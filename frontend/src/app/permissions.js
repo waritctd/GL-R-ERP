@@ -83,6 +83,19 @@ const PATH_GUARDS = [
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
   // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // Garnishment shortfall ledger. Needs its own entry because the guard above is an EXACT match
+  // and canAccessPath fails OPEN for a path no guard claims — a nested path would otherwise be
+  // reachable by any authenticated role. canViewPayroll (hr + ceo) mirrors the endpoint's
+  // @PreAuthorize("hasAnyRole('HR','CEO')") and PayrollDeductionShortfallService's VIEW_ROLES.
+  { test: (p) => p === '/payroll/deduction-shortfalls', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // Written-consent register (issue #376's other read surface). Needs its own entry for exactly the
+  // same reason as the sibling above — `/payroll` is an EXACT match and canAccessPath fails OPEN
+  // for a path no guard claims, so without this line any authenticated role reaches it.
+  // canViewPayroll (hr + ceo) mirrors the GET's @PreAuthorize("hasAnyRole('HR','CEO')") and
+  // DeductionWrittenConsentService.VIEW_ROLES. The narrower WRITE gate (hasRole('HR'), EDIT_ROLES)
+  // is enforced inside the page on canManagePayroll — a route guard cannot express it, since CEO
+  // must reach the page read-only.
+  { test: (p) => p === '/payroll/deduction-consents', can: (u) => hasPermission(u.role, 'canViewPayroll') },
   // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
   // employee's own declaration form — same "must have an employeeId" shape as
   // `/profile` above, and just as important to guard explicitly: unknown paths
@@ -120,6 +133,13 @@ const PATH_GUARDS = [
   // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar
   // in routes.js for the same caveat.
   { test: (p) => p === '/settings/attendance-calendar', can: (u) => hasPermission(u.role, 'canManageAttendanceCalendar') },
+  // §5 announcement PDF upload (LeaveController#uploadPolicyDocument's requireAnyRole(user, "hr",
+  // "ceo") — PR #494's write API, this branch's UI). Its own entry is required, not optional:
+  // canAccessPath fails OPEN for any path no guard claims, and `/settings/attendance-calendar`
+  // above is an EXACT match, so a second `/settings/*` route without its own line would be
+  // reachable by every authenticated role. Frontend gating only — see
+  // ROLE_PERMISSIONS.canManageLeavePolicyDocument for the same caveat.
+  { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
 
 export function canAccessPath(path, user) {

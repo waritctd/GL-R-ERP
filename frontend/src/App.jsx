@@ -48,6 +48,8 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
+const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
+const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionConsentsPage.jsx').then(toDefault('DeductionConsentsPage')));
 // ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
@@ -61,6 +63,7 @@ const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/P
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
 // SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
 const AttendanceCalendarPage = lazy(() => import('./features/attendanceCalendar/AttendanceCalendarPage.jsx').then(toDefault('AttendanceCalendarPage')));
+const LeavePolicyDocumentPage = lazy(() => import('./features/leave/LeavePolicyDocumentPage.jsx').then(toDefault('LeavePolicyDocumentPage')));
 // e2e-only fixture (#safe-form-primitive review round, F2) — see the component's own doc comment
 // for why it exists. Route registration below is gated on VITE_USE_MOCKS, so this is unreachable
 // in a production build (no VITE_ vars are set there at all) even though the lazy chunk itself
@@ -323,7 +326,7 @@ export function App() {
             />
             <Route
               path="/employees/:id"
-              element={<EmployeeDetailPage user={user} onUpdateEmployee={updateEmployee} />}
+              element={<EmployeeDetailPage user={user} onUpdateEmployee={updateEmployee} showToast={showToast} />}
             />
             <Route
               path="/requests"
@@ -380,10 +383,32 @@ export function App() {
               path="/payroll"
               element={<PayrollPage user={user} showToast={showToast} />}
             />
+            {/* Garnishment shortfall ledger (issue #376's read surface, exposed for #744). Its own
+                route rather than a PayrollPage section: the endpoint takes no month parameter and
+                orders across every period, where PayrollPage is scoped to one selected month. */}
+            <Route
+              path="/payroll/deduction-shortfalls"
+              element={<DeductionShortfallsPage />}
+            />
+            {/* Written-consent register (issue #376's other read surface, exposed for #744). Its
+                own route for the same reason as the ledger above: the endpoint is cross-month and
+                takes no period, where PayrollPage is scoped to one selected month. Read is hr+ceo;
+                the hr-only write is gated inside the page. */}
+            <Route
+              path="/payroll/deduction-consents"
+              element={<DeductionConsentsPage user={user} showToast={showToast} />}
+            />
             {/* Attendance calendar admin (PR #480's API, this branch's UI) — HR/CEO only. */}
             <Route
               path="/settings/attendance-calendar"
               element={<AttendanceCalendarPage user={user} showToast={showToast} />}
+            />
+            {/* §5 announcement PDF upload (PR #494's API, this branch's UI, issue #744) — HR/CEO
+                only. A settings route rather than a control on /leave: that page is guarded for
+                every employee, and this is an administrative write on the document governing them. */}
+            <Route
+              path="/settings/leave-policy"
+              element={<LeavePolicyDocumentPage showToast={showToast} />}
             />
             {/* Frozen sales stack — param-wired to keep working / URL-addressable. */}
             {SALES_ENABLED && (

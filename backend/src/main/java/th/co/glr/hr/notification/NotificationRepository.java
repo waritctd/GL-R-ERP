@@ -163,7 +163,11 @@ public class NotificationRepository {
         Map.entry("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"),
         // Step 6: Deposit, Payment, and Order Confirmation.
         Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
-        Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว")
+        Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
+        // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
+        // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
+        // routine pipeline noise; the whole point of this notification is that it is not.
+        Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -201,12 +205,22 @@ public class NotificationRepository {
      * is <b>not</b> a mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule}
      * for the owner ruling and the empty-set consequence.
      *
+     * <p>{@code sales_manager} is different again: it resolves to the ฝ่ายขาย members whose
+     * position marks them a ผู้จัดการ, so it is a strict subset of {@code sales} and the two are
+     * not interchangeable -- {@code sales} alone would also fan out to the rep who triggered the
+     * event, not just their supervisor.
+     *
      * <p>The {@code hr.division} join is a {@code LEFT JOIN} so a {@code ceo} match with no
      * division is not silently dropped -- the predicate no longer reads {@code d} at all.
-     * This does not change {@code import}/{@code sales}: both predicates test {@code
-     * d.source_code}, which is SQL {@code NULL} (never true) when {@code d} fails to match, exactly
-     * as an absent INNER JOIN row would have excluded that employee -- confirmed by inspection, not
-     * just assumed.
+     * This does not change {@code import}/{@code sales}/{@code sales_manager}: each of those
+     * predicates tests {@code d.source_code}, which is SQL {@code NULL} (never true) when {@code
+     * d} fails to match, exactly as an absent INNER JOIN row would have excluded that employee --
+     * confirmed by inspection, not just assumed. {@code hr.position} is likewise a {@code LEFT
+     * JOIN}: only {@code sales_manager} reads it, and an employee with a null {@code position_id}
+     * must stay reachable by the other, position-agnostic branches.
+     *
+     * <p>An unrecognised role resolves to nobody and inserts (and mails) nothing -- a silent
+     * no-op, as it always has been -- so a typo'd role name notifies no one rather than everyone.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -221,6 +235,14 @@ public class NotificationRepository {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
+            // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
+            // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who
+            // already sign a rep's commission off are the ones who supervise a rep's commission
+            // INPUTS (TicketService.reserveStock). Two different answers to "who is the sales
+            // manager" is the drift worth avoiding; if that predicate ever moves, move this one
+            // with it. Note "sales" above would fan out to the reps themselves, including the one
+            // who just declared, so it is not a substitute.
+            case "sales_manager" -> "d.source_code ILIKE 'SA%' AND p.name_th LIKE '%ผู้จัดการ%'";
             default -> null;
         };
         // An unrecognised role writes nothing and mails nothing — the two channels stay in step even
@@ -229,9 +251,9 @@ public class NotificationRepository {
 
         String title = ticketEventTitle(type);
         // RETURNING, so the mail router is handed the employees that ACTUALLY received a row rather
-        // than a second query's guess at them. Only the `sales` branch reads the ids (it delivers per
-        // rep); import/account/ceo route to a fixed address and deliberately mail even when this
-        // comes back empty — see SalesNotificationMailRouter.
+        // than a second query's guess at them. The `sales`/`sales_manager` branches read the ids
+        // (each delivers per recipient); import/account/ceo route to a fixed address and
+        // deliberately mail even when this comes back empty — see SalesNotificationMailRouter.
         List<Long> notified = jdbc.queryForList("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link

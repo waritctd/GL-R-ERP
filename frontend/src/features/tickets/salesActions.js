@@ -67,16 +67,21 @@ export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
   return null;
 }
 
-// Pricing-request statuses that mean "this request is with import/CEO right
-// now" — nothing here for sales to click. Anything not explicitly matched by
-// the cascade below (SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
-// READY_FOR_CEO_REVIEW, CEO_REVIEWING, QUOTATION_ISSUED,
-// COSTING_REVISION_REQUIRED) falls through to the follow-up/activity buckets,
-// same as a deal with no pending pricing-request action at all. V140 retired
-// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine
-// sales action in that list ("answer import's question"), and with the
-// ขอข้อมูลเพิ่มเติม round-trip removed there is no longer a sixth CTA bucket
-// waiting to be built here.
+// LIVE_PR_STATUSES holds the NOT-live statuses — the name reads backwards from what it holds, and
+// that backwards reading is why this comment used to narrate the set's CONTENTS as if they were
+// the live ones. DRAFT is still private to the rep who created it; CANCELLED/SUPERSEDED are dead
+// ends. A request counts as "live" — with import/CEO right now, nothing here for sales to click —
+// precisely by being OUTSIDE this set (see hasLivePr below: `!LIVE_PR_STATUSES.has(pr.status)`).
+//
+// The eight statuses that ARE live this way split further: APPROVED_FOR_QUOTATION and
+// QUOTATION_ACCEPTED have their own buckets below (2 and 3); the other six — SUBMITTED,
+// IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, CEO_REVIEWING,
+// QUOTATION_ISSUED — fall through to follow-up/activity, same as a deal with no pending
+// pricing-request action at all. COSTING_REVISION_REQUIRED does NOT belong in that list any more:
+// V141 retired it, so no live request can carry it. V140 is the migration that retired
+// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine sales action in that
+// old list ("answer import's question"), and with the ขอข้อมูลเพิ่มเติม round-trip retired there is
+// no sixth CTA bucket waiting to be built here.
 const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 
 // Ticket statuses that prove a customer-facing price already went out. NOT

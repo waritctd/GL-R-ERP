@@ -9,7 +9,9 @@ import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -177,14 +179,120 @@ function cleanResponsePayload(draft) {
   };
 }
 
+/**
+ * V141 ("CEO owns costing", PR #702): the CEO's per-line manual cost override. `costingItem` may
+ * be undefined only in theory — the page's own button that opens this modal is itself gated on
+ * `costingItem` being present, so this component never has to render a no-costing-item state.
+ *
+ * The mandatory reason is enforced HERE, client-side, on BOTH the set path and the clear path —
+ * `onSubmit` (which is what ends up calling the API) is never invoked with a blank/whitespace-only
+ * reason. The server's own check stays authoritative and is never removed or weakened; this is
+ * purely so the CEO sees the mistake immediately instead of via a round-trip 400.
+ */
+function CostOverrideModal({ item, costingItem, onClose, onSubmit, pending }) {
+  const hasOverride = costingItem.manualLandedCostPerUnitThb != null;
+  const [amount, setAmount] = useState(() => String(
+    hasOverride ? costingItem.manualLandedCostPerUnitThb : costingItem.landedCostPerUnitThb ?? '',
+  ));
+  const [reason, setReason] = useState('');
+  const [amountError, setAmountError] = useState(null);
+  const [reasonError, setReasonError] = useState(null);
+
+  function validateReason() {
+    if (reason.trim()) {
+      setReasonError(null);
+      return true;
+    }
+    setReasonError('กรุณาระบุเหตุผลในการปรับต้นทุน');
+    return false;
+  }
+
+  function handleSet(event) {
+    event.preventDefault();
+    const reasonOk = validateReason();
+    const numericAmount = Number(amount);
+    const amountOk = amount !== '' && !Number.isNaN(numericAmount) && numericAmount >= 0;
+    setAmountError(amountOk ? null : 'กรุณากรอกต้นทุนที่ปรับให้ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)');
+    if (!reasonOk || !amountOk) return;
+    onSubmit({ manualLandedCostPerUnitThb: numericAmount, reason: reason.trim() });
+  }
+
+  function handleClear() {
+    if (!validateReason()) return;
+    onSubmit({ manualLandedCostPerUnitThb: null, reason: reason.trim() });
+  }
+
+  return (
+    <Modal
+      title={hasOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+      subtitle={[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || undefined}
+      onClose={onClose}
+      testId="cost-override-modal"
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          {hasOverride ? (
+            <Button type="button" variant="secondary" disabled={pending} onClick={handleClear}>
+              ล้างค่าที่ปรับ
+            </Button>
+          ) : null}
+          <Button type="submit" form="cost-override-form" variant="primary" disabled={pending}>
+            {pending ? 'กำลังบันทึก…' : 'บันทึกต้นทุนที่ปรับ'}
+          </Button>
+        </>
+      }
+    >
+      <SafeForm id="cost-override-form" onSubmit={handleSet} noValidate>
+        <div className="grid gap-3">
+          <div className="rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs">
+            <div>
+              ต้นทุนคำนวณ/ชิ้น:{' '}
+              <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+            </div>
+            {hasOverride ? (
+              <div className="mt-1">
+                ต้นทุนที่ปรับปัจจุบัน/ชิ้น:{' '}
+                <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+              </div>
+            ) : null}
+            <p className="m-0 mt-1 text-2xs text-text-muted">ค่าที่คำนวณได้จะไม่ถูกเขียนทับ — ค่าที่ปรับเองจะแสดงคู่กันเสมอ</p>
+          </div>
+          <FormField label="ต้นทุนที่ปรับ (บาท/ชิ้น)" htmlFor="cost-override-amount" error={amountError}>
+            <input
+              id="cost-override-amount"
+              type="number"
+              min="0"
+              step="0.0001"
+              value={amount}
+              onChange={(e) => {
+                setAmount(e.target.value);
+                if (amountError) setAmountError(null);
+              }}
+            />
+          </FormField>
+          <FormField label="เหตุผล" htmlFor="cost-override-reason" error={reasonError} required>
+            <textarea
+              id="cost-override-reason"
+              className="min-h-20"
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                if (reasonError) setReasonError(null);
+              }}
+            />
+          </FormField>
+        </div>
+      </SafeForm>
+    </Modal>
+  );
+}
+
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [responseDrafts, setResponseDrafts] = useState({});
-  const [costingNote, setCostingNote] = useState('');
-  const [costingClientRequestId] = useState(() => generateClientRequestId());
   const [emailDrafts, setEmailDrafts] = useState({});
   const [sendClientRequestIds, setSendClientRequestIds] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
@@ -350,9 +458,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
     onError: (error) => showToast?.('error', error.message || 'ส่งให้ CEO ไม่สำเร็จ'),
   });
 
-  const createCosting = useActionMutation(() => api.pricingRequests.createCosting(pricingRequestId, { note: costingNote || null, clientRequestId: costingClientRequestId }), 'สร้างร่างต้นทุนแล้ว');
-  const recalculateCosting = useActionMutation((costing) => api.pricingRequests.recalculateCosting(costing.id, { note: costingNote || null }), 'คำนวณต้นทุนแล้ว');
-  const submitCosting = useActionMutation((costing) => api.pricingRequests.submitCosting(costing.id, { note: costingNote || null }), 'ส่งให้ CEO แล้ว');
   const uploadQuoteAttachment = useActionMutation(({ quote, file }) => api.pricingRequests.uploadFactoryQuoteAttachment(quote.id, file), 'แนบไฟล์ราคาโรงงานแล้ว');
   const uploadPricingRequestAttachment = useActionMutation((file) => api.pricingRequests.uploadAttachment(pricingRequestId, file), 'แนบไฟล์แล้ว');
   const deletePricingRequestAttachment = useActionMutation((attachmentId) => api.pricingRequests.deleteAttachment(attachmentId), 'ลบไฟล์แนบแล้ว');
@@ -397,6 +502,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
       };
     }),
   }), 'บันทึกราคาขายที่เสนอแล้ว');
+  // V141 ("CEO owns costing", PR #702): recomputes the bound costing in place, preserving every
+  // per-line override — see recalculatePricingDecisionCost's own doc comment in hrApi.js. Never
+  // changes status, margins, or approved_* — it only refreshes cost.
+  const recalculateDecisionCost = useActionMutation(
+    (decision) => api.pricingRequests.recalculatePricingDecisionCost(decision.id),
+    'คำนวณต้นทุนใหม่แล้ว',
+  );
+  // V141 (PR #702): a per-line manual cost override, sitting BESIDE the computed figure (which is
+  // never destroyed). `reason` is mandatory in both directions — the modal refuses to call this at
+  // all without one; the server's own check is the backstop, never removed or relied on alone.
+  const [costOverrideItem, setCostOverrideItem] = useState(null);
+  const overrideItemCost = useActionMutation(
+    ({ decision, item, manualLandedCostPerUnitThb, reason }) =>
+      api.pricingRequests.overridePricingDecisionItemCost(decision.id, item.id, { manualLandedCostPerUnitThb, reason }),
+    'บันทึกต้นทุนที่ปรับแล้ว',
+  );
   const approveDecision = useMutation({
     mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
       clientRequestId: approveClientRequestId,
@@ -555,10 +676,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   );
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const costings = useMemo(() => costingQuery.data ?? [], [costingQuery.data]);
-  const latestOpenCosting = useMemo(
-    () => [...costings].reverse().find((costing) => ['DRAFT', 'CALCULATED'].includes(costing.status)),
-    [costings],
-  );
   const pricingDecisions = useMemo(() => decisionsQuery.data ?? [], [decisionsQuery.data]);
   // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review),
   // else the most recent one (so a just-approved or just-returned decision still renders).
@@ -566,6 +683,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => pricingDecisions.find((d) => d.status === 'DRAFT') ?? [...pricingDecisions].reverse()[0] ?? null,
     [pricingDecisions],
   );
+  // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
+  // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
+  // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
+  // render must tolerate a missing costing item (the map simply has no entry for it) — this query
+  // can legitimately be empty (sales/sales_manager never fetch it) or not yet contain the bound
+  // costing (a brand-new decision before its first paint).
+  const decisionCostingItems = useMemo(() => {
+    const costing = costings.find((c) => c.id === currentDecision?.pricingCostingId);
+    return new Map((costing?.items ?? []).map((ci) => [ci.id, ci]));
+  }, [costings, currentDecision]);
   const decisionSalesView = decisionSalesViewQuery.data;
   // Step 4: newest revision last (creation order) — the OPEN draft/ready-to-issue revision if
   // one exists, else the most recent (so a just-issued or just-cancelled quotation still shows).
@@ -1021,40 +1148,27 @@ export function PricingRequestDetailPage({ user, showToast }) {
       ) : null}
 
       {/* Import no longer sees the costing aggregate — submitToCeo runs it end to end. CEO keeps
-          the full view (canSeeRaw is import+ceo; only the ceo half is wanted here). */}
+          the full view (canSeeRaw is import+ceo; only the ceo half is wanted here), and it is
+          READ-ONLY: this panel holds no action controls at all.
+
+          It used to hold four — สร้างร่างต้นทุน, the หมายเหตุต้นทุน field feeding it, คำนวณใหม่ and
+          ส่งให้ CEO ตรวจ — each additionally gated on isImport(user). Since this render site is
+          `canSeeRaw(user) && !isImport(user)`, those two conditions were mutually exclusive and no
+          user could ever reach them, for the whole life of the controls. Deleted by issue #747
+          (owner ruling 2026-08-14); the routes they drove were already severed by V141/PR #702. */}
       {canSeeRaw(user) && !isImport(user) ? (
-        <Panel
-          flush
-          title="ต้นทุนนำเข้า"
-          actions={isImport(user) ? <Button type="button" variant="primary" onClick={() => createCosting.mutate()} data-testid="pcr-costing-create">สร้างร่างต้นทุน</Button> : null}
-        >
+        <Panel flush title="ต้นทุนนำเข้า">
           <div className="flex flex-col gap-3 p-4">
-            {isImport(user) ? (
-              <FormField label="หมายเหตุต้นทุน" htmlFor="pcr-costing-note">
-                <input
-                  id="pcr-costing-note"
-                  className="form-input"
-                  value={costingNote}
-                  onChange={(e) => setCostingNote(e.target.value)}
-                />
-              </FormField>
-            ) : null}
             {costings.map((costing) => (
               <div key={costing.id} className="rounded-md border border-border bg-surface p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <strong>{costing.costingCode}</strong>
                   <StatusBadge tone="neutral">เวอร์ชัน {costing.versionNo}</StatusBadge>
                   {(() => {
-                    const status = pricingCostingStatusLabel(costing.status, { stale: costing.stale });
+                    const status = pricingCostingStatusLabel(costing.status);
                     return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
                   })()}
                   <span className="text-xs text-text-muted">{costing.totalLandedCostThb != null ? formatCurrency(costing.totalLandedCostThb, 'THB') : '-'}</span>
-                  {isImport(user) && costing.id === latestOpenCosting?.id ? (
-                    <Fragment key={`costing-actions-${costing.id}`}>
-                      <Button type="button" variant="secondary" onClick={() => recalculateCosting.mutate(costing)} data-testid="pcr-costing-recalculate">คำนวณใหม่</Button>
-                      <Button type="button" variant="secondary" disabled={costing.status !== 'CALCULATED' || costing.stale} onClick={() => setConfirmAction({ type: 'submitCosting', costing })} data-testid="pcr-costing-submit">ส่งให้ CEO ตรวจ</Button>
-                    </Fragment>
-                  ) : null}
                 </div>
                 {canSeeRaw(user) && costing.items?.length ? (
                   <div className="mt-2 flex flex-col gap-1 text-xs text-text-muted">
@@ -1108,6 +1222,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 const minPrice = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit;
                 return margin == null || margin === '' || minPrice == null || minPrice === '';
               });
+              // V141: mirrors PricingDecisionService.approve's own stale-override 409 guard, so the
+              // CEO discovers it here instead of via a failed approve. The server stays
+              // authoritative — this only pre-empts a call that would fail anyway.
+              const staleOverrideItems = decision.items.filter(
+                (item) => decisionCostingItems.get(item.pricingCostingItemId)?.overrideStale,
+              );
               return (
                 <div key={decision.id} className="rounded-md border border-border bg-surface p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1126,15 +1246,61 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       const effectiveCeiling = draft.discountCeilingPct ?? item.discountCeilingPct ?? '';
                       const belowMinimum = effectiveMinimum !== '' && item.proposedSellingPricePerRequestedUnit != null
                         && Number(item.proposedSellingPricePerRequestedUnit) < Number(effectiveMinimum);
+                      // V141: the bound costing line this decision item was frozen from — may
+                      // legitimately be undefined (costings never fetched, or not yet loaded), in
+                      // which case this renders only the decision item's own frozen cost above,
+                      // with no override affordance at all.
+                      const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
+                      const hasOverride = costingItem?.manualLandedCostPerUnitThb != null;
                       return (
                         <div key={item.id} className="rounded-md border border-border-subtle p-2">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
                             <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                             <span>{item.factoryName ?? '-'}</span>
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
-                            <span>ต้นทุน/หน่วย: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
+                            <span>ต้นทุน/หน่วยที่ขอ: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
                             {belowMinimum ? <StatusBadge tone="danger">ต่ำกว่าราคาขั้นต่ำ</StatusBadge> : null}
+                            {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
                           </div>
+                          {costingItem ? (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-subtle pt-1.5 text-xs">
+                              <span>
+                                ต้นทุนคำนวณ/ชิ้น:{' '}
+                                <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+                              </span>
+                              {hasOverride ? (
+                                <span className="flex min-w-0 items-baseline gap-1.5">
+                                  ต้นทุนที่ปรับ/ชิ้น:{' '}
+                                  <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+                                  <span className="text-2xs text-override">ปรับเอง</span>
+                                  {costingItem.overrideReason ? (
+                                    <span
+                                      className="min-w-0 max-w-[220px] truncate text-2xs text-text-muted"
+                                      title={costingItem.overrideReason}
+                                    >
+                                      ({costingItem.overrideReason})
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                              {editable ? (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  className="text-2xs px-2 py-[3px]"
+                                  onClick={() => setCostOverrideItem({ decision, item, costingItem })}
+                                  data-testid={`pcr-ceo-cost-override-${item.id}`}
+                                >
+                                  {hasOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+                                </Button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {costingItem?.overrideStale ? (
+                            <p className="m-0 mt-1 text-2xs text-warning-dark">
+                              อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                            </p>
+                          ) : null}
                           {editable ? (
                             <div className="mt-2 grid gap-2 md:grid-cols-4">
                               <input
@@ -1171,35 +1337,54 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     })}
                   </div>
                   {editable ? (
-                    <div className="mt-3 flex flex-wrap gap-2 border-t border-border-subtle pt-3">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={saveDecisionItems.isPending}
-                        onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
-                        data-testid="pcr-ceo-save-decision-items"
-                      >
-                        บันทึกการเปลี่ยนแปลง
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={approveDecision.isPending || missingBeforeApprove.length > 0}
-                        onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
-                        data-testid="pcr-ceo-approve"
-                      >
-                        อนุมัติราคาขาย
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        disabled={returnDecisionToImport.isPending}
-                        onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
-                      >
-                        ตีกลับให้ฝ่ายนำเข้าแก้ไข
-                      </Button>
+                    <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={recalculateDecisionCost.isPending}
+                          onClick={() => recalculateDecisionCost.mutate(decision)}
+                          data-testid="pcr-ceo-recalculate-cost"
+                        >
+                          คำนวณต้นทุนใหม่
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={saveDecisionItems.isPending}
+                          onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
+                          data-testid="pcr-ceo-save-decision-items"
+                        >
+                          บันทึกการเปลี่ยนแปลง
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="primary"
+                          disabled={approveDecision.isPending || missingBeforeApprove.length > 0 || staleOverrideItems.length > 0}
+                          onClick={() => setConfirmAction({ type: 'approveDecision', decision })}
+                          data-testid="pcr-ceo-approve"
+                        >
+                          อนุมัติราคาขาย
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={returnDecisionToImport.isPending}
+                          onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
+                        >
+                          ตีกลับให้ฝ่ายนำเข้าแก้ไข
+                        </Button>
+                      </div>
+                      <p className="m-0 text-xs text-text-muted">
+                        คำนวณต้นทุนใหม่จะดึงต้นทุนล่าสุดมาคำนวณ โดยไม่ลบค่าที่ปรับเองไว้ — ถ้าอัตราแลกเปลี่ยนหรือสูตรคำนวณเปลี่ยนไป ค่าที่ปรับเองอาจล้าสมัยและต้องยืนยันอีกครั้งก่อนอนุมัติ
+                      </p>
                       {missingBeforeApprove.length > 0 ? (
-                        <span className="self-center text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
+                        <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
+                      ) : null}
+                      {staleOverrideItems.length > 0 ? (
+                        <span className="text-xs text-danger">
+                          มีรายการที่ปรับต้นทุนเองล้าสมัย — กรุณาคำนวณต้นทุนใหม่ หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                        </span>
                       ) : null}
                     </div>
                   ) : null}
@@ -1523,41 +1708,49 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmDialog
         open={Boolean(confirmAction)}
-        title={confirmAction?.type === 'submitCosting' ? 'ส่งต้นทุนให้ CEO ตรวจ'
-          : confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
+        title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุน'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : 'ส่งอีเมลถึงโรงงาน'}
-        message={confirmAction?.type === 'submitCosting'
-          ? 'เมื่อส่งแล้ว เวอร์ชันต้นทุนนี้จะแก้ไขไม่ได้'
-          : confirmAction?.type === 'approveDecision'
-            ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
-            : confirmAction?.type === 'returnDecision'
-              ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
-              : confirmAction?.type === 'issueQuotation'
-                ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
-                : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
-        confirmLabel={confirmAction?.type === 'submitCosting' ? 'ส่งให้ CEO ตรวจ'
-          : confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
+        message={confirmAction?.type === 'approveDecision'
+          ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
+          : confirmAction?.type === 'returnDecision'
+            ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
+            : confirmAction?.type === 'issueQuotation'
+              ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
+              : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+        confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : 'ส่งอีเมล'}
         tone={confirmAction?.type === 'returnDecision' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision'}
         reasonLabel="เหตุผลที่ตีกลับ"
-        busy={sendQuote.isPending || submitCosting.isPending || approveDecision.isPending
+        busy={sendQuote.isPending || approveDecision.isPending
           || returnDecisionToImport.isPending || issueQuotation.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
           setConfirmAction(null);
-          if (action?.type === 'submitCosting') submitCosting.mutate(action.costing);
           if (action?.type === 'sendQuote') sendQuote.mutate({ quote: action.quote, draft: action.emailDraft });
           if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
           if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });
           if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
         }}
       />
+
+      {costOverrideItem ? (
+        <CostOverrideModal
+          item={costOverrideItem.item}
+          costingItem={costOverrideItem.costingItem}
+          pending={overrideItemCost.isPending}
+          onClose={() => setCostOverrideItem(null)}
+          onSubmit={(payload) => overrideItemCost.mutate(
+            { decision: costOverrideItem.decision, item: costOverrideItem.item, ...payload },
+            { onSuccess: () => setCostOverrideItem(null) },
+          )}
+        />
+      ) : null}
 
       {revisionModalOpen ? (
         <PricingRequestCreateModal

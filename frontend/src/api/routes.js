@@ -9,6 +9,8 @@ export const API_ROUTES = {
     list: '/api/employees',
     create: '/api/employees',
     detail: (id) => `/api/employees/${id}`,
+    // HR-only temporary-password issue. Mirrors EmployeeController#resetPassword.
+    resetPassword: (id) => `/api/employees/${id}/reset-password`,
   },
   profileRequests: {
     list: '/api/profile-requests',
@@ -182,6 +184,10 @@ export const API_ROUTES = {
   pricingFormulaConfig: {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
+    // Per-row freight add/delete (issue #436, PR #455). Both return the WHOLE config as a NEW
+    // version — every freightRateId is reissued. Mirrors PricingFormulaConfigController.
+    freightRates: '/api/pricing-formula-config/freight-rates',
+    freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
   attachments: {
     list: (ticketId) => `/api/tickets/${ticketId}/attachments`,
@@ -202,6 +208,9 @@ export const API_ROUTES = {
     // Manual commission entries (feat/commission-manual-adjustments). Mirrors
     // CommissionController's POST /api/commissions/manual.
     manual: '/api/commissions/manual',
+    // Issue #737: the manual-commission rep picker's data source -- active employees in ฝ่ายขาย,
+    // the same list for sales_manager and ceo alike. Mirrors CommissionController#reps.
+    reps: '/api/commissions/reps',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
     // fix/commission-figures-from-backend: a rep's own live monthly commission estimate, computed
@@ -282,6 +291,17 @@ export const API_ROUTES = {
       overrideContinue: (id) => `/api/payroll/deduction-obligations/${id}/override-continue`,
       clearOverride: (id) => `/api/payroll/deduction-obligations/${id}/clear-override`,
     },
+    // Read-only garnishment shortfall ledger (issue #376). Mirrors
+    // PayrollDeductionShortfallController. Optional employeeId / kind query params.
+    deductionShortfalls: '/api/payroll/deduction-shortfalls',
+    // Written-consent register (issue #376, exposed for #744). ONE path, two verbs — mirrors
+    // DeductionWrittenConsentController, whose @GetMapping and @PutMapping both sit on the bare
+    // class-level @RequestMapping. GET takes optional employeeId / kind query params; PUT takes a
+    // JSON body and upserts one (employee, kind) row.
+    //
+    // A RECORD, NOT A GATE: nothing in PayrollCalculator reads the row this writes — see
+    // DeductionWrittenConsentService's own javadoc and V107's COMMENT ON TABLE.
+    deductionConsents: '/api/payroll/deduction-consents',
   },
   priceImport: {
     factories: '/api/price-import/factories',
@@ -328,6 +348,11 @@ export const API_ROUTES = {
     pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
+    // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
+    // severed /pricing-costings/{}/recalculate; cost-override is genuinely new per-line behaviour.
+    pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
+    pricingDecisionItemCostOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,
@@ -488,4 +513,13 @@ export const ROLE_PERMISSIONS = {
   // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
   // why a frontend permission key is never itself evidence of a backend authorization change.
   canManageAttendanceCalendar: ['hr', 'ceo'],
+  // §5 announcement PDF upload (/settings/leave-policy — PR #494 shipped the write API with no UI
+  // at all, issue #744). Mirrors LeaveController#uploadPolicyDocument's `requireAnyRole(user, "hr",
+  // "ceo")` exactly. Deliberately NOT the same question as reading the document: the GET is open to
+  // every authenticated employee (`sessions.requireUser` only), because the rules that bind you are
+  // yours to read — replacing them is not. FRONTEND GATING ONLY: LeaveController enforces this
+  // independently, and this key decides who sees the SCREEN; it grants nothing on its own. See
+  // CLAUDE.md's "Mock API contract" on why a frontend permission key is never itself evidence of a
+  // backend authorization change.
+  canManageLeavePolicyDocument: ['hr', 'ceo'],
 };

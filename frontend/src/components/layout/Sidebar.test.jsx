@@ -77,3 +77,47 @@ describe('Sidebar nav item accessible names', () => {
     expect(link.getAttribute('aria-label')).toBe('เงินเดือน (Payroll)');
   });
 });
+
+// `exact` exists because /payroll/deduction-shortfalls is a SIBLING nav item, not a detail page of
+// /payroll. Default prefix matching would light both rows at once and the nav would claim two
+// current locations at the same time.
+describe('Sidebar active-item matching', () => {
+  const NESTED_ITEMS = [
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: true, exact: true },
+    { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'triangleAlert', group: 'finance', show: true },
+  ];
+
+  function renderAt(pathname, items = NESTED_ITEMS) {
+    return render(
+      <MemoryRouter initialEntries={[pathname]}>
+        <Sidebar items={items} user={{ role: 'hr', name: 'ทดสอบ' }} employee={null} onLogout={vi.fn()} />
+      </MemoryRouter>,
+    );
+  }
+
+  function activeLabels() {
+    return screen.getAllByRole('link')
+      .filter((link) => link.className.split(/\s+/).includes('active'))
+      .map((link) => link.getAttribute('aria-label'));
+  }
+
+  it('marks exactly the child item active on the nested route', () => {
+    renderAt('/payroll/deduction-shortfalls');
+
+    expect(activeLabels()).toEqual(['ยอดค้างหักตามหมายบังคับคดี (Deduction shortfalls)']);
+  });
+
+  it('marks exactly the parent item active on /payroll itself', () => {
+    renderAt('/payroll');
+
+    expect(activeLabels()).toEqual(['เงินเดือน (Payroll)']);
+  });
+
+  it('still prefix-matches an item without `exact`, so a detail page keeps its parent lit', () => {
+    renderAt('/employees/123', [
+      { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: true },
+    ]);
+
+    expect(activeLabels()).toEqual(['พนักงานทั้งหมด (Employees)']);
+  });
+});

@@ -53,6 +53,7 @@ import {
 import {
   buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
   buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+  buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
@@ -239,6 +240,69 @@ db.employeeTaxAllowances = db.employeeTaxAllowances?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
+// Garnishment shortfall ledger (issue #376). Unlike the remittance store above, this one CAN be
+// seeded honestly: a shortfall row is a plain record of an ALREADY-computed cap outcome, so
+// nothing here reimplements the ป.วิ.พ. ม.302 cap — the numbers are fixtures, not a calculation.
+db.deductionShortfalls = db.deductionShortfalls?.length
+  ? db.deductionShortfalls : buildDemoDeductionShortfalls(db.employees);
+// Written-consent register (issue #376, exposed for #744). SEEDED EMPTY, ON PURPOSE — and this is
+// the honest fixture, not a lazy one.
+//
+// hr.deduction_written_consent is written by exactly one code path: DeductionWrittenConsentRepository
+// #upsert, reached only from DeductionWrittenConsentService#upsert, reached only from
+// DeductionWrittenConsentController's PUT — which had no client at all until this branch. V107
+// creates the table and seeds nothing, and no other migration or service touches it (verified by
+// grep across backend/src/main). So the table is necessarily EMPTY in every environment, production
+// included — exactly like hr.leave_policy_document (V133).
+//
+// Seeding demo rows here would therefore invert CLAUDE.md's warning: the fixture would be more
+// populated than production, and the EMPTY state — the only state any real deployment has today,
+// and so the one a reader will actually meet — would never be rendered by the default mock session.
+// Rows appear the same way they do in production: by someone recording one through the register's
+// PUT half.
+db.deductionConsents = db.deductionConsents || [];
+// §5 announcement PDF store (V133's hr.leave_policy_document + _blob, collapsed into one array
+// since the mock has no reason to split metadata from bytes for I/O cost).
+//
+// EMPTY for the same reason as the register above, and V133 says so outright: rows reach that table
+// only through POST /api/leave/policy-document, which had no client until #744. The table is
+// necessarily empty in EVERY environment, production included — nobody has ever uploaded one.
+db.leavePolicyDocuments = db.leavePolicyDocuments || [];
+db.leavePolicyDocumentSeq = db.leavePolicyDocumentSeq || 1;
+// LeaveController.MAX_POLICY_DOCUMENT_BYTES (10 * 1024 * 1024). Mirrored by value, so it is pinned
+// against the Java constant by mockApi.leavePolicyDocument.test.js — contract.test.js compares
+// method names and parameter counts, never values.
+const MAX_POLICY_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Mirrors LeavePolicyDocumentRepository#findCurrent: the latest `effective_from` that is NOT in the
+ * future, tie-broken by document_id DESC.
+ *
+ * The `<= today` half is the load-bearing part and the easy one to drop. A document uploaded with a
+ * FUTURE effective date is stored and returns 200, yet is deliberately not "current" — the previous
+ * version keeps being served until that date arrives. An upload that appears to have done nothing
+ * is exactly the outcome a user would misread as a failure, so the mock reproduces it rather than
+ * treating "most recently uploaded" as current.
+ */
+function currentLeavePolicyDocument() {
+  const today = bangkokTodayIso();
+  return [...db.leavePolicyDocuments]
+    .filter((doc) => doc.effectiveFrom <= today)
+    .sort((a, b) => (
+      b.effectiveFrom.localeCompare(a.effectiveFrom) || b.documentId - a.documentId
+    ))[0] || null;
+}
+db.deductionConsentSeq = db.deductionConsentSeq || 1;
+// Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's
+// `CHECK (deduction_kind IN (...))` constraint. The other four PayrollDeductionKind values are
+// excluded on purpose: WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN are ม.76 item (1), where no
+// consent question arises, and LEGAL_EXECUTION_GARNISHMENT is compelled by court order regardless
+// of consent.
+//
+// A value mirrored into this file has NO automatic guard — contract.test.js compares method names
+// and parameter COUNTS, never values — so this list is pinned against the one the UI offers by
+// mockApi.deductionConsents.test.js.
+const CONSENT_APPLICABLE_KINDS = ['WARNING_LETTER', 'CUSTOMER_RETURN', 'OTHER_PRETAX', 'OTHER_POST_TAX'];
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -570,6 +634,138 @@ function sortedFormulaConfig(config) {
   };
 }
 
+// ── Freight-row add/delete (issue #436, PR #455) — mirrors PricingFormulaConfigController's new
+// endpoints exactly, including the fact that neither mutates in place: both derive the full
+// freight list from the current version and write a COMPLETE NEW version, reissuing a fresh id
+// for EVERY row (freight AND duty AND clearance) — never just the freight rows that changed. This
+// validation is a NON-AUTHORITATIVE approximation of the server's; a green run here is never
+// evidence the real endpoint would also accept the payload.
+
+/**
+ * Rebuilds the whole config as a NEW version, substituting `freightRows` in for the freight
+ * child list. Every scalar (buffers, margin, effectiveFrom, ...) and every duty/clearance row
+ * carries over from `current` verbatim in VALUE — but duty/clearance rows are still re-keyed with
+ * a fresh id via formulaDutyRow/formulaClearanceRow, same as pricingFormulaConfig.update above,
+ * because "never mutate an existing version's children in place" applies to every child table,
+ * not just the one this call happens to be touching.
+ */
+function createNewFormulaConfigVersion(current, freightRows) {
+  const maxVersion = Math.max(0, ...mockPricingFormulaConfigVersions.map((c) => c.version));
+  mockPricingFormulaConfigVersions.forEach((c) => { c.isCurrent = false; });
+  const newConfig = {
+    formulaConfigId: mockFormulaConfigSeq++,
+    version: maxVersion + 1,
+    insuranceValueFactor: current.insuranceValueFactor,
+    insuranceRate: current.insuranceRate,
+    insuranceBuffer: current.insuranceBuffer,
+    costBuffer: current.costBuffer,
+    sellingBuffer: current.sellingBuffer,
+    defaultMarginPct: current.defaultMarginPct,
+    sellingPriceRoundUpTo: current.sellingPriceRoundUpTo,
+    isCurrent: true,
+    effectiveFrom: current.effectiveFrom,
+    updatedAt: new Date().toISOString(),
+    freightRates: freightRows.map((r) => formulaFreightRow(
+      r.originCountry, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
+    dutyRates: current.dutyRates.map((d) => formulaDutyRow(d.productType, d.productLabel, d.dutyPct)),
+    clearanceFees: current.clearanceFees.map((c) => formulaClearanceRow(c.qtyMinSqm, c.qtyMaxSqm, c.amountThb)),
+  };
+  mockPricingFormulaConfigVersions.push(newConfig);
+  return newConfig;
+}
+
+/**
+ * Half-open [min, max) overlap test — mirrors PricingFormulaConfigController#bandsOverlap
+ * exactly, including the strict "<" that keeps contiguous bands ([1,101) and [101,451)) from
+ * being flagged as overlapping.
+ */
+function freightBandsOverlap(aMin, aMax, bMin, bMax) {
+  const aMinLtBMax = bMax == null || aMin < bMax;
+  const bMinLtAMax = aMax == null || bMin < aMax;
+  return aMinLtBMax && bMinLtAMax;
+}
+
+/** Mirrors PricingFormulaConfigController#validate's band-ordering + per-country pairwise overlap
+ * check, run against the WHOLE resulting matrix (not just the row being added). */
+function validateFreightRates(rows) {
+  for (const row of rows) {
+    if (row.thicknessMinMm >= row.thicknessMaxMm) {
+      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+    if (row.qtyMaxSqm != null && row.qtyMinSqm >= row.qtyMaxSqm) {
+      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+    }
+  }
+  const byCountry = new Map();
+  for (const row of rows) {
+    if (!byCountry.has(row.originCountry)) byCountry.set(row.originCountry, []);
+    byCountry.get(row.originCountry).push(row);
+  }
+  for (const [country, group] of byCountry) {
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i];
+        const b = group[j];
+        const thicknessOverlap = freightBandsOverlap(a.thicknessMinMm, a.thicknessMaxMm, b.thicknessMinMm, b.thicknessMaxMm);
+        const qtyOverlap = freightBandsOverlap(a.qtyMinSqm, a.qtyMaxSqm, b.qtyMinSqm, b.qtyMaxSqm);
+        if (thicknessOverlap && qtyOverlap) {
+          fail(
+            `ช่วงความหนาและช่วงจำนวน (ตร.ม.) ซ้อนทับกัน: ${country} `
+            + `หนา ${a.thicknessMinMm}-${a.thicknessMaxMm} มม. (${a.qtyMinSqm}-${a.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.) `
+            + `กับ ${b.thicknessMinMm}-${b.thicknessMaxMm} มม. (${b.qtyMinSqm}-${b.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม.)`,
+            400,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Mirrors PricingFormulaConfigController#validateRemovalLeavesNoInteriorGap: a row is deletable
+ * only at the lowest or highest qtyMinSqm of its (country, thickness) ladder — and, only when it
+ * is the last row of its thickness band, that thickness band must itself be the lowest or highest
+ * for the country. Trimming an edge is how V109's own seed is shaped (every existing hole is a
+ * trailing one); punching a hole in the middle would silently mis-price an order that lands there.
+ */
+function validateFreightRemovalLeavesNoInteriorGap(all, target) {
+  const sameThicknessBand = all
+    .filter((r) => r.originCountry === target.originCountry
+      && r.thicknessMinMm === target.thicknessMinMm && r.thicknessMaxMm === target.thicknessMaxMm)
+    .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
+
+  if (sameThicknessBand.length > 1) {
+    // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which
+    // validateFreightRates already rejects, but an id comparison cannot be fooled either way.
+    const lowestId = sameThicknessBand[0].freightRateId;
+    const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
+    if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
+      fail(
+        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountry} `
+        + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ช่วง `
+        + `${target.qtyMinSqm}-${target.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด`,
+        400,
+      );
+    }
+    return;
+  }
+
+  // The row is the last one in its thickness band, so removing it empties that band. Apply the
+  // same edge-only rule one level up, across the country's thickness ladder.
+  const thicknessMins = [...new Set(
+    all.filter((r) => r.originCountry === target.originCountry).map((r) => r.thicknessMinMm),
+  )].sort((a, b) => a - b);
+  if (thicknessMins.length > 1
+    && thicknessMins[0] !== target.thicknessMinMm
+    && thicknessMins[thicknessMins.length - 1] !== target.thicknessMinMm) {
+    fail(
+      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountry} `
+      + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด`,
+      400,
+    );
+  }
+}
+
 // R5: Attachments
 const mockAttachments = [];
 let mockAttachSeq = 1;
@@ -714,6 +910,11 @@ let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
+// PricingCostingItemDto's own id (sales.pricing_costing_item.id) — distinct from
+// pricingRequestItemId, which is a FK a costing item merely CARRIES. PricingDecisionItemDto's
+// pricingCostingItemId points at THIS, not at pricingRequestItemId (see startPricingDecision
+// below and PricingDecisionDtos.PricingDecisionItemDto's own field list).
+let mockPricingCostingItemSeq = 1;
 // Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
 const mockPricingDecisions = [];
 let mockPricingDecisionSeq = 1;
@@ -751,6 +952,7 @@ let mockCustomerQuotationItemSeq = 1;
   mockFactoryQuoteItemSeq = salesSeed.nextSeq.factoryQuoteItem;
   mockPricingCostings.push(...salesSeed.pricingCostings);
   mockPricingCostingSeq = salesSeed.nextSeq.pricingCosting;
+  mockPricingCostingItemSeq = salesSeed.nextSeq.pricingCostingItem;
   mockPricingDecisions.push(...salesSeed.pricingDecisions);
   mockPricingDecisionSeq = salesSeed.nextSeq.pricingDecision;
   mockPricingDecisionItemSeq = salesSeed.nextSeq.pricingDecisionItem;
@@ -1365,6 +1567,31 @@ function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricing
     case 'PER_LINEAR_M': return Number(requestedQty) / mockRequireConversionFactor(factors.linearMPerUnit, pricingRequestItemId, 'linearMPerUnit');
     default: fail(`ไม่รองรับหน่วยนับที่ขอ '${requestedUnitBasis}'`, 422); return null;
   }
+}
+
+// V141 ("CEO owns costing") — mirrors PricingCostingRepository#mapItem's three DERIVED, NEVER
+// STORED fields: recomputed fresh every time a costing item is read, never cached on the item
+// itself, so none of the three can drift out of sync with the raw columns they describe. Applied
+// wherever a costing (or a costing item) is returned to a caller — see listCostings/getCosting
+// below — and reused directly inside recalculatePricingDecisionCost/overridePricingDecisionItemCost
+// to re-derive a decision item's frozen cost right after mutating the bound costing item.
+function deriveCostingItemEffective(item) {
+  const effectiveLandedCostPerUnitThb = item.manualLandedCostPerUnitThb != null
+    ? item.manualLandedCostPerUnitThb
+    : item.landedCostPerUnitThb;
+  const effectiveTotalLandedCostThb = effectiveLandedCostPerUnitThb * (item.normalizedQuantityPieces ?? 0);
+  const overrideStale = item.manualLandedCostPerUnitThb != null
+    && (item.overrideFxRate == null || item.overrideCalcConfigVersion == null
+        || item.overrideFxRate !== item.fxRate || item.overrideCalcConfigVersion !== item.calculationConfigVersion);
+  return { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb, overrideStale };
+}
+
+function withDerivedCostingItemFields(item) {
+  return { ...item, ...deriveCostingItemEffective(item) };
+}
+
+function withDerivedCosting(costing) {
+  return { ...costing, items: (costing.items ?? []).map(withDerivedCostingItemFields) };
 }
 
 function buildMockDoc(doc) {
@@ -3737,6 +3964,19 @@ function findEmployee(id) {
   return employee;
 }
 
+// Mirrors TemporaryPasswordGenerator's alphabet and length exactly (14 chars, alphanumeric with
+// the visually ambiguous O/0/I/l/1 removed) so ResetPasswordDialog is exercised against a
+// realistic value. Uses Math.random, NOT SecureRandom — this is a demo-fixture generator for
+// exercising the UI, not a security-grade one; only the real backend's SecureRandom is that.
+const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+function mockTemporaryPassword() {
+  let password = '';
+  for (let i = 0; i < 14; i += 1) {
+    password += TEMPORARY_PASSWORD_ALPHABET[Math.floor(Math.random() * TEMPORARY_PASSWORD_ALPHABET.length)];
+  }
+  return password;
+}
+
 function applyApprovedProfileRequest(request) {
   const employee = findEmployee(request.employeeId);
   if (request.fieldKey === 'phone') employee.phone = request.newValue;
@@ -4014,6 +4254,24 @@ export const api = {
         }
       }
       return delay({ employee: employeeWithRequestMeta(employee) });
+    },
+    // Mirrors EmployeeController#resetPassword + EmployeeService#resetPassword.
+    // hr ONLY — the Java side is `sessions.requireAnyRole(user, "hr")`, so ceo is deliberately NOT
+    // allowed here either. 404s on an unknown employee exactly as the service does.
+    async resetPassword(id) {
+      hasRole('hr');
+      const employee = findEmployee(id);
+      const temporaryPassword = mockTemporaryPassword();
+      // Mirrors EmployeeAuthRepository#setTemporaryPassword: the row's password is replaced and
+      // must_change_password is set, so the next login is forced through ChangePasswordModal.
+      // The real backend writes hr.employee directly, so an employee with no login row is still a
+      // successful reset — hence the optional match rather than a failure.
+      const account = db.users.find((user) => user.employeeId === employee.id);
+      if (account) {
+        account.password = temporaryPassword;
+        account.mustChangePassword = true;
+      }
+      return delay({ temporaryPassword });
     },
   },
   // Mirrors ProfileRequestController + ProfileRequestService (profile/).
@@ -5220,20 +5478,74 @@ export const api = {
       });
     },
 
-    // Leave-surface IA rebuild, Phase A3: mirrors LeaveController#policyDocument's SHAPE only, not
-    // its authority. The real endpoint's answer depends on server-side storage this mock has no
-    // equivalent of and no file to actually serve — "not supported in mock mode" is the honest
-    // answer here (CLAUDE.md: prefer that over inventing a fake success path), so this always
-    // reports "not uploaded", exactly the state a fresh/unconfigured real deployment is in too. Do
-    // not read an "available" render under mocks as evidence the real endpoint works — verify a
-    // configured deployment against the real backend.
+    // Mirrors LeaveController#policyDocument + LeavePolicyDocumentRepository#findCurrent.
+    //
+    // ── WHY THIS IS NO LONGER A FLAT `false` (2026-08-14, issue #744) ────────
+    // It used to return `false` unconditionally, on the sound reasoning that the mock had no
+    // storage and no file to serve. Adding the UPLOAD half (below) retires that reasoning: the mock
+    // now has exactly one way to hold a document — someone uploading one — which is also the ONLY
+    // way a real environment gets one (V133: rows reach the table through that endpoint alone).
+    //
+    // The DEFAULT is unchanged and deliberately so: with nothing uploaded this still answers
+    // `'absent'`, which is the state production, UAT and a fresh mock session are all in today. It
+    // can only become `'available'` by way of a real upload in the same session, so this is
+    // strictly more faithful, never more permissive. Availability is computed by findCurrent's own
+    // rule rather than "something was uploaded" — see currentLeavePolicyDocument().
+    //
+    // Still NOT evidence the real endpoint works: no bytes cross a network here.
+    //
+    // ── A STRING ENUM, NOT A BOOLEAN (2026-08-14, LeavePolicyBar's upload-preferring reversal) ──
+    // hrApi.js's real HEAD probe answers one of FOUR strings — 'available' / 'absent' / 'unverified'
+    // / 'check-failed' — and never throws for an HTTP reason; see that method's own comment for the
+    // full table. The mock has no transport layer to fail, so it can only ever produce the two rows
+    // a session with a real store can actually reach: 'available' or 'absent'. It can never answer
+    // 'unverified' (there is no partial, unconfirmed answer to mirror — every mock call either finds
+    // a row or doesn't) or 'check-failed' (there is no failing backend to mirror). A test that needs
+    // those two rows exercised must stub hrApi.js's `fetch` directly — see
+    // hrApi.leavePolicyProbe.test.js — not drive it through this mock.
     async policyDocumentAvailable() {
       requireSession();
-      return delay(false);
+      return delay(currentLeavePolicyDocument() ? 'available' : 'absent');
     },
     async downloadPolicyDocument() {
       requireSession();
-      fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      const current = currentLeavePolicyDocument();
+      // Same message and same 404 the controller raises when findCurrent has nothing to serve —
+      // including the case where a document EXISTS but is future-dated, which is not "current".
+      if (!current) fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
+      // NOT wrapped in delay(): that helper round-trips through structuredClone, which does not
+      // preserve a Blob — it arrives as a bare `{}` with no size, type or bytes. Every other
+      // blob-returning method in this file returns directly for the same reason.
+      return new Blob([current.content], { type: current.mimeType });
+    },
+
+    // Mirrors LeaveController#uploadPolicyDocument (issue #744). hr + ceo — `requireAnyRole(user,
+    // "hr", "ceo")` — which is NARROWER than the read above (any authenticated employee).
+    async uploadPolicyDocument(file, effectiveFrom) {
+      hasRole('hr', 'ceo');
+      // The controller's three 400s, in its own order, with its own messages.
+      if (!file || !file.size) fail('ไฟล์ว่างเปล่า', 400);
+      // Mirrors `MediaType.APPLICATION_PDF_VALUE.equals(file.getContentType())` — the CLIENT-DECLARED
+      // type, exactly as weak on the real backend as it is here. The mock deliberately does not
+      // sniff the bytes: being STRICTER than production would hide a request production accepts.
+      if (file.type !== 'application/pdf') fail('รองรับเฉพาะไฟล์ PDF', 400);
+      if (file.size > MAX_POLICY_DOCUMENT_BYTES) fail('ไฟล์มีขนาดใหญ่เกินไป', 400);
+
+      // INSERT, never UPDATE — LeavePolicyDocumentRepository#insert keeps every superseded version
+      // (V133), so this appends rather than replacing. `content` stands in for the blob table.
+      const document = {
+        documentId: db.leavePolicyDocumentSeq++,
+        fileName: file.name || 'leave-policy-announcement.pdf',
+        mimeType: file.type,
+        fileSize: file.size,
+        effectiveFrom,
+        uploadedAt: new Date().toISOString(),
+        content: file,
+      };
+      db.leavePolicyDocuments.push(document);
+      // The controller returns Map.of("document", saved) — metadata only, never the bytes.
+      const { content, ...metadata } = document;
+      return delay({ document: metadata });
     },
 
     // Leave-request composer, Phase C: mirrors LeaveController#calendarContext's SHAPE only, NOT
@@ -6342,6 +6654,80 @@ export const api = {
     },
 
     /**
+     * Issue #737 — SHAPE MIRROR ONLY, read this before trusting it for anything else.
+     *
+     * The real endpoint (CommissionController#reps / CommissionService
+     * #listManualCommissionRepOptions) returns hr.employee rows in ฝ่ายขาย, keyed by employee_id.
+     * This mock returns db.users rows instead, keyed by db.users id — NOT the same identity
+     * space. That divergence is deliberate, not sloppy: createManualCommission() below resolves
+     * its salesRepId against `db.users.find(item => item.id === salesRepId)`, not db.employees,
+     * so a picker built from db.employees ids would select values that never resolve to a name
+     * in mock mode.
+     *
+     * SCOPE (owner ruling, 2026-08-14 — 2nd ruling on this endpoint, superseding a brief
+     * per-caller-division-scoped design in between): ceo and sales_manager now get the IDENTICAL
+     * list — every ACTIVE employee in ฝ่ายขาย, division MEMBERSHIP rather than "has a commission
+     * record", so a brand-new rep still appears. No per-caller scoping is left to mirror.
+     *
+     * HOW THIS MOCK IDENTIFIES ฝ่ายขาย, AND WHY IT IS db.users' `role`, NOT db.employees'
+     * `divisionId`. The real query joins hr.employee to hr.division and matches the division's
+     * code — but this fixture's db.employees divisions ('SAL'/'WHL'/'PRC'/'FIN'/'HRD'/'IT', see
+     * demoData.js's `divisions` array) are a SEPARATE, hand-authored coding scheme that does not
+     * correspond to the real hr.division.source_code values ('SA'/'WH'/'PCIM'/'AC'/'HR'/'QC'/'MD')
+     * at all — there is no live DivisionAccessPolicy-style derivation running in mock mode to
+     * bridge the two. A division-based filter (`employeeForUser(item)?.divisionId === 'SAL'`) was
+     * tried and rejected here: TWO of db.users' three sales-role personas — sales@glr.co.th and
+     * sales2@glr.co.th — carry `employeeId: null`, so a division-based filter would silently drop
+     * the two actual sales-rep demo accounts from a "list everyone in sales" picker, leaving only
+     * the manager. Backwards. Filtering on `role === 'sales' || role === 'sales_manager'` instead
+     * is this fixture's own faithful stand-in: DivisionAccessPolicy.roleFor derives exactly those
+     * two role strings FROM ฝ่ายขาย membership and nothing else in the real system, and every
+     * db.users row's role here is hand-authored to match what it is meant to represent — "has a
+     * sales-shaped role" is the closest signal this data model actually has, not a loose
+     * approximation reached for lack of a better one.
+     *
+     * THIS STILL UNDERCOUNTS relative to the real endpoint, and structurally now, not by fixture
+     * accident: the real query has no login-account precondition at all — it reads hr.employee
+     * directly, so an active ฝ่ายขาย employee who has never had a login created still appears.
+     * This mock can only ever surface db.users rows, so anyone belonging to sales without one of
+     * the 3 sales-role personas here (sales, sales2, sales.manager) is invisible in mock mode.
+     * That is the safe direction (CLAUDE.md: a mock less populated than production is the same
+     * class of lie as one more permissive, but it never shows someone who should not be visible)
+     * — do not read mock-mode picker population as a rehearsal of the real ฝ่ายขาย roster size.
+     *
+     * A SECOND, OPPOSITE axis is live and is NOT safe, so it is named rather than left implicit:
+     * the filter above reads `item.active`, which is the db.users LOGIN row's flag, and never
+     * consults the linked employee's employment status. demoData's employees[] carry a real
+     * `status` (indices 3/17/28 probation, 24/29 resigned) that this method cannot see. Today no
+     * sales-role persona points at one of those rows, so the undercount above holds — but that is
+     * a fixture accident, not a property of this code. Point sales.manager@glr.co.th at a
+     * non-"ACT" employee and this mock lists someone the real `WHERE e.is_active` excludes: an
+     * OVERCOUNT, the dangerous direction. Mirror the employment-status filter here before relying
+     * on mock mode for anything that turns on who is currently employed.
+     *
+     * This mock sorts with JS `localeCompare('th')`; the real endpoint's ORDER BY sorts under
+     * Postgres's collation. The two are different implementations of "Thai order" and are not
+     * guaranteed to agree on every input. The sort stays (a picker has to render in SOME order),
+     * but do not treat mock-mode ordering as a rehearsal for the real one.
+     *
+     * No employeeCode field: the real DTO does not have one either (see CommissionRepOptionDto's
+     * javadoc for why it was removed — showing a second id-shaped value next to the real
+     * employee_id field invited a user to type the wrong one in).
+     *
+     * Authz here only APPROXIMATES the Java gate (CLAUDE.md "Mock API contract") — the real
+     * boundary (only sales_manager/ceo may call this) is proven by
+     * CommissionRepLookupIntegrationTest against real Postgres, not by this check.
+     */
+    async reps() {
+      hasRole('sales_manager', 'ceo');
+      const reps = db.users
+        .filter((item) => item.active && (item.role === 'sales' || item.role === 'sales_manager'))
+        .map((item) => ({ id: item.id, name: item.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th') || a.id - b.id);
+      return delay({ reps });
+    },
+
+    /**
      * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
      * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
      * salesRepId's payrollMonth — no invoice, never touches the commission tier calculation.
@@ -7096,6 +7482,91 @@ export const api = {
       row.updatedAt = new Date().toISOString();
       return delay(deductionObligationPublic(row));
     },
+    // Garnishment shortfall ledger (issue #376). Mirrors PayrollDeductionShortfallController +
+    // PayrollDeductionShortfallService: hr + ceo (VIEW_ROLES), read-only, no write half at all —
+    // rows are written only as a side effect of a payroll run.
+    async getDeductionShortfalls(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionShortfalls;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors PayrollDeductionShortfallRepository#findAll's
+      // `ORDER BY s.payroll_month DESC, e.employee_code` — and its absence of any LIMIT, so the
+      // mock returns every matching row exactly as the server does.
+      items = [...items].sort((a, b) => (
+        b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
+      ));
+      return delay({ items });
+    },
+
+    // Written-consent register (issue #376). Mirrors DeductionWrittenConsentController +
+    // DeductionWrittenConsentService + DeductionWrittenConsentRepository.
+    //
+    // READ is hr + ceo (VIEW_ROLES); WRITE is hr ONLY (EDIT_ROLES) — the asymmetry is the point,
+    // and matching it here is what keeps the mock from being more permissive than production.
+    async getDeductionConsents(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionConsents;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors DeductionWrittenConsentRepository#findAll's `ORDER BY e.employee_code,
+      // c.deduction_kind` — and its absence of any LIMIT, so every matching row comes back.
+      items = [...items].sort((a, b) => (
+        a.employeeCode.localeCompare(b.employeeCode) || a.deductionKind.localeCompare(b.deductionKind)
+      ));
+      return delay({ items });
+    },
+
+    // hr ONLY — DeductionWrittenConsentService.EDIT_ROLES is Set.of("hr"), NARROWER than the read
+    // gate above (hr + ceo). Getting that asymmetry wrong in the permissive direction is the
+    // failure CLAUDE.md warns about (issue #199 was exactly it), so CEO is refused here on purpose
+    // even though CEO may read the very same rows.
+    async upsertDeductionConsent(payload = {}) {
+      const actor = hasRole('hr');
+      // The real service validates the kind BEFORE checking the employee exists, and returns 400
+      // rather than silently ignoring the row. Order matters for a caller that sends both wrong.
+      if (!CONSENT_APPLICABLE_KINDS.includes(payload.deductionKind)) {
+        fail(
+          `ประเภทการหัก ${payload.deductionKind} ไม่ใช่ประเภทที่ต้องมีหนังสือยินยอม `
+          + '(item (1) หรือคำสั่งศาล/บังคับคดี ไม่ต้องขอความยินยอม)',
+          400,
+        );
+      }
+      const employee = db.employees.find((row) => row.id === Number(payload.employeeId));
+      if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
+
+      const now = new Date().toISOString();
+      // ON CONFLICT (employee_id, deduction_kind) DO UPDATE — one row per pair, so re-recording the
+      // same pair overwrites rather than appending. recorded_by_id / recorded_at are set on INSERT
+      // only and deliberately NOT re-stamped on update, matching the repository's DO UPDATE SET
+      // column list exactly (it lists consent_on_file, consent_document_reference, consent_date,
+      // notes, updated_by_id, updated_at — and nothing else).
+      const existing = db.deductionConsents.find((row) => (
+        row.employeeId === employee.id && row.deductionKind === payload.deductionKind
+      ));
+      const row = existing || {
+        id: db.deductionConsentSeq++,
+        employeeId: employee.id,
+        employeeCode: employee.code,
+        employeeName: employee.nameTh,
+        deductionKind: payload.deductionKind,
+        recordedById: actor.employeeId ?? null,
+        recordedAt: now,
+      };
+      row.consentOnFile = !!payload.consentOnFile;
+      row.consentDocumentReference = payload.consentDocumentReference ?? null;
+      row.consentDate = payload.consentDate ?? null;
+      row.notes = payload.notes ?? null;
+      row.updatedById = actor.employeeId ?? null;
+      row.updatedAt = now;
+      if (!existing) db.deductionConsents.push(row);
+
+      // ⚠️ Returns findAll(employeeId, deductionKind) — the ONE row just written, NOT the whole
+      // register. Mirrored exactly, because a caller that treated this as the full list would blank
+      // its own table; see hrApi.upsertDeductionConsent's note. Nothing in any payroll calculation
+      // reads what this just wrote.
+      return delay({ items: [row] });
+    },
   },
 
   // Mirrors AttendanceController + AttendanceService (attendance/).
@@ -7516,12 +7987,46 @@ export const api = {
   // endpoint, distinct from priceCalcConfigs above (which keeps serving the separate catalog
   // price calculator, untouched). get() mirrors READ_ROLES = ceo/import (same #388-style
   // rationale: this config IS the margin policy). update stays CEO-only.
+  //
+  // addFreightRate/deleteFreightRate (issue #436, PR #455) mirror
+  // PricingFormulaConfigController.addFreightRate/deleteFreightRate — also CEO-only, also strictly
+  // additive to the whole-config POST above (same versioning model: neither one UPDATEs or
+  // DELETEs a stored row in place, both write a complete new version). Their validation is a
+  // NON-AUTHORITATIVE approximation; the server decides.
   pricingFormulaConfig: {
     async get() {
       hasRole('ceo', 'import');
       const current = currentFormulaConfig();
       if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
       return delay({ formulaConfig: sortedFormulaConfig(current) });
+    },
+    async addFreightRate(payload) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const newRow = {
+        originCountry: payload.originCountry,
+        thicknessMinMm: Number(payload.thicknessMinMm),
+        thicknessMaxMm: Number(payload.thicknessMaxMm),
+        qtyMinSqm: Number(payload.qtyMinSqm),
+        qtyMaxSqm: payload.qtyMaxSqm == null ? null : Number(payload.qtyMaxSqm),
+        amountThb: Number(payload.amountThb),
+      };
+      validateFreightRates([...current.freightRates, newRow]);
+      const newConfig = createNewFormulaConfigVersion(current, [...current.freightRates, newRow]);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
+    },
+    async deleteFreightRate(freightRateId) {
+      hasRole('ceo');
+      const current = currentFormulaConfig();
+      if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
+      const target = current.freightRates.find((r) => r.freightRateId === Number(freightRateId));
+      if (!target) fail('ไม่พบค่าขนส่งที่ต้องการลบในสูตรปัจจุบัน', 404);
+      if (current.freightRates.length === 1) fail('ต้องมีค่าขนส่งอย่างน้อย 1 รายการ', 400);
+      validateFreightRemovalLeavesNoInteriorGap(current.freightRates, target);
+      const remaining = current.freightRates.filter((r) => r.freightRateId !== target.freightRateId);
+      const newConfig = createNewFormulaConfigVersion(current, remaining);
+      return delay({ formulaConfig: sortedFormulaConfig(newConfig) });
     },
     async update(payload) {
       hasRole('ceo');
@@ -7774,7 +8279,16 @@ export const api = {
       ticket.updatedAt = doc.updatedAt;
       pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, `เอกสาร ${doc.docNumber} ออกแล้ว`);
 
-      return delay({ depositNotice: structuredClone(doc) });
+      // Mirrors DepositNoticeService.issue's renderAfterCommit (PR #721 moved the PDF/XLSX
+      // render into an afterCommit callback): the DTO issue() itself returns still reports
+      // the PRE-render state, and only a subsequent read sees hasPdf/hasXlsx true. ORDER IS
+      // LOAD-BEARING — clone the response BEFORE flipping the stored doc's flags, or the
+      // response would lie about what production actually returns (issue #752).
+      const response = structuredClone(doc);
+      doc.hasPdf = true;
+      doc.hasXlsx = true;
+
+      return delay({ depositNotice: response });
     },
 
     async downloadXlsx(docId) {
@@ -8480,10 +8994,9 @@ export const api = {
       const revision = { ...quote, id: mockFactoryQuoteSeq++, quoteCode: `FQ-2026-${String(mockFactoryQuoteSeq).padStart(4, '0')}`, status: 'RESPONSE_RECEIVED', parentFactoryQuoteId: quote.id, revisionNo: quote.revisionNo + 1, current: true, createdAt: new Date().toISOString() };
       applyResponse(revision);
       mockFactoryQuotes.push(revision);
-      for (const costing of mockPricingCostings.filter((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status))) {
-        costing.stale = true;
-        costing.staleReason = 'Factory quote revision changed';
-      }
+      // A revision no longer marks open costings: V141 deleted FactoryQuoteService's
+      // markOpenCostingsStale together with the pricing_costing.stale/stale_reason columns it
+      // wrote, so mirroring it here would invent a state the real service cannot produce.
       pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
       mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: revision.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
       return delay({ factoryQuote: revision });
@@ -8570,7 +9083,7 @@ export const api = {
       for (const item of pr.items) if (!readyFactories.has(item.factory)) fail(`ใบเสนอราคาของโรงงาน ${item.factory} ยังไม่พร้อมสำหรับการคำนวณต้นทุน`, 422);
       const existing = mockPricingCostings.find((c) => c.pricingRequestId === pr.id && ['DRAFT', 'CALCULATED'].includes(c.status));
       if (existing) return delay({ costing: existing });
-      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', stale: false, staleReason: null, note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
+      const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
       mockPricingCostings.push(costing);
       // Mirrors PricingCostingService.createDraft after V140: starting a costing settles the
       // request into AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one
@@ -8584,14 +9097,16 @@ export const api = {
 
     async listCostings(id) {
       hasRole('import', 'ceo');
-      return delay({ items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)) });
+      return delay({
+        items: mockPricingCostings.filter((c) => c.pricingRequestId === Number(id)).map(withDerivedCosting),
+      });
     },
 
     async getCosting(id) {
       hasRole('import', 'ceo');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
       if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
-      return delay({ costing });
+      return delay({ costing: withDerivedCosting(costing) });
     },
 
     async recalculateCosting(id, payload = {}) {
@@ -8614,6 +9129,9 @@ export const api = {
         const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
         const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
         return {
+          // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this
+          // row merely carries as a FK) — see mockPricingCostingItemSeq's own comment.
+          id: mockPricingCostingItemSeq++,
           pricingRequestItemId: item.id,
           factoryQuoteId: quote.id,
           factoryQuoteItemId: quoteItem.id,
@@ -8633,12 +9151,24 @@ export const api = {
           goodsCostThb: pricePerPiece,
           landedCostPerUnitThb: pricePerPiece,
           totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
+          // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto.
+          // The mock's FX is always 1 (no BOT lookup in mock mode, same simplification the rest of
+          // this costing builder already makes), so only the calculationConfigVersion half of
+          // overrideStale is reachable under VITE_USE_MOCKS=true: override -> CEO saves a new
+          // formula-config version -> recalculate cost -> stale. Do not fake the FX half.
+          fxRate: 1,
+          fxSource: 'THB',
+          calculationConfigVersion: currentFormulaConfig()?.version ?? 1,
+          manualLandedCostPerUnitThb: null,
+          overrideReason: null,
+          overriddenBy: null,
+          overriddenAt: null,
+          overrideFxRate: null,
+          overrideCalcConfigVersion: null,
         };
       });
       costing.totalLandedCostThb = costing.items.reduce((sum, item) => sum + item.totalLandedCostThb, 0);
       costing.status = 'CALCULATED';
-      costing.stale = false;
-      costing.staleReason = null;
       costing.note = payload.note ?? costing.note;
       costing.calculatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_CALCULATED', null, null);
@@ -8649,7 +9179,9 @@ export const api = {
       const user = hasRole('import');
       const costing = mockPricingCostings.find((c) => c.id === Number(id));
       if (!costing) fail('ไม่พบการคำนวณต้นทุนนี้', 404);
-      if (costing.stale) fail('ข้อมูลต้นทุนล้าสมัยแล้ว ต้องคำนวณใหม่ก่อนส่ง', 409);
+      // No staleness gate here. There used to be a 409 keyed on costing.stale — a rule the real
+      // service CANNOT enforce, because V141 dropped the column it read. A mock that refuses what
+      // production accepts is the same class of lie as one that accepts what production refuses.
       if (costing.status !== 'CALCULATED') fail('ส่งได้เฉพาะการคำนวณต้นทุนที่คำนวณเสร็จแล้วเท่านั้น', 409);
       const pr = findPricingRequestRaw(costing.pricingRequestId);
       costing.status = 'SUBMITTED';
@@ -8726,7 +9258,14 @@ export const api = {
             // reason — see its own comment) fixes it up once decision.id is known.
             pricingDecisionId: null,
             pricingRequestItemId: costingItem.pricingRequestItemId,
-            pricingCostingItemId: costingItem.pricingRequestItemId,
+            // costingItem.id, NOT pricingRequestItemId — PricingDecisionItemDto.pricingCostingItemId
+            // is a FK to pricing_costing_item.id (see PricingDecisionService.overrideItemCost's own
+            // lookup). The two used to be silently interchangeable here only because every mock
+            // costing item lacked its own id at all; now that recalculateCosting/makeCosting mint
+            // one, this must point at it or the CEO cost-override UI's join
+            // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) never matches
+            // under VITE_USE_MOCKS=true.
+            pricingCostingItemId: costingItem.id,
             brand: prItem?.brand ?? null,
             model: prItem?.model ?? null,
             productDescription: prItem?.productDescription ?? null,
@@ -8839,6 +9378,99 @@ export const api = {
       return delay({ decision });
     },
 
+    // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
+    // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
+    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Refreshes the
+    // bound costing items' COMPUTED provenance (fxRate/calculationConfigVersion), preserving every
+    // override column, then re-derives each decision item's frozen cost from the resulting
+    // EFFECTIVE cost — this is what can make an existing override STALE without destroying it.
+    // Does not reimplement the landed-cost engine — landedCostPerUnitThb itself is untouched.
+    async recalculatePricingDecisionCost(id) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const currentVersion = currentFormulaConfig()?.version ?? 1;
+      for (const costingItem of costing?.items ?? []) {
+        costingItem.fxRate = 1;
+        costingItem.calculationConfigVersion = currentVersion;
+      }
+      for (const item of decision.items) {
+        const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+        if (!costingItem) continue;
+        const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+        item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
+        item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+          ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+          : effectiveLandedCostPerUnitThb;
+        if (item.proposedMarginPct != null) {
+          item.proposedSellingPricePerRequestedUnit =
+            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        }
+        item.updatedAt = new Date().toISOString();
+      }
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
+    // V141 (PR #702). Mirrors PricingDecisionService.overrideItemCost, including its check ORDER:
+    // role -> reason (mandatory in BOTH directions, checked before anything else) -> negative
+    // amount -> decision open-for-mutation -> item-belongs-to-decision -> bound-costing-item-found.
+    // `itemId` is the pricingDecisionItemId, resolved here to its bound pricingCostingItemId.
+    async overridePricingDecisionItemCost(decisionId, itemId, payload) {
+      const user = hasRole('ceo');
+      if (!payload?.reason || !payload.reason.trim()) {
+        fail('ต้องระบุเหตุผลในการปรับต้นทุน ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม', 400);
+      }
+      const manualCost = payload.manualLandedCostPerUnitThb;
+      if (manualCost != null && Number(manualCost) < 0) {
+        fail('ต้นทุนที่ปรับต้องไม่ติดลบ', 400);
+      }
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      costingItem.overrideReason = payload.reason;
+      costingItem.overriddenBy = user.id;
+      costingItem.overriddenAt = new Date().toISOString();
+      if (manualCost != null) {
+        costingItem.manualLandedCostPerUnitThb = Number(manualCost);
+        // Re-stamp: snapshot THIS row's CURRENT computed provenance. Re-confirming the SAME value
+        // after a recalculate re-stamps these to whatever is current then — that is how staleness
+        // clears, and it is the CEO's only escape hatch besides clearing the override outright.
+        costingItem.overrideFxRate = costingItem.fxRate;
+        costingItem.overrideCalcConfigVersion = costingItem.calculationConfigVersion;
+      } else {
+        costingItem.manualLandedCostPerUnitThb = null;
+        costingItem.overrideFxRate = null;
+        costingItem.overrideCalcConfigVersion = null;
+      }
+
+      const { effectiveLandedCostPerUnitThb, effectiveTotalLandedCostThb } = deriveCostingItemEffective(costingItem);
+      item.frozenLandedCostPerPieceThb = effectiveLandedCostPerUnitThb;
+      item.frozenLandedCostPerRequestedUnitThb = Number(item.requestedQuantity) > 0
+        ? effectiveTotalLandedCostThb / Number(item.requestedQuantity)
+        : effectiveLandedCostPerUnitThb;
+      if (item.proposedMarginPct != null) {
+        item.proposedSellingPricePerRequestedUnit =
+          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+      }
+      item.updatedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -8850,6 +9482,23 @@ export const api = {
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่รออนุมัติ', 409);
       const pr = findPricingRequestRaw(decision.pricingRequestId);
       if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      // V141: refuse while ANY line of the bound costing carries a stale override — mirrors
+      // PricingDecisionService.approve's staleItemIds guard, including its message shape. Keeps
+      // the mock from being MORE PERMISSIVE than production, which is the dangerous direction
+      // (CLAUDE.md "Mock API contract") — approvePricingDecision must never accept here what the
+      // real service would 409 on.
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const decisionItemIdByCostingItemId = new Map(decision.items.map((i) => [i.pricingCostingItemId, i.id]));
+      const staleItemIds = (costing?.items ?? [])
+        .filter((ci) => deriveCostingItemEffective(ci).overrideStale)
+        .map((ci) => decisionItemIdByCostingItemId.get(ci.id) ?? ci.id);
+      if (staleItemIds.length) {
+        fail(
+          'ไม่สามารถอนุมัติได้ เนื่องจากมีรายการที่ปรับต้นทุนเองล้าสมัย (อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับ) '
+          + `กรุณาคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ — รายการที่ล้าสมัย: [${staleItemIds}]`,
+          409,
+        );
+      }
       const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
       const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
       if (missingMargin.length || missingMinimum.length) {

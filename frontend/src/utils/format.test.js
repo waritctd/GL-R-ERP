@@ -100,11 +100,11 @@ describe('pricing workflow status labels', () => {
     expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'พร้อมคำนวณต้นทุน', tone: 'success' });
     expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
     expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
-  });
-
-  it('keeps stale costing visible without exposing the raw backend code', () => {
-    expect(pricingCostingStatusLabel('CALCULATED', { stale: true }))
-      .toMatchObject({ label: 'คำนวณแล้ว · ต้องคำนวณใหม่', tone: 'warning' });
+    // Absorbed from a deleted 'keeps stale costing visible' case: that test only ever exercised
+    // the ` · ต้องคำนวณใหม่` suffix, which V141 removed along with pricing_costing.stale — but it
+    // was also the file's ONLY call of pricingCostingStatusLabel, so the still-true base mapping
+    // would have gone uncovered with it.
+    expect(pricingCostingStatusLabel('CALCULATED')).toMatchObject({ label: 'คำนวณแล้ว', tone: 'warning' });
   });
 });
 

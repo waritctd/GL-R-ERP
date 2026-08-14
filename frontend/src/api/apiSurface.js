@@ -138,9 +138,10 @@ export function apiPathBypasses(root = SRC_ROOT()) {
 // Its consumer is `ResponseFieldContractTest` (#727), which pins Schema.field pairs where the
 // field name is read anywhere under `frontend/src`. Attribution is the limit there: a read of
 // `.ticketCode` cannot be tied to one DTO statically, so a field gets pinned on EVERY schema
-// declaring it — leaving 29 of 924 pins (3.1%) on schemas with no frontend caller at all
-// (`FactoryPurchaseOrderDto`, `DealEstimateMarkupDto`, …). Intersecting against this file lets
-// that test drop them.
+// declaring it — leaving ~29 of 924 pins (3.1%) on schemas with no frontend caller at all
+// (`FactoryPurchaseOrderDto`, `DeductionObligationDto`, …). Intersecting against this file lets
+// that test drop them. (`DealEstimateMarkupDto` was the other worked example here until issue
+// #748 deleted it outright, which is the other way a pin like that goes away.)
 //
 // Written from the frontend because reachability is a frontend fact — it depends on which
 // components call which hrApi methods, which no JVM test can see. The drift guard is the same

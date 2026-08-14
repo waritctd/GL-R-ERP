@@ -27,6 +27,21 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Issue #756: pre-document placeholder ONLY. Before a deposit-notice document exists to serve
+// its own `vatPercent` (DepositNoticeDto.java:25), the page has nothing else to compute a VAT
+// preview from — this is what that preview uses. Once a document exists, the served value
+// always wins (see `vatPercent` below); this constant is never consulted after that. The
+// backend's authoritative copies live in CustomerQuotationService.VAT_RATE and
+// QuotationRenderer.VAT_RATE — this is a pre-document placeholder, not a fourth source of truth.
+const FALLBACK_VAT_PERCENT = 0.07;
+
+// Formats a VAT rate (0.07, 0.10, 0.075, …) as the bare percentage string used in labels —
+// "7", "10", "7.5" — rounded to 2dp of the percent value so float noise (e.g. the classic
+// "7.000000000000001") never reaches the screen.
+function formatVatPercent(rate) {
+  return String(Math.round(Number(rate) * 100 * 100) / 100);
+}
+
 // ── validation (UX-03) ──────────────────────────────────────────────────────
 // This gate fires ONLY from handleIssue() — never from handleSave() or the
 // preview path. This is a draft editor: users save partial drafts
@@ -461,7 +476,10 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     return sum + net * (Number(it.qty) || 0);
   }, 0);
   const deposit = subtotal * Number(form.depositPercent || 0.5);
-  const vat = deposit * 0.07;
+  // Issue #756: the served document's own vatPercent always wins once one exists — only
+  // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
+  const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
+  const vat = deposit * vatPercent;
   const total = deposit + vat;
 
   if (loading) {
@@ -826,7 +844,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               {[
                 { label: 'รวมเป็นเงิน', value: subtotal },
                 { label: `ขอรับเงินมัดจำ (${Math.round(Number(form.depositPercent) * 100)}%)`, value: deposit },
-                { label: 'ภาษีมูลค่าเพิ่ม 7% (คิดจากมัดจำ)', value: vat },
+                { label: `ภาษีมูลค่าเพิ่ม ${formatVatPercent(vatPercent)}% (คิดจากมัดจำ)`, value: vat },
                 { label: 'รวมเป็นเงินที่ต้องชำระ', value: total, bold: true },
               ].map(({ label, value, bold }) => (
                 <div key={label} className="flex justify-between border-b border-surface-subtle py-[5px] text-sm">
@@ -895,7 +913,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               <code className="font-mono">{money(deposit)} บาท</code>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม 7%</span>
+              <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม {formatVatPercent(vatPercent)}%</span>
               <code className="font-mono">{money(vat)} บาท</code>
             </div>
             <div className="flex justify-between text-md font-bold">
