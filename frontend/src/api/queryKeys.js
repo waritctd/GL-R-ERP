@@ -7,6 +7,9 @@ export const queryKeys = {
   profileRequests: () => ['profileRequests'],
   dashboardSummary: () => ['dashboardSummary'],
   payrollCurrent: (payrollMonth) => ['payroll', 'current', payrollMonth ?? ''],
+  // Garnishment shortfall ledger (issue #376). employeeId is the only server-side filter the
+  // ledger page uses; the rest of its narrowing is client-side over the returned rows.
+  deductionShortfalls: (employeeId) => ['payroll', 'deductionShortfalls', employeeId ?? ''],
   // Tax-allowance declaration workflow (PR A, 2026-08-01). Mirrors
   // TaxAllowanceDeclarationController's endpoints -- no UI in this PR, but the frontend agent
   // building the declaration screen (PR B) needs these to already exist.

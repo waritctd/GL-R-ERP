@@ -83,6 +83,11 @@ const PATH_GUARDS = [
   // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
   // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
+  // Garnishment shortfall ledger. Needs its own entry because the guard above is an EXACT match
+  // and canAccessPath fails OPEN for a path no guard claims — a nested path would otherwise be
+  // reachable by any authenticated role. canViewPayroll (hr + ceo) mirrors the endpoint's
+  // @PreAuthorize("hasAnyRole('HR','CEO')") and PayrollDeductionShortfallService's VIEW_ROLES.
+  { test: (p) => p === '/payroll/deduction-shortfalls', can: (u) => hasPermission(u.role, 'canViewPayroll') },
   // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
   // employee's own declaration form — same "must have an employeeId" shape as
   // `/profile` above, and just as important to guard explicitly: unknown paths

@@ -627,6 +627,10 @@ export const api = {
       apiRequest(API_ROUTES.payroll.deductionObligations.overrideContinue(id), { method: 'POST', body: { reason } }),
     clearDeductionObligationOverride: (id) =>
       apiRequest(API_ROUTES.payroll.deductionObligations.clearOverride(id), { method: 'POST' }),
+    // Garnishment shortfall ledger (issue #376). hr + ceo, read-only — rows are written only by
+    // DeductionObligationService#recordGarnishmentShortfalls during a payroll run. Optional
+    // `employeeId` / `kind` params; the server applies no LIMIT and no pagination.
+    getDeductionShortfalls: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionShortfalls, params)),
   },
   priceImport: {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),

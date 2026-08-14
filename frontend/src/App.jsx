@@ -48,6 +48,7 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
+const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
 // ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
@@ -379,6 +380,13 @@ export function App() {
             <Route
               path="/payroll"
               element={<PayrollPage user={user} showToast={showToast} />}
+            />
+            {/* Garnishment shortfall ledger (issue #376's read surface, exposed for #744). Its own
+                route rather than a PayrollPage section: the endpoint takes no month parameter and
+                orders across every period, where PayrollPage is scoped to one selected month. */}
+            <Route
+              path="/payroll/deduction-shortfalls"
+              element={<DeductionShortfallsPage />}
             />
             {/* Attendance calendar admin (PR #480's API, this branch's UI) — HR/CEO only. */}
             <Route

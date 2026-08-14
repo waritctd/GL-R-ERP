@@ -45,6 +45,7 @@ const ROUTES = [
   '/leave',
   '/leave/new',
   '/payroll',
+  '/payroll/deduction-shortfalls', // Garnishment shortfall ledger (issue #376 read surface)
   '/settings/attendance-calendar',
   '/attendance',
   '/tickets',

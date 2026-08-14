@@ -23,6 +23,11 @@ const NAV_GROUPS = [
 ];
 
 function isItemActive(item, pathname) {
+  // `exact` opts an item OUT of prefix matching. It exists for the case where a SIBLING nav item
+  // lives at a nested path — /payroll and /payroll/deduction-shortfalls — where prefix matching
+  // would light both up at once and the nav would claim two current locations. The default stays
+  // prefix-matching, which is what keeps /employees lit on /employees/123.
+  if (item.exact) return pathname === item.path;
   return pathname === item.path
     || pathname.startsWith(`${item.path}/`)
     || (item.match?.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ?? false);

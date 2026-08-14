@@ -255,10 +255,6 @@ const SERVER_ONLY = {
     'HR bookkeeping of which deductions have written employee consent on file (issue #376, PR #411). Deliberately a '
     + 'recorded field and NOT an enforcement gate — nothing in PayrollCalculator reads it. Service-level tests only; '
     + 'the HTTP layer is untested because nothing calls it.',
-  'GET /api/payroll/deduction-shortfalls':
-    'Read-only ledger of garnishment deductions that could not be taken in full (issue #376, PR #411). The table is '
-    + 'WRITTEN on every payroll run by DeductionObligationService#recordGarnishmentShortfalls, so the data accumulates '
-    + 'in production — only the read surface has no client, meaning HR cannot see what the system is recording.',
   'POST /api/leave/policy-document':
     'The UPLOAD half of the §5 announcement PDF (PR #494). It has never had a frontend client. V133 says rows reach '
     + 'the table only through this endpoint, so the table is necessarily empty in every environment. Covered by '

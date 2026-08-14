@@ -53,6 +53,7 @@ import {
 import {
   buildDemoCommissions, buildDemoTaxAllowanceDeclarations, buildDemoTaxAllowanceAttachments,
   buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
+  buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
 
 const db = createDemoDatabase();
@@ -239,6 +240,11 @@ db.employeeTaxAllowances = db.employeeTaxAllowances?.length
 db.deductionObligations = db.deductionObligations?.length
   ? db.deductionObligations : buildDemoDeductionObligations(db.employees);
 db.deductionObligationRemittances = db.deductionObligationRemittances || [];
+// Garnishment shortfall ledger (issue #376). Unlike the remittance store above, this one CAN be
+// seeded honestly: a shortfall row is a plain record of an ALREADY-computed cap outcome, so
+// nothing here reimplements the ป.วิ.พ. ม.302 cap — the numbers are fixtures, not a calculation.
+db.deductionShortfalls = db.deductionShortfalls?.length
+  ? db.deductionShortfalls : buildDemoDeductionShortfalls(db.employees);
 // §5 leave-rules-as-data (V116, extended V119/V120): paidDaysCap/advanceNoticeDays/
 // minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/
 // firstYearMaxDays mirror the hr.leave_type columns for SHAPE parity only (contract.test.js checks
@@ -7119,6 +7125,22 @@ export const api = {
       row.updatedById = user.employeeId;
       row.updatedAt = new Date().toISOString();
       return delay(deductionObligationPublic(row));
+    },
+    // Garnishment shortfall ledger (issue #376). Mirrors PayrollDeductionShortfallController +
+    // PayrollDeductionShortfallService: hr + ceo (VIEW_ROLES), read-only, no write half at all —
+    // rows are written only as a side effect of a payroll run.
+    async getDeductionShortfalls(params = {}) {
+      hasRole('hr', 'ceo');
+      let items = db.deductionShortfalls;
+      if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
+      if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
+      // Mirrors PayrollDeductionShortfallRepository#findAll's
+      // `ORDER BY s.payroll_month DESC, e.employee_code` — and its absence of any LIMIT, so the
+      // mock returns every matching row exactly as the server does.
+      items = [...items].sort((a, b) => (
+        b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
+      ));
+      return delay({ items });
     },
   },
 
