@@ -47,6 +47,7 @@ import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
@@ -1760,6 +1761,62 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingCostingDto costing = costingService.get(decision.pricingCostingId(), ceoActor);
         return costing.items().get(0);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Regression: FactoryQuoteRepository.insertDraftItems used to seed a freshly drafted item's
+    // unit_basis by text-matching the free-text requested_unit ('sqm'/'sq.m'/'m2'/'m²'/'ตร.ม.'
+    // -> PER_SQM, everything else -> PER_PIECE) — a CASE with no branch for PER_BOX or
+    // PER_LINEAR_M, so a request item asked for in boxes or linear metres seeded its draft as
+    // PER_PIECE from the moment the draft was created. The fix copies
+    // pricing_request_item.requested_unit_basis (V68's own canonical, NOT NULL + CHECK-
+    // constrained column) straight across instead of re-deriving it. Both cases below assert
+    // the draft state right after generateDrafts() and BEFORE any receive/response call —
+    // replaceResponseItems deletes and re-inserts every item from Import's own form, so
+    // asserting after a receive would prove nothing about the seed.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void generateDraftsSeedsUnitBasisFromRequestedUnitBasisForABoxRequest() {
+        DraftAndRequestItem result = draftItemForRequestedBasis(UnitBasis.PER_BOX);
+
+        assertThat(result.draftItem().unitBasis()).isEqualTo(result.requestItem().requestedUnitBasis());
+        assertThat(result.draftItem().unitBasis()).isNotEqualTo(UnitBasis.PER_PIECE);
+    }
+
+    @Test
+    void generateDraftsSeedsUnitBasisFromRequestedUnitBasisForALinearMetreRequest() {
+        DraftAndRequestItem result = draftItemForRequestedBasis(UnitBasis.PER_LINEAR_M);
+
+        assertThat(result.draftItem().unitBasis()).isEqualTo(result.requestItem().requestedUnitBasis());
+        assertThat(result.draftItem().unitBasis()).isNotEqualTo(UnitBasis.PER_PIECE);
+    }
+
+    /**
+     * Builds a fresh single-item pricing request against "Factory C" with the given
+     * requestedUnitBasis, drives it through submit -> pickup -> generateDrafts — same pipeline as
+     * {@link #singleItemCosting}, truncated right after generateDrafts and deliberately never
+     * reaching receive() — and returns the resulting draft item alongside the persisted request
+     * item it was seeded from.
+     */
+    private DraftAndRequestItem draftItemForRequestedBasis(String requestedUnitBasis) {
+        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
+            null, catalogProductIdFactoryC, null, "TestBrand", "TestModel", "TestBrand TestModel",
+            null, null, "1x1", "Factory C", new BigDecimal("10"), new BigDecimal("10"), "unit",
+            requestedUnitBasis, QuantityType.CONFIRMED, null, null, null);
+        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            null, "THB", "unit basis draft seed test", UUID.randomUUID().toString(), List.of(item));
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C");
+        PricingRequestDtos.PricingRequestItemDto requestItem =
+            pricingRequestService.get(pricingRequestId, importActor).items().get(0);
+        return new DraftAndRequestItem(draft.items().get(0), requestItem);
+    }
+
+    private record DraftAndRequestItem(
+        FactoryQuoteItemDto draftItem, PricingRequestDtos.PricingRequestItemDto requestItem) {}
 
     @Test
     void customerChangeRevisionSupersedesPriorRequestAndCreatesNewDraftRevision() {
