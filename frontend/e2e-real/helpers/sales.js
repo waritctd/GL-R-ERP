@@ -15,6 +15,25 @@ import { apiWrite } from './api.js';
 // time UAT's customer master was re-seeded — which, given UAT was rebuilt from production once
 // already, is not hypothetical.
 
+// ⚠️ THE THREE STATUS AXES ON A DEAL DO NOT SHARE A CASING CONVENTION. A deal row carries three
+// independent state fields, and asserting the wrong case is a failure that reads like a broken
+// feature rather than a broken test:
+//
+//     summary.status      TicketStatus    lowercase   'cancelled', 'quotation_issued', 'draft'
+//     summary.lifecycle   DealLifecycle   UPPERCASE   'ACTIVE', 'CANCELLED', 'CLOSED_LOST'
+//     summary.salesStage  DealStage       UPPERCASE   'LEAD_APPROACH', 'ORDER_RECEIVED'
+//
+// Found the hard way in slice 2: `lifecycle` came back CANCELLED and `status` came back
+// `cancelled` in the same response. It matters most at the confirm-order bridge, where the
+// precondition is `ticket.status == 'quotation_issued'` — lowercase — while the stage it produces
+// is 'ORDER_RECEIVED'. Use the constants below rather than inline literals.
+export const TICKET_STATUS = {
+  DRAFT: 'draft',
+  QUOTATION_ISSUED: 'quotation_issued',
+  CANCELLED: 'cancelled',
+  CLOSED: 'closed',
+};
+
 /** The run id global-setup stamped. Every row a run creates carries it. */
 export function runId() {
   const id = process.env.E2E_RUN_ID;

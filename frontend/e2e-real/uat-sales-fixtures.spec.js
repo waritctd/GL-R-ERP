@@ -1,7 +1,14 @@
 import { test, expect } from '@playwright/test';
 import { uatSessionFor, disposeSessions } from './helpers/api.js';
 import { UAT_SALES_ROLES } from './helpers/uat-accounts.js';
-import { cancelDeal, createDeal, readDeal, runId, stageHistory } from './helpers/sales.js';
+import {
+  TICKET_STATUS,
+  cancelDeal,
+  createDeal,
+  readDeal,
+  runId,
+  stageHistory,
+} from './helpers/sales.js';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // SLICE 2 — the first WRITE against deployed UAT, and its cleanup.
@@ -84,9 +91,15 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
 
     // Re-READ rather than trusting the response body: the question is what the database holds,
     // not what the write echoed back.
+    //
+    // Note the two cases. `lifecycle` is UPPERCASE (DealLifecycle) and `status` is lowercase
+    // (TicketStatus) — on the same row, in the same response. See TICKET_STATUS in helpers/sales.js;
+    // this exact pair is what surfaced it.
     const ticket = await readDeal(sessions, 'sales', deal.id);
     expect(ticket.summary.lifecycle, 'cancel must set lifecycle CANCELLED').toBe('CANCELLED');
-    expect(ticket.summary.status, 'cancel must set status CANCELLED').toBe('CANCELLED');
+    expect(ticket.summary.status, 'cancel must set status cancelled (lowercase)').toBe(
+      TICKET_STATUS.CANCELLED
+    );
 
     // Cancel is terminal. Asserting it here is what lets afterAll cancel unconditionally without
     // caring whether a test already did — the second call is a no-op, not an error path.
