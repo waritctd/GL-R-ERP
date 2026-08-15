@@ -14,6 +14,7 @@
     "audit": "node scripts/audit-gate.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test --config playwright.real.config.js",
+    "test:e2e:uat": "playwright test --config playwright.real.config.js --grep @uat-sales",
     "test:visual": "playwright test --config playwright.visual.config.js"
   },
   "dependencies": {

@@ -20,17 +20,24 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
  * commented: {@code app.mail.provider} defaults to {@code log} repo-wide, so losing the uat
  * override stops all mail while every log line still reads "email sent".
  *
- * <p>The second assertion is narrower than its old name/comment claimed (fixed 2026-08-08) - it
- * does NOT describe the mail that actually leaves the deployed gl-r-erp-uat service. The owner
- * confirmed (2026-08-08) that the live {@code From:} header is an address on {@code glr-trial.lat},
- * set directly via {@code APP_MAIL_FROM} on the Render dashboard (see render.yaml), which overrides
- * the yml-resolved value entirely and is invisible to this test - an
- * {@link ApplicationContextRunner} loads yml files, not the Render environment's dashboard-set
+ * <p>The second assertion is narrower than its old name/comment claimed (fixed 2026-08-08), and was
+ * updated again on 2026-08-15 when the main branch's mail stack merged in: {@code application.yml}'s
+ * {@code app.mail.from} default changed from the Resend sandbox sender ({@code onboarding@resend.dev})
+ * to blank, because an annotation/yml default must not name an external service any more than it may
+ * name an environment - see {@code ResendMailer}'s constructor comment and
+ * {@code ProductionReadinessConfig}, which now REQUIRES {@code APP_MAIL_FROM} whenever
+ * {@code app.mail.provider} is {@code resend}/{@code smtp} under a real deployment, rather than
+ * letting a missing dashboard variable fall back to a sender that can only deliver to the Resend
+ * account's own address. This assertion does NOT describe the mail that actually leaves the deployed
+ * gl-r-erp-uat service either way: the owner confirmed (2026-08-08) the live {@code From:} header is
+ * an address on {@code glr-trial.lat}, set directly via {@code APP_MAIL_FROM} on the Render dashboard
+ * (see render.yaml), which overrides the yml-resolved value entirely and is invisible to this test -
+ * an {@link ApplicationContextRunner} loads yml files, not the Render environment's dashboard-set
  * variables. What this assertion actually guards: neither {@code application.yml} nor
- * {@code application-uat.yml} hardcodes a literal {@code app.mail.from} value in source - both
- * leave it as an env-var placeholder falling back to Resend's sandbox sender, so which address UAT
- * sends as is always an operator's explicit dashboard choice, never a stray commit. Do not read a
- * green run here as evidence about what a received UAT email's From: header contains.
+ * {@code application-uat.yml} hardcodes a literal {@code app.mail.from} value in source - both leave
+ * it unset absent an operator's explicit dashboard choice, so a missing {@code APP_MAIL_FROM} is
+ * never silently papered over by a stray literal committed here. Do not read a green run here as
+ * evidence about what a received UAT email's From: header contains.
  *
  * <p>Deliberately narrow: every other {@code app.mail.*} key is declared in {@code application.yml}
  * bound to its own env var, so asserting it here would pass with the uat override deleted — a
@@ -55,14 +62,16 @@ class UatProfileMailTransportTest {
     }
 
     @Test
-    void uatProfileFallsBackToResendSandboxSenderWhenAppMailFromEnvVarIsUnset() {
+    void uatProfileLeavesAppMailFromBlankWhenTheEnvVarIsUnset() {
         // NOT a claim about the deployed From: header - see the class Javadoc above. This pins that
-        // neither application.yml nor application-uat.yml hardcodes an app.mail.from literal, so the
-        // safe sandbox-sender fallback is still there if the Render dashboard's APP_MAIL_FROM is
-        // ever unset.
+        // neither application.yml nor application-uat.yml hardcodes an app.mail.from literal - since
+        // 2026-08-15 (main's mail stack merge) the shared yml default is blank, not the old Resend
+        // sandbox-sender fallback, so a missing Render dashboard APP_MAIL_FROM is caught by
+        // ProductionReadinessConfig instead of silently sending as a sender that cannot reach real
+        // inboxes.
         uatProfile.run(ctx -> assertThat(ctx.getEnvironment().getProperty("app.mail.from"))
             .as("yml default only, NOT the deployed value (the dashboard sets APP_MAIL_FROM directly) - see class Javadoc")
-            .isEqualTo("onboarding@resend.dev"));
+            .isEmpty());
     }
 
     /**

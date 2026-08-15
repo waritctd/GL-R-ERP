@@ -93,6 +93,8 @@ export const queryKeys = {
   ticketDetail: (id) => ['tickets', 'detail', id],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
+  // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
+  unitBasisCatalog: () => ['meta', 'unit-bases'],
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],

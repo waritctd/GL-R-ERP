@@ -70,9 +70,13 @@ export const ANONYMOUS_ALLOWLIST = [
   '/api/attendance/punch',
   // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification
   // email, so there is no session to present and none can be obtained: Gmail and Outlook fetch an
-  // image URL with no credentials. Anonymous by necessity, not by oversight. Serves one static
-  // asset and reads nothing. Exists only on uat, because the whole th.co.glr.hr.mail package does
-  // — Render blocks outbound SMTP on main. Owner-confirmed to keep, 2026-08-13.
+  // image URL with no credentials, and Gmail proxies it besides. Anonymous by necessity, not by
+  // oversight. Serves one static asset and reads nothing.
+  //
+  // SecurityConfig scopes this to /api/public/brand/** and NOT /api/public/**. That distinction is
+  // the whole safety argument: a wildcard there would make every future endpoint under that prefix
+  // anonymous by default, which is how a data leak gets introduced by accident rather than by
+  // decision.
   '/api/public/brand/logo.png',
 ];
 

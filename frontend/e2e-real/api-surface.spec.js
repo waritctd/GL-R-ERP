@@ -156,9 +156,9 @@ test.describe('API surface', () => {
 
       // Brand logo: the requester is a mail client rendering a notification email — Gmail's image
       // proxy fetches with no credentials and no way to obtain any — so it cannot be gated. A 200
-      // carrying image bytes is the assertion only a request that reached BrandController could
-      // produce; a filter-chain rejection would be a 401 with no body. uat-only, because the whole
-      // mail package is (Render blocks outbound SMTP on main).
+      // carrying image BYTES is the assertion only a request that reached BrandController could
+      // produce; a filter-chain rejection would be a 401 with no body, and an SPA catch-all or an
+      // error page would be a 200 of the wrong content-type. Status alone would not separate those.
       const logo = await anon.get('/api/public/brand/logo.png', { failOnStatusCode: false });
       expect(
         logo.status(),

@@ -87,6 +87,10 @@ frontend/playwright/.cache/
 # so a mock run and a real run never overwrite each other's results).
 frontend/playwright-report-real/
 frontend/test-results-real/
+# Captured UAT sessions (global-setup.js writes one storageState per persona here when
+# E2E_BASE_URL is set). These are LIVE SESSION COOKIES for a shared deployment — committing one
+# would hand anyone with repo access an authenticated session on UAT.
+frontend/e2e-real/.auth/
 # Uploads the e2e backend writes when APP_UPLOADS_DIR is left at its default.
 backend/target/e2e-uploads/
 

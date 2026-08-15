@@ -719,7 +719,16 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
-            String quotedUnit = UnitBasis.canonicalize(responseItem.quotedUnit(), "Factory quote unit");
+            // quotedUnit is the DISPLAY unit (ตร.ม., PCS, ...) — LandedCostCalculator never reads
+            // it for arithmetic (only unitBasis feeds pricePerPiece/quantityToPieces; quotedUnit
+            // rides through as PricingCostingWriteItem.rawUnit, display-only). Routing it through
+            // UnitBasis.canonicalize alongside unitBasis was itself a defect, not just the frontend
+            // seed that fed it: canonicalize() forces its input to one of the four PER_ codes,
+            // rejecting anything else with a 422 — so a real unit like "ตร.ม." could never be
+            // stored here, only a basis code (or an English synonym that happens to canonicalize
+            // to one). requireUnitText only requires non-blank text, same as every other free-text
+            // field on this request.
+            String quotedUnit = requireUnitText(responseItem.quotedUnit(), "Factory quote unit");
             if (UnitBasis.PER_BOX.equals(unitBasis) && responseItem.piecesPerBox() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
@@ -842,6 +851,18 @@ public class FactoryQuoteService {
             return first.trim();
         }
         return fallback != null && !fallback.isBlank() ? fallback.trim() : null;
+    }
+
+    /**
+     * Requires non-blank free text and trims it — the same blank check {@link UnitBasis#canonicalize}
+     * applies, without forcing the value onto one of its four canonical codes. Used for
+     * {@code quotedUnit}, which is a display unit (ตร.ม., PCS, กล่อง, ...), not a basis.
+     */
+    private static String requireUnitText(String value, String fieldLabel) {
+        if (value == null || value.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, fieldLabel + " ต้องไม่เว้นว่าง");
+        }
+        return value.trim();
     }
 
     private String validateClientRequestId(String clientRequestId) {

@@ -1453,6 +1453,58 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
+    // The seed bug (PricingRequestDetailPage.jsx's defaultResponseItems used ONE variable to seed
+    // both quotedUnit and unitBasis) had a backend-side twin: validateAndNormalizeResponseItems
+    // ran quotedUnit through the SAME UnitBasis.canonicalize as unitBasis, which forces its input
+    // onto one of the four PER_ codes and 422s on anything else. That meant a real display unit
+    // (ตร.ม., which is exactly what FactoryQuoteRepository.insertDraftItems seeds quoted_unit with
+    // from the request's own requested_unit) could never actually be SAVED as quotedUnit — only a
+    // basis code, or an English synonym that happens to canonicalize to one, could pass. Fixing the
+    // frontend seed alone would have turned "silently stores the wrong thing" into "422s on save"
+    // for the common case, not fixed it. This pins the fix: a real unit string round-trips as-is.
+    @Test
+    void receiveFactoryQuote_storesQuotedUnitAsTheRealDisplayTextNotForcedOntoABasisCode() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("d0000000-1111-4111-8111-d00000000001"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest("REF-UNIT-TEXT", "THB", "30 days",
+            "45 days", "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
+                draft.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("1.00"),
+                "ตร.ม.", "PER_SQM", new BigDecimal("120.00"), "THB", null, new BigDecimal("0.36"), null, null,
+                "45 days", null, null)),
+            UUID.randomUUID().toString());
+
+        FactoryQuoteDto received = factoryQuoteService.receive(draft.id(), response, importActor);
+
+        assertThat(received.items().get(0).quotedUnit()).isEqualTo("ตร.ม.");
+        assertThat(received.items().get(0).unitBasis()).isEqualTo("PER_SQM");
+        // Round-trips through a fresh read too, not just the write-path return value.
+        FactoryQuoteDto reloaded = factoryQuoteService.get(draft.id(), importActor);
+        assertThat(reloaded.items().get(0).quotedUnit()).isEqualTo("ตร.ม.");
+    }
+
+    @Test
+    void receiveFactoryQuote_stillRejectsABlankQuotedUnit() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            pricingRequest("d0000000-1111-4111-8111-d00000000002"), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        ReceiveFactoryQuoteRequest blankUnit = new ReceiveFactoryQuoteRequest("REF-BLANK-UNIT", "THB", "30 days",
+            "45 days", "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
+                draft.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("1.00"),
+                "   ", "PER_PIECE", new BigDecimal("120.00"), "THB", null, null, null, null,
+                "45 days", null, null)),
+            UUID.randomUUID().toString());
+
+        assertThatThrownBy(() -> factoryQuoteService.receive(draft.id(), blankUnit, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // submit()'s catalog handling, through the REAL PricingRequestService +
     // PricingRequestRepository + real Postgres — not Mockito. PricingRequestServiceTest
