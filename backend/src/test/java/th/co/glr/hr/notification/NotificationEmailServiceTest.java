@@ -41,6 +41,11 @@ class NotificationEmailServiceTest {
             && images.get(0).bytes().length > 0;
     }
 
+    // UAT ARTIFACT #3 (redirectNote): must not render when app.mail.override-to is blank. Asserted
+    // wrong-way-round on purpose - the presence assertions in this test only prove the normal
+    // content renders; they say nothing about what ELSE might also be in the body. A ternary read
+    // as "should be null when overrideTo is blank" is not evidence the string never appears -
+    // asserting its ABSENCE here is.
     @Test
     void sendsToRealAddressWhenNoOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -54,11 +59,13 @@ class NotificationEmailServiceTest {
                 && html.contains("body text")
                 && html.contains("https://portal.example/leave/1")
                 && html.contains("ดูรายละเอียดในระบบ")
-                && html.contains("ระบบบริหารงานบุคคล GL&amp;R")),
+                && html.contains("ระบบบริหารงานบุคคล GL&amp;R")
+                && !html.contains("Redirected for testing")),
             argThat(text -> text.contains("เรียน คุณสมชาย,")
                 && text.contains("body text")
                 && text.contains("ดูรายละเอียดในระบบ: https://portal.example/leave/1")
-                && text.contains("ระบบบริหารงานบุคคล GL&R")),
+                && text.contains("ระบบบริหารงานบุคคล GL&R")
+                && !text.contains("Redirected for testing")),
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
 
@@ -224,6 +231,27 @@ class NotificationEmailServiceTest {
             argThat(body -> body.contains("Attached")
                 && body.contains("Redirected for testing")
                 && body.contains("employee@glr.co.th")
+                && !body.contains("[Redirected")),
+            eq("payslip.pdf"),
+            aryEq("%PDF".getBytes()));
+    }
+
+    // UAT ARTIFACT #3 (redirectNote), sendWithAttachment path: must not render when
+    // app.mail.override-to is blank - the counterpart to sendsToRealAddressWhenNoOverrideConfigured
+    // above, on the payslip-attachment path rather than send(). PayslipDistributionService is a real
+    // consumer of this exact method, so a stray "Redirected for testing" string here would land in a
+    // real employee's payslip email.
+    @Test
+    void sendWithAttachmentOmitsTheRedirectNoteWhenNoOverrideConfigured() {
+        NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
+
+        service.sendWithAttachment("employee@glr.co.th", "Payslip", "Attached", "payslip.pdf", "%PDF".getBytes());
+
+        verify(mailer).sendWithAttachment(
+            eq("employee@glr.co.th"),
+            eq("Payslip"),
+            argThat(body -> body.contains("Attached")
+                && !body.contains("Redirected for testing")
                 && !body.contains("[Redirected")),
             eq("payslip.pdf"),
             aryEq("%PDF".getBytes()));

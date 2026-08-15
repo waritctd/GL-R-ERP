@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { request as playwrightRequest } from '@playwright/test';
 import { DEMO_PASSWORD, personaFor } from './accounts.js';
 
@@ -24,7 +25,16 @@ import { DEMO_PASSWORD, personaFor } from './accounts.js';
 // at order -100, so an ANONYMOUS write is rejected 401 there before CsrfCookieFilter (order 0)
 // ever sees it — which is what makes api-surface.spec.js's "anonymous POST ⇒ 401" sweep correct
 // as written. CSRF only becomes reachable once a request is authenticated.
-export const BACKEND_URL = process.env.E2E_BACKEND_URL || 'http://127.0.0.1:8080';
+// Against a deployment (E2E_BASE_URL), the API is served from the FRONTEND's own origin — the
+// deployment rewrites /api/* to the backend. Defaulting to it there is not a convenience: if the
+// browser used *.vercel.app and this module used *.onrender.com, the two would hold separate
+// GLR_HR_SESSION cookie jars and every authenticated API assertion would run against a session
+// the browser never established. An explicit E2E_BACKEND_URL still wins, for the local case where
+// the two genuinely are different hosts.
+export const BACKEND_URL =
+  process.env.E2E_BACKEND_URL ||
+  (process.env.E2E_BASE_URL || '').trim().replace(/\/$/, '') ||
+  'http://127.0.0.1:8080';
 
 /** A request context with no session — every guarded endpoint must answer 401 to it. */
 export function anonApi() {
@@ -69,6 +79,36 @@ export async function apiSessionFor(role) {
 }
 
 /** Opens one authenticated context per role, keyed by role. Dispose with `disposeSessions`. */
+/**
+ * A request context rehydrated from the session global-setup captured for `role` — performs NO
+ * login of its own.
+ *
+ * This exists because `apiSessionFor` logs in on every call, and against a shared deployment every
+ * login is a real hit on LoginRateLimitFilter's 20-per-IP / 900s budget. Four journey specs each
+ * opening five sessions in `beforeAll` is twenty logins per run, and more on a retry — enough to
+ * lock out the real testers using that environment. Capturing once in globalSetup makes the cost
+ * five, flat, regardless of how many specs are added later.
+ *
+ * The role assertion `apiSessionFor` makes at login time is not skipped, only moved: globalSetup
+ * makes it once, against the very session this file was written from.
+ *
+ * Do not "unify" this with apiSessionFor. That function's login-per-call behaviour is depended on
+ * by auth.spec.js and the write specs, and is correct for a local stack where a lockout is free.
+ */
+export async function uatSessionFor(role) {
+  const { statePathFor } = await import('./uat-accounts.js');
+  const path = statePathFor(role);
+  if (!existsSync(path)) {
+    throw new Error(
+      `No captured UAT session for '${role}' at ${path}.\n\n` +
+        '  global-setup.js writes these at the start of a remote run. Either it did not run — are\n' +
+        '  you invoking `playwright test` directly instead of `npm run test:e2e:uat`, or is\n' +
+        `  E2E_BASE_URL unset? — or '${role}' is not in UAT_SALES_ROLES.\n`
+    );
+  }
+  return playwrightRequest.newContext({ baseURL: BACKEND_URL, storageState: path });
+}
+
 export async function apiSessionsFor(roles) {
   const entries = await Promise.all(
     roles.map(async (role) => [role, await apiSessionFor(role)])

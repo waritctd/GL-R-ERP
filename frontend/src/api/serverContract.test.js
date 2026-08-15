@@ -212,9 +212,10 @@ const SERVER_ONLY = {
   'GET /api/public/brand/logo.png':
     'Fetched by the MAIL CLIENT, not by this app — it is the <img> src in the notification email '
     + 'templates, so the requester is Gmail/Outlook rendering a message, with no session and no hrApi '
-    + 'call. Exists only on uat: the whole th.co.glr.hr.mail package lives here because Render blocks '
-    + 'outbound SMTP on main, so this endpoint has no counterpart to reconcile against. Owner-confirmed '
-    + 'to keep (2026-08-13). Anonymous by necessity — an email client cannot authenticate.',
+    + 'call. Anonymous by necessity rather than oversight: an email client cannot authenticate, and '
+    + "Gmail's image proxy fetches with no credentials at all. Serves one static asset and reads "
+    + 'nothing. SecurityConfig scopes the exception to /api/public/brand/** specifically, NOT '
+    + '/api/public/**, so admitting this endpoint did not open a namespace.',
   'POST /api/attendance/punch':
     'The physical scanners post here with an X-GLR-Agent-Token instead of a session — see '
     + 'agents/attendance/showroom_agent.py. One of SecurityConfig\'s anonymous exceptions, and pinned by '

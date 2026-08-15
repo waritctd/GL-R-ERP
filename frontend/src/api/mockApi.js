@@ -7897,6 +7897,15 @@ export const api = {
       requireSession();
       return delay(DEAL_STAGE_CATALOG);
     },
+    // Mirrors UnitBasisMetaController (pricingrequest/) — GET /api/meta/unit-bases. Reuses
+    // PRICING_REQUEST_UNIT_BASIS_OPTIONS (pricingRequestMeta.js's existing hand-maintained
+    // UnitBasis.java mirror, already imported above for the pricing-request gates) rather than a
+    // second copy, so this fixture cannot drift from the other frontend consumers of the same
+    // vocabulary. Authenticated-only on the real endpoint, no role gate — no business data.
+    async unitBases() {
+      requireSession();
+      return delay({ unitBases: PRICING_REQUEST_UNIT_BASIS_OPTIONS });
+    },
   },
 
   // Mirrors FactoryConfigController + FactoryEmailService (factory/).

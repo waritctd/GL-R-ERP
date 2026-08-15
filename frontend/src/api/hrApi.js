@@ -389,6 +389,11 @@ export const api = {
   // the lost/cancel reason CODE sets. Labels stay client-side; see utils/format.js + stageMeta.js.
   meta: {
     dealStages: () => apiRequest(API_ROUTES.meta.dealStages),
+    // Mirrors UnitBasisMetaController (pricingrequest/) — UnitBasis's four codes with their Thai
+    // display units. Unlike dealStages, the labels here ARE server-supplied (see that controller's
+    // doc comment for why): they are meant to match pricingRequestMeta.js's UNIT_BASIS_OPTIONS,
+    // which stays the source for that file's other, unrelated call sites.
+    unitBases: () => apiRequest(API_ROUTES.meta.unitBases),
   },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
