@@ -19,6 +19,7 @@ import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollCalculator;
@@ -96,7 +97,7 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(AuditService.class),
             mock(FileStorageService.class),
             payrollService,
-            new NotificationRepository(jdbc),
+            new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EXP-HR", new BigDecimal("50000.00"));

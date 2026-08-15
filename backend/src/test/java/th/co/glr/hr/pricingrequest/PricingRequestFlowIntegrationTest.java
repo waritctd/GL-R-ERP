@@ -33,6 +33,7 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
@@ -101,7 +102,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        notifications = new NotificationRepository(jdbc);
+        notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -126,7 +127,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         // Principal role drives service authz; keep this employee out of PCIM so
         // submit-notification tests still have exactly one Import recipient.
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า สำรอง", "import2@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร ทดสอบ", "ceo@glr.co.th", "MD", "ผู้บริหาร");
+        ceoUserId = createManagingDirector(employees, "ผู้บริหาร ทดสอบ", "ceo@glr.co.th");
         accountUserId = createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "account@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย", "sales-manager@glr.co.th", "SALES", "ฝ่ายขาย");
 
@@ -562,6 +563,18 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why:
+     *  CeoApproverRule keys the notified set on position กรรมการผู้จัดการ alone, and
+     *  {@link #createEmployee} leaves positionTh null. Division stays MD, so the `ceo` role and
+     *  every authz assertion here are unchanged. */
+    private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
+        return employees.create(new UpsertEmployeeRequest(
+            null, null, nameTh, null, null, null, null, null, null, null,
+            email, null, "MD", "ผู้บริหาร", "ผู้บริหาร",
+            "กรรมการผู้จัดการ", null, null, "ACT", new BigDecimal("30000"),
+            null, null, null, null, null, null, null));
     }
 
     private UserPrincipal actor(long employeeId, String role) {

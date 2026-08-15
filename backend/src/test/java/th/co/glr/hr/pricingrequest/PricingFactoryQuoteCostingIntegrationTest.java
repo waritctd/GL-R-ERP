@@ -56,6 +56,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
@@ -120,7 +121,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -165,7 +166,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-step2@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เอ", "import-a@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า บี", "import-b@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
-        ceoUserId = createEmployee(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th", "MD", "ผู้บริหาร");
+        ceoUserId = createManagingDirector(employees, "ผู้บริหาร ทดสอบ", "ceo-step2@glr.co.th");
         accountUserId = createEmployee(employees, "บัญชี ทดสอบ", "account-step2@glr.co.th", "ACCT", "ฝ่ายบัญชี");
         salesManagerUserId = createEmployee(employees, "ผู้จัดการฝ่ายขาย", "sales-manager-step2@glr.co.th", "SALES", "ฝ่ายขาย");
         salesActor = actor(salesRepId, "sales");
@@ -659,7 +660,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
         factoryQuoteService.attemptSend(dispatchId);
 
-        NotificationRepository throwingNotifications = new NotificationRepository(jdbc) {
+        NotificationRepository throwingNotifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP) {
             @Override
             public void notifyByRoleForPricingRequest(String role, long pricingRequestIdArg, String type, String message) {
                 throw new RuntimeException("simulated notification failure");
@@ -2077,6 +2078,18 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why:
+     *  CeoApproverRule keys the notified set on position กรรมการผู้จัดการ alone, and
+     *  {@link #createEmployee} leaves positionTh null. Division stays MD, so the `ceo` role and
+     *  every authz assertion here are unchanged. */
+    private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
+        return employees.create(new UpsertEmployeeRequest(
+            null, null, nameTh, null, null, null, null, null, null, null,
+            email, null, "MD", "ผู้บริหาร", "ผู้บริหาร",
+            "กรรมการผู้จัดการ", null, null, "ACT", new BigDecimal("30000"),
+            null, null, null, null, null, null, null));
     }
 
     private UserPrincipal actor(long employeeId, String role) {

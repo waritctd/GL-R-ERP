@@ -16,7 +16,7 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
     @BeforeEach
     void wireRepository() {
-        repository = new NotificationRepository(jdbc);
+        repository = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
     }
 
     @Test
@@ -95,10 +95,12 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(recipient.get().name()).isEqualTo("สมชาย");
     }
 
-    // The employee row exists, so the new contract returns it present - but the email must still
+    // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which
+    // pinned the PRE-fix contract (empty Optional whenever the address was blank/missing). The
+    // employee row exists, so the new contract returns it present - but the email must still
     // normalise from "" to null (not stay ""), since that null/non-null distinction is exactly what
-    // NotificationEmailService.send()'s isBlank() check relies on to decide whether
-    // app.mail.override-to is rescuing an addressless employee.
+    // NotificationEmailService.send()'s isBlank() check relies on to decide whether app.mail
+    // .override-to is rescuing an addressless employee.
     @Test
     void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
         long divisionId = insertDivision("SA", "Sales3");
@@ -115,6 +117,8 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
     // string) is reachable in production and must pass through the same
     // NULLIF(BTRIM(...), '') as the empty-string case above. Map.of() rejects null values, so this
     // needs its own insert rather than reusing insertEmployeeWithNameAndEmail's "" coercion.
+    // Flipped from findEmployeeEmailIsEmptyWhenTheEmployeeHasATrueSqlNullEmail for the same reason as
+    // the empty-string case above.
     @Test
     void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasATrueSqlNullEmail() {
         long divisionId = insertDivision("SA", "Sales4");
@@ -133,7 +137,9 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(recipient.get().name()).isEqualTo("สมหญิง");
     }
 
-    // The only case left that returns empty under the new contract: no employee row at all.
+    // The only case left that returns empty under the new contract: no employee row at all. Had no
+    // coverage before this fix - the old findEmployeeEmail() conflated "no employee" with "no
+    // address" into the same empty Optional, so nothing distinguished them.
     @Test
     void findEmployeeRecipientIsEmptyWhenTheEmployeeDoesNotExist() {
         assertThat(repository.findEmployeeRecipient(999_999_999L)).isEmpty();
@@ -195,6 +201,17 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(repository.findByEmployeeId(manager)).isEmpty();
     }
 
+    private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,
+                                                String email) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
+            VALUES (:code, :firstName, :lastName, :email, :divisionId, TRUE)
+            RETURNING employee_id
+            """, Map.of("code", code, "firstName", firstName, "lastName", lastName,
+                "email", email == null ? "" : email, "divisionId", divisionId), Number.class);
+        return id.longValue();
+    }
+
     private Integer countLegacySalesNotifications() {
         return jdbc.getJdbcTemplate().queryForObject("SELECT COUNT(*) FROM sales.notification", Integer.class);
     }
@@ -223,17 +240,6 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         jdbc.update("UPDATE hr.employee SET position_id = :positionId WHERE employee_id = :id",
             Map.of("positionId", ensurePosition(positionTh), "id", employeeId));
         return employeeId;
-    }
-
-    private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,
-                                                String email) {
-        Number id = jdbc.queryForObject("""
-            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
-            VALUES (:code, :firstName, :lastName, :email, :divisionId, TRUE)
-            RETURNING employee_id
-            """, Map.of("code", code, "firstName", firstName, "lastName", lastName,
-                "email", email == null ? "" : email, "divisionId", divisionId), Number.class);
-        return id.longValue();
     }
 
     /** V30 seeds a bare "ผู้จัดการ"; the fuller ฝ่าย-specific titles used here are created on demand. */

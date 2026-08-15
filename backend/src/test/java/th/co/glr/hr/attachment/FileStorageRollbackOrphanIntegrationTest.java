@@ -37,6 +37,7 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
@@ -294,7 +295,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
     }
 
     private PricingRequestService pricingRequestService(PricingRequestRepository requests) {
-        return new PricingRequestService(requests, tickets, new NotificationRepository(jdbc),
+        return new PricingRequestService(requests, tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             new ObjectMapper(), new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
     }
 

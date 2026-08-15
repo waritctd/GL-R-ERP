@@ -43,6 +43,7 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
@@ -117,7 +118,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     @BeforeEach
     void wireRealCollaboratorsAndSeedADeal() {
         tickets = new TicketRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
