@@ -46,15 +46,6 @@ spring:
     multipart:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
-  mail:
-    host: ${MAIL_HOST:smtp.gmail.com}
-    port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:}
-    password: ${MAIL_PASSWORD:}
-    properties:
-      mail.smtp.auth: true
-      mail.smtp.starttls.enable: true
-
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
@@ -95,6 +86,52 @@ app:
   special-money:
     payroll-cutoff-day: ${APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY:25}
   uploads-dir: ${APP_UPLOADS_DIR:./uploads}
+  mail:
+    # Transport is pluggable behind th.co.glr.hr.mail.Mailer. Default `log` = boot/run with no mail
+    # creds and no accidental sends (dev/CI). `resend` = Resend HTTP API (cloud; Render blocks
+    # outbound SMTP 25/465/587). `smtp` = authenticated SMTP as app.mail.from (on-prem; e.g.
+    # job@glr.co.th).
+    provider: ${APP_MAIL_PROVIDER:log}
+    # No production default, deliberately: an unset APP_MAIL_FROM must NOT silently fall back to
+    # Resend's SANDBOX sender (onboarding@resend.dev), which can only deliver to the Resend
+    # account's own address and otherwise fails 403 domain-not-verified — silently, since nothing
+    # here surfaces a swallowed delivery failure back to an operator. ProductionReadinessConfig
+    # makes this REQUIRED under the prod profile whenever app.mail.provider is resend or smtp, so
+    # the app refuses to boot rather than emailing real employees from a sender that cannot reach
+    # them.
+    from: ${APP_MAIL_FROM:}
+    # provider=resend
+    resend-api-key: ${APP_MAIL_RESEND_API_KEY:}
+    # provider=smtp (on-prem): the company mail host + the sending mailbox's credentials
+    smtp:
+      host: ${APP_MAIL_SMTP_HOST:}
+      port: ${APP_MAIL_SMTP_PORT:587}
+      username: ${APP_MAIL_SMTP_USERNAME:}
+      password: ${APP_MAIL_SMTP_PASSWORD:}
+      starttls: ${APP_MAIL_SMTP_STARTTLS:true}
+    # OFF by default (blank) = 1-to-many: each notification goes to the real per-employee address.
+    # Set only on a test/UAT deployment to redirect every notification email to one inbox
+    # (regardless of the employee's actual/fake seeded address) so the pipeline can be verified
+    # without real mailboxes. This is the BASE default every profile inherits, including prod —
+    # it must stay blank here; a non-blank override belongs only in a test/UAT-specific profile,
+    # never in this file.
+    override-to: ${APP_MAIL_OVERRIDE_TO:}
+    # Appended (not prepended) to the subject so a test/UAT deployment never lets a real inbox
+    # mistake test mail for real, without putting a bracketed keyword at the FRONT of the subject -
+    # a leading "[TEST]"-shaped token is a classic spam-filter trigger. Blank by default so every
+    # other deployment, prod included, sends the subject unchanged.
+    subject-suffix: ${APP_MAIL_SUBJECT_SUFFIX:}
+    # No production default, for the same reason as app.mail.from above: a literal fallback URL
+    # here would put a dead or wrong-tenant link in every notification and payslip email sent by
+    # any deployment that forgot to set this. REQUIRED under the prod profile whenever
+    # app.mail.provider is resend or smtp (see ProductionReadinessConfig).
+    app-base-url: ${APP_MAIL_APP_BASE_URL:}
+    # Optional. Blank by default = no Reply-To header at all (RFC 5322 clients then reply to
+    # app.mail.from, which is fine). Set APP_MAIL_REPLY_TO to a real, monitored mailbox to improve
+    # deliverability - a Reply-To that resolves to a real inbox is a positive signal to mail
+    # providers, and gives a recipient somewhere to go if they have a question. Never invented
+    # here: an unmonitored or made-up address would be worse than omitting the header.
+    reply-to: ${APP_MAIL_REPLY_TO:}
   # V134 storage-durability fix: explicit server-side cap enforced in FileStorageService, checked
   # before any byte is read into memory. Deliberately separate from
   # spring.servlet.multipart.max-file-size (${APP_MAX_FILE_SIZE:10MB} above) -- that property is
@@ -152,14 +189,10 @@ management:
       show-details: never        # anonymous-safe UP/DOWN; DB still rolls into the aggregate
       probes:
         enabled: true             # /actuator/health/liveness + /readiness
-  health:
-    mail:
-      # The mail health indicator opens a live SMTP connection to spring.mail.host on every check.
-      # That's an outbound-egress dependency having nothing to do with this app's liveness (mail is
-      # used only for the async factory Import Request notification), and it flips the aggregate
-      # health to DOWN in any sandboxed/offline environment. Excluded so /actuator/health reflects
-      # this app's own readiness (DB) rather than a third-party SMTP host's reachability.
-      enabled: false
+      # No management.health.mail.enabled override needed: Spring's MailHealthIndicator activates
+      # only when a JavaMailSender *bean* exists. SmtpMailer builds a private JavaMailSenderImpl (not
+      # a bean) and no spring.mail.* auto-config runs, so no such bean is ever exposed - the health
+      # aggregate reflects this app's own readiness (DB), not an SMTP host's reachability.
 
 logging:
   level:

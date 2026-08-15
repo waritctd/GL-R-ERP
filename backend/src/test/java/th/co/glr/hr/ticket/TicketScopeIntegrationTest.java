@@ -12,7 +12,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.mail.javamail.JavaMailSender;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -33,6 +32,7 @@ import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
+import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PriceCalcConfigRepository;
@@ -103,7 +103,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
                 new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(JavaMailSender.class), "test@glr.co.th"),
+            new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
             notifications, fileStorage, new AppProperties(), landedCostCalculator);
 
         // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience

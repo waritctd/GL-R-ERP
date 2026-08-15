@@ -68,6 +68,16 @@ export const ANONYMOUS_ALLOWLIST = [
   // POST /api/attendance/punch — scanner devices authenticate with X-GLR-Agent-Token, not a
   // session, so the filter chain cannot gate it.
   '/api/attendance/punch',
+  // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification
+  // email, so there is no session to present and none can be obtained: Gmail and Outlook fetch an
+  // image URL with no credentials, and Gmail proxies it besides. Anonymous by necessity, not by
+  // oversight. Serves one static asset and reads nothing.
+  //
+  // SecurityConfig scopes this to /api/public/brand/** and NOT /api/public/**. That distinction is
+  // the whole safety argument: a wildcard there would make every future endpoint under that prefix
+  // anonymous by default, which is how a data leak gets introduced by accident rather than by
+  // decision.
+  '/api/public/brand/logo.png',
 ];
 
 // Endpoints excluded from the per-role authenticated sweep (they are still covered by the
