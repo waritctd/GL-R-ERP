@@ -117,30 +117,22 @@ function isUnlabelled(labelFn, code) {
 // Direction 1 exemptions — backend statuses with NO frontend label today
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Real gaps found while building this digest (2026-08-16), not pre-existing tracked debt. Neither
-// is fixed here — this task adds a guard, it does not rewrite copy — so both are named here,
-// loudly, with the self-cleaning test below deleting the entry the moment a real label is added.
-const KNOWN_UNLABELLED = {
-  factoryQuoteStatusLabel: {
-    NOT_AVAILABLE:
-      'FactoryQuoteStatus.NOT_AVAILABLE has no entry — falls through to the raw-code fallback. '
-      + 'FactoryQuoteRepository.markNotAvailable writes this status for real, backing an '
-      + 'already-built endpoint (POST /api/factory-quotes/{id}/not-available) — listed in '
-      + "serverContract.test.js's UNREACHABLE_FROM_UI because no screen calls it YET, but the "
-      + "service-level write path exists, and this file's own CommissionStatus.VOID (also "
-      + "currently unreachable) is still labelled defensively, so 'unreachable today' has not "
-      + 'been the bar for skipping a label elsewhere in this file. Needs a product decision on '
-      + 'Thai wording, not a guard silencing it.',
-    SUPERSEDED:
-      'FactoryQuoteStatus.SUPERSEDED has no entry — falls through to the raw-code fallback. '
-      + 'FactoryQuoteRepository.supersede writes this status on the ORDINARY path: every time a '
-      + 'factory sends a revised quote, the prior version is superseded. '
-      + 'PricingRequestDetailPage.jsx (this map\'s only caller) renders factory quote history, so '
-      + "a superseded quote is realistically shown there today, printing the literal string "
-      + "'SUPERSEDED' instead of Thai copy — the same shape of defect as the READY_FOR_COSTING "
-      + 'fossil this guard exists to catch, just a MISSING label instead of a STALE one.',
-  },
-};
+// EMPTY, and that is the assertion — not an oversight.
+//
+// This guard found exactly two gaps on its first run, both in factoryQuoteStatusLabel:
+// NOT_AVAILABLE and SUPERSEDED, each falling through to the raw-code fallback. SUPERSEDED was the
+// live one: FactoryQuoteService calls quotes.supersede() on EVERY revised quote, and
+// PricingRequestDetailPage renders quote history through that function unfiltered — so a second
+// round of factory prices printed the literal English "SUPERSEDED" on a Thai screen, next to its
+// own ครั้งที่ 1 badge. Same family as the READY_FOR_COSTING fossil, a MISSING label rather than a
+// stale one.
+//
+// Both are now labelled (owner-chosen wording, 2026-08-16), so their entries are gone from here.
+// That is the intended lifecycle: a gap is named loudly, then the entry disappears when it is
+// fixed. Keep this constant rather than deleting it — the machinery is what lets the NEXT gap be
+// recorded honestly instead of being quietly tolerated, and the emptiness is itself worth
+// asserting: it says every backend status this digest covers currently has Thai copy.
+const KNOWN_UNLABELLED = {};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Direction 2 exemptions — frontend label keys with no backend counterpart

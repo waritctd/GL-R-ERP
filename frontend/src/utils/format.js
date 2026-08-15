@@ -223,6 +223,21 @@ const FACTORY_QUOTE_STATUS_LABELS = {
     NEGOTIATING: { label: 'กำลังเจรจา', tone: 'warning' },
     READY_FOR_COSTING: { label: 'พร้อมคำนวณต้นทุน', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
+    // Both added 2026-08-16, found by statusCatalog.test.js on its first run — the guard's own
+    // KNOWN_UNLABELLED list named them, and that list is self-cleaning, so adding these here is
+    // what removes the exemption.
+    //
+    // SUPERSEDED was rendering the literal English string on a Thai screen, and not rarely:
+    // FactoryQuoteService calls quotes.supersede() on EVERY revised quote, and
+    // PricingRequestDetailPage renders quote history through this function unfiltered. So the
+    // moment Import saved a second round of prices, the first one showed as "SUPERSEDED" beside
+    // its own ครั้งที่ 1 badge. neutral, not danger: a superseded round is ordinary history, not
+    // something that went wrong.
+    SUPERSEDED: { label: 'รอบเก่า', tone: 'neutral' },
+    // danger, matching CANCELLED: for THIS factory the line is a dead end and Import has to source
+    // it elsewhere. Names the factory rather than the item ("ไม่มีสินค้า" alone) because several
+    // factories are usually asked and only one declines.
+    NOT_AVAILABLE: { label: 'โรงงานไม่มีสินค้า', tone: 'danger' },
 };
 export const FACTORY_QUOTE_STATUS_LABEL_KEYS = Object.keys(FACTORY_QUOTE_STATUS_LABELS);
 
