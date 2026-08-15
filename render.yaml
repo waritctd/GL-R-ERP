@@ -102,6 +102,17 @@ services:
       # service, the same demo-profile leniency APP_UPLOADS_DIR already has — see
       # ProductionReadinessConfig's Javadoc. A real on-prem prod deployment (no demo profile) hard
       # -fails on the same gap instead.
+      #
+      # ⚠️ INTERIM, owner ruling 2026-08-15: this service sends from the SAME verified Resend
+      # domain as UAT (glr-trial.lat) until a company domain is verified. Two consequences a
+      # reader should not have to rediscover:
+      #   - Recipients cannot tell prod mail from UAT mail by SENDER. UAT's " (UAT)" subject
+      #     suffix is the only distinguishing mark, and it is set on the uat service alone.
+      #   - Sender REPUTATION is shared. UAT test traffic marked as spam degrades deliverability
+      #     for real notification and payslip mail from this service, and vice versa.
+      # The domain was registered 2026-08-05, so it also has very little sending history — a
+      # first bulk send to personal gmail/hotmail addresses is the case most likely to be
+      # filtered. Verify a company domain and repoint this when one exists.
       - key: APP_MAIL_FROM
         sync: false
       # The portal URL every notification/payslip email links back to. application.yml has no
