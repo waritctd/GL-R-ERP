@@ -51,7 +51,14 @@ public class ResendMailer implements Mailer {
 
     @Autowired
     public ResendMailer(@Value("${app.mail.resend-api-key:}") String apiKey,
-                        @Value("${app.mail.from:onboarding@resend.dev}") String fromAddress,
+                        // Blank, NOT the sandbox sender. onboarding@resend.dev can only deliver to
+                        // the Resend account's OWN address and otherwise fails 403
+                        // domain-not-verified — which this class logs and swallows, so a
+                        // misconfigured deployment sends nothing and reports nothing. Naming it as
+                        // an annotation default made that the silent outcome of a missing yml line.
+                        // ProductionReadinessConfig now requires APP_MAIL_FROM instead, so the app
+                        // refuses to boot rather than quietly failing to mail anybody.
+                        @Value("${app.mail.from:}") String fromAddress,
                         @Value("${app.mail.reply-to:}") String replyTo) {
         // Constructing with a blank key is harmless (no network call happens until send()).
         Resend client = new Resend(apiKey);

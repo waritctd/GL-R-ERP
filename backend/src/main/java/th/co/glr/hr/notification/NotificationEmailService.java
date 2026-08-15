@@ -47,7 +47,18 @@ public class NotificationEmailService {
                                     BrandAssets brandAssets,
                                     @Value("${app.mail.override-to:}") String overrideTo,
                                     @Value("${app.mail.subject-suffix:}") String subjectSuffix,
-                                    @Value("${app.mail.app-base-url:https://demo-glr-git-uat-waritctds-projects.vercel.app}") String appBaseUrl) {
+                                    // Blank, NOT a URL. This annotation default is the last line of
+                                    // defence and it must not name an environment. It carried uat's
+                                    // preview host when ported; that was harmless only because
+                                    // application.yml defines app.mail.app-base-url as
+                                    // ${APP_MAIL_APP_BASE_URL:}, so the property is PRESENT-BUT-EMPTY
+                                    // and an annotation default never fires. Delete or rename that
+                                    // yml line and the property becomes ABSENT, the default fires,
+                                    // and every production email links to UAT — silently. Absent and
+                                    // empty are not the same thing, and this repo has been bitten by
+                                    // that distinction before. ProductionReadinessConfig is what
+                                    // actually forces a real value in a real deployment.
+                                    @Value("${app.mail.app-base-url:}") String appBaseUrl) {
         this.mailer = mailer;
         this.overrideTo = clean(overrideTo);
         this.subjectSuffix = subjectSuffix == null ? "" : subjectSuffix;
