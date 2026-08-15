@@ -71,6 +71,9 @@ vi.mock('../../api/index.js', () => ({
     catalog: {
       prices: vi.fn(),
     },
+    meta: {
+      unitBases: vi.fn(),
+    },
   },
 }));
 
@@ -260,6 +263,16 @@ function setApiDefaults() {
   });
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
   api.catalog.prices.mockResolvedValue({ items: [] });
+  // Mirrors UnitBasisMetaController's GET /api/meta/unit-bases — the backend catalog the
+  // factory-quote response unit select is built from at runtime (item 3 of this task's brief).
+  api.meta.unitBases.mockResolvedValue({
+    unitBases: [
+      { code: 'PER_PIECE', label: 'แผ่น' },
+      { code: 'PER_SQM', label: 'ตร.ม.' },
+      { code: 'PER_BOX', label: 'กล่อง' },
+      { code: 'PER_LINEAR_M', label: 'เมตร' },
+    ],
+  });
 }
 
 // Step 4 (Customer Quotation Generation and Issuance) fixture. Mirrors
@@ -660,6 +673,126 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByLabelText('เลขอ้างอิงใบเสนอราคา')).toBeNull();
     expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
     expect(screen.queryByLabelText('ระยะเวลาผลิต/ส่งมอบ')).toBeNull();
+  });
+
+  // Reported from UAT: two items of the same model in different sizes rendered identically, so
+  // Import could not tell which price box belonged to which item.
+  it('shows size and colour/texture in the row summary, not just brand + model', async () => {
+    const baseItem = buildRequest().items[0];
+    const request = buildRequest({ items: [{ ...baseItem, color: 'ขาว' }] });
+    const quote = buildFactoryQuote({ status: 'REQUESTED' });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded(request);
+    await screen.findByText('SCG Ceramics');
+
+    // size (60x60) · color (ขาว) · texture (ด้าน) — compact, on their own line under brand/model.
+    expect(screen.getByText('60x60 · ขาว · ด้าน')).toBeTruthy();
+  });
+
+  // THE SEED BUG. FactoryQuoteRepository.insertDraftItems seeds a fresh quote item's quotedUnit
+  // from the REQUEST's own requested_unit (real text, e.g. ตร.ม.) and unitBasis from a basis guess
+  // — the two are already different on a brand-new draft. The old defaultResponseItems used ONE
+  // variable to seed both fields, so the real unit was thrown away in favour of the basis code
+  // before Import ever saw the form. This is the mutation-checked test: reverting the fix (sharing
+  // one variable again) must turn it red.
+  it('seeds quotedUnit from the real unit Sales requested, not the basis code, when Import has not touched it', async () => {
+    const quote = buildFactoryQuote({
+      status: 'REQUESTED',
+      items: [{
+        id: 911,
+        pricingRequestItemId: 1,
+        supplierProductCode: '',
+        supplierProductDescription: '',
+        quotedQuantity: 20,
+        quotedUnit: 'ตร.ม.',
+        unitBasis: 'PER_SQM',
+        rawUnitPrice: null,
+        currency: 'THB',
+        sqmPerUnit: null,
+      }],
+    });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '55.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ quotedUnit: 'ตร.ม.', unitBasis: 'PER_SQM' })],
+      }),
+    ));
+  });
+
+  // Item 3 of this task's brief: the unit select is built from GET /api/meta/unit-bases at
+  // runtime, not a hardcoded list, and changing it writes both unitBasis and quotedUnit together
+  // (the same "one select, two fields" pattern PricingRequestCreateModal's updateUnitBasis uses).
+  it('offers the unit select built from the backend catalog, and changing it updates both unitBasis and quotedUnit on save', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: unitBasis PER_PIECE
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const unitSelect = await screen.findByLabelText(/^หน่วย/);
+    expect(within(unitSelect).getAllByRole('option').map((option) => option.value)).toEqual([
+      'PER_PIECE', 'PER_SQM', 'PER_BOX', 'PER_LINEAR_M',
+    ]);
+
+    fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' })],
+      }),
+    ));
+  });
+
+  // The ตร.ม./หน่วย input this task's brief listed as already shipped, but which was not present
+  // on origin/main — FactoryQuoteService requires sqmPerUnit for any PER_SQM line
+  // (validateAndNormalizeResponseItems:727) and there was no way for Import to supply it.
+  it('shows the ตร.ม./หน่วย input only for a PER_SQM line, and includes it in the saved payload', async () => {
+    const quote = buildFactoryQuote({
+      status: 'REQUESTED',
+      items: [{
+        id: 911,
+        pricingRequestItemId: 1,
+        supplierProductCode: '',
+        supplierProductDescription: '',
+        quotedQuantity: 20,
+        quotedUnit: 'ตร.ม.',
+        unitBasis: 'PER_SQM',
+        rawUnitPrice: null,
+        currency: 'THB',
+        sqmPerUnit: null,
+      }],
+    });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const sqmInput = screen.getByLabelText(/^ตร\.ม\.\/หน่วย/);
+    fireEvent.change(sqmInput, { target: { value: '0.36' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ sqmPerUnit: 0.36 })] }),
+    ));
+  });
+
+  it('does not show the ตร.ม./หน่วย input for a PER_PIECE line', async () => {
+    const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: unitBasis PER_PIECE
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByLabelText(/^ตร\.ม\.\/หน่วย/)).toBeNull();
   });
 });
 

@@ -107,6 +107,7 @@ export const API_ROUTES = {
   // Read-only enumerations served by the backend so no client re-declares them.
   meta: {
     dealStages: '/api/meta/deal-stages',
+    unitBases: '/api/meta/unit-bases',
   },
   tickets: {
     list: '/api/tickets',
