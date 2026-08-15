@@ -782,3 +782,397 @@ export async function stageDecisions(sessions, role, ticketId) {
   const { stageDecisions: decisions } = await response.json();
   return decisions;
 }
+
+// ── Slice 5: the four route journeys (Cases A-D) ────────────────────────────────────────────
+//
+// DealStage.java:78-100 (Javadoc on ORDER's own Javadoc block, "the owner's four real sales
+// routes") names four routes through the 15-stage pipeline that are NOT a straight walk through
+// DealStage.ORDER (:67-73):
+//
+//   A  designer -> owner -> contractor, the full route:
+//      S1->S2->S4->S3->S5->S6->S7->S8->S9->S10->(S11)->S12…S17->S18->S19∥S20
+//   B  the owner buys direct: skips S3, S4, S7, S8 (no designer, no separate buyer)
+//   C  a contractor arrives with a BOQ and spec already in hand: starts at S8, skipping S1-S7
+//   D  everything already in stock: skips S12-S17 (PROCUREMENT) only
+//
+// `expect(salesStage).toBe('CLOSED_PAID')` proves a DESTINATION; it is satisfied by any route
+// that happens to end there, including an illegal one. expectRoute below proves the ROUTE.
+
+/**
+ * Asserts `history` (from {@link stageHistory}) is a legitimate, unbroken, non-oscillating walk
+ * that lands exactly on `expectedStages`, with the stated provenance on every hop.
+ *
+ * Four independent checks — independent in the sense that each is computed without leaning on
+ * whether another one passed, so a bug that would fool one cannot also fool the rest:
+ *
+ *   1. CHAIN CONTINUITY — hop[i].from === hop[i-1].to for every i. Catches an interleaved write
+ *      (a STAGE_CHANGED event from a concurrent actor landing between two of this test's own
+ *      hops) that landed on the right stages in the wrong order.
+ *   2. EXACT WALK — `[expectedStages[0], ...history.map(h => h.to)]` deep-equals `expectedStages`.
+ *      A missing hop and an extra hop both fail this; a set/subset comparison would catch
+ *      neither (a route that visits every expected stage PLUS one illegal detour is still a
+ *      superset match).
+ *   3. NO STAGE VISITED TWICE — computed from the walked sequence ALONE, never by consulting
+ *      `expectedStages`, specifically so a wrong `expectedStages` could never accidentally
+ *      launder an oscillating real route (A->B->A) into a passing test. A dedup over the exact
+ *      same array checked in #2 would not be independent in that sense.
+ *   4. PROVENANCE — `expectedMessages[i]` is compared against `history[i].message`.
+ *      {@link AUTO_STAGE_MESSAGE} for a hop the SYSTEM advanced (issuing a quotation,
+ *      confirming an order, receiving goods, completing delivery, confirming final payment);
+ *      the caller's literal note (`null` throughout every case in this slice) for a hop a human
+ *      drove through POST /stage. Proves the SYSTEM walked the auto hops rather than the test
+ *      clicking them there by hand — a route with the right stages but every hop manual would be
+ *      a materially different, and wrong, claim about this pipeline.
+ *
+ * @param history          stageHistory()'s return — `[{from, to, message}]`.
+ * @param expectedStages   the full walked sequence, starting stage included —
+ *                          `[start, hop1.to, hop2.to, ...]`. One longer than `history`.
+ * @param expectedMessages one entry per hop (same length as `history`) — {@link AUTO_STAGE_MESSAGE}
+ *                          or the exact note (`null` for every manual hop in this slice).
+ */
+export function expectRoute(history, expectedStages, expectedMessages) {
+  expect(
+    Array.isArray(history) && history.length > 0,
+    `expectRoute: history must have at least one hop (got ${JSON.stringify(history)}) — an empty ` +
+      'history has no starting stage to walk from; assert stageHistory() directly for that case ' +
+      "(Case C's baseline does exactly that)."
+  ).toBe(true);
+  expect(
+    expectedMessages.length,
+    `expectRoute: expectedMessages must have exactly one entry per hop (${history.length} hops, ` +
+      `got ${expectedMessages.length} messages)`
+  ).toBe(history.length);
+
+  // 1. Chain continuity.
+  for (let i = 1; i < history.length; i++) {
+    expect(
+      history[i].from,
+      `expectRoute: hop ${i} (${history[i].from} -> ${history[i].to}) does not continue from hop ` +
+        `${i - 1}'s destination (${history[i - 1].to}) — an interleaved write, or two runs of this ` +
+        'test colliding on the same deal'
+    ).toBe(history[i - 1].to);
+  }
+
+  // 2. Exact walk: the starting stage plus every hop's destination, in order.
+  const walked = [history[0].from, ...history.map((hop) => hop.to)];
+  expect(
+    walked,
+    'expectRoute: the actual walked stage sequence must exactly equal the expected route — a ' +
+      'missing hop, an extra hop, or a wrong order all fail this'
+  ).toEqual(expectedStages);
+
+  // 3. No stage visited twice — derived from `walked` alone (never from `expectedStages`), so an
+  // oscillating real route cannot be "expected" into passing by a matching-but-wrong expectation.
+  expect(
+    new Set(walked).size,
+    `expectRoute: a stage was visited more than once in the actual route — ${JSON.stringify(walked)}`
+  ).toBe(walked.length);
+
+  // 4. Provenance per hop: AUTO_STAGE_MESSAGE for a system advance, the caller's note otherwise.
+  expect(
+    history.map((hop) => hop.message),
+    'expectRoute: per-hop provenance must match — an AUTO_STAGE_MESSAGE hop the test expected to ' +
+      'be manual (or vice versa) means the route was not actually driven the way this test claims'
+  ).toEqual(expectedMessages);
+}
+
+/**
+ * Asserts none of `stages` was ever visited — as a `from` OR a `to` — across `history`.
+ *
+ * Independent of {@link expectRoute}'s own exact-walk check (#2 above), which already implies
+ * this for anything the FINAL expected route omits — that implication is exactly what would let
+ * a copy-paste error in `expectedStages` silently drop a stage from both arrays at once. Calling
+ * this separately, with the skipped stages transcribed BY HAND from DealStage's route Javadoc
+ * rather than derived from `expectedStages`, is what makes "route B skips S3/S4/S7/S8" its own
+ * falsifiable claim rather than a restatement of whatever expectRoute happened to be given.
+ */
+export function expectNeverEntered(history, stages) {
+  const touched = new Set(history.flatMap((hop) => [hop.from, hop.to]));
+  for (const stage of stages) {
+    expect(
+      touched.has(stage),
+      `expectNeverEntered: ${stage} was entered (as a hop's from or to) but this route must never ` +
+        `touch it — actual touched stages: ${JSON.stringify([...touched])}`
+    ).toBe(false);
+  }
+}
+
+/**
+ * POST /api/tickets/{id}/entry-channel — labels how the deal arrived. TicketController.entryChannel
+ * (ticket/TicketController.java:263-269); TicketService.setEntryChannel (ticket/TicketService.java:
+ * 2000-2030) is gated by requireDealOwnership (owner sales rep / sales_manager / ceo — NOT a fixed
+ * role set, unlike most of this file's other new helpers) and refuses EntryChannel.UNSPECIFIED as
+ * an INPUT even though it is legal as the stored default (V144).
+ *
+ * No note is required the first time a channel is stated — entryChannelIsStated (:2439-2443) reads
+ * false for the UNSPECIFIED default every deal in this suite starts at (createDeal never passes
+ * entryChannel), so `changingExistingNonDefault` is false and the 400 never fires.
+ *
+ * @param value one of EntryChannel's three real routes — DESIGNER_LED / OWNER_DIRECT / BUYER_DIRECT
+ *              — the exact three literals Cases A/B/C are named after in this slice's spec.
+ */
+export async function setEntryChannel(sessions, ticketId, value, { note = null } = {}) {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/entry-channel`, {
+    value,
+    note,
+  });
+  expect(response.status(), `sales POST /api/tickets/${ticketId}/entry-channel -> ${value}`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/deposit-policy — TicketController.depositPolicy (ticket/
+ * TicketController.java:271-277); TicketService.waiveDeposit (ticket/TicketService.java:2032-2057)
+ * requires ACCOUNT_ROLES (account, ceo) and a non-blank reason, and refuses (409) once a real
+ * deposit notice has actually been issued — paymentStatus must still be null or CUSTOMER_CONFIRMED
+ * (DepositPolicy.NON_REQUIRED = {NOT_REQUIRED, WAIVED, CREDIT_CUSTOMER}).
+ *
+ * ⚠️ Needed BEFORE, not merely "at some point before", any deposit-gated step this slice reaches
+ * without ever running the real DepositNoticeService document flow:
+ *   - issueImportRequest's `depositReady` OR-branch (TicketService.java:761-765) checks this gate
+ *     BEFORE its own fulfillmentStatus-not-null check (:772) — call order matters, see
+ *     issueImportRequest's own doc below for why Case D's 409 would otherwise prove the wrong
+ *     thing.
+ *   - confirmFinalPayment's canConfirmFinalPaymentNow (:1470-1481) accepts the identical
+ *     bypass — `bypassesDepositNotice(depositPolicy) && paymentStatus === CUSTOMER_CONFIRMED`.
+ *
+ * @param opts.policy default 'NOT_REQUIRED' — the literal every case in this slice uses.
+ */
+export async function waiveDeposit(sessions, ticketId, { policy = 'NOT_REQUIRED', reason }) {
+  const response = await apiWrite(sessions.account, 'post', `/api/tickets/${ticketId}/deposit-policy`, {
+    policy,
+    reason,
+  });
+  expect(response.status(), `account POST /api/tickets/${ticketId}/deposit-policy -> ${policy}`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/import-request — TicketController.issueImportRequest (ticket/
+ * TicketController.java:376-380); TicketService.issueImportRequest (ticket/TicketService.java:
+ * 748-783) requires FULFILMENT_ROLES (import, ceo).
+ *
+ * Two independent 409 causes, checked IN THIS ORDER (:766, :772-773) — which matters for what a
+ * refusal here actually proves:
+ *   1. `!depositReady` (paymentStatus not DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID, and no bypass —
+ *      see {@link waiveDeposit}) or ticket.status not yet 'quotation_issued'.
+ *   2. `fulfillmentStatus != null` — an IR (or a stock declaration) already exists.
+ * Cause 1 is checked FIRST. A deal that never waived its deposit would 409 on cause 1 even after
+ * a full stock declaration, which would make Case D's "the import path is structurally closed"
+ * proof actually be "the deposit was never waived" in disguise — every case that expects THIS
+ * call to refuse must have already cleared cause 1 (via {@link waiveDeposit}), so the 409 body's
+ * message can be asserted as the fulfillmentStatus-specific one ("คำขอนำเข้านี้ถูกออกไปแล้ว") and
+ * not the deposit one.
+ *
+ * On success, auto-advances the deal to DealStage.PROCUREMENT (:781, autoAdvanceStage's own
+ * guarded no-op).
+ *
+ * @param opts.expect 'ok' (default, asserts 200) or an exact status — Case D asserts 409 through
+ *                     this same call, mirroring advanceStage's `{expect}` pattern in this file.
+ */
+export async function issueImportRequest(sessions, ticketId, { expect: expectation = 'ok' } = {}) {
+  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/import-request`);
+  const wantStatus = expectation === 'ok' ? 200 : expectation;
+  expect(response.status(), `import POST /api/tickets/${ticketId}/import-request`).toBe(wantStatus);
+  if (wantStatus !== 200) {
+    return response;
+  }
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/ir-sent — TicketController.markIrSent (ticket/TicketController.java:
+ * 382-386); TicketService.markIrSent (ticket/TicketService.java:785-801) requires FULFILMENT_ROLES
+ * and fulfillmentStatus === IR_ISSUED. Fulfilment-axis only: does not itself move salesStage — per
+ * DealStage's own Javadoc, the whole IR -> warehouse journey lives inside the single PROCUREMENT
+ * stage via fulfillment_status, with no separate DealStage entries for IR_SENT/SHIPPING/
+ * GOODS_RECEIVED.
+ */
+export async function markIrSent(sessions, ticketId) {
+  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/ir-sent`);
+  expect(response.status(), `import POST /api/tickets/${ticketId}/ir-sent`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/shipping — TicketController.markShipping (ticket/TicketController.java:
+ * 388-392); TicketService.markShipping (ticket/TicketService.java:803-824) requires
+ * FULFILMENT_ROLES, fulfillmentStatus === IR_SENT, and refuses (409) if the deal is tracked by a
+ * factory purchase order (hasLivePurchaseOrders) — none of this suite's deals ever create one
+ * (that is a separate aggregate, th.co.glr.hr.procurement.ProcurementService), so that branch
+ * never fires here.
+ */
+export async function markShipping(sessions, ticketId) {
+  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/shipping`);
+  expect(response.status(), `import POST /api/tickets/${ticketId}/shipping`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/goods-received — TicketController.markGoodsReceived (ticket/
+ * TicketController.java:394-398); TicketService.markGoodsReceived (ticket/TicketService.java:
+ * 826-843) requires FULFILMENT_ROLES and fulfillmentStatus === SHIPPING, then applyGoodsReceived
+ * (:852-868) auto-advances the deal to DealStage.DELIVERY_SCHEDULING.
+ *
+ * This is the ONLY way Case A's non-stock route reaches DELIVERY_SCHEDULING from PROCUREMENT:
+ * reserveStock's full-coverage branch (see {@link declareStockCoverage}) is the stock-route's
+ * alternative path to the same stage, and Case A must not take it (that is Case D's whole point).
+ */
+export async function markGoodsReceived(sessions, ticketId) {
+  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/goods-received`);
+  expect(response.status(), `import POST /api/tickets/${ticketId}/goods-received`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/reserve-stock — despite the name, and despite TicketEventKind.
+ * STOCK_RESERVED, **nothing is reserved**: see TicketService.reserveStock's own Javadoc (ticket/
+ * TicketService.java:926-983) for the full "this is an uncorroborated sales declaration, not an
+ * inventory system" warning. TicketController.reserveStock (ticket/TicketController.java:106-114);
+ * TicketService.reserveStock (:984-1034) is gated by canDeclareStockCoverage (:2517-2520 — the
+ * deal OWNER, or import, or ceo; sales_manager is deliberately excluded) AND floored at
+ * DealStage.ORDER_RECEIVED (stockCoverageStageReached, :2551-2553 — a 409 below it, matching this
+ * slice's brief: "reserveStock is floored at ORDER_RECEIVED").
+ *
+ * When every line is FULLY covered (qtyFromStock >= qty on every item), sets fulfillment_status
+ * FROM_STOCK and auto-advances straight to DealStage.DELIVERY_SCHEDULING (:1020-1031) — skipping
+ * PROCUREMENT entirely and, per {@link issueImportRequest}'s own doc, PERMANENTLY: that endpoint's
+ * `fulfillmentStatus != null` guard (:772) then refuses forever after, which is what makes "this
+ * route skipped procurement" a structural fact rather than an ordering coincidence.
+ *
+ * @param role   'sales' (must be the deal OWNER — canDeclareStockCoverage checks createdById
+ *               directly, not requireDealOwnership, so sales_manager does NOT qualify here even
+ *               though it can move most sales-gated stages), 'import', or 'ceo'.
+ * @param lines  [{itemId, qtyFromStock}] — read real item ids/quantities off a fresh
+ *               `readDeal(...).items`, never invented. Ticket items are populated by
+ *               confirmOrder's own reconciliation (OrderConfirmationService.reconcileTicketItems,
+ *               orderconfirmation/OrderConfirmationService.java:269-307) — createDeal's `items`
+ *               option is NOT what ends up here, since none of this slice's PCR items carry a
+ *               sourceTicketItemId (see createPricingRequest's own doc), so reconcileTicketItems
+ *               always takes its INSERT branch and creates a wholly new ticket_item row from the
+ *               confirmed pricing request's own quantity.
+ */
+export async function declareStockCoverage(sessions, role, ticketId, lines) {
+  const response = await apiWrite(sessions[role], 'post', `/api/tickets/${ticketId}/reserve-stock`, { lines });
+  expect(response.status(), `${role} POST /api/tickets/${ticketId}/reserve-stock`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/deliveries/complete — TicketController.completeDelivery (ticket/
+ * TicketController.java:126-134); TicketService.completeDelivery (:1115-1141) computes the
+ * remaining (qty - qtyDelivered) line for EVERY ticket item itself — no body lines needed — and
+ * 409s ("ไม่มีจำนวนค้างส่ง") if nothing remains, so the ticket must already carry at least one item
+ * with qty > 0. Confirmed present after confirmOrder's reconciliation — see
+ * {@link declareStockCoverage}'s doc on where that item comes from.
+ *
+ * Picks source STOCK when every remaining line is already covered by qtyFromStock, else WAREHOUSE
+ * (recordDeliveryInternal, :1143-1208); WAREHOUSE additionally requires fulfillmentStatus
+ * GOODS_RECEIVED (warehouseDeliveryAvailable, :1439-1447) — which is exactly why Case A's route
+ * must call {@link markGoodsReceived} before this.
+ *
+ * Auto-advances to DealStage.DELIVERED once every item is fully delivered (:1198), and — same
+ * call, same transaction — re-checks maybeAdvanceClosedPaid in case the deal was somehow already
+ * fully paid before delivery finished (:1199-1203; never the case in this slice, since
+ * {@link confirmFinalPayment} always runs after this).
+ */
+export async function completeDelivery(sessions, ticketId, { note, recipientName } = {}) {
+  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
+    note: note ?? null,
+    recipientName: recipientName ?? null,
+  });
+  expect(response.status(), `import POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * POST /api/tickets/{id}/final-payment — TicketController.confirmFinalPayment (ticket/
+ * TicketController.java:400-404); TicketService.confirmFinalPayment (:1210-1238) requires
+ * ACCOUNT_ROLES and canConfirmFinalPaymentNow (:1470-1481: paymentStatus AWAITING_FINAL_PAYMENT or
+ * DEPOSIT_PAID, or a bypass deposit policy with paymentStatus CUSTOMER_CONFIRMED — see
+ * {@link waiveDeposit}).
+ *
+ * Records the full outstanding balance via recordPaymentInternal -> reconcilePaymentStatus, or —
+ * if the deal is somehow already fully covered — advances the payment track directly (:1220-1234);
+ * either path ends in maybeAdvanceClosedPaid (:1341 / :1231). DealStage.CLOSED_PAID only fires once
+ * BOTH FULLY_PAID and FULLY_DELIVERED hold (closedPaidFactsHold, :1755-1757), so this must run
+ * AFTER {@link completeDelivery} to actually land there — calling it first would silently no-op
+ * the stage advance while still moving the payment track, which is why this file always sequences
+ * them delivery-then-payment.
+ */
+export async function confirmFinalPayment(sessions, ticketId) {
+  const response = await apiWrite(sessions.account, 'post', `/api/tickets/${ticketId}/final-payment`);
+  expect(response.status(), `account POST /api/tickets/${ticketId}/final-payment`).toBe(200);
+  const { ticket } = await response.json();
+  return ticket;
+}
+
+/**
+ * Runs the slice-3 pricing-request chain (steps 1-10: createPricingRequest through
+ * issueCustomerQuotation) for ONE recipient, stopping right after `issue` — the call that trips
+ * TicketService.advanceStageForCustomerQuotationIssue (STAGE_FOR_RECIPIENT). Does NOT accept the
+ * quotation or confirm the order; see {@link runPricingChainToOrder} for the version that also
+ * does the slice-3 tail.
+ *
+ * Exists because Case A drives THREE independent chains (DESIGNER -> OWNER -> BUYER) on one deal
+ * — "a deal has one sales_stage and one live PCR at a time" (this slice's own brief) is a business
+ * discipline this helper enforces by construction (each call is a fresh, self-contained chain),
+ * not a constraint PricingRequestService.createDraft itself checks (it has none — confirmed by
+ * reading it: no gate on any OTHER pricing request the ticket may already carry).
+ *
+ * @returns {{pricingRequestId: number, quotationId: number}}
+ */
+export async function runPricingChainToIssue(
+  sessions,
+  ticketId,
+  { factoryName, recipientType, requestedQty = 10 }
+) {
+  const pcr = await createPricingRequest(sessions, ticketId, { factoryName, recipientType, requestedQty });
+  const pcrId = pcr.summary.id;
+  const pcrItemId = pcr.items[0].id;
+
+  await submitPricingRequest(sessions, pcrId);
+  await pickupPricingRequest(sessions, pcrId);
+
+  const drafts = await generateFactoryEmailDrafts(sessions, pcrId);
+  const receivedQuote = await receiveFactoryQuote(sessions, drafts[0].id, pcrItemId);
+  await markFactoryQuoteReadyForCosting(sessions, receivedQuote.id);
+
+  const decision = await startPricingDecision(sessions, pcrId, { defaultMarginPct: 0.3 });
+  await setPricingDecisionMinimums(sessions, decision.id, decision.items);
+  await approvePricingDecision(sessions, decision.id);
+
+  const quotation = await createCustomerQuotation(sessions, pcrId);
+  const issued = await issueCustomerQuotation(sessions, quotation.id);
+
+  return { pricingRequestId: pcrId, quotationId: issued.id };
+}
+
+/**
+ * {@link runPricingChainToIssue} plus the slice-3 tail (recordOutcome ACCEPTED -> confirm-order) —
+ * the only way S10+ (ORDER_RECEIVED and beyond) becomes reachable at all: ORDER_RECEIVED is
+ * fact-gated on payment_status, whose only writer is confirmCustomer, reachable only via
+ * confirm-order from PCR QUOTATION_ACCEPTED (see confirmOrder's own doc above in this file).
+ *
+ * Do not use this for a chain that needs a MANUAL stage move inserted between `issue` and
+ * `confirm-order` (Cases A, B and D all do — the manual move to NEGOTIATION must happen before
+ * confirm-order's own auto-advance would otherwise jump straight past it). Call
+ * {@link runPricingChainToIssue}, insert the manual move via `advanceStage`, then call
+ * `acceptCustomerQuotation` + `confirmOrder` directly.
+ *
+ * @returns {{pricingRequestId: number, quotationId: number, ticket: object}}
+ */
+export async function runPricingChainToOrder(sessions, ticketId, opts) {
+  const { pricingRequestId, quotationId } = await runPricingChainToIssue(sessions, ticketId, opts);
+  await acceptCustomerQuotation(sessions, quotationId);
+  const result = await confirmOrder(sessions, pricingRequestId);
+  return { pricingRequestId, quotationId, ticket: result.ticket };
+}

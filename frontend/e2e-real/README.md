@@ -210,9 +210,19 @@ behaviour worth knowing. All stay recorded so they remain visible.
 
 ### Not covered — read this before citing a green run
 
-- **Overtime is the only business workflow driven end to end.** Every other multi-step flow —
-  leave, a pricing request, a deposit confirmation, closing a deal — has no end-to-end coverage
-  anywhere since the mock suite was removed.
+- **Overtime and the sales pipeline are the two business workflows driven end to end — by two
+  DIFFERENT mechanisms, and only one of them runs in `npm run test:e2e`.** Overtime's coverage
+  (`write-overtime.spec.js`) runs locally, against the local stack this file's "Running it" section
+  starts, on every invocation. The sales pipeline's coverage (`uat-sales-*.spec.js` — the
+  pricing-request chain from lead to `ORDER_RECEIVED`, the stage/note/readiness/role refusal
+  matrix, and the four real routes named in `DealStage.java`'s own Javadoc: Case A designer-led,
+  Case B owner-direct, Case C buyer-direct/starts-at-S8, Case D an all-from-stock deal that skips
+  PROCUREMENT) runs ONLY against a **deployed UAT environment**, via `npm run test:e2e:uat` — see
+  "Running against deployed UAT" below. `playwright.real.config.js` excludes every `uat-*.spec.js`
+  file from a local run entirely (`testIgnore`), so a green local `npm run test:e2e` asserts
+  nothing about the sales pipeline at all — it is neither run nor skipped-and-reported, just absent
+  from that invocation's test count. Every OTHER multi-step flow — leave, a deposit confirmation —
+  still has no end-to-end coverage anywhere since the mock suite was removed.
 - **Leave's successful approve transition is still not driven, and the reason is the service, not
   the seed.** This entry used to blame the demo seed alone. Two things were in the way and only one
   of them was seed-shaped:
@@ -327,6 +337,70 @@ re-pointing the authz assertions at the wrong persona.
 | `E2E_BACKEND_URL` | `http://127.0.0.1:8080` | where the backend is |
 | `E2E_REAL_FRONTEND_PORT` | `5251` | dev-server port for this suite |
 | `E2E_CHROMIUM_EXECUTABLE` | *(unset)* | absolute path to a Chromium binary, for sandboxes/CI images that preinstall one at a different Playwright browser revision |
+
+## Running against deployed UAT
+
+A second mode of this SAME suite (same `playwright.real.config.js`, same `helpers/`) drives the
+sales pipeline end to end against a deployed UAT environment instead of the local stack above —
+real Vercel frontend, real Render backend, real Postgres, no mocks anywhere, no local server
+started. This is what actually proves the pricing-request chain, the refusal matrix, and the four
+sales-pipeline routes (Cases A-D) named in this file's "Not covered" section above.
+
+```bash
+E2E_BASE_URL=https://<uat-frontend-host> \
+E2E_UAT_PASSWORD=<ask whoever runs UAT> \
+npm run test:e2e:uat
+```
+
+Two environment variables, both required:
+
+| variable | purpose |
+|---|---|
+| `E2E_BASE_URL` | the deployed frontend's origin — must be `https://` and non-loopback, or `playwright.real.config.js` refuses to start (its anti-mock protection depends on the target being a real `vite build` output, which only a genuine deployment is). `/api/*` is rewritten to the backend from this same origin, so the browser and this suite's direct-to-Spring API calls share one session cookie jar. |
+| `E2E_UAT_PASSWORD` | the shared password on the `E2E-*` personas `db/migration-uat/V912__uat_e2e_test_personas.sql` seeds. **Not in this repository, and never will be** — see `helpers/uat-accounts.js`'s `uatPassword()` for the full reasoning. Ask whoever runs UAT; do not try any password published for the old, now-gone `@uat.glr` personas. |
+
+`npm run test:e2e:uat` runs `playwright test --config playwright.real.config.js --grep @uat-sales`.
+Every spec meant for UAT tags its `describe` block `@uat-sales`, and `playwright.real.config.js`
+separately `testIgnore`s every `uat-*.spec.js` file in LOCAL mode — two independent mechanisms, so
+neither a `--grep` typo nor a missing tag can point a local run at a shared deployment, or a remote
+run at specs that assume a local one (`route-coverage.spec.js`, `api-surface.spec.js` and
+`write-authz.spec.js` are excluded the other way for exactly that reason — see
+`playwright.real.config.js`'s own comment).
+
+### The never-do list
+
+This is a SHARED, long-lived database that human testers are actively using, not a disposable
+fixture a run can leave dirty:
+
+- **Own deal per test, registered for teardown.** Every UAT spec creates its own deal(s), tags the
+  title with the run id `global-setup.js` stamps (`E2E-<timestamp>-<random>`), and cancels every
+  deal it created in `afterAll` — best-effort and outside any `expect()`, so a teardown failure can
+  never turn a passing assertion red or mask a real one.
+- **Never touch `UAT-TKT-01`..`14` or `UAT-GOLD-01`.** Those are human testers' own fixtures; a
+  spec that advanced one would silently rewrite somebody's acceptance script out from under them.
+- **No failing logins.** `LoginRateLimitFilter` counts both 401 and 403 against `POST
+  /api/auth/login` — 5 failures per account, 20 per client IP, inside a 900s window — and a
+  lockout on the shared Render service cannot be cleared by restarting anything you control.
+  `global-setup.js` captures one session per persona up front and aborts on the FIRST login
+  failure rather than spending the budget trying the rest.
+- **Every test is `@uat-sales` tagged.** It is the only thing `--grep` can select against, and (see
+  above) the local run's `testIgnore` is the second, independent guard against a stray `--grep`
+  sending the wrong specs at the wrong target.
+
+### Personas
+
+The five roles this suite needs (`sales`, `sales_manager`, `import`, `ceo`, `account` —
+`UAT_SALES_ROLES` in `helpers/uat-accounts.js`) come from
+`db/migration-uat/V912__uat_e2e_test_personas.sql`, which lives on the `uat` branch **only** — a
+branch cut from `main` cannot see it, diff against it, or verify it. `helpers/uat-accounts.js` is
+therefore necessarily a HAND-COPY of that migration's persona table, kept next to a long comment on
+exactly how it drifts (an employee's division moves, an email is renamed) and how each failure mode
+surfaces differently. **No credential is committed anywhere in this repository**: V912 seeds every
+persona with `password_hash NULL`, and whoever runs UAT sets the shared password once by hand —
+`helpers/uat-accounts.js`'s own header has the full reasoning, including why the old `@uat.glr`
+password (published in plaintext in earlier commits) is not a fallback: those accounts no longer
+exist in the rebuilt UAT database at all, so every login attempt with it is a guaranteed 401 that
+only spends the rate-limit budget.
 
 ## When a test here goes red
 
