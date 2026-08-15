@@ -209,6 +209,13 @@ const UI_REACHABLE_KEYS = new Set(
 // decision, recorded in the PR that added this file — not something a test should decide.
 const SERVER_ONLY = {
   // ── Live, via a client this harness cannot see ────────────────────────────
+  'GET /api/public/brand/logo.png':
+    'Fetched by the MAIL CLIENT, not by this app — it is the <img> src in the notification email '
+    + 'templates, so the requester is Gmail/Outlook rendering a message, with no session and no hrApi '
+    + 'call. Anonymous by necessity rather than oversight: an email client cannot authenticate, and '
+    + "Gmail's image proxy fetches with no credentials at all. Serves one static asset and reads "
+    + 'nothing. SecurityConfig scopes the exception to /api/public/brand/** specifically, NOT '
+    + '/api/public/**, so admitting this endpoint did not open a namespace.',
   'POST /api/attendance/punch':
     'The physical scanners post here with an X-GLR-Agent-Token instead of a session — see '
     + 'agents/attendance/showroom_agent.py. One of SecurityConfig\'s anonymous exceptions, and pinned by '
