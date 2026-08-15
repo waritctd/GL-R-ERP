@@ -693,3 +693,92 @@ export async function readPricingRequest(sessions, role, pricingRequestId) {
   const { pricingRequest } = await response.json();
   return pricingRequest;
 }
+
+// ── Slice 4: the refusal matrix ─────────────────────────────────────────────────────────────
+//
+// Everything above proves a deal CAN reach a stage. This proves the guards that decide it CANNOT.
+// TicketService.updateStage (ticket/TicketService.java:1497-1534) evaluates, in order:
+// write-access -> lifecycle -> same-stage -> the FACT GATE -> the NOTE RULE -> READINESS. Get
+// that order wrong and a refusal test can pass for the wrong reason — e.g. asserting the 400 note
+// message against ORDER_RECEIVED (a fact-gated target) would actually be observing the 409 FACT
+// message instead, because requireStageMoveAllowed (:1555-1574) runs requireStageFactsHold
+// (:1701-1718) before updateStage's own note check ever runs. uat-sales-refusals.spec.js is
+// written around this ordering explicitly; see that file's own header.
+
+/**
+ * POST /api/tickets/{id}/stage as `role` — TicketController.updateStage
+ * (ticket/TicketController.java:203-209), body shape UpdateStageRequest{stage, note}
+ * (ticket/TicketController.java:303-304), decided by TicketService.updateStage
+ * (ticket/TicketService.java:1497-1534).
+ *
+ * ALWAYS logs a fresh deal_activity row FIRST, via {@link logActivity} — which is hardcoded to
+ * the `sales` session, same as that function's own contract, so this works regardless of which
+ * role is about to attempt the move (the deal is always owned by `sales`; see createDeal). Two
+ * independent reasons this is unconditional, not only on a call expected to succeed:
+ *
+ *   1. The forward readiness gate (requireStageAdvanceReadiness, ticket/TicketService.java:
+ *      1587-1592) compares the newest deal_activity row against MAX(ticket_event.created_at
+ *      WHERE kind = 'STAGE_CHANGED') (TicketRepository.hasActivitySinceLastStageChange, ticket/
+ *      TicketRepository.java:1945-1960) — and EVERY accepted stage change, manual or automatic,
+ *      moves that maximum forward. A test that calls this twice in a row for two successful
+ *      moves would fail the second call's readiness gate for a reason unrelated to what it is
+ *      testing, unless the activity clock is refreshed on every call.
+ *   2. It is what lets a refusal be asserted through the exact same function as a success: the
+ *      only thing that differs between a passing call and a failing one is targetStage/note/role/
+ *      expect, never an incidental extra step a refusal happened to skip. That is what proves a
+ *      refusal in uat-sales-refusals.spec.js is the RULE under test, not an artefact of a
+ *      differently-shaped request.
+ *
+ * Refusal #8 (no NEW activity since the last stage change) deliberately does NOT route its
+ * middle, refused call through this helper — that specific case would be unreachable if this
+ * helper's own unconditional activity-log ran first. See that test's own comment.
+ *
+ * @param role          key into `sessions` — the actor attempting the move. Not necessarily the
+ *                       deal's owner: several refusals are specifically about a non-owner or
+ *                       wrong-role actor.
+ * @param opts.note      defaults to `null` — the exact shape the note-rule refusals need. Pass a
+ *                       non-blank string to satisfy DealStage.requiresJustification.
+ * @param opts.expect    `'ok'` (default; asserts 200) or an exact HTTP status number for a
+ *                       refusal. Named `expect` per the brief; destructured to a local
+ *                       `expectation` so it does not shadow the `expect` imported from
+ *                       @playwright/test that this function still needs to call.
+ * @returns the raw response — callers read `.status()`/`.json()` themselves, since a refusal's
+ *          body (ErrorResponse{message,status}) and a success's body (TicketDetailResponse
+ *          {ticket}) are different shapes and only the caller knows which one to expect.
+ */
+export async function advanceStage(
+  sessions,
+  role,
+  ticketId,
+  targetStage,
+  { note = null, expect: expectation = 'ok' } = {}
+) {
+  await logActivity(sessions, ticketId, { note: `advanceStage clock reset before -> ${targetStage}` });
+  const response = await apiWrite(sessions[role], 'post', `/api/tickets/${ticketId}/stage`, {
+    stage: targetStage,
+    note,
+  });
+  const wantStatus = expectation === 'ok' ? 200 : expectation;
+  expect(
+    response.status(),
+    `${role} POST /api/tickets/${ticketId}/stage -> ${targetStage} (note=${JSON.stringify(note)})`
+  ).toBe(wantStatus);
+  return response;
+}
+
+/**
+ * GET /api/tickets/{id}/actions -> the server's own per-stage verdicts — TicketController.actions
+ * (ticket/TicketController.java:68-72, gated only by requireViewAccess so any VIEWER_ROLES caller
+ * may read it), TicketActionsResponse.stageDecisions (ticket/TicketResponses.java:13-32), computed
+ * by the private TicketService.stageDecisions (ticket/TicketService.java:1628-1647): one entry per
+ * DealStage.ORDER stage, `requiresReason` is DealStage.requiresJustification(currentStage,
+ * thatStage) — populated even when `allowed` is false, since the note rule does not depend on the
+ * gates. See refusal #6, which recomputes the same predicate independently in JS and asserts
+ * agreement for all 15 stages.
+ */
+export async function stageDecisions(sessions, role, ticketId) {
+  const response = await sessions[role].get(`/api/tickets/${ticketId}/actions`, { failOnStatusCode: false });
+  expect(response.status(), `${role} GET /api/tickets/${ticketId}/actions`).toBe(200);
+  const { stageDecisions: decisions } = await response.json();
+  return decisions;
+}
