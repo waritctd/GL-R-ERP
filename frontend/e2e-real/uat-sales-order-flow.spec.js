@@ -67,6 +67,11 @@ test.describe('@uat-sales pricing-request chain — deal to ORDER_RECEIVED', () 
   });
 
   test.afterAll(async () => {
+    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it. Teardown
+    // cancels one deal at a time against a Render `starter` instance; the refusal spec hit the
+    // 30s default at 12 deals with every assertion passing. Budget here before this file grows.
+    test.setTimeout(180_000);
+
     // Best-effort, outside any expect(): teardown must never turn a passing assertion red, and
     // must never mask a real failure with a second one. TicketService.cancel only refuses a
     // CLOSED/CANCELLED ticket (ticket/TicketService.java:2120-2121) — by the end of this test the

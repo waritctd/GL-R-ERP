@@ -102,6 +102,16 @@ test.describe('@uat-sales refusal matrix — stage/note/readiness/role guards', 
   });
 
   test.afterAll(async () => {
+    // HOOKS HAVE THEIR OWN TIMEOUT, and test.setTimeout() on a test does not extend it. This file
+    // creates a deal per test — 12 of them — and cancels them one at a time against a Render
+    // `starter` instance at a few seconds each, which lands right on the 30s default. It did:
+    // every one of the 20 assertions passed and the RUN still failed, on this hook.
+    //
+    // Sequential on purpose. Firing 12 concurrent cancels at a shared UAT would trade a slow
+    // teardown for contention on a database other people are using, and teardown is the one part
+    // of a suite that must never become the reason something else flakes.
+    test.setTimeout(180_000);
+
     // Best-effort, outside any expect(): teardown must never turn a passing assertion red, and
     // must never mask a real failure with a second one. Mirrors slices 2-3.
     for (const ticketId of created) {

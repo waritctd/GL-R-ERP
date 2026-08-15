@@ -42,6 +42,11 @@ test.describe('@uat-sales sales fixtures — create and cancel a deal', () => {
   });
 
   test.afterAll(async () => {
+    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it. Teardown
+    // cancels one deal at a time against a Render `starter` instance; the refusal spec hit the
+    // 30s default at 12 deals with every assertion passing. Budget here before this file grows.
+    test.setTimeout(180_000);
+
     // Best-effort, and outside any expect(): teardown must never turn a passing assertion red,
     // and must never mask a real failure with a second one.
     for (const ticketId of created) {
