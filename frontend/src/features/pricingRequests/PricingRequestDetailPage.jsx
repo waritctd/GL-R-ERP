@@ -129,10 +129,18 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     // this one seed variable, so quotedUnit was overwriting a real unit — FactoryQuoteRepository.
     // insertDraftItems already seeds it from the request's own requested_unit — with the basis
     // code instead. Measured in UAT: 30 of 34 sales.factory_quote_item rows hold a basis in
-    // quoted_unit. unitBasis keeps its existing fallback chain; quotedUnit now falls back through
-    // the item's own quoted unit, then what Sales requested in free text, and only then a
-    // basis-derived display label — never the basis code itself.
-    const unitBasis = item.unitBasis ?? item.quotedUnit ?? requestItem.requestedUnitBasis ?? 'PER_PIECE';
+    // quoted_unit. quotedUnit falls back through the item's own quoted unit, then what Sales
+    // requested in free text, and only then a basis-derived display label — never the basis code.
+    //
+    // unitBasis is read straight off the item with NO fallback, because it cannot be absent:
+    // sales.factory_quote_item.unit_basis is NOT NULL (V61) and CHECK-constrained to the four
+    // canonical codes (V63), and every quote here comes from the API. The chain that used to sit
+    // here — `?? item.quotedUnit ?? requestItem.requestedUnitBasis ?? 'PER_PIECE'` — could never
+    // fire for that reason: it read as a live safety net while being dead, and its second term
+    // would have written a display string into a basis field. Leaving the `'PER_PIECE'` default
+    // off is deliberate — a silently wrong basis is what PR #789 fixed on the seeding side, and
+    // an absent one should fail loudly at the backend rather than quietly price per piece.
+    const unitBasis = item.unitBasis;
     const quotedUnit = item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
     return {
     pricingRequestItemId: item.pricingRequestItemId,
