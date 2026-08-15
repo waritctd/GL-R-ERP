@@ -16,6 +16,7 @@ import {
   expectNeverEntered,
   expectRoute,
   issueImportRequest,
+  logActivity,
   markGoodsReceived,
   markIrSent,
   markShipping,
@@ -271,12 +272,26 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
         'target is never counted as "skipped" and no note is required. Checked against the SERVER, ' +
         'not just asserted: stageDecisions().requiresReason must independently read false too.',
       async () => {
+        // ⚠️ `allowed` IS TIME-DEPENDENT; `requiresReason` IS NOT. TicketService.stageDecisions
+        // computes `allowed` by running requireStageMoveAllowed AND requireStageAdvanceReadiness
+        // in a try/catch, so for a FORWARD target it folds in the readiness gate — which needs an
+        // activity newer than the last STAGE_CHANGED. Read straight after a stage change, every
+        // forward target reports allowed:false, correctly. `requiresReason` is
+        // DealStage.requiresJustification alone and is reported even for a blocked stage.
+        //
+        // The first version of this step read stageDecisions() before logging an activity and
+        // asserted allowed:true. It failed against UAT, and the SERVER was right: the hop really
+        // was unreachable at that instant. Log the activity first, so `allowed` answers "is this
+        // hop reachable" rather than "did the clock happen to be reset".
+        await logActivity(sessions, deal.id, { note: 'satisfy readiness before reading decisions' });
+
         const decisions = await stageDecisions(sessions, 'sales', deal.id);
         const negotiation = decisions.find((d) => d.stage === 'NEGOTIATION');
         expect(negotiation, 'stageDecisions must report an entry for NEGOTIATION').toBeTruthy();
         expect(
           negotiation.allowed,
-          'OWNER_SIGNOFF -> NEGOTIATION must actually be reachable, not merely note-exempt'
+          'with readiness satisfied, OWNER_SIGNOFF -> NEGOTIATION must be reachable — not merely ' +
+            'note-exempt'
         ).toBe(true);
         expect(
           negotiation.requiresReason,

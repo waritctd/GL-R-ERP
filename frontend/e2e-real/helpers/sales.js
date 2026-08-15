@@ -776,6 +776,22 @@ export async function advanceStage(
  * gates. See refusal #6, which recomputes the same predicate independently in JS and asserts
  * agreement for all 15 stages.
  */
+/**
+ * ⚠️ `allowed` IS TIME-DEPENDENT. `requiresReason` IS NOT. They answer different questions and are
+ * not interchangeable:
+ *
+ *   allowed        requireStageMoveAllowed AND, for a FORWARD target, requireStageAdvanceReadiness,
+ *                  both run in a try/catch. So it folds in the readiness gate, which needs an
+ *                  activity newer than the last STAGE_CHANGED. Read immediately after ANY stage
+ *                  change — including an auto-advance, which emits that event too — every forward
+ *                  target correctly reports `false` until an activity is logged.
+ *   requiresReason DealStage.requiresJustification alone. Reported even for a BLOCKED stage,
+ *                  because "would this need a note" is independent of "can I do it right now".
+ *
+ * Use `requiresReason` to check the NOTE rule. Only assert `allowed` after logActivity(), or you
+ * are asserting the clock rather than the rule — Case B's first version did exactly that, expected
+ * true, and the server was right to say false.
+ */
 export async function stageDecisions(sessions, role, ticketId) {
   const response = await sessions[role].get(`/api/tickets/${ticketId}/actions`, { failOnStatusCode: false });
   expect(response.status(), `${role} GET /api/tickets/${ticketId}/actions`).toBe(200);
