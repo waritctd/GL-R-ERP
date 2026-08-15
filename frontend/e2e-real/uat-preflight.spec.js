@@ -69,6 +69,13 @@ test.describe('@uat-sales UAT harness handshake', () => {
   });
 
   test('the sales pipeline is readable by the roles that own it', async () => {
+    // Four sequential reads of a real deal list from a Render `starter` instance. It has hit the
+    // 30s default twice — once at 30.0s exactly, mid-request, reported as "Request context
+    // disposed", which names the timeout's victim rather than its cause. Not a hang and not a
+    // permission problem: on the runs that finish, this same test takes 10-24s. The variance is
+    // cold-start plus however many tickets UAT is holding that day, and both grow.
+    test.setTimeout(90_000);
+
     // A deliberately shallow read: it proves the deployment has a working sales surface and that
     // TicketAccessPolicy.VIEWER_ROLES admits these four, without coupling to any seeded row.
     // Asserting a COUNT here would couple this suite to fixtures humans edit — see §B.3 of the
