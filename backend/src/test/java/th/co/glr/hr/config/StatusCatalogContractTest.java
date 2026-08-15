@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -25,6 +26,8 @@ import java.util.TreeMap;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attendance.correction.AttendanceCorrectionStatus;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
+import th.co.glr.hr.auth.EmployeeLoginRecord;
 import th.co.glr.hr.commission.CommissionStatus;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.leave.LeaveStatus;
@@ -53,14 +56,16 @@ import th.co.glr.hr.ticket.TicketStatus;
  * <p><b>Deliberately NOT a {@code @SpringBootTest}.</b> Every other contract test in this package
  * reads springdoc's live {@code /v3/api-docs}, which needs a running application context and (via
  * {@code SpringdocContractSupport}) a Postgres instance gated by {@code @EnabledIf}. This test
- * needs neither: it is pure reflection over plain Java classes and enums, so it stays fast and
- * runs even when no database is available — which matters, because a guard that can ERROR out for
- * an unrelated reason (no {@code TEST_DB_URL}, no Docker) is a guard that stops protecting anyone
- * on exactly the days it is inconvenient to chase that down. {@link #digestRoot()} and
- * {@link #writeDigest(Path, ObjectNode)} below are therefore a small, deliberate duplication of
- * {@code SpringdocContractSupport}'s equivalents rather than an inherited dependency on it.
+ * needs neither: most groups are read by reflection over plain Java classes and enums, and the
+ * role group ({@link #rolesFromDivisionAccessPolicy()}) by directly calling a pure static method —
+ * no Spring context, no database either way — so it stays fast and runs even when no database is
+ * available — which matters, because a guard that can ERROR out for an unrelated reason (no
+ * {@code TEST_DB_URL}, no Docker) is a guard that stops protecting anyone on exactly the days it is
+ * inconvenient to chase that down. {@link #digestRoot()} and {@link #writeDigest(Path, ObjectNode)}
+ * below are therefore a small, deliberate duplication of {@code SpringdocContractSupport}'s
+ * equivalents rather than an inherited dependency on it.
  *
- * <p><b>The shape problem this test exists to solve.</b> The nine status types below are NOT
+ * <p><b>The shape problem this test exists to solve.</b> The ten types below are NOT
  * uniform, and a generator that assumes one shape silently breaks on the others:
  *
  * <ul>
@@ -86,6 +91,13 @@ import th.co.glr.hr.ticket.TicketStatus;
  *       guard would then pass while checking nothing for a quarter of its own scope — the exact
  *       vacuity this test exists to prevent. These four are read via
  *       {@code Class#getEnumConstants()} instead.
+ *   <li>The login role vocabulary ({@link DivisionAccessPolicy#roleFor}) declares no constants
+ *       field at all — its values are inline string literals inside branch logic over division and
+ *       position data, not a field of any kind. There is nothing here for reflection to read, so
+ *       {@link #rolesFromDivisionAccessPolicy()} instead CALLS the real method against one
+ *       synthetic {@link EmployeeLoginRecord} per branch of its ladder and collects the distinct
+ *       results — executing the authority directly, one level more direct than reflecting on a
+ *       field would be.
  * </ul>
  *
  * <p><b>Two backend types are deliberately NOT here</b>, for reasons recorded once, in full, on
@@ -94,8 +106,10 @@ import th.co.glr.hr.ticket.TicketStatus;
  * {@code frontend/src/features/tickets/stageCatalog.test.js}) and the {@code sales.pricing_costing}
  * status column, which has no backing Java type at all post-V141 (only a SQL CHECK constraint).
  * See {@code frontend/src/utils/statusCatalog.test.js}'s {@code EXCLUDED_MAPS} for the full
- * reasoning on both, plus a third exclusion ({@code roleLabel}) that never had a Java constants
- * type to begin with.
+ * reasoning on both. A third type, the login role vocabulary, used to be excluded here too for a
+ * related reason (no constants field to reflect on) — it is now covered instead, by execution
+ * rather than reflection; see the bullet above and {@code roleLabel}'s entry in
+ * {@code frontend/src/utils/statusCatalog.test.js}'s {@code MAP_SPECS}.
  *
  * <p>When this test fails, regenerate and commit the result, and say so in the PR body:
  * <pre>cd backend &amp;&amp; ./mvnw -Dtest=StatusCatalogContractTest -Dstatus.catalog.update=true test</pre>
@@ -177,6 +191,9 @@ class StatusCatalogContractTest {
         groups.put("AttendanceCorrectionStatus", fromEnum(AttendanceCorrectionStatus.class));
         groups.put("SpecialMoneyStatus", fromEnum(SpecialMoneyStatus.class));
 
+        // ── No constants field of any kind — DERIVED by calling the real branch logic ───────────
+        groups.put("DivisionAccessPolicyRole", rolesFromDivisionAccessPolicy());
+
         return groups;
     }
 
@@ -218,6 +235,53 @@ class StatusCatalogContractTest {
         return sorted(Arrays.stream(type.getEnumConstants()).map(Enum::name));
     }
 
+    /**
+     * Every role {@link DivisionAccessPolicy#roleFor} can actually return. That method declares no
+     * constants field to reflect on — its vocabulary is inline string literals inside branch logic
+     * over division code, division name, and position title (see that class's own Javadoc for the
+     * full ladder: executive/{@code md} → {@code ceo}; {@code hr}/{@code pcim}/{@code ac}/
+     * {@code wh}/{@code qc} → their own named role; {@code sa} → {@code sales_manager} or
+     * {@code sales} depending on {@link DivisionAccessPolicy#isManager}; everything else, including
+     * null/blank, → {@code employee}). The only faithful extraction is to CALL the real method —
+     * one synthetic {@link EmployeeLoginRecord} per branch, collecting the distinct results — not
+     * to reflect on a parallel list.
+     *
+     * <p>{@link th.co.glr.hr.auth.ApplicationRoles} declares its own static 9-role allowlist, but
+     * for a different purpose (validating an already-assigned role, e.g. from an external import),
+     * and deliberately is NOT read here: nothing proves it stays in lockstep with
+     * {@code roleFor}'s actual outputs, so trusting it would just swap one unguarded mirror for
+     * another. This method proves the digest against {@code roleFor} itself instead.
+     */
+    private static List<String> rolesFromDivisionAccessPolicy() {
+        List<EmployeeLoginRecord> samples = List.of(
+            sampleEmployee("md", "MD-ผู้บริหารระดับสูง", "กรรมการผู้จัดการ"),   // ceo, via the "md" code
+            sampleEmployee("zz", "ZZ-ไม่มีฝ่ายนี้จริง", "ประธานกรรมการ"),        // ceo, via isExecutive — any division
+            sampleEmployee("hr", "HR-บุคคล", "เจ้าหน้าที่บุคคล"),
+            sampleEmployee("pcim", "PCIM-จัดซื้อต่างประเทศ", "เจ้าหน้าที่จัดซื้อ"),
+            sampleEmployee("ac", "AC-ฝ่ายบัญชี", "เจ้าหน้าที่บัญชี"),
+            sampleEmployee("wh", "WH-คลังสินค้า", "เจ้าหน้าที่คลังสินค้า"),
+            sampleEmployee("qc", "QC-ควบคุมคุณภาพ", "เจ้าหน้าที่ QC"),
+            sampleEmployee("sa", "SA-ฝ่ายขาย", "ผู้จัดการฝ่ายขาย"),             // sales_manager, position contains ผู้จัดการ
+            sampleEmployee("sa", "SA-ฝ่ายขาย", "พนักงานขาย"),                  // sales, not a manager
+            sampleEmployee("yy", "YY-ไม่มีฝ่ายนี้จริง", "พนักงานทั่วไป"),        // employee, the unmatched-code fallback
+            sampleEmployee(null, null, null)                                   // employee, the null/blank fallback
+        );
+        return sorted(samples.stream().map(DivisionAccessPolicy::roleFor));
+    }
+
+    /**
+     * A minimal {@link EmployeeLoginRecord} varying only the three fields
+     * {@link DivisionAccessPolicy#roleFor} reads (division code, division name, position title) —
+     * the rest are inert placeholders {@code roleFor} never looks at.
+     */
+    private static EmployeeLoginRecord sampleEmployee(String divisionCode, String divisionName, String positionName) {
+        return new EmployeeLoginRecord(
+            1L, "E001", "sample@example.invalid", "Sample Employee", true,
+            1L, divisionCode, divisionName, positionName,
+            LocalDate.now(), "hash", false
+        );
+    }
+
     private static List<String> sorted(Stream<String> values) {
         return values.distinct().sorted(Comparator.naturalOrder()).toList();
     }
@@ -250,8 +314,10 @@ class StatusCatalogContractTest {
         root.put("$comment", "GENERATED by StatusCatalogContractTest — do not hand-edit."
             + " Regenerate: cd backend && ./mvnw -Dtest=StatusCatalogContractTest -D"
             + UPDATE_PROPERTY + "=true test");
-        root.put("source", "reflection over backend status String-constant classes and enums — "
-            + "see StatusCatalogContractTest for the group list and each type's extraction strategy");
+        root.put("source", "reflection over backend status String-constant classes and enums, plus "
+            + "one group (DivisionAccessPolicyRole) derived by executing the real role-derivation "
+            + "method — see StatusCatalogContractTest for the group list and each type's extraction "
+            + "strategy");
         return root;
     }
 
