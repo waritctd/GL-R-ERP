@@ -6,8 +6,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -37,14 +35,22 @@ public class NotificationService {
     public NotificationDto notify(long employeeId, String type, String subject, String body,
                                   String link, boolean sendEmail) {
         validate(employeeId, type, subject, body);
-        long id = notifications.insert(employeeId, type.trim(), subject.trim(), body.trim(), trimmedOrNull(link));
+        String cleanLink = trimmedOrNull(link);
+        long id = notifications.insert(employeeId, type.trim(), subject.trim(), body.trim(), cleanLink);
         NotificationDto created = notifications.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Notification was not saved"));
         if (sendEmail) {
-            notifications.findEmployeeEmail(employeeId)
+            // Deliberately NOT gated on the employee having an address: app.mail.override-to can
+            // still redirect this email to a test inbox even when there is no address on file, and
+            // only NotificationEmailService (which owns that config) knows whether an override is
+            // configured. Gating on the address here, the way findEmployeeEmail() used to, made the
+            // override unreachable for exactly the employees it exists to rescue - do not
+            // reintroduce that gate. The only thing checked here is whether the employee row exists.
+            notifications.findEmployeeRecipient(employeeId)
                 .ifPresentOrElse(
-                    to -> sendEmailAfterCommit(employeeId, to, subject.trim(), body.trim()),
-                    () -> log.info("Notification email skipped: employee={} has no email", employeeId));
+                    recipient -> sendEmailAfterCommit(
+                        employeeId, recipient.email(), recipient.name(), subject.trim(), body.trim(), cleanLink),
+                    () -> log.info("Notification email skipped: employee={} not found", employeeId));
         }
         return created;
     }
@@ -57,17 +63,11 @@ public class NotificationService {
         }
     }
 
-    private void sendEmailAfterCommit(long employeeId, String to, String subject, String body) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            emailService.send(employeeId, to, subject, body);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                emailService.send(employeeId, to, subject, body);
-            }
-        });
+    // Behaviour unchanged — the deferral moved verbatim into AfterCommit so any future second caller
+    // shares one implementation with this path instead of copying it.
+    private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
+                                      String link) {
+        AfterCommit.run(() -> emailService.send(employeeId, to, recipientName, subject, body, link));
     }
 
     private void validate(long employeeId, String type, String subject, String body) {

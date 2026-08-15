@@ -26,9 +26,15 @@ import org.springframework.core.env.Environment;
  * silently passing.
  *
  * <p>2026-08: {@code #validate} now also collects several DEGRADED-classified properties (payroll
- * employer fields, mail credentials, BOT tokens) -- see {@link #environment} for why the six
- * original tests below still pass unchanged, and the block below them for the new coverage of that
- * extension.
+ * employer fields, BOT tokens) -- see {@link #environment} for why the six original tests below
+ * still pass unchanged, and the block below them for the new coverage of that extension.
+ *
+ * <p>2026-08 (Resend mail port): {@code app.mail.from} / {@code app.mail.app-base-url} /
+ * {@code app.mail.resend-api-key} joined as REQUIRED, conditionally on {@code app.mail.provider} --
+ * see the "app.mail.* REQUIRED-when-provider" block below. The MAIL_USERNAME/MAIL_PASSWORD DEGRADED
+ * entries this class used to check are retired outright (not merely renamed): nothing reads
+ * {@code spring.mail.username}/{@code spring.mail.password} once NotificationEmailService/
+ * FactoryEmailService moved onto {@code th.co.glr.hr.mail.Mailer}.
  */
 class ProductionReadinessConfigTest {
 
@@ -116,12 +122,12 @@ class ProductionReadinessConfigTest {
     // ---- 2026-08: collect-every-problem + REQUIRED/DEGRADED severity coverage ----------------
 
     /**
-     * Today exactly one property is classified REQUIRED ({@code app.uploads-dir}), so "multiple
-     * REQUIRED problems get listed together in one throw" cannot be produced through {@link
-     * ProductionReadinessConfig#validate}'s real property classification -- that's exactly why
-     * {@link ProductionReadinessConfig#applyPolicy} is package-private: it lets this test drive the
-     * aggregation policy directly with a synthetic list, independent of how many properties happen
-     * to be REQUIRED today.
+     * Drives {@link ProductionReadinessConfig#applyPolicy} directly with a synthetic problem list,
+     * independent of how {@link ProductionReadinessConfig#validate} classifies any real property --
+     * that's exactly why {@code applyPolicy} is package-private. The real classification CAN produce
+     * multiple REQUIRED problems in one throw now (see {@code resendProviderRequiresFromAppBaseUrlAndApiKey}
+     * below, which does exactly that through {@code #validate} itself), but this synthetic-list test
+     * still earns its place: it pins the aggregation policy in isolation from property classification.
      */
     @Test
     void multipleRequiredProblemsAreAllListedInOneThrow() {
@@ -136,13 +142,16 @@ class ProductionReadinessConfigTest {
     void degradedOnlyGapWarnsAndDoesNotThrowInRealProd() {
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
-        when(environment.getProperty("spring.mail.username", "")).thenReturn(""); // the one DEGRADED gap
+        // A DEGRADED gap: environment() below stubs a non-blank default for every property this
+        // method reads, so overriding just this one back to blank isolates it the same way the
+        // pre-2026-08-Resend-port version of this test isolated spring.mail.username.
+        when(environment.getProperty("app.payroll.employer.company-name-th", "")).thenReturn("");
 
         ProductionReadinessConfig.validate(environment); // must not throw
 
         assertThat(appender.list).hasSize(1);
         assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
-        assertThat(appender.list.get(0).getFormattedMessage()).contains("MAIL_USERNAME is not set");
+        assertThat(appender.list.get(0).getFormattedMessage()).contains("APP_PAYROLL_COMPANY_NAME_TH is not set");
     }
 
     @Test
@@ -163,19 +172,129 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list.get(0).getFormattedMessage()).contains("BOT_FX_API_TOKEN is not set");
     }
 
+    // ---- app.mail.* REQUIRED-when-provider coverage (2026-08 Resend mail port) ----------------
+    //
+    // Owner decision this locks in: neither a production From address nor a production portal URL
+    // is invented anywhere in this repo (see application.yml's app.mail.from/app-base-url comments
+    // -- both default to blank, not a literal fallback). A deployment that sets
+    // app.mail.provider=resend/smtp without also setting these must refuse to boot in real prod
+    // rather than silently send from Resend's sandbox sender (which 403s on any real recipient) or
+    // link every notification/payslip email at the wrong host.
+
+    @Test
+    void resendProviderRequiresFromAppBaseUrlAndApiKey() {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("");
+
+        assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("APP_MAIL_FROM is not set")
+            .hasMessageContaining("APP_MAIL_APP_BASE_URL is not set")
+            .hasMessageContaining("APP_MAIL_RESEND_API_KEY is not set");
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void smtpProviderRequiresFromAndAppBaseUrlButNotAResendApiKey() {
+        // provider=smtp authenticates via app.mail.smtp.* (SmtpMailer's own constructor already
+        // hard-fails on a blank app.mail.smtp.host) -- app.mail.resend-api-key is meaningless here
+        // and must not be demanded.
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("smtp");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("");
+
+        assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("APP_MAIL_FROM is not set")
+            .hasMessageContaining("APP_MAIL_APP_BASE_URL is not set")
+            .hasMessageNotContaining("APP_MAIL_RESEND_API_KEY");
+    }
+
+    @Test
+    void logProviderDoesNotRequireAnyMailProperty() {
+        // provider=log (the repo-wide default) never contacts a real inbox, so a blank
+        // From/base-url/API key must not block boot -- dev/CI has no mail credentials at all.
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void unsetProviderDefaultsToLogAndDoesNotRequireAnyMailProperty() {
+        // The property() helper treats a Mockito mock's unstubbed null the same as "absent" (see
+        // its own Javadoc) -- this is the same path a real, unconfigured deployment takes, where
+        // application.yml's ${APP_MAIL_PROVIDER:log} default applies.
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void resendProviderWithEveryMailPropertySetPassesSilently() {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("re_live_abc123");
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void demoProfileWarnsRatherThanThrowsOnAMissingMailFrom() {
+        // Matches the existing app.uploads-dir precedent (see the six original tests above): this
+        // Render service runs prod,demo (render.yaml), so a REQUIRED gap there WARNs at boot
+        // instead of crash-looping the showcase; real on-prem prod (no demo profile) still
+        // hard-fails on the identical gap, per resendProviderRequiresFromAppBaseUrlAndApiKey above.
+        Environment environment = environment("prod", "demo");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("re_live_abc123");
+
+        ProductionReadinessConfig.validate(environment); // must not throw
+
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(appender.list.get(0).getFormattedMessage()).contains("APP_MAIL_FROM is not set");
+    }
+
     /**
      * The six original tests above were all written back when {@code app.uploads-dir} was the only
-     * property {@link ProductionReadinessConfig#validate} ever read. Now that it also reads eight
+     * property {@link ProductionReadinessConfig#validate} ever read. Now that it also reads six
      * DEGRADED-classified properties, a plain {@code mock(Environment.class)} would return null for
      * every one of them here (Mockito's default answer for an unstubbed String-returning call,
      * regardless of the "default" argument the real {@code Environment} would honour) -- #validate
      * treats null the same as blank/unset (see its {@code property} helper), so without this,
-     * EVERY real-prod/prod+demo test above would trip eight unrelated DEGRADED WARNs and fail their
+     * EVERY real-prod/prod+demo test above would trip unrelated DEGRADED WARNs and fail their
      * {@code appender.list}-emptiness assertions. Pre-stub every such key to a non-blank dummy value
      * here, via {@code lenient()} since not every test cares about every key; each test's own later
-     * {@code app.uploads-dir} stub (and the two new tests' own single-key overrides above) still
-     * wins over these generic defaults -- Mockito resolves a mock invocation against the
-     * most-recently-registered matching stub.
+     * stubs (including the app.mail.* ones above) still win over these generic defaults --
+     * Mockito resolves a mock invocation against the most-recently-registered matching stub.
+     *
+     * <p>Deliberately does NOT stub {@code app.mail.provider} (or any other {@code app.mail.*}
+     * key): the unstubbed-null-becomes-blank behaviour described above already resolves it to
+     * {@code ""}, which is neither {@code resend} nor {@code smtp} -- exactly application.yml's own
+     * {@code ${APP_MAIL_PROVIDER:log}} default-to-safe behaviour -- so every test above that never
+     * mentions {@code app.mail.*} is implicitly proving the "unconfigured deployment" case rather
+     * than skipping it by accident.
      */
     private static Environment environment(String... profiles) {
         Environment environment = mock(Environment.class);
@@ -188,8 +307,6 @@ class ProductionReadinessConfigTest {
             .thenReturn("6001010598");
         lenient().when(environment.getProperty("app.payroll.employer.sso-employer-account", ""))
             .thenReturn("0000000000");
-        lenient().when(environment.getProperty("spring.mail.username", "")).thenReturn("noreply@glr.co.th");
-        lenient().when(environment.getProperty("spring.mail.password", "")).thenReturn("app-password");
         lenient().when(environment.getProperty("app.bot.fx-api-token", "")).thenReturn("fx-token");
         lenient().when(environment.getProperty("app.bot.holiday-api-token", "")).thenReturn("holiday-token");
         return environment;

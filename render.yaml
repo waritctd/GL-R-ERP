@@ -83,22 +83,40 @@ services:
         sync: false
       - key: BOT_HOLIDAY_API_TOKEN
         sync: false
-      # Notification email. Exactly the same omission as the BOT tokens above, with the same
-      # symptom: spring.mail.username/password default to BLANK in application.yml, neither was
-      # declared here, and NotificationEmailService#send catches every exception and only logs —
-      # so with mail.smtp.auth=true and no credentials, every notification email failed silently.
-      # Reported by the owner: an OT notification never arrived. The employee row and the whole
-      # app-side path were fine; the credentials were simply never set on this service.
-      #
-      # ⚠️ Gmail will NOT accept an account password here. Create a 16-character App Password
-      # (Google Account → Security → 2-Step Verification → App passwords) and use that as
-      # MAIL_PASSWORD. MAIL_USERNAME doubles as the From address (NotificationEmailService's
-      # fromAddress falls back to spring.mail.username), so it must be a real sendable mailbox.
-      - key: MAIL_HOST
+      # Notification email: transport is pluggable behind th.co.glr.hr.mail.Mailer
+      # (app.mail.provider). This service must run provider=resend, never provider=smtp — Render
+      # blocks outbound SMTP on ports 25/465/587, confirmed live twice, most recently on plan
+      # `starter` with real Gmail credentials, as a TCP connect timeout (not an auth failure), so
+      # no credential or port change can make SMTP work from here. provider itself is not a
+      # secret, so it is checked in with a literal value rather than sync:false.
+      - key: APP_MAIL_PROVIDER
+        value: resend
+      - key: APP_MAIL_RESEND_API_KEY
         sync: false
-      - key: MAIL_PORT
+      # The verified sending address for this service's Resend domain — set by hand on the Render
+      # dashboard once a real sender exists. Never invented in this file: application.yml's
+      # APP_MAIL_FROM default is blank (not Resend's sandbox sender), and
+      # ProductionReadinessConfig now classifies a blank value as REQUIRED whenever
+      # app.mail.provider=resend/smtp. Because this service runs prod,demo (see
+      # SPRING_PROFILES_ACTIVE above), a gap here WARNS at boot rather than crash-looping the
+      # service, the same demo-profile leniency APP_UPLOADS_DIR already has — see
+      # ProductionReadinessConfig's Javadoc. A real on-prem prod deployment (no demo profile) hard
+      # -fails on the same gap instead.
+      - key: APP_MAIL_FROM
         sync: false
-      - key: MAIL_USERNAME
+      # The portal URL every notification/payslip email links back to. application.yml has no
+      # fallback for this either, for the same reason: its old literal fallback was the UAT Vercel
+      # URL, which would have put every production email's link on the wrong deployment.
+      - key: APP_MAIL_APP_BASE_URL
         sync: false
-      - key: MAIL_PASSWORD
+      # Optional. Unset here deliberately — do not invent an address. A Reply-To that resolves to
+      # a real, monitored mailbox is a positive deliverability signal; set APP_MAIL_REPLY_TO on the
+      # dashboard to one if/when an operator designates one. Blank = no Reply-To header at all
+      # (replies fall back to APP_MAIL_FROM, a valid default, not an error state).
+      - key: APP_MAIL_REPLY_TO
         sync: false
+      # Deliberately NOT declared here: APP_MAIL_OVERRIDE_TO and APP_MAIL_SUBJECT_SUFFIX. Both
+      # default to blank in application.yml, so this service addresses each real employee directly
+      # with an unmodified subject line — the owner-confirmed intent for production mail. Setting
+      # either here would redirect real notifications (leave/OT/commission/attendance, and
+      # PayslipDistributionService's payslips) to a test inbox or mark them as test mail.

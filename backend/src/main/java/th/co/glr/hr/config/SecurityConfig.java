@@ -29,6 +29,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()      // no session yet; CSRF-exempt already
                 .requestMatchers(HttpMethod.POST, "/api/attendance/punch").permitAll()// device X-GLR-Agent-Token; no session
                 .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll() // LB/probe health only; no other actuator endpoint
+                // Scoped to /brand/** deliberately, NOT the whole /api/public/** namespace: a
+                // wildcard there would silently make every future controller placed under
+                // /api/public anonymous, which is how an accidental data leak gets introduced by
+                // someone who never read this line. Widen it only for another asset that genuinely
+                // must be fetched cookie-less.
+                .requestMatchers(HttpMethod.GET, "/api/public/brand/**").permitAll()   // logo embedded in notification email; fetched by mail clients / Gmail's image proxy with no session
                 // OpenAPI docs (/v3/api-docs, /swagger-ui) are intentionally NOT allowlisted: they
                 // fall under default-deny below, so reading the contract / enumerating endpoints
                 // requires an authenticated session rather than being anonymously accessible.

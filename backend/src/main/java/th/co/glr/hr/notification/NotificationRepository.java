@@ -68,14 +68,40 @@ public class NotificationRepository {
             """, Map.of("id", notificationId, "employeeId", employeeId));
     }
 
-    public Optional<String> findEmployeeEmail(long employeeId) {
+    /**
+     * Resolves both the email address and display name in one query, so a rich notification email
+     * (greeting by name, portal link) doesn't need a second round-trip. Returns the recipient
+     * whenever the employee row exists - {@code email} may be {@code null} when the employee has no
+     * address on file (an empty-string address is normalised to {@code null} by
+     * {@code NULLIF(BTRIM(...), '')} below, same as a true SQL NULL). Returns empty only when there
+     * is no employee with that id.
+     *
+     * <p>The address used to be the gate here too (this method returned empty whenever it was
+     * missing, under the old name {@code findEmployeeEmail}). That is deliberately no longer the
+     * contract: {@code app.mail.override-to} must be able to rescue an addressless employee by
+     * redirecting the notification to a test inbox, and only {@link NotificationEmailService} - the
+     * sole owner of that config - knows whether an override is configured. Gating on the address
+     * here would make the override unreachable for exactly the employees it exists to rescue, so
+     * that decision now lives entirely in {@link NotificationEmailService#send}; this method's job is
+     * only to say whether the employee exists. {@code name} on its own may still be {@code null} (no
+     * first name on file); callers already fall back to a generic greeting for that.
+     *
+     * <p><b>{@code name} is first name only</b> (owner ruling, mail-copy wording fix): a Thai
+     * greeting addresses someone by first name after "คุณ" (a title, not "Mr./Ms." -- "คุณสมชาย",
+     * not "คุณสมชาย ใจดี"), so a full name would read as stiff/translated rather than natural Thai.
+     * {@link EmailRecipient#name()} feeds only that greeting line - nothing else in this codebase
+     * reads it.
+     */
+    public Optional<EmailRecipient> findEmployeeRecipient(long employeeId) {
         try {
-            String email = jdbc.queryForObject("""
-                SELECT NULLIF(BTRIM(email), '')
+            EmailRecipient recipient = jdbc.queryForObject("""
+                SELECT NULLIF(BTRIM(email), '') AS email,
+                       NULLIF(BTRIM(first_name_th), '') AS name
                   FROM hr.employee
                  WHERE employee_id = :employeeId
-                """, Map.of("employeeId", employeeId), String.class);
-            return Optional.ofNullable(email);
+                """, Map.of("employeeId", employeeId),
+                (rs, rowNum) -> new EmailRecipient(rs.getString("email"), rs.getString("name")));
+            return Optional.ofNullable(recipient);
         } catch (EmptyResultDataAccessException exception) {
             return Optional.empty();
         }

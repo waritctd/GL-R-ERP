@@ -79,6 +79,66 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
     }
 
+    // mail-copy wording fix: name is now FIRST NAME ONLY (was CONCAT_WS(first, last) before this
+    // change) -- it feeds only the "เรียน คุณ<name>," greeting, and a Thai greeting addresses someone
+    // by first name after คุณ, not by full name. See EmailRecipient's Javadoc.
+    @Test
+    void findEmployeeRecipientResolvesTheAddressAndTheFirstNameOnlyForTheGreeting() {
+        long divisionId = insertDivision("SA", "Sales2");
+        long employeeId = insertEmployeeWithNameAndEmail("EMP-400", divisionId, "สมชาย", "ใจดี",
+            "somchai@glr.co.th");
+
+        var recipient = repository.findEmployeeRecipient(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isEqualTo("somchai@glr.co.th");
+        assertThat(recipient.get().name()).isEqualTo("สมชาย");
+    }
+
+    // The employee row exists, so the new contract returns it present - but the email must still
+    // normalise from "" to null (not stay ""), since that null/non-null distinction is exactly what
+    // NotificationEmailService.send()'s isBlank() check relies on to decide whether
+    // app.mail.override-to is rescuing an addressless employee.
+    @Test
+    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
+        long divisionId = insertDivision("SA", "Sales3");
+        long employeeId = insertEmployeeWithNameAndEmail("EMP-401", divisionId, "สมหญิง", "ดีใจ", "");
+
+        var recipient = repository.findEmployeeRecipient(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isNull();
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
+    }
+
+    // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty
+    // string) is reachable in production and must pass through the same
+    // NULLIF(BTRIM(...), '') as the empty-string case above. Map.of() rejects null values, so this
+    // needs its own insert rather than reusing insertEmployeeWithNameAndEmail's "" coercion.
+    @Test
+    void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasATrueSqlNullEmail() {
+        long divisionId = insertDivision("SA", "Sales4");
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
+            VALUES (:code, :firstName, :lastName, NULL, :divisionId, TRUE)
+            RETURNING employee_id
+            """, Map.of("code", "EMP-402", "firstName", "สมหญิง", "lastName", "ดีใจ",
+                "divisionId", divisionId), Number.class);
+        long employeeId = id.longValue();
+
+        var recipient = repository.findEmployeeRecipient(employeeId);
+
+        assertThat(recipient).isPresent();
+        assertThat(recipient.get().email()).isNull();
+        assertThat(recipient.get().name()).isEqualTo("สมหญิง");
+    }
+
+    // The only case left that returns empty under the new contract: no employee row at all.
+    @Test
+    void findEmployeeRecipientIsEmptyWhenTheEmployeeDoesNotExist() {
+        assertThat(repository.findEmployeeRecipient(999_999_999L)).isEmpty();
+    }
+
     /**
      * {@code sales_manager} is the one role here that is not a whole ฝ่าย: it is a strict SUBSET of
      * {@code sales}, narrowed by position. Both directions are asserted, because getting either
@@ -163,6 +223,17 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         jdbc.update("UPDATE hr.employee SET position_id = :positionId WHERE employee_id = :id",
             Map.of("positionId", ensurePosition(positionTh), "id", employeeId));
         return employeeId;
+    }
+
+    private long insertEmployeeWithNameAndEmail(String code, long divisionId, String firstName, String lastName,
+                                                String email) {
+        Number id = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, email, division_id, is_active)
+            VALUES (:code, :firstName, :lastName, :email, :divisionId, TRUE)
+            RETURNING employee_id
+            """, Map.of("code", code, "firstName", firstName, "lastName", lastName,
+                "email", email == null ? "" : email, "divisionId", divisionId), Number.class);
+        return id.longValue();
     }
 
     /** V30 seeds a bare "ผู้จัดการ"; the fuller ฝ่าย-specific titles used here are created on demand. */
