@@ -124,27 +124,38 @@ export function roleLabel(role) {
   return labels[role] ?? role?.toUpperCase() ?? '-';
 }
 
+// Mirrors TicketStatus.VALUES (backend ticket/TicketStatus.java). Key coverage against the
+// backend is guarded both ways by utils/statusCatalog.test.js; TICKET_STATUS_LABEL_KEYS exists
+// only so that guard can enumerate this map's keys without a second hand-typed copy of them.
+const TICKET_STATUS_LABELS = {
+  draft:            { label: 'แบบร่าง',          tone: 'neutral' },
+  submitted:        { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
+  in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
+  price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
+  approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
+  rejected:         { label: 'ตีกลับ',            tone: 'danger' },
+  quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
+  document_issued:  { label: 'ออกใบแจ้งยอดแล้ว',  tone: 'success' },
+  closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
+  cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
+};
+export const TICKET_STATUS_LABEL_KEYS = Object.keys(TICKET_STATUS_LABELS);
+
 export function ticketStatusLabel(status) {
-  const map = {
-    draft:            { label: 'แบบร่าง',          tone: 'neutral' },
-    submitted:        { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
-    in_review:        { label: 'กำลังดำเนินการ',    tone: 'info' },
-    price_proposed:   { label: 'รอการอนุมัติ',      tone: 'warning' },
-    approved:         { label: 'อนุมัติแล้ว',       tone: 'success' },
-    rejected:         { label: 'ตีกลับ',            tone: 'danger' },
-    quotation_issued: { label: 'ออกใบเสนอราคาแล้ว', tone: 'success' },
-    document_issued:  { label: 'ออกใบแจ้งยอดแล้ว',  tone: 'success' },
-    closed:           { label: 'ปิดแล้ว',           tone: 'neutral' },
-    cancelled:        { label: 'ยกเลิกแล้ว',        tone: 'danger' },
-  };
-  return map[status] ?? { label: status, tone: 'neutral' };
+  return TICKET_STATUS_LABELS[status] ?? { label: status, tone: 'neutral' };
 }
 
 // PricingRequest status -> StatusBadge tone (commit 6). Canonical source; do
 // not re-add a page-local map for pricing-request status elsewhere. Status
 // order/gates live in features/pricingRequests/pricingRequestMeta.js.
-export function pricingRequestStatusLabel(status) {
-  const map = {
+// PRICING_REQUEST_STATUS_LABEL_KEYS is this map's own key set (Object.keys, not a hand-typed
+// second copy) — utils/statusCatalog.test.js reads it to guard coverage against
+// PricingRequestStatus.VALUES. Not to be confused with pricingRequestMeta.js's
+// ALLOWED_TRANSITIONS, a SEPARATE hand-mirror of the same eleven statuses for transition rules
+// rather than labels, guarded independently by pricingRequestMeta.test.js; that file's own comment
+// warns against adding a bare status array that nothing consumes, which is why this one is named
+// for what it feeds rather than reusing that name.
+const PRICING_REQUEST_STATUS_LABELS = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
     SUBMITTED: { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
     // Import's workflow was simplified to three meaningful stages (owner ruling,
@@ -196,12 +207,16 @@ export function pricingRequestStatusLabel(status) {
     MORE_INFO_REQUIRED: { label: 'รอข้อมูลเพิ่มเติม', tone: 'warning' },
     SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+};
+export const PRICING_REQUEST_STATUS_LABEL_KEYS = Object.keys(PRICING_REQUEST_STATUS_LABELS);
+
+export function pricingRequestStatusLabel(status) {
+  return PRICING_REQUEST_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-export function factoryQuoteStatusLabel(status) {
-  const map = {
+// Mirrors FactoryQuoteStatus.VALUES (backend factoryquote/FactoryQuoteStatus.java). Key coverage
+// guarded both ways by utils/statusCatalog.test.js.
+const FACTORY_QUOTE_STATUS_LABELS = {
     DRAFT: { label: 'ร่างอีเมลถึงโรงงาน', tone: 'neutral' },
     REQUESTED: { label: 'ส่งขอราคาแล้ว', tone: 'warning' },
     RESPONSE_RECEIVED: { label: 'ได้รับราคาโรงงานแล้ว', tone: 'info' },
@@ -220,8 +235,26 @@ export function factoryQuoteStatusLabel(status) {
     // what Import did rather than what the request is now doing.
     READY_FOR_COSTING: { label: 'ส่งให้ CEO แล้ว', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+    // Both added 2026-08-16, found by statusCatalog.test.js on its first run — the guard's own
+    // KNOWN_UNLABELLED list named them, and that list is self-cleaning, so adding these here is
+    // what removes the exemption.
+    //
+    // SUPERSEDED was rendering the literal English string on a Thai screen, and not rarely:
+    // FactoryQuoteService calls quotes.supersede() on EVERY revised quote, and
+    // PricingRequestDetailPage renders quote history through this function unfiltered. So the
+    // moment Import saved a second round of prices, the first one showed as "SUPERSEDED" beside
+    // its own ครั้งที่ 1 badge. neutral, not danger: a superseded round is ordinary history, not
+    // something that went wrong.
+    SUPERSEDED: { label: 'รอบเก่า', tone: 'neutral' },
+    // danger, matching CANCELLED: for THIS factory the line is a dead end and Import has to source
+    // it elsewhere. Names the factory rather than the item ("ไม่มีสินค้า" alone) because several
+    // factories are usually asked and only one declines.
+    NOT_AVAILABLE: { label: 'โรงงานไม่มีสินค้า', tone: 'danger' },
+};
+export const FACTORY_QUOTE_STATUS_LABEL_KEYS = Object.keys(FACTORY_QUOTE_STATUS_LABELS);
+
+export function factoryQuoteStatusLabel(status) {
+  return FACTORY_QUOTE_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 // Status only. There is no header-level staleness to fold in any more: V141 dropped
@@ -238,23 +271,33 @@ export function pricingCostingStatusLabel(status) {
   return map[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// Mirrors PricingDecisionStatus (backend pricingdecision/PricingDecisionStatus.java) — that class
+// declares no aggregating VALUES/VALID field, so the guard reflects every public static final
+// String it declares directly (all four genuinely are members; see StatusCatalogContractTest).
+const PRICING_DECISION_STATUS_LABELS = {
+  DRAFT: { label: 'รอพิจารณา', tone: 'warning' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  RETURNED: { label: 'ตีกลับให้แก้ไข', tone: 'danger' },
+  SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
+};
+export const PRICING_DECISION_STATUS_LABEL_KEYS = Object.keys(PRICING_DECISION_STATUS_LABELS);
+
 export function pricingDecisionStatusLabel(status) {
-  const map = {
-    DRAFT: { label: 'รอพิจารณา', tone: 'warning' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    RETURNED: { label: 'ตีกลับให้แก้ไข', tone: 'danger' },
-    SUPERSEDED: { label: 'ถูกแทนที่แล้ว', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+  return PRICING_DECISION_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
+// Mirrors Priority.VALID (backend ticket/Priority.java) — that class names its canonical set
+// VALID rather than VALUES, and separately declares a DEFAULT alias (= NORMAL) with no vocabulary
+// of its own; the backend digest reads VALID specifically to sidestep it.
+const TICKET_PRIORITY_LABELS = {
+  LOW:    { label: 'ต่ำ',   tone: 'neutral' },
+  NORMAL: { label: 'กลาง',  tone: 'warning' },
+  HIGH:   { label: 'สูง',   tone: 'danger' },
+};
+export const TICKET_PRIORITY_LABEL_KEYS = Object.keys(TICKET_PRIORITY_LABELS);
+
 export function ticketPriorityLabel(priority) {
-  const map = {
-    LOW:    { label: 'ต่ำ',   tone: 'neutral' },
-    NORMAL: { label: 'กลาง',  tone: 'warning' },
-    HIGH:   { label: 'สูง',   tone: 'danger' },
-  };
-  return map[priority] ?? { label: priority, tone: 'neutral' };
+  return TICKET_PRIORITY_LABELS[priority] ?? { label: priority, tone: 'neutral' };
 }
 
 // "Who this is waiting on" -- rendered BESIDE a รออนุมัติ/pending status badge (leave/overtime/
@@ -292,15 +335,22 @@ export function requestStatus(status) {
 
 // Commission approval status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for commission status elsewhere.
+//
+// Mirrors CommissionStatus (backend commission/CommissionStatus.java) — no aggregating field
+// there either, so the guard reflects every public static final String directly (all five,
+// including VOID, are genuine members — VOID is unreachable BY DESIGN, per that class's own
+// Javadoc, not unlabelled; it still gets a real Thai entry below in case that ever changes).
+const COMMISSION_STATUS_LABELS = {
+  SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+  MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+  VOID: { label: 'ยกเลิก', tone: 'danger' },
+};
+export const COMMISSION_STATUS_LABEL_KEYS = Object.keys(COMMISSION_STATUS_LABELS);
+
 export function commissionStatusLabel(status) {
-  const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    VOID: { label: 'ยกเลิก', tone: 'danger' },
-  };
-  return map[status] ?? { label: status, tone: 'neutral' };
+  return COMMISSION_STATUS_LABELS[status] ?? { label: status, tone: 'neutral' };
 }
 
 // Overtime approval status -> StatusBadge tone. Canonical source; do not
@@ -315,32 +365,42 @@ export function commissionStatusLabel(status) {
 // string, because every welfare request is CEO-only in one stage -- overtime has two real routes
 // PER REQUEST (see OvertimeRepository#resolvePendingApproverRole), so the caller must say which
 // route THIS row took rather than assuming one shape for the whole domain.
+// Mirrors OvertimeStatus (backend overtime/OvertimeStatus.java) — a Java ENUM, not a
+// String-constant class: zero `public static final String` fields, so the backend digest reads
+// it via Class#getEnumConstants() rather than field reflection. See StatusCatalogContractTest.
+const OVERTIME_STATUS_LABELS = {
+  SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
+  MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+  CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+};
+export const OVERTIME_STATUS_LABEL_KEYS = Object.keys(OVERTIME_STATUS_LABELS);
+
 export function overtimeStatusLabel(status, pendingApproverRole) {
   if (status === 'SUBMITTED' && pendingApproverRole === 'ceo') {
     // Same label/tone the MANAGER_APPROVED entry below already uses -- from the employee's point
     // of view both states mean the same thing: the CEO holds this now.
     return { label: 'รอ CEO', tone: 'info' };
   }
-  const map = {
-    SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+  return OVERTIME_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 // Attendance-correction request status -> StatusBadge tone. Single CEO-only stage, same shape as
 // special-money's status set (no MANAGER_APPROVED — there is no manager stage at all here).
+//
+// Mirrors AttendanceCorrectionStatus (backend attendance/correction/AttendanceCorrectionStatus.java)
+// — also a Java enum; see OVERTIME_STATUS_LABELS above for why that changes the extraction strategy.
+const ATTENDANCE_CORRECTION_STATUS_LABELS = {
+  SUBMITTED: { label: 'รอ CEO', tone: 'warning' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
+  CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
+};
+export const ATTENDANCE_CORRECTION_STATUS_LABEL_KEYS = Object.keys(ATTENDANCE_CORRECTION_STATUS_LABELS);
+
 export function attendanceCorrectionStatusLabel(status) {
-  const map = {
-    SUBMITTED: { label: 'รอ CEO', tone: 'warning' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+  return ATTENDANCE_CORRECTION_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 // Special-money (welfare) request status -> StatusBadge tone. Canonical source;
@@ -357,30 +417,44 @@ export function attendanceCorrectionStatusLabel(status) {
 // reachable for new requests. It reads the same to the employee — still the
 // CEO's queue — so it is labelled the same, qualified rather than made to look
 // like a distinct step.
-export const SPECIAL_MONEY_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED'];
+// Mirrors SpecialMoneyStatus (backend specialmoney/SpecialMoneyStatus.java), a Java enum — see
+// OVERTIME_STATUS_LABELS's comment above for why that changes the extraction strategy.
+//
+// SPECIAL_MONEY_STATUSES now DERIVES from the same labels object below (Object.keys) rather than
+// being a second hand-typed literal of the same five codes. It used to be declared independently
+// of specialMoneyStatusLabel's own map — the two happened to still agree, but nothing enforced
+// that, which is the identical unguarded-mirror shape this whole guard exists to close; fixing it
+// here costs nothing (same value, same order) while this function was already being touched for
+// the digest guard.
+const SPECIAL_MONEY_STATUS_LABELS = {
+  SUBMITTED: { label: 'รอ CEO อนุมัติ', tone: 'warning' },
+  MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ (คำขอเดิม)', tone: 'warning' },
+  APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
+  REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
+  CANCELLED: { label: 'ยกเลิก', tone: 'neutral' },
+};
+export const SPECIAL_MONEY_STATUSES = Object.keys(SPECIAL_MONEY_STATUS_LABELS);
 
 export function specialMoneyStatusLabel(status) {
-  const map = {
-    SUBMITTED: { label: 'รอ CEO อนุมัติ', tone: 'warning' },
-    MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ (คำขอเดิม)', tone: 'warning' },
-    APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-    REJECTED: { label: 'ปฏิเสธ', tone: 'danger' },
-    CANCELLED: { label: 'ยกเลิก', tone: 'neutral' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+  return SPECIAL_MONEY_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 // Leave request status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for leave status elsewhere.
-export function leaveStatusLabel(status) {
-  const map = {
+//
+// Mirrors LeaveStatus (backend leave/LeaveStatus.java), a Java enum — see
+// OVERTIME_STATUS_LABELS's comment above for why that changes the extraction strategy.
+const LEAVE_STATUS_LABELS = {
     SUBMITTED: { label: 'รออนุมัติ', tone: 'warning' },
     APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
     REJECTED: { label: 'ปฏิเสธแล้ว', tone: 'danger' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'neutral' },
     AUTO_REJECTED: { label: 'โควตาไม่พอ', tone: 'danger' },
-  };
-  return map[status] ?? { label: status || '-', tone: 'neutral' };
+};
+export const LEAVE_STATUS_LABEL_KEYS = Object.keys(LEAVE_STATUS_LABELS);
+
+export function leaveStatusLabel(status) {
+  return LEAVE_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
 // Project sales-pipeline stage -> StatusBadge tone (V50, widened by V143).
