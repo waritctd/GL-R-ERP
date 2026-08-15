@@ -26,6 +26,7 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -240,7 +241,7 @@ class DepositNoticeIssueRenderOutsideTransactionIntegrationTest extends Abstract
     }
 
     private DepositNoticeService service() {
-        return new DepositNoticeService(docs, tickets, new NotificationRepository(jdbc),
+        return new DepositNoticeService(docs, tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
             renderer, new RemainingInvoiceRenderer(), new CustomerRepository(jdbc),
             new CustomerQuotationRepository(jdbc));
     }

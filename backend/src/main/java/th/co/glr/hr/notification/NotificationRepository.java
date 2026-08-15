@@ -11,9 +11,23 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class NotificationRepository {
     private final NamedParameterJdbcTemplate jdbc;
+    /**
+     * Sales-pipeline notifications are emailed as well as shown in-app, and these four {@code
+     * notify*} methods are the only route every one of them takes — see {@link
+     * SalesNotificationMailer} for why the dispatch hangs off the repository rather than the nine
+     * sales services. This collaborator decides nothing about mailboxes; it is told what was
+     * written and routes from there.
+     *
+     * <p>There is deliberately <b>no</b> single-argument constructor. Wiring
+     * {@link SalesNotificationMailer#NO_OP} is how a test says "in-app only", and it has to say so
+     * out loud at the wiring site — a convenience constructor would let a test assert "no mail was
+     * sent" against a collaborator that can never send, which is a green test that proves nothing.
+     */
+    private final SalesNotificationMailer salesMailer;
 
-    public NotificationRepository(NamedParameterJdbcTemplate jdbc) {
+    public NotificationRepository(NamedParameterJdbcTemplate jdbc, SalesNotificationMailer salesMailer) {
         this.jdbc = jdbc;
+        this.salesMailer = salesMailer;
     }
 
     public List<NotificationDto> findByEmployeeId(long employeeId) {
@@ -86,11 +100,15 @@ public class NotificationRepository {
      * only to say whether the employee exists. {@code name} on its own may still be {@code null} (no
      * first name on file); callers already fall back to a generic greeting for that.
      *
-     * <p><b>{@code name} is first name only</b> (owner ruling, mail-copy wording fix): a Thai
-     * greeting addresses someone by first name after "คุณ" (a title, not "Mr./Ms." -- "คุณสมชาย",
-     * not "คุณสมชาย ใจดี"), so a full name would read as stiff/translated rather than natural Thai.
-     * {@link EmailRecipient#name()} feeds only that greeting line - nothing else in this codebase
-     * reads it.
+     * <p><b>{@code name} is first name only</b> (owner ruling, mail-copy wording fix): was {@code
+     * CONCAT_WS(' ', first_name_th, last_name_th)} (full name) until this change. Confirmed by
+     * tracing every reader of {@link EmailRecipient#name()} before narrowing it -- it flows through
+     * {@code NotificationService#notify}/{@code #sendEmailAfterCommit} into {@code
+     * NotificationEmailService#send(..., recipientName, ...)}, and inside that class {@code
+     * recipientName} is used ONLY to build the {@code textBody}/{@code htmlBody} greeting line
+     * ("เรียน คุณ&lt;name&gt;,"); nothing else in this codebase reads {@link EmailRecipient#name()}. A
+     * Thai greeting addresses someone by first name after "คุณ" (a title, not "Mr./Ms." -- "คุณสมชาย",
+     * not "คุณสมชาย ใจดี"), so the full name read as stiff/translated rather than natural Thai.
      */
     public Optional<EmailRecipient> findEmployeeRecipient(long employeeId) {
         try {
@@ -153,19 +171,15 @@ public class NotificationRepository {
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
-        jdbc.update("""
-            INSERT INTO hr.notification (employee_id, type, title, message, link)
-            VALUES (:employeeId, :type, :title, :message, :link)
-            """,
-            new MapSqlParameterSource()
-                .addValue("employeeId", employeeId)
-                .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
-                .addValue("message", message)
-                .addValue("link", "/tickets/" + ticketId));
+        notifyEmployeeAt(employeeId, type, message, "/tickets/" + ticketId);
     }
 
     public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
+        notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
+        String title = ticketEventTitle(type);
         jdbc.update("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             VALUES (:employeeId, :type, :title, :message, :link)
@@ -173,20 +187,40 @@ public class NotificationRepository {
             new MapSqlParameterSource()
                 .addValue("employeeId", employeeId)
                 .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
+                .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", "/pricing-requests/" + pricingRequestId));
+                .addValue("link", link));
+        // The Thai TITLE, never `type`. `type` is a machine code (PRICING_DECISION_APPROVED) and
+        // mailing it would put a raw enum in a subject line at real people — the exact defect a
+        // previous round shipped when TRAVEL_PER_DIEM reached employees. Passing the same string the
+        // in-app row stores also means the bell and the inbox can never disagree about what happened.
+        salesMailer.emailForEmployee(employeeId, title, message, link);
     }
 
     /**
-     * Notify every active employee the given sales role resolves to.
-     * Division mapping mirrors DivisionAccessPolicy — extended for sales module roles.
+     * Notify all employees whose division maps to the given sales role ({@code import}/{@code
+     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE}, which is
+     * a POSITION test (กรรมการผู้จัดการ) and ignores division entirely, unlike the plain division
+     * mapping the other two roles use. It is deliberately NARROWER than the {@code ceo} role and
+     * is <b>not</b> a mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule}
+     * for the owner ruling and the empty-set consequence.
      *
-     * <p>{@code import}/{@code ceo}/{@code sales} each resolve to a whole ฝ่าย.
-     * {@code sales_manager} does not: it resolves to the ฝ่ายขาย members whose position marks
-     * them a ผู้จัดการ, so it is a strict subset of {@code sales} and the two are not
-     * interchangeable. An unknown role resolves to nobody and inserts nothing (a silent no-op,
-     * as it always has been) — so a typo'd role name notifies no one rather than everyone.
+     * <p>{@code sales_manager} is different again: it resolves to the ฝ่ายขาย members whose
+     * position marks them a ผู้จัดการ, so it is a strict subset of {@code sales} and the two are
+     * not interchangeable -- {@code sales} alone would also fan out to the rep who triggered the
+     * event, not just their supervisor.
+     *
+     * <p>The {@code hr.division} join is a {@code LEFT JOIN} so a {@code ceo} match with no
+     * division is not silently dropped -- the predicate no longer reads {@code d} at all.
+     * This does not change {@code import}/{@code sales}/{@code sales_manager}: each of those
+     * predicates tests {@code d.source_code}, which is SQL {@code NULL} (never true) when {@code
+     * d} fails to match, exactly as an absent INNER JOIN row would have excluded that employee --
+     * confirmed by inspection, not just assumed. {@code hr.position} is likewise a {@code LEFT
+     * JOIN}: only {@code sales_manager} reads it, and an employee with a null {@code position_id}
+     * must stay reachable by the other, position-agnostic branches.
+     *
+     * <p>An unrecognised role resolves to nobody and inserts (and mails) nothing -- a silent
+     * no-op, as it always has been -- so a typo'd role name notifies no one rather than everyone.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -197,9 +231,9 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {
-        String recipientFilter = switch (role) {
+        String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
-            case "ceo"    -> "d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%'";
+            case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
             // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who
@@ -211,24 +245,31 @@ public class NotificationRepository {
             case "sales_manager" -> "d.source_code ILIKE 'SA%' AND p.name_th LIKE '%ผู้จัดการ%'";
             default -> null;
         };
-        if (recipientFilter == null) return;
+        // An unrecognised role writes nothing and mails nothing — the two channels stay in step even
+        // on the do-nothing path.
+        if (divisionFilter == null) return;
 
-        // LEFT JOIN, not JOIN: only the sales_manager branch reads hr.position, and an employee
-        // with a null position_id must stay reachable by the three division-only branches exactly
-        // as before. (An inner join here would silently un-notify them.)
-        jdbc.update("""
+        String title = ticketEventTitle(type);
+        // RETURNING, so the mail router is handed the employees that ACTUALLY received a row rather
+        // than a second query's guess at them. The `sales`/`sales_manager` branches read the ids
+        // (each delivers per recipient); import/account/ceo route to a fixed address and
+        // deliberately mail even when this comes back empty — see SalesNotificationMailRouter.
+        List<Long> notified = jdbc.queryForList("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link
               FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
-            """.formatted(recipientFilter),
+            RETURNING employee_id
+            """.formatted(divisionFilter),
             new MapSqlParameterSource()
                 .addValue("type", type)
-                .addValue("title", ticketEventTitle(type))
+                .addValue("title", title)
                 .addValue("message", message)
-                .addValue("link", link));
+                .addValue("link", link),
+            Long.class);
+        salesMailer.emailForRole(role, notified, title, message, link);
     }
 
     private String ticketEventTitle(String type) {

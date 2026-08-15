@@ -30,6 +30,7 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationDto;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -92,7 +93,7 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
     @BeforeEach
     void wireRealCollaborators() {
         tickets = new TicketRepository(jdbc);
-        notifications = new NotificationRepository(jdbc);
+        notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         ticketService = newTicketService(tickets, notifications);
 
         EmployeeRepository employees = new EmployeeRepository(
@@ -315,7 +316,7 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         long itemId = onlyItemId(ticketId);
 
         AtomicBoolean notified = new AtomicBoolean(false);
-        NotificationRepository notificationSpy = spy(new NotificationRepository(jdbc));
+        NotificationRepository notificationSpy = spy(new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
         doAnswer(invocation -> {
             Object result = invocation.callRealMethod();  // the real INSERT really happens
             notified.set(true);
@@ -354,7 +355,7 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
     void aCommittedDeclarationKeepsItsNotification() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
-        NotificationRepository notificationSpy = spy(new NotificationRepository(jdbc));
+        NotificationRepository notificationSpy = spy(new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
         TicketService service = transactional(newTicketService(new TicketRepository(jdbc), notificationSpy));
 
         service.reserveStock(ticketId, declare(itemId, "40.00"), owner);

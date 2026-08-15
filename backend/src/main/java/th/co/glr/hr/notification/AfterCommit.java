@@ -12,7 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * database. Mail cannot be un-sent. This is the same defect class as PR #708's orphaned attachment
  * files and #721's deferred render, and it is why {@link NotificationService} has deferred its own
  * sends since the notification-email backbone landed — this class is that logic extracted verbatim
- * so any future second caller cannot drift from it.
+ * so the sales-pipeline router ({@link SalesNotificationMailRouter}) cannot drift from it.
  *
  * <p><b>No transaction, no deferral.</b> When nothing is synchronising — a direct call from a unit
  * test, or a code path outside any transaction — the action runs immediately. That is deliberate:

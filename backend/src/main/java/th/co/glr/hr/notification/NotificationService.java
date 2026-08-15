@@ -63,8 +63,8 @@ public class NotificationService {
         }
     }
 
-    // Behaviour unchanged — the deferral moved verbatim into AfterCommit so any future second caller
-    // shares one implementation with this path instead of copying it.
+    // Behaviour unchanged — the deferral moved verbatim into AfterCommit so the sales-pipeline mail
+    // router shares one implementation with this path instead of copying it.
     private void sendEmailAfterCommit(long employeeId, String to, String recipientName, String subject, String body,
                                       String link) {
         AfterCommit.run(() -> emailService.send(employeeId, to, recipientName, subject, body, link));

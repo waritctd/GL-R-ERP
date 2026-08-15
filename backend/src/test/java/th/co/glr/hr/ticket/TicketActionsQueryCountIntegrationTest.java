@@ -24,6 +24,7 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -112,7 +113,7 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         // Every collaborator that owns SQL is wired on the counted template, so a future gate that
         // reaches for a different repository is counted too rather than silently invisible.
-        ticketService = new TicketService(tickets, new NotificationRepository(counted),
+        ticketService = new TicketService(tickets, new NotificationRepository(counted, SalesNotificationMailer.NO_OP),
             mock(PriceCalcService.class), new ObjectMapper(), new CustomerRepository(counted),
             new QuotationRenderer(), pricingRequests);
 
