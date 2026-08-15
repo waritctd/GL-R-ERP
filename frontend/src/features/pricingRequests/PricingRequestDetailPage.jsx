@@ -1101,12 +1101,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         const requested = requestItemById.get(line.pricingRequestItemId);
                         const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
                           .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
+                        // PER_SQM items are priced per square metre, so the backend cannot convert a
+                        // quoted price into a landed cost without knowing how many m² one unit
+                        // covers: FactoryQuoteService rejects the whole save with
+                        // "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit". The draft already carried
+                        // sqmPerUnit and the payload already sent it — there was simply no input, so
+                        // it was always '' and every PER_SQM save 422'd. Shown only for PER_SQM
+                        // because it is meaningless for the other bases, and asking for it there
+                        // would be noise on the row that matters.
+                        const needsSqmPerUnit = line.unitBasis === 'PER_SQM';
                         return (
-                          <div key={line.pricingRequestItemId} className="grid items-end gap-2 md:grid-cols-[1fr_auto]">
+                          <div
+                            key={line.pricingRequestItemId}
+                            className={`grid items-end gap-2 ${needsSqmPerUnit ? 'md:grid-cols-[1fr_auto_auto]' : 'md:grid-cols-[1fr_auto]'}`}
+                          >
                             <div className="min-w-0">
                               <div className="truncate text-sm font-bold text-text">{productName}</div>
                               <div className="text-2xs text-text-muted">
                                 ที่ Sales ขอ: {requested?.requestedQty ?? line.quotedQuantity} {requested?.requestedUnit ?? unitBasisLabel(line.unitBasis)}
+                                {' · '}คิดราคาแบบ {unitBasisLabel(line.unitBasis)}
                                 {' · '}สกุลเงิน {line.currency}
                               </div>
                             </div>
@@ -1127,6 +1140,29 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 }}
                               />
                             </FormField>
+                            {needsSqmPerUnit ? (
+                              <FormField
+                                label="ตร.ม./หน่วย"
+                                htmlFor={`pcr-quote-sqm-${quote.id}-${line.pricingRequestItemId}`}
+                                hint="จำเป็นสำหรับสินค้าที่คิดราคาต่อตารางเมตร"
+                              >
+                                <input
+                                  id={`pcr-quote-sqm-${quote.id}-${line.pricingRequestItemId}`}
+                                  className="form-input md:w-40"
+                                  type="number"
+                                  min="0"
+                                  step="0.000001"
+                                  inputMode="decimal"
+                                  aria-label={`ตารางเมตรต่อหน่วย ${itemRef}`}
+                                  value={line.sqmPerUnit}
+                                  onChange={(e) => {
+                                    const items = [...draft.items];
+                                    items[index] = { ...line, sqmPerUnit: e.target.value };
+                                    setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                                  }}
+                                />
+                              </FormField>
+                            ) : null}
                           </div>
                         );
                       })}

@@ -206,7 +206,19 @@ export function factoryQuoteStatusLabel(status) {
     REQUESTED: { label: 'ส่งขอราคาแล้ว', tone: 'warning' },
     RESPONSE_RECEIVED: { label: 'ได้รับราคาโรงงานแล้ว', tone: 'info' },
     NEGOTIATING: { label: 'กำลังเจรจา', tone: 'warning' },
-    READY_FOR_COSTING: { label: 'พร้อมคำนวณต้นทุน', tone: 'success' },
+    // "ส่งให้ CEO แล้ว", not "พร้อมคำนวณต้นทุน". The constant's NAME is a fossil: V141 severed the
+    // costing aggregate (PricingCostingService's writes all throw 409 COSTING_MOVED_TO_CEO) and the
+    // cost is now computed by the CEO at startReview, so there is no costing step for a quote to be
+    // "ready for" any more. The label advertised a stage of the workflow that no longer exists, and
+    // Import read it as the request being stuck.
+    //
+    // Deliberately NOT "รอ CEO อนุมัติราคา". This badge is on ONE FACTORY QUOTE, not on the request.
+    // A request does not advance to READY_FOR_CEO_REVIEW until EVERY current quote is marked ready
+    // (FactoryQuoteService#markReadyForCosting, guarded by landedCosts.isFullyResolvable), so with
+    // two factories one quote can sit here while another is still being negotiated. "Waiting for the
+    // CEO" would be false in that window; "sent to the CEO" is true either way, because it describes
+    // what Import did rather than what the request is now doing.
+    READY_FOR_COSTING: { label: 'ส่งให้ CEO แล้ว', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
   };
   return map[status] ?? { label: status || '-', tone: 'neutral' };
