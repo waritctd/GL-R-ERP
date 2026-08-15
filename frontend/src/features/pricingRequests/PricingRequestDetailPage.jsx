@@ -45,6 +45,7 @@ import {
   unitBasisLabel,
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
+import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 
@@ -123,14 +124,23 @@ function apiStatus(error) {
 function defaultResponseItems(quote, requestItemById = new Map()) {
   return (quote?.items ?? []).map((item) => {
     const requestItem = requestItemById.get(item.pricingRequestItemId) ?? {};
-    const unit = item.unitBasis ?? item.quotedUnit ?? requestItem.requestedUnitBasis ?? 'PER_PIECE';
+    // unitBasis (what LandedCostCalculator does math on: PER_SQM/PER_PIECE/...) and quotedUnit
+    // (the display unit a human reads: ตร.ม., PCS, ...) are DIFFERENT fields that used to share
+    // this one seed variable, so quotedUnit was overwriting a real unit — FactoryQuoteRepository.
+    // insertDraftItems already seeds it from the request's own requested_unit — with the basis
+    // code instead. Measured in UAT: 30 of 34 sales.factory_quote_item rows hold a basis in
+    // quoted_unit. unitBasis keeps its existing fallback chain; quotedUnit now falls back through
+    // the item's own quoted unit, then what Sales requested in free text, and only then a
+    // basis-derived display label — never the basis code itself.
+    const unitBasis = item.unitBasis ?? item.quotedUnit ?? requestItem.requestedUnitBasis ?? 'PER_PIECE';
+    const quotedUnit = item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
     return {
     pricingRequestItemId: item.pricingRequestItemId,
     supplierProductCode: item.supplierProductCode ?? '',
     supplierProductDescription: item.supplierProductDescription ?? '',
     quotedQuantity: item.quotedQuantity ?? requestItem.requestedQty ?? 1,
-    quotedUnit: unit,
-    unitBasis: unit,
+    quotedUnit,
+    unitBasis,
     rawUnitPrice: item.rawUnitPrice ?? '',
     currency: item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
@@ -365,6 +375,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryFn: () => api.pricingRequests.listAttachments(pricingRequestId).then((r) => r.items ?? []),
     enabled: Number.isFinite(pricingRequestId),
   });
+
+  // The unit-basis vocabulary for the ราคาโรงงาน response unit select below — fetched from the
+  // backend at runtime (owner's choice, not a hardcoded list) and cached for the app's lifetime.
+  const { unitBases: unitBasisCatalog } = useUnitBasisCatalog();
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingRequestDetail(pricingRequestId) });
@@ -1090,26 +1104,89 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           ReceiveFactoryQuoteRequest, so nothing is sent as null that the backend
                           required; currency now rides on each line, autofilled from the catalog
                           row Sales picked. */}
-                      {/* One input per line: the factory's price. Everything else on the row is a
-                          READ-ONLY echo of what Sales requested — quantity, unit and currency are
-                          held in `draft.items` (the backend still requires all three) but are not
-                          Import's to retype. Re-keying them was the single biggest source of
-                          friction here, and the currency field in particular was a live defect:
-                          it defaulted to THB against factories that trade in EUR. */}
+                      {/* Three inputs per line: the factory's price; the unit it was quoted in
+                          (owner ruling 2026-08-15 — a factory does not always quote in the unit
+                          Sales requested, so Import must be able to set it, from the backend's own
+                          list); and — only for a PER_SQM line — the ตร.ม./หน่วย conversion factor
+                          the backend requires to resolve it (FactoryQuoteService's PER_SQM/PER_BOX/
+                          PER_LINEAR_M checks; no piecesPerBox or linearMPerUnit input, by owner
+                          ruling — see this task's brief). Quantity and currency stay a READ-ONLY
+                          echo of what Sales requested — held in `draft.items` (the backend still
+                          requires them) but not Import's to retype; re-keying them was the single
+                          biggest source of friction here, and the currency field in particular was
+                          a live defect: it defaulted to THB against factories that trade in EUR. */}
                       {draft.items.map((line, index) => {
                         const itemRef = `รายการ #${line.pricingRequestItemId}`;
                         const requested = requestItemById.get(line.pricingRequestItemId);
                         const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
                           .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
+                        // Size + colour/surface, so two items of the same model in different sizes
+                        // do not render identically — Import could not tell which price box
+                        // belonged to which item, which was the reported complaint.
+                        const variantLabel = [requested?.size, requested?.color, requested?.texture]
+                          .filter(Boolean).join(' · ');
+                        function updateLine(patch) {
+                          const items = [...draft.items];
+                          items[index] = { ...line, ...patch };
+                          setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
+                        }
+                        // The ตร.ม./หน่วย column only exists for PER_SQM, so the track count has to
+                        // follow it. A fixed four-track grid would leave one track empty on every
+                        // other row and slide the price box left by one column — so in a list
+                        // mixing bases, the price inputs would not line up down the page, which is
+                        // the one column Import's eye actually follows while keying.
+                        const needsSqmPerUnit = line.unitBasis === 'PER_SQM';
                         return (
-                          <div key={line.pricingRequestItemId} className="grid items-end gap-2 md:grid-cols-[1fr_auto]">
+                          <div
+                            key={line.pricingRequestItemId}
+                            className={`grid items-end gap-2 ${needsSqmPerUnit ? 'md:grid-cols-[1fr_auto_auto_auto]' : 'md:grid-cols-[1fr_auto_auto]'}`}
+                          >
                             <div className="min-w-0">
                               <div className="truncate text-sm font-bold text-text">{productName}</div>
+                              {variantLabel ? (
+                                <div className="truncate text-2xs text-text-muted">{variantLabel}</div>
+                              ) : null}
                               <div className="text-2xs text-text-muted">
                                 ที่ Sales ขอ: {requested?.requestedQty ?? line.quotedQuantity} {requested?.requestedUnit ?? unitBasisLabel(line.unitBasis)}
                                 {' · '}สกุลเงิน {line.currency}
                               </div>
                             </div>
+                            <FormField label="หน่วย" htmlFor={`pcr-quote-unit-${quote.id}-${line.pricingRequestItemId}`}>
+                              <select
+                                id={`pcr-quote-unit-${quote.id}-${line.pricingRequestItemId}`}
+                                className="form-input md:w-28"
+                                aria-label={`หน่วย ${itemRef}`}
+                                value={line.unitBasis ?? ''}
+                                onChange={(e) => {
+                                  const nextBasis = e.target.value;
+                                  const nextLabel = unitBasisCatalog.find((option) => option.code === nextBasis)?.label;
+                                  updateLine({ unitBasis: nextBasis, quotedUnit: nextLabel ?? line.quotedUnit });
+                                }}
+                              >
+                                {unitBasisCatalog.map((option) => (
+                                  <option key={option.code} value={option.code}>{option.label}</option>
+                                ))}
+                              </select>
+                            </FormField>
+                            {line.unitBasis === 'PER_SQM' ? (
+                              <FormField
+                                label="ตร.ม./หน่วย"
+                                htmlFor={`pcr-quote-sqm-${quote.id}-${line.pricingRequestItemId}`}
+                                hint="จำเป็นสำหรับสินค้าที่คิดราคาต่อตารางเมตร"
+                              >
+                                <input
+                                  id={`pcr-quote-sqm-${quote.id}-${line.pricingRequestItemId}`}
+                                  className="form-input md:w-28"
+                                  type="number"
+                                  min="0.000001"
+                                  step="0.000001"
+                                  inputMode="decimal"
+                                  aria-label={`ตร.ม./หน่วย ${itemRef}`}
+                                  value={line.sqmPerUnit}
+                                  onChange={(e) => updateLine({ sqmPerUnit: e.target.value })}
+                                />
+                              </FormField>
+                            ) : null}
                             <FormField label={`ราคาโรงงาน (${line.currency})`} htmlFor={`pcr-quote-price-${quote.id}-${line.pricingRequestItemId}`}>
                               <input
                                 id={`pcr-quote-price-${quote.id}-${line.pricingRequestItemId}`}
@@ -1120,11 +1197,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 inputMode="decimal"
                                 aria-label={`ราคาโรงงาน ${itemRef}`}
                                 value={line.rawUnitPrice}
-                                onChange={(e) => {
-                                  const items = [...draft.items];
-                                  items[index] = { ...line, rawUnitPrice: e.target.value };
-                                  setResponseDrafts({ ...responseDrafts, [quote.id]: { ...draft, items } });
-                                }}
+                                onChange={(e) => updateLine({ rawUnitPrice: e.target.value })}
                               />
                             </FormField>
                           </div>
