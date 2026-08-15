@@ -82,6 +82,17 @@ test.describe('@uat-sales pricing-request chain — deal to ORDER_RECEIVED', () 
   });
 
   test('drives a deal through the pricing-request chain to ORDER_RECEIVED, asserting the PCR status after every hop', async () => {
+    // Playwright's default 30s is not enough, and this is not a hang. The chain is ~14 sequential
+    // round trips to a Render `starter` instance, several of which do real work — the CEO decision
+    // computes a landed cost per item. The first run reached step 8 (approve) and was cut off
+    // mid-request at exactly 30.0s; the reported "Request context disposed" was the timeout tearing
+    // the context down around an in-flight fetch, not a session problem.
+    //
+    // 180s matches route-coverage.spec.js. Cases A–D will need more headroom still: Case A runs
+    // THREE of these chains (DESIGNER → OWNER → BUYER) plus a fulfilment tail, so budget per-spec
+    // rather than assuming this value carries over.
+    test.setTimeout(180_000);
+
     const factory = await test.step('discover a factory this database can actually cost', async () => {
       const usable = await resolveFactory(sessions);
       expect(usable.factoryName, 'a usable factory must have a name').toBeTruthy();
