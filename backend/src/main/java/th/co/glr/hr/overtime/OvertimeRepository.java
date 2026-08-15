@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.notification.CeoApproverRule;
 
 @Repository
 public class OvertimeRepository {
@@ -306,15 +307,28 @@ public class OvertimeRepository {
         return byEmployee;
     }
 
+    /**
+     * Notification recipients for a pending CEO-stage approval -- NOT a permission gate; approval
+     * authority is decided entirely by role checks in the controllers/services, never here. See
+     * {@link CeoApproverRule}'s Javadoc for the owner ruling (position-only match on
+     * กรรมการผู้จัดการ, 2026-08-10) and its consequence stated plainly there: with no fallback, if
+     * no active employee holds that exact position, this returns empty and the CEO queue goes
+     * silent -- for this notification path and, unchanged by this port, for the three sibling
+     * copies in {@code CommissionRepository}, {@code SpecialMoneyRepository} and {@code
+     * AttendanceCorrectionRepository} as well. Until this change the predicate here was the same
+     * {@code MD%}/{@code MN%} division-prefix convention those three still carry a copy of, rather
+     * than delegating to {@code CeoApproverRepository} (the sales/ticket/pricing-request
+     * equivalent).
+     */
     public List<Long> findCeoApproverEmployeeIds() {
         return jdbc.query("""
             SELECT e.employee_id
               FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE e.is_active = TRUE
-               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
+               AND %s
              ORDER BY e.employee_id
-            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+            """.formatted(CeoApproverRule.SQL_PREDICATE), Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
     /**

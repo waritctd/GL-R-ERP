@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.notification.CeoApproverRule;
 
 @Repository
 public class CommissionRepository {
@@ -413,15 +414,16 @@ public class CommissionRepository {
             """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
+    /** Mirrors {@code OvertimeRepository#findCeoApproverEmployeeIds} -- notification recipients only. */
     public List<Long> findCeoApproverEmployeeIds() {
         return jdbc.query("""
             SELECT e.employee_id
               FROM hr.employee e
-              JOIN hr.division d ON d.division_id = e.division_id
+              LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE e.is_active = TRUE
-               AND (d.source_code ILIKE 'MD%' OR d.source_code ILIKE 'MN%')
+               AND %s
              ORDER BY e.employee_id
-            """, Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
+            """.formatted(CeoApproverRule.SQL_PREDICATE), Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
     /**
