@@ -1,4 +1,4 @@
--- V152: give every catalogue row a per-sqm price basis and a resolvable thickness, then expose the
+-- V153: give every catalogue row a per-sqm price basis and a resolvable thickness, then expose the
 -- one surface the pricing engine will read.
 --
 -- The CEO formula works entirely in square metres: UC = TC / Q, and both the freight and clearance
