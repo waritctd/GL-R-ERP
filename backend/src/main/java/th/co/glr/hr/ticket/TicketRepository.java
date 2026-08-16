@@ -406,7 +406,14 @@ public class TicketRepository {
                 .addValue("qtyFromStock", item.qtyFromStock())
                 .addValue("stockNote", item.stockNote())
                 .addValue("catalogPriceId", item.catalogPriceId())
-                .addValue("catalogProductCode", item.catalogProductCode());
+                .addValue("catalogProductCode", item.catalogProductCode())
+                // V148: this DELETE+re-INSERT gives every edited item a brand-new item_id (the
+                // column is GENERATED ALWAYS AS IDENTITY), so the LOGICAL weight a sales_manager
+                // set survives an edit only because TicketService.mergeEditedItemsPreservingPricing
+                // carries item.weightMultiplier() forward from the prior row -- this repository
+                // method just persists whatever it was handed, exactly like every other
+                // pricing-adjacent field above (approvedPrice/calcedCost/manualPrice/...).
+                .addValue("weightMultiplier", item.weightMultiplier());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -415,13 +422,13 @@ public class TicketRepository {
                  proposed_price, approved_price, currency, sort_order,
                  calced_cost, calced_price, calc_config_version,
                  manual_price, manual_override_reason, qty_delivered, qty_from_stock, stock_note,
-                 catalog_price_id, catalog_product_code)
+                 catalog_price_id, catalog_product_code, weight_multiplier)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
                     :proposedPrice, :approvedPrice, :currency, :sortOrder,
                     :calcedCost, :calcedPrice, :calcConfigVersion,
                     :manualPrice, :manualOverrideReason, :qtyDelivered, :qtyFromStock, :stockNote,
-                    :catalogPriceId, :catalogProductCode)
+                    :catalogPriceId, :catalogProductCode, :weightMultiplier)
             """, batch);
     }
 
@@ -694,7 +701,7 @@ public class TicketRepository {
                    ti.calced_cost, ti.calced_price, ti.calc_config_version,
                    ti.manual_price, ti.manual_override_reason,
                    ti.qty_delivered, ti.qty_from_stock, ti.stock_note,
-                   ti.catalog_price_id, ti.catalog_product_code,
+                   ti.catalog_price_id, ti.catalog_product_code, ti.weight_multiplier,
                    pp.price AS catalog_price, pp.currency AS catalog_currency,
                    pp.price_unit AS catalog_price_unit, pp.sqm_per_piece AS catalog_sqm_per_piece
               FROM sales.ticket_item ti
@@ -741,7 +748,8 @@ public class TicketRepository {
                     rs.getBigDecimal("catalog_price"),
                     rs.getString("catalog_currency"),
                     rs.getString("catalog_price_unit"),
-                    rs.getBigDecimal("catalog_sqm_per_piece")
+                    rs.getBigDecimal("catalog_sqm_per_piece"),
+                    rs.getInt("weight_multiplier")
                 );
             });
     }
@@ -1407,6 +1415,30 @@ public class TicketRepository {
             UPDATE sales.ticket_item
                SET qty_from_stock = :qtyFromStock,
                    stock_note = :note
+             WHERE ticket_id = :ticketId AND item_id = :itemId
+            """, batch);
+    }
+
+    /**
+     * V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
+     * {@link #reserveStock} above -- same absolute-SET-keyed-on-(ticket_id,item_id) shape, this is
+     * the only production writer of {@code sales.ticket_item.weight_multiplier}. Authorization
+     * lives entirely in {@link TicketService#setItemWeightMultipliers}; this method trusts its
+     * caller completely, exactly as {@link #reserveStock} does.
+     */
+    @Transactional
+    public void updateItemWeightMultipliers(long ticketId, List<ItemWeightMultiplierRequest.Line> lines) {
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            ItemWeightMultiplierRequest.Line line = lines.get(i);
+            batch[i] = new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("itemId", line.itemId())
+                .addValue("weightMultiplier", line.weightMultiplier());
+        }
+        jdbc.batchUpdate("""
+            UPDATE sales.ticket_item
+               SET weight_multiplier = :weightMultiplier
              WHERE ticket_id = :ticketId AND item_id = :itemId
             """, batch);
     }

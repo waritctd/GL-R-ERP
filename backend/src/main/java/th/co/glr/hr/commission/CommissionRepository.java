@@ -22,6 +22,7 @@ public class CommissionRepository {
                NULLIF(TRIM(CONCAT_WS(' ', sr.first_name_th, sr.last_name_th)), '') AS sales_rep_name,
                cr.submitted_by_id, cr.kind, cr.status, cr.payroll_month,
                cr.actual_received, cr.commissionable_base, cr.weight_multiplier,
+               cr.effective_weight_multiplier,
                cr.approved_by_id, cr.approved_at, cr.cancellation_of_id, cr.cancellation_reason,
                cr.manager_approved_by,
                NULLIF(TRIM(CONCAT_WS(' ', manager_approver.first_name_th, manager_approver.last_name_th)), '') AS manager_approved_by_name,
@@ -164,10 +165,21 @@ public class CommissionRepository {
      * instead of this repository summing each receipt's already-2dp-rounded {@code
      * commissionable_base} column (the old {@code sumActiveMonthlyBase}, which let per-receipt
      * rounding accumulate across many small receipts).
+     *
+     * <p>V148 (per-item stock-commission weighting): the per-record weight used here is now
+     * {@code COALESCE(effective_weight_multiplier, weight_multiplier)} -- the frozen, blended
+     * per-item weight when one was computed at record-creation time, else the plain manager-set
+     * multiplier exactly as before this feature. Every record that predates V148 (and every record
+     * this feature does not apply to) has {@code effective_weight_multiplier IS NULL}, so the
+     * COALESCE falls straight through to {@code weight_multiplier} and this sum is BYTE-IDENTICAL
+     * to what it computed before this migration for every such row -- see {@link
+     * CommissionRecord#effectiveWeight()} for the same COALESCE mirrored in Java, used where this
+     * method's single SQL aggregate cannot reach ({@link
+     * CommissionService#computeRepPayrollCommissions}'s per-record accumulation).
      */
     public BigDecimal sumActiveWeightedActualReceived(long salesRepId, LocalDate payrollMonth) {
         BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(SUM(actual_received * weight_multiplier), 0)
+            SELECT COALESCE(SUM(actual_received * COALESCE(effective_weight_multiplier, weight_multiplier)), 0)
               FROM sales.commission_record
              WHERE sales_rep_id = :salesRepId
                AND payroll_month = :payrollMonth
@@ -542,16 +554,55 @@ public class CommissionRepository {
         BigDecimal dealPayableAmountSnapshot,
         boolean dealAmountMismatch
     ) {
+        // V148: every caller reaching this overload has no item-derived weight to freeze (test
+        // fixtures seeding a record directly, or a caller written before this feature existed) --
+        // null is exactly the "not applicable / not computed" value a pre-V148 row already has, so
+        // this delegation changes nothing about what any existing caller's row looks like.
+        return createCommissionRecord(invoiceId, sourceTicketId, salesRepId, submittedById,
+            payrollMonth, calculation, dealPayableAmountSnapshot, dealAmountMismatch, null);
+    }
+
+    /**
+     * V148 (per-item stock-commission weighting) full overload -- the only one that FREEZES
+     * {@code effective_weight_multiplier} at INSERT time. Called directly only by {@code
+     * CommissionService#submit}/{@code #createFromDeal}, the two places that ever have a
+     * freshly-computed item-derived weight to freeze; every other caller (both shorter overloads
+     * above, and every test file seeding a commission_record directly through this repository)
+     * goes through one of them and gets {@code effectiveWeightMultiplier = null} here.
+     *
+     * @param dealPayableAmountSnapshot  Step 9 cross-check snapshot -- see the two-arg overload's
+     *                                   own Javadoc.
+     * @param dealAmountMismatch         Step 9 flag -- see the two-arg overload's own Javadoc.
+     * @param effectiveWeightMultiplier  the FROZEN, blended per-item weight computed by {@link
+     *                                   CommissionCalculator#itemDerivedWeight} at THIS moment, or
+     *                                   {@code null} when nothing could be derived (unlinked
+     *                                   commission, no items, zero item value -- see that method's
+     *                                   Javadoc for the full list). Never recomputed after this
+     *                                   insert; payroll reads it via {@link
+     *                                   CommissionRecord#effectiveWeight()}/{@link
+     *                                   #sumActiveWeightedActualReceived}'s {@code COALESCE}.
+     */
+    public long createCommissionRecord(
+        long invoiceId,
+        Long sourceTicketId,
+        long salesRepId,
+        long submittedById,
+        LocalDate payrollMonth,
+        InvoiceCalculation calculation,
+        BigDecimal dealPayableAmountSnapshot,
+        boolean dealAmountMismatch,
+        BigDecimal effectiveWeightMultiplier
+    ) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.commission_record
                 (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
                  payroll_month, actual_received, commissionable_base,
-                 deal_payable_amount_snapshot, deal_amount_mismatch)
+                 deal_payable_amount_snapshot, deal_amount_mismatch, effective_weight_multiplier)
             VALUES
                 (:invoiceId, :sourceTicketId, :salesRepId, :submittedById, 'SALE', 'SUBMITTED',
                  :payrollMonth, :actualReceived, :commissionableBase,
-                 :dealPayableAmountSnapshot, :dealAmountMismatch)
+                 :dealPayableAmountSnapshot, :dealAmountMismatch, :effectiveWeightMultiplier)
             """,
             new MapSqlParameterSource()
                 .addValue("invoiceId", invoiceId)
@@ -562,7 +613,8 @@ public class CommissionRepository {
                 .addValue("actualReceived", calculation.actualReceived())
                 .addValue("commissionableBase", calculation.commissionableBase())
                 .addValue("dealPayableAmountSnapshot", dealPayableAmountSnapshot)
-                .addValue("dealAmountMismatch", dealAmountMismatch),
+                .addValue("dealAmountMismatch", dealAmountMismatch)
+                .addValue("effectiveWeightMultiplier", effectiveWeightMultiplier),
             keyHolder,
             new String[]{"commission_id"});
         return keyHolder.getKey().longValue();
@@ -573,6 +625,16 @@ public class CommissionRepository {
      * weight_multiplier} (not the column default of 1). Without this, a clawback of a 2x-weighted
      * sale would only reverse 1x of the original's contribution to the monthly TIER BASE,
      * silently leaving half of the original's weighted credit in place after the "cancellation".
+     *
+     * <p>V148 (per-item stock-commission weighting): {@code effective_weight_multiplier} is copied
+     * verbatim (null or a value) for the exact same reason. A SALE frozen at a blended 1.6x (from
+     * per-item stock weighting) whose clawback fell back to copying only the plain {@code
+     * weight_multiplier} (which stays at its 1x default for a record whose weight came from items,
+     * not the manager-set fallback) would reverse at the WRONG weight: {@link
+     * #sumActiveWeightedActualReceived}'s {@code COALESCE(effective_weight_multiplier,
+     * weight_multiplier)} would credit the original at 1.6x and the clawback at only 1x, leaving
+     * 0.6x of the original's weighted credit stranded after the "cancellation" -- the identical
+     * failure shape V82's own weight_multiplier copy already guards against, one column over.
      */
     public long createClawback(CommissionRecord original, long submittedById, LocalDate payrollMonth, String reason) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
@@ -580,10 +642,12 @@ public class CommissionRepository {
             INSERT INTO sales.commission_record
                 (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
                  payroll_month, actual_received, commissionable_base, weight_multiplier,
+                 effective_weight_multiplier,
                  approved_by_id, approved_at, cancellation_of_id, cancellation_reason)
             VALUES
                 (:invoiceId, :sourceTicketId, :salesRepId, :submittedById, 'CLAWBACK', 'APPROVED',
                  :payrollMonth, :actualReceived, :commissionableBase, :weightMultiplier,
+                 :effectiveWeightMultiplier,
                  :submittedById, now(), :cancellationOfId, :reason)
             """,
             new MapSqlParameterSource()
@@ -595,6 +659,7 @@ public class CommissionRepository {
                 .addValue("actualReceived", original.actualReceived().abs().negate())
                 .addValue("commissionableBase", original.commissionableBase().abs().negate())
                 .addValue("weightMultiplier", original.weightMultiplier())
+                .addValue("effectiveWeightMultiplier", original.effectiveWeightMultiplier())
                 .addValue("cancellationOfId", original.id())
                 .addValue("reason", reason),
             keyHolder,
@@ -867,7 +932,8 @@ public class CommissionRepository {
             rs.getBigDecimal("deal_payable_amount_snapshot"),
             rs.getBoolean("deal_amount_mismatch"),
             rs.getBigDecimal("manual_amount"),
-            rs.getString("manual_reason")
+            rs.getString("manual_reason"),
+            rs.getBigDecimal("effective_weight_multiplier")
         );
     }
 
