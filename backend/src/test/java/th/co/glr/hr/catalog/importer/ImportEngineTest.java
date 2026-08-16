@@ -350,7 +350,7 @@ class ImportEngineTest {
 
         // ── REFIN: allow_missing_code ─────────────────────────────────────────
 
-        @Test @DisplayName("REFIN Trim-Tiles — missing code accepted when allow_missing_code=true")
+        @Test @DisplayName("REFIN Trim-Tiles — missing code accepted, surrogate code synthesised")
         void refin_allowMissingCode() throws Exception {
             Object[][] data = {
                 {"Collection", "Item",     "Size (cm)", "Um", "PRICE 2025"},
@@ -369,9 +369,121 @@ class ImportEngineTest {
             ImportResult r = engine.parse(makeWorkbook("Trim-Tiles", data), prof, 1L);
             assertThat(r.errors()).isEmpty();
             assertThat(r.rows()).hasSize(2);
-            assertThat(r.rows().get(0).productCode()).isNull(); // accepted
+            // Previously these were left NULL, which made uq_price degenerate to
+            // (version_id, size_raw). They now carry a synthesised code instead.
+            assertThat(r.rows().get(0).productCode()).startsWith(ImportEngine.SURROGATE_PREFIX);
+            assertThat(r.rows().get(1).productCode()).startsWith(ImportEngine.SURROGATE_PREFIX);
             assertThat(r.rows().get(0).priceUnit()).isEqualTo("per_sqm");
             assertThat(r.rows().get(1).priceUnit()).isEqualTo("per_piece");
+        }
+
+        // ── surrogate code: the REFIN row-loss regression ─────────────────────
+
+        @Test @DisplayName("Surrogate — same size, different product ⇒ different codes (Trim-Tiles loss)")
+        void surrogate_sameSizeDifferentProductGetsDistinctCodes() throws Exception {
+            // The exact shape that collapsed 74 Trim-Tiles rows to 17: no Code column,
+            // several distinct products sharing one size at different prices.
+            Object[][] data = {
+                {"Thickness (mm)", "Item",               "Size (cm)", "PRICE 2026", "UM"},
+                {9.0,              "GRADINO",            "33X150",    244.0,        "pcs"},
+                {9.0,              "GRADINO ANG DX/SX",  "33X150",    318.5,        "pcs"},
+                {9.0,              "SCALINO ELEMENTO L", "33X150",    177.5,        "pcs"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "thickness_mm", "Thickness (mm)",
+                "product_name", "Item",
+                "size_raw",     "Size (cm)",
+                "price",        "PRICE 2026",
+                "unit",         "UM"
+            ), Map.of("currency", "EUR"), "Trim-Tiles", 1);
+            prof.allowMissingCode = true;
+
+            ImportResult r = engine.parse(makeWorkbook("Trim-Tiles", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(3);
+
+            // Distinct codes are what stops uq_price collapsing these onto one row.
+            assertThat(r.rows().stream().map(PriceRow::productCode).distinct())
+                .as("three products sharing size 33X150 must not share a code")
+                .hasSize(3);
+            assertThat(r.rows().stream().map(PriceRow::price).distinct()).hasSize(3);
+        }
+
+        @Test @DisplayName("Surrogate — surface distinguishes Balneo MATT/SOFT from LUCIDO")
+        void surrogate_surfaceDistinguishesVariants() throws Exception {
+            Object[][] data = {
+                {"COLLECTION",     "ITEM",                "SIZE (cm)",     "SURFACE",   "PRICE 2025", "UM"},
+                {"BALNEO PROJECT", "LAVABO SOSPESO VISTA", "120X50  h.15", "MATT/SOFT", 3930.0,       "pcs"},
+                {"",               "",                     "",             "LUCIDO",    4175.5,       "pcs"},
+            };
+            ImportProfile prof = new ImportProfile();
+            prof.columns = Map.of(
+                "collection",   "COLLECTION",
+                "product_name", "ITEM",
+                "size_raw",     "SIZE (cm)",
+                "surface",      "SURFACE",
+                "price",        "PRICE 2025",
+                "unit",         "UM"
+            );
+            prof.defaults = Map.of("currency", "EUR");
+            prof.sheets = List.of(sheetConf("Balneo-Project", 1));
+            prof.allowMissingCode = true;
+            prof.fillDownPerSheet = Map.of(
+                "Balneo-Project", List.of("COLLECTION", "ITEM", "SIZE (cm)"));
+
+            ImportResult r = engine.parse(makeWorkbook("Balneo-Project", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(2);
+            // Identical collection/item/size after fill-down — only SURFACE differs.
+            assertThat(r.rows().get(0).productCode())
+                .isNotEqualTo(r.rows().get(1).productCode());
+        }
+
+        @Test @DisplayName("Surrogate — deterministic across re-imports of the same file")
+        void surrogate_isStableAcrossReimports() throws Exception {
+            Object[][] data = {
+                {"Item",    "Size (cm)", "PRICE 2026", "UM"},
+                {"GRADINO", "33X150",    244.0,        "pcs"},
+            };
+            // Same profile shape both times; re-parsed from a fresh stream.
+            ImportProfile prof1 = profileWith(Map.of(
+                "product_name", "Item", "size_raw", "Size (cm)",
+                "price", "PRICE 2026", "unit", "UM"
+            ), Map.of("currency", "EUR"), "Trim-Tiles", 1);
+            prof1.allowMissingCode = true;
+            ImportProfile prof2 = profileWith(Map.of(
+                "product_name", "Item", "size_raw", "Size (cm)",
+                "price", "PRICE 2026", "unit", "UM"
+            ), Map.of("currency", "EUR"), "Trim-Tiles", 1);
+            prof2.allowMissingCode = true;
+
+            String first  = engine.parse(makeWorkbook("Trim-Tiles", data), prof1, 1L)
+                                  .rows().get(0).productCode();
+            String second = engine.parse(makeWorkbook("Trim-Tiles", data), prof2, 1L)
+                                  .rows().get(0).productCode();
+
+            // Assert a code was actually synthesised before comparing — otherwise this
+            // passes vacuously when both sides are NULL (verified by mutation check).
+            assertThat(first).startsWith(ImportEngine.SURROGATE_PREFIX);
+            // Stability is what keeps PriceImportService's incremental merge matching.
+            assertThat(second).isEqualTo(first);
+        }
+
+        @Test @DisplayName("Surrogate — real codes are never overwritten by a synthesised one")
+        void surrogate_doesNotTouchRealCodes() throws Exception {
+            Object[][] data = {
+                {"Code", "Item",    "Size (cm)", "PRICE 2026", "UM"},
+                {"OG65", "CALCE R", "120X120",   96.5,          "mq"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code", "product_name", "Item", "size_raw", "Size (cm)",
+                "price", "PRICE 2026", "unit", "UM"
+            ), Map.of("currency", "EUR"), "Collections", 1);
+            prof.allowMissingCode = true;
+
+            ImportResult r = engine.parse(makeWorkbook("Collections", data), prof, 1L);
+            assertThat(r.rows()).hasSize(1);
+            assertThat(r.rows().get(0).productCode()).isEqualTo("OG65");
         }
 
         // ── REFIN: fill_down_per_sheet (Balneo-Project) ───────────────────────
