@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,7 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketDto;
+import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketRepository;
 
 @Service
@@ -138,6 +140,11 @@ public class CommissionService {
             safeRequest.overpayment()
         );
         DealLinkage linkage = resolveDealLinkage(safeRequest);
+        // V148 (per-item stock-commission weighting): computed and FROZEN here, once, from this
+        // ticket's items as they stand right now -- never recomputed after this. See
+        // #computeItemDerivedWeight's own Javadoc.
+        Optional<BigDecimal> itemDerivedWeight =
+            computeItemDerivedWeight(safeRequest.sourceTicketId(), calculation.actualReceived());
         // Commission-closed-month guard: computed and checked on the DERIVED, normalized
         // first-of-month value that createCommissionRecord below actually writes -- not on the raw
         // caller-supplied invoiceDate. Runs before any write (invoice row, file storage, attachment)
@@ -185,7 +192,8 @@ public class CommissionService {
                 payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
-                linkage.mismatch()
+                linkage.mismatch(),
+                itemDerivedWeight.orElse(null)
             );
             CommissionRecord created = requireRecord(commissionId);
             auditService.record(actor, "SUBMIT_COMMISSION", "commission_record", commissionId, null, created);
@@ -286,6 +294,13 @@ public class CommissionService {
         // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact
         // same gate submit() has always enforced. Never loosened for this trigger.
         DealLinkage linkage = resolveDealLinkage(request);
+        // V148 (per-item stock-commission weighting): computed and FROZEN here, once, from this
+        // SAME ticket already loaded above -- no second fetch needed, unlike submit()'s wrapper
+        // (which has no ticket in hand yet at this point). Never recomputed after this. Keyed on
+        // calculation.actualReceived() (post-deduction cash), not the raw grossAmount -- the same
+        // figure #sumActiveWeightedActualReceived weights and submit()'s own call below uses.
+        Optional<BigDecimal> itemDerivedWeight =
+            calculator.itemDerivedWeight(toItemStockWeightInputs(ticket.items()), calculation.actualReceived());
         // Commission-closed-month guard: same guard and same placement rationale as submit() above
         // -- computed on the DERIVED, normalized first-of-month value, checked before any write
         // (invoice row, file storage, ticket attachment) so a refused create leaves nothing behind,
@@ -338,7 +353,8 @@ public class CommissionService {
                 payrollMonth,
                 calculation,
                 linkage.payableSnapshot(),
-                linkage.mismatch()
+                linkage.mismatch(),
+                itemDerivedWeight.orElse(null)
             );
             CommissionRecord created = requireRecord(commissionId);
             auditService.record(actor, "CREATE_COMMISSION_FROM_DEAL", "commission_record", commissionId, null, created);
@@ -371,6 +387,40 @@ public class CommissionService {
         BigDecimal payable = tickets.payableAmount(ticketId);
         boolean mismatch = isMismatch(request.grossAmount(), payable);
         return new DealLinkage(payable, mismatch);
+    }
+
+    /**
+     * V148 (per-item stock-commission weighting): resolves and freezes this NEW SALE commission's
+     * blended per-item weight -- called ONCE, at record-creation time, by {@link #submit} (which
+     * has no {@link TicketDto} in hand yet, unlike {@link #createFromDeal}, so this fetches one
+     * when linked). {@link Optional#empty()} for an unlinked/manual commission ({@code
+     * sourceTicketId == null}) without ever touching the ticket repository -- {@link
+     * CommissionCalculator#itemDerivedWeight}'s own empty-input guard would reach the same answer,
+     * but resolving it here avoids a pointless {@code findById} call on the hot path every
+     * manual/unlinked submission already takes today.
+     *
+     * <p>Never called again for an existing record -- see {@code
+     * sales.commission_record.effective_weight_multiplier}'s migration comment (V148) for why this
+     * must stay a one-time freeze, not a live recomputation: editing the ticket's items (a
+     * different {@code weight_multiplier}, a corrected {@code qty_from_stock}) after this point
+     * must never move an already-created commission record's money.
+     */
+    private Optional<BigDecimal> computeItemDerivedWeight(Long sourceTicketId, BigDecimal actualReceived) {
+        if (sourceTicketId == null) {
+            return Optional.empty();
+        }
+        List<TicketItemDto> items = tickets.findById(sourceTicketId).map(TicketDto::items).orElse(List.of());
+        return calculator.itemDerivedWeight(toItemStockWeightInputs(items), actualReceived);
+    }
+
+    /** Maps the ticket-package DTO onto the calculator's decoupled, dependency-free input shape
+     * -- see {@link CommissionCalculator.ItemStockWeightInput}'s own Javadoc for why the
+     * calculator does not take {@link TicketItemDto} directly. */
+    private List<CommissionCalculator.ItemStockWeightInput> toItemStockWeightInputs(List<TicketItemDto> items) {
+        return items.stream()
+            .map(item -> new CommissionCalculator.ItemStockWeightInput(
+                item.qty(), item.qtyFromStock(), item.approvedPrice(), item.proposedPrice(), item.weightMultiplier()))
+            .toList();
     }
 
     private boolean isMismatch(BigDecimal grossAmount, BigDecimal payable) {
@@ -925,9 +975,14 @@ public class CommissionService {
             // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
             // x weight_multiplier), not the already-2dp-rounded commissionable_base column — see
             // CommissionRepository#sumActiveWeightedActualReceived for the same change at the
-            // single-rep query path (simulate()).
+            // single-rep query path (simulate()). V148: the weight used is now
+            // record.effectiveWeight() (COALESCE(effective_weight_multiplier, weight_multiplier))
+            // -- the frozen per-item blend when one was computed, else the plain weight_multiplier
+            // exactly as before this feature. Every pre-V148 record has effectiveWeight() ==
+            // weightMultiplier() (effective_weight_multiplier is NULL), so this cannot change the
+            // contribution of any record this migration did not touch.
             grouped.computeIfAbsent(record.salesRepId(), id -> new RepAccumulator(record.salesRepId(), record.salesRepName()))
-                .add(record.actualReceived(), record.weightMultiplier());
+                .add(record.actualReceived(), record.effectiveWeight());
         }
         List<TierConfig> tiers = tiers();
         // Issue #405: load the INCENTIVE ladder + STOCK_BONUS config ONCE for the whole month
@@ -1354,10 +1409,13 @@ public class CommissionService {
             this.salesRepName = salesRepName;
         }
 
-        private void add(BigDecimal actualReceived, int weightMultiplier) {
+        // V148: takes the resolved effective weight (a BigDecimal -- a per-item blend can be
+        // fractional, e.g. 1.6, which the record's raw SMALLINT weightMultiplier could never
+        // express) rather than the raw int weight_multiplier this took before that feature.
+        private void add(BigDecimal actualReceived, BigDecimal effectiveWeight) {
             BigDecimal received = actualReceived == null ? BigDecimal.ZERO : actualReceived;
             unweightedActualReceived = unweightedActualReceived.add(received);
-            weightedActualReceived = weightedActualReceived.add(received.multiply(BigDecimal.valueOf(weightMultiplier)));
+            weightedActualReceived = weightedActualReceived.add(received.multiply(effectiveWeight));
         }
     }
 }

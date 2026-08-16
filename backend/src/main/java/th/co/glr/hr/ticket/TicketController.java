@@ -113,6 +113,19 @@ public class TicketController {
         return new TicketDetailResponse(ticketService.reserveStock(id, request, user));
     }
 
+    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
+    // reserve-stock above. Authorization is enforced in TicketService.setItemWeightMultipliers,
+    // not here -- see that method's Javadoc.
+    @PostMapping("/{id}/item-weight-multipliers")
+    TicketDetailResponse setItemWeightMultipliers(
+        @PathVariable long id,
+        @Valid @RequestBody ItemWeightMultiplierRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new TicketDetailResponse(ticketService.setItemWeightMultipliers(id, request, user));
+    }
+
     @PostMapping("/{id}/deliveries")
     TicketDetailResponse recordDelivery(
         @PathVariable long id,

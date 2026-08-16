@@ -331,8 +331,22 @@ class CommissionCalcRefineIntegrationTest extends AbstractPostgresIntegrationTes
     /**
      * Seeds one active (SUBMITTED) commission_record with the given real-cash amount and no
      * deductions (so {@code actualReceived == grossAmount} exactly) via the real repository —
-     * mirroring exactly what {@code CommissionService#submit}/{@code #createFromDeal} persist,
+     * mirroring exactly what {@code CommissionService#submit}/{@code #createFromDeal} persist FOR
+     * AN UNLINKED COMMISSION ({@code sourceTicketId = null}, every record this method ever seeds),
      * without needing the full ticket/deal fixture chain this slice doesn't touch.
+     *
+     * <p><b>V148 scoping note (reviewer finding, 2026-08-16):</b> this claim is scoped to the
+     * unlinked case on purpose, not a blanket claim about every commission {@code submit}/{@code
+     * #createFromDeal} can create. Since V148, a TICKET-LINKED submission additionally computes
+     * and freezes {@code effective_weight_multiplier} from the ticket's items (see {@link
+     * CommissionCalculator#itemDerivedWeight}) — this 6-arg {@code createCommissionRecord}
+     * overload always leaves that column {@code NULL}, which happens to still match what a real
+     * unlinked {@code submit()} call persists ({@code sourceTicketId == null} short-circuits the
+     * freeze to empty before it ever runs), but would NOT match a real ticket-linked one. Do not
+     * extend this helper to a ticket-linked scenario and assume it still mirrors production — see
+     * {@code StockItemWeightedCommissionIntegrationTest} for coverage that exercises the real,
+     * ticket-linked {@code submit}/{@code createFromDeal} paths (including the frozen-weight /
+     * manager-override interaction this file's own weighting tests never touch).
      */
     private long seedCommissionRecord(long salesRepId, BigDecimal actualReceived) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(

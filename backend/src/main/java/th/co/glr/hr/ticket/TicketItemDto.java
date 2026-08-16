@@ -56,13 +56,25 @@ public record TicketItemDto(
     BigDecimal catalogPrice,
     String catalogCurrency,
     String catalogPriceUnit,
-    BigDecimal sqmPerPiece
+    BigDecimal sqmPerPiece,
+    // V148 (per-item stock-commission weighting): the manager-set 1/2/3 multiplier for THIS
+    // item, mirroring sales.commission_record.weight_multiplier's own shape (V82) but scoped to
+    // one line instead of a whole invoice. Placed last, after every Slice F ราคาตั้ง field, so
+    // every pre-existing positional constructor call in this codebase (tests, the write-path
+    // merge, quotation-item snapshot reconstruction) keeps compiling unchanged and keeps
+    // defaulting to 1 -- the same "no weighting" behaviour a brand-new ticket_item row gets from
+    // the column's own DEFAULT 1. See TicketRepository#findItemsByTicketId (the sole full-shape
+    // reader) and TicketService#mergeEditedItemsPreservingPricing (which must carry a prior
+    // item's weight forward across an edit, never silently reset it) for the two places that
+    // populate this with a real value.
+    int weightMultiplier
 ) {
     // Compat shape for every call site written before Slice F: a plain TicketItemDto with no
     // ราคาตั้ง inputs (the write-path merge, quotation-item snapshot reconstruction, and every
     // existing test fixture). source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece
     // default to null/"custom" -- these are read-path-only fields nothing here writes back to
-    // sales.ticket_item, so a null default cannot lose data.
+    // sales.ticket_item, so a null default cannot lose data. weightMultiplier defaults to 1 (the
+    // column default) for the same reason.
     public TicketItemDto(
         long id,
         long ticketId,
@@ -98,7 +110,51 @@ public record TicketItemDto(
             sortOrder, calcedCost, calcedPrice, calcConfigVersion, unitBasis,
             manualPrice, manualOverrideReason, qtyDelivered, qtyFromStock, stockNote,
             catalogPriceId, catalogProductCode,
-            catalogPriceId != null ? "catalog" : "custom", null, null, null, null);
+            catalogPriceId != null ? "catalog" : "custom", null, null, null, null, 1);
+    }
+
+    // V148 compat shape: the pre-Slice-F fields (through catalogProductCode) PLUS an explicit
+    // weightMultiplier, for the one call site that must preserve a prior item's weight across an
+    // edit (TicketService#mergeEditedItemsPreservingPricing) without also needing to populate the
+    // Slice F ราคาตั้ง read-path fields it never carries either way. source/catalogPrice/
+    // catalogCurrency/catalogPriceUnit/sqmPerPiece default exactly as the ctor above derives them.
+    public TicketItemDto(
+        long id,
+        long ticketId,
+        String brand,
+        String model,
+        String color,
+        String texture,
+        String size,
+        String factory,
+        BigDecimal qty,
+        BigDecimal qtySqm,
+        BigDecimal rawPrice,
+        String rawCurrency,
+        String rawUnit,
+        BigDecimal proposedPrice,
+        BigDecimal approvedPrice,
+        String currency,
+        int sortOrder,
+        BigDecimal calcedCost,
+        BigDecimal calcedPrice,
+        Integer calcConfigVersion,
+        String unitBasis,
+        BigDecimal manualPrice,
+        String manualOverrideReason,
+        BigDecimal qtyDelivered,
+        BigDecimal qtyFromStock,
+        String stockNote,
+        Long catalogPriceId,
+        String catalogProductCode,
+        int weightMultiplier
+    ) {
+        this(id, ticketId, brand, model, color, texture, size, factory, qty, qtySqm,
+            rawPrice, rawCurrency, rawUnit, proposedPrice, approvedPrice, currency,
+            sortOrder, calcedCost, calcedPrice, calcConfigVersion, unitBasis,
+            manualPrice, manualOverrideReason, qtyDelivered, qtyFromStock, stockNote,
+            catalogPriceId, catalogProductCode,
+            catalogPriceId != null ? "catalog" : "custom", null, null, null, null, weightMultiplier);
     }
 
     public TicketItemDto(
