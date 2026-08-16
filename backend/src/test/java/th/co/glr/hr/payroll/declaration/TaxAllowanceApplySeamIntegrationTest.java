@@ -53,6 +53,7 @@ import th.co.glr.hr.ticket.TicketRepository;
  * every dated row for the year at once.
  */
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 
@@ -78,7 +79,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),

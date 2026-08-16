@@ -27,6 +27,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
@@ -107,7 +108,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
             mock(AuditService.class),
             mock(NotificationService.class),
             tickets,
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
 
         employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         ownerId = createEmployee("เจ้าของดีล ถ่วงน้ำหนัก", "owner-itemweight@glr.co.th", "SA", "แผนกขาย");
@@ -481,7 +482,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
             mock(AuditService.class),
             mock(NotificationService.class),
             tickets,
-            new AttachmentRepository(jdbc));
+            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
     }
 
     private MultipartFile invoiceFile() {

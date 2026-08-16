@@ -36,6 +36,7 @@ import th.co.glr.hr.employee.ManagerApproverRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 class OvertimeServiceTest {
@@ -72,6 +73,7 @@ class OvertimeServiceTest {
     // before this feature existed keeps behaving as though only hr.holiday can make a day
     // non-standard, unless it opts in to a specific schedule stub.
     private final WorkScheduleResolver scheduleResolver = mock(WorkScheduleResolver.class);
+    private final CeoApproverRepository ceoApprovers = mock(CeoApproverRepository.class);
     private final OvertimeService overtimeService = new OvertimeService(
         overtimeRepository,
         managerApproverRepository,
@@ -80,7 +82,8 @@ class OvertimeServiceTest {
         appProperties,
         attendanceDailyService,
         holidayCalendar,
-        scheduleResolver
+        scheduleResolver,
+        ceoApprovers
     );
 
     /**
@@ -154,7 +157,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.create(anyLong(), any(), any(), anyInt(), any(), any(), any())).thenReturn(55L);
         when(overtimeRepository.findById(55L)).thenReturn(Optional.of(created));
         when(managerApproverRepository.findManagerApproverEmployeeIds(10L)).thenReturn(List.of());
-        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
 
         overtimeService.submit(request, user("employee", 10L));
 
@@ -624,7 +627,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.managerApprove(
                 eq(77L), eq(99L), any(OvertimeCalculation.class), eq(new BigDecimal("30000.00")), eq("ok")))
             .thenReturn(1);
-        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
         UserPrincipal actor = manager(99L, 5L);
 
         OvertimeRequestDto result = overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), actor);
@@ -742,7 +745,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.managerApprove(
                 eq(77L), eq(88L), any(OvertimeCalculation.class), any(BigDecimal.class), eq("ok")))
             .thenReturn(1);
-        when(overtimeRepository.findCeoApproverEmployeeIds()).thenReturn(List.of());
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of());
 
         OvertimeRequestDto result = overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), manager(88L, 5L));
 

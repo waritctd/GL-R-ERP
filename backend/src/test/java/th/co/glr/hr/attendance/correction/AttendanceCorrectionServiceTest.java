@@ -22,6 +22,7 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 class AttendanceCorrectionServiceTest {
@@ -32,8 +33,9 @@ class AttendanceCorrectionServiceTest {
     private final AttendanceDailyService dailyService = mock(AttendanceDailyService.class);
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
+    private final CeoApproverRepository ceoApprovers = mock(CeoApproverRepository.class);
     private final AttendanceCorrectionService service = new AttendanceCorrectionService(
-        repository, dailyService, auditService, notificationService);
+        repository, dailyService, auditService, notificationService, ceoApprovers);
 
     // --- submit: happy path ---------------------------------------------------------------------
 
@@ -238,7 +240,7 @@ class AttendanceCorrectionServiceTest {
         when(repository.hasOpenRequest(10L, PAST_DATE)).thenReturn(false);
         when(repository.create(eq(10L), eq(10L), any())).thenReturn(55L);
         when(repository.findById(55L)).thenReturn(Optional.of(dto(55L, 10L, "SUBMITTED")));
-        when(repository.findCeoApproverEmployeeIds()).thenReturn(List.of(500L, 501L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L, 501L));
 
         service.submit(checkInRequest(), employee(10L));
 

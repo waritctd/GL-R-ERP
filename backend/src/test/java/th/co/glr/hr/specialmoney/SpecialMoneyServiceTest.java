@@ -30,6 +30,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 /**
@@ -44,8 +45,9 @@ class SpecialMoneyServiceTest {
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationService notificationService = mock(NotificationService.class);
     private final AppProperties appProperties = new AppProperties();
+    private final CeoApproverRepository ceoApprovers = mock(CeoApproverRepository.class);
     private final SpecialMoneyService service = new SpecialMoneyService(
-        repository, evaluator, auditService, notificationService, appProperties);
+        repository, evaluator, auditService, notificationService, appProperties, ceoApprovers);
 
     /**
      * Evidence-required types cannot be approved with nothing attached. Default the count to 1 so

@@ -19,6 +19,7 @@ import th.co.glr.hr.commission.CommissionRepository;
 import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.leave.LeaveRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollLineDto;
 import th.co.glr.hr.payroll.PayrollPeriodDto;
@@ -63,7 +64,7 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         payrollService = new PayrollService(
             payrollRepository,
             new th.co.glr.hr.payroll.PayrollCalculator(),

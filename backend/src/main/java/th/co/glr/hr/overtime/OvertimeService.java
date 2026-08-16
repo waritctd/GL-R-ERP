@@ -21,6 +21,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.employee.ManagerApproverRepository;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 @Service
@@ -64,6 +65,7 @@ public class OvertimeService {
     private final AttendanceDailyService attendanceDailyService;
     private final HolidayCalendar holidayCalendar;
     private final WorkScheduleResolver scheduleResolver;
+    private final CeoApproverRepository ceoApprovers;
 
     public OvertimeService(
             OvertimeRepository overtimeRepository,
@@ -73,7 +75,8 @@ public class OvertimeService {
             AppProperties appProperties,
             AttendanceDailyService attendanceDailyService,
             HolidayCalendar holidayCalendar,
-            WorkScheduleResolver scheduleResolver) {
+            WorkScheduleResolver scheduleResolver,
+            CeoApproverRepository ceoApprovers) {
         this.overtimeRepository = overtimeRepository;
         this.managerApproverRepository = managerApproverRepository;
         this.auditService = auditService;
@@ -82,6 +85,7 @@ public class OvertimeService {
         this.attendanceDailyService = attendanceDailyService;
         this.holidayCalendar = holidayCalendar;
         this.scheduleResolver = scheduleResolver;
+        this.ceoApprovers = ceoApprovers;
     }
 
     public List<OvertimeRequestDto> list(
@@ -957,7 +961,7 @@ public class OvertimeService {
         notificationService.notify(request.employeeId(), "OVERTIME_SUBMITTED", title, message, "/overtime", true);
 
         if (goesToCeo) {
-            for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+            for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
                 notificationService.notify(
                     ceoEmployeeId,
                     "OVERTIME_PENDING_CEO",
@@ -990,7 +994,7 @@ public class OvertimeService {
             "/overtime",
             true
         );
-        for (Long ceoEmployeeId : overtimeRepository.findCeoApproverEmployeeIds()) {
+        for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "OVERTIME_PENDING_CEO",

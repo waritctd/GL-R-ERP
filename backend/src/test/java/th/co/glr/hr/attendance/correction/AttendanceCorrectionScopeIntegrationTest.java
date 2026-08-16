@@ -21,6 +21,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -69,7 +70,7 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
             repository,
             dailyService,
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class), new CeoApproverRepository(jdbc));
 
         salesDivision = insertDivision("SLS", "ฝ่ายขาย");
         salesManager = insertEmployee("M001", salesDivision);
