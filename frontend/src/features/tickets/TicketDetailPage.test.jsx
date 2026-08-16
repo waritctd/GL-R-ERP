@@ -1924,6 +1924,55 @@ describe('TicketDetailPage', () => {
       return within(heading.closest('section'));
     }
 
+    // Regression: the /fulfilment workspace gave the four fulfilment codes a `to` of
+    // '/fulfilment', which made TicketDetailPage's sticky bar navigate away instead of scrolling
+    // to the panel already on this page — ejecting an import user from the deal they were standing
+    // on to go find it again in a list. The in-page target must win whenever the page has one.
+    it('import’s sticky CTA scrolls to the fulfilment panel instead of navigating to /fulfilment', async () => {
+      // Records WHICH element was scrolled, not merely that something was. A bare
+      // vi.fn() on the prototype passes with the fix reverted — other things on this page
+      // scroll on mount, so "scrollIntoView was called" is satisfied by them and the test
+      // proves nothing. Verified by mutation-check: with `&& !jumpId` removed, the id
+      // assertion below goes red and the bare-call assertion did not.
+      const scrolledIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledIds.push(this.id);
+      };
+      try {
+        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the
+        // sticky bar would never render and this test would pass vacuously.
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID',
+              lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', fulfillmentStatus: null,
+            },
+          }),
+        });
+        api.tickets.actions.mockResolvedValue({
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+          availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' }],
+        });
+
+        renderTicketDetailPage(importUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+
+        const sticky = await screen.findByTestId('ticket-primary-action');
+        expect(sticky.getAttribute('data-action')).toBe('issueImportRequest');
+
+        fireEvent.click(sticky);
+
+        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the
+        // scroll target rather than "did not navigate" because a MemoryRouter with no /fulfilment
+        // route renders blank either way, so a negative navigation assertion would itself be
+        // vacuous.
+        await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
     it('import issues an Import Request via api.tickets.issueImportRequest', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }),

@@ -126,6 +126,13 @@ const PATH_GUARDS = [
   // COMMIT 6 review remediation: a single combined rule previously let sales reach the queue too.
   { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
+  // งานนำเข้า — Import's cross-deal fulfilment workspace. This entry is MANDATORY,
+  // not decorative: canAccessPath fails OPEN for any path no guard claims (the
+  // `if (!guard) return true` below), so without this line every authenticated
+  // role reaches /fulfilment. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself
+  // a mirror of TicketService.FULFILMENT_ROLES {import, ceo}. Frontend gating
+  // only — the four endpoints enforce the real gate and are unchanged.
+  { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —

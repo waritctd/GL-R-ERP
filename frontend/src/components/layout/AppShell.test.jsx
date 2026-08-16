@@ -62,6 +62,27 @@ describe('AppShell navigation (role-scoped views)', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.queryByText('จัดซื้อ & นำเข้า')).toBeNull();
     expect(screen.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
+    // งานนำเข้า is NOT that page coming back. The deleted one was a link list
+    // duplicating the dashboard worklist; this one performs the four transitions.
+    // The retired LABEL must stay retired all the same.
+    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
+  });
+
+  // งานนำเข้า's audience is canActOnFulfilment {import, ceo} — deliberately
+  // NARROWER than its คิวขอราคา neighbour, which also admits sales_manager.
+  // Wrong-way-round: the refusals are what matter, since a nav item pointing at a
+  // page whose every button 403s is worse than no nav item.
+  it('shows งานนำเข้า to import and ceo only', async () => {
+    for (const role of ['sales', 'sales_manager', 'account', 'hr', 'employee']) {
+      const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
+      await screen.findByText('เนื้อหา');
+      expect(screen.queryByText('งานนำเข้า'), `${role} must not see งานนำเข้า`).toBeNull();
+      unmount();
+    }
+
+    renderShell({ role: 'ceo', employeeId: 1, name: 'ซีอีโอ ทดสอบ', email: 'ceo@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
   });
 
   it('keeps รายการดีล for sales', async () => {

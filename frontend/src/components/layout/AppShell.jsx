@@ -160,8 +160,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       group: 'sales',
       // Role-scoped views: the pipeline BROWSER is canViewDealPipeline (sales/
       // sales_manager/ceo) — narrower than canViewTickets (detail-read, kept
-      // for import/account). Import gets its own จัดซื้อ & นำเข้า worklist and
-      // Account gets its own งานการเงิน worklist below instead of this item.
+      // for import/account). Instead of this item, Import gets คิวขอราคา +
+      // งานนำเข้า and Account gets งานการเงิน, all below.
+      //
+      // This comment used to promise Import a "จัดซื้อ & นำเข้า worklist below"
+      // and was false for six days: that nav item and its /procurement page were
+      // deleted in ebaf6888 (owner ruling — the page duplicated the dashboard
+      // worklist), leaving nothing below to point at. งานนำเข้า is its
+      // replacement and is NOT the same page — see
+      // .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §0.
       // See docs/role-scoped-views.md.
       show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets'],
@@ -175,6 +182,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
     // comment for why this is a narrower audience than a single request's detail page.
     { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
+    // Import's stream-2 workspace, placed immediately after stream 1 so its two
+    // obligations to Sales read as two adjacent items in the order a deal travels
+    // (price, then goods). NARROWER audience than its neighbour on purpose:
+    // canActOnFulfilment mirrors TicketService.FULFILMENT_ROLES {import, ceo},
+    // while canViewPricingRequestQueue also includes sales_manager — who would
+    // find every button on this page 403s. `building`, not `clipboard`: the
+    // neighbour already owns that glyph, and the chain ends at the warehouse.
+    { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item (finalized Account design, owner-confirmed
     // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ + ออกค่าคอม / create-from-deal
     // at close) is the LAST STAGE of the งานการเงิน money lifecycle + the Overview worklist

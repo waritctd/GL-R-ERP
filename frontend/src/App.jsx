@@ -58,6 +58,7 @@ const CeoSettingsPage = lazy(() => import('./features/ceoSettings/CeoSettingsPag
 const PriceImportPage = lazy(() => import('./features/catalog/PriceImportPage.jsx').then(toDefault('PriceImportPage')));
 const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPage.jsx').then(toDefault('CatalogSearchPage')));
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
+const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
 // Attendance calendar admin (PR #480 shipped the hr.holiday / hr.work_schedule_assignment write
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
@@ -432,6 +433,14 @@ export function App() {
                 <Route
                   path="/pricing-requests/:id"
                   element={<PricingRequestDetailPage user={user} showToast={showToast} />}
+                />
+                {/* Import's cross-deal fulfilment workspace (งานนำเข้า) — the four
+                    stage-12 transitions performed in place. Guarded by
+                    canActOnFulfilment in PATH_GUARDS; see
+                    .design/import-fulfilment/INFORMATION_ARCHITECTURE.md. */}
+                <Route
+                  path="/fulfilment"
+                  element={<ImportFulfilmentPage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/commissions"
