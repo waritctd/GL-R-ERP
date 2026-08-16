@@ -522,4 +522,121 @@ class CommissionCalculatorTest {
 
         assertThat(weight).isEmpty();
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Characterisation tests -- multi-item, value-weighted allocation. See itemDerivedWeight's
+    // own "Validation status" Javadoc paragraph: the owner's real commission workbook contains no
+    // multi-item weighted deal (every weighted row there has exactly one item, where per-item and
+    // record-level weighting collapse to an identical answer), so this pro-rata-by-item-value
+    // allocation ACROSS MULTIPLE ITEMS has never been checked against real reconciled data. These
+    // three tests pin the CURRENT multi-item behaviour on synthetic deals -- built from BigDecimal
+    // arithmetic and reduced by hand in each comment below, never by running the method under
+    // test -- so a future silent change to the allocation fails loudly. They characterise, they do
+    // not certify correctness.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void itemDerivedWeight_twoItemsDifferentValue_blendIsValueWeighted_notASimplePerItemAverage() {
+        // Item A: qty 10 @ price 1,000, fully stock-sourced (qtyFromStock = 10) at x2.
+        //   itemValue_A       = 10 * 1,000 = 10,000
+        //   effectiveWeight_A = 1 + (2-1) * (10/10) = 2
+        // Item B: qty 10 @ price 100, NOT stock-sourced at all (qtyFromStock = 0), stored x3 --
+        // irrelevant, stockFraction is 0 either way so effectiveWeight_B is 1 regardless of n.
+        //   itemValue_B       = 10 * 100 = 1,000
+        //   effectiveWeight_B = 1 + (3-1) * (0/10) = 1
+        //
+        // Value-weighted blend (what this method computes):
+        //   blended = (itemValue_A * effectiveWeight_A + itemValue_B * effectiveWeight_B)
+        //           / (itemValue_A + itemValue_B)
+        //           = (10,000*2 + 1,000*1) / (10,000 + 1,000)
+        //           = 21,000 / 11,000
+        //           = 1.9090909090909... -> 1.909091 at the stored 6dp scale (HALF_UP)
+        //
+        // A NAIVE PER-ITEM AVERAGE that ignores item value -- (effectiveWeight_A +
+        // effectiveWeight_B) / 2 = (2 + 1) / 2 = 1.5 -- gives a DIFFERENT answer. 1.909091 and 1.5
+        // are deliberately far apart (not a rounding-distance apart) so a test pinned to one
+        // cannot silently also satisfy the other: this test asserts the value-weighted figure and
+        // explicitly rules out the naive average, so it fails loudly if the allocation is ever
+        // swapped for a plain per-item average.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10"), new BigDecimal("10"), new BigDecimal("1000"), null, 2),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10"), BigDecimal.ZERO, new BigDecimal("100"), null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.909091");
+        // Explicitly not the naive per-item average -- see derivation above.
+        assertThat(weight.get()).isNotEqualByComparingTo("1.5");
+    }
+
+    @Test
+    void itemDerivedWeight_threeItemsMixedMultipliers_partialStockCoverage_blendsToPointFourFive() {
+        // Item 1: qty 5 @ price 200, x1 stock weight, partially stock-sourced (qtyFromStock = 3 of
+        // 5) -- irrelevant to the result, since (weightMultiplier - 1) = 0 for x1 regardless of
+        // stock fraction.
+        //   itemValue_1       = 5 * 200 = 1,000
+        //   effectiveWeight_1 = 1 + (1-1) * (3/5) = 1
+        // Item 2: qty 8 @ price 150, x2, half stock-sourced (qtyFromStock = 4 of 8).
+        //   itemValue_2       = 8 * 150 = 1,200
+        //   effectiveWeight_2 = 1 + (2-1) * (4/8) = 1.5
+        // Item 3: qty 6 @ price 300, x3, one-third stock-sourced (qtyFromStock = 2 of 6).
+        //   itemValue_3       = 6 * 300 = 1,800
+        //   effectiveWeight_3 = 1 + (3-1) * (2/6) = 1 + 2*(1/3) = 5/3
+        //
+        //   totalItemValue       = 1,000 + 1,200 + 1,800 = 4,000
+        //   weightedContribution = 1,000*1 + 1,200*1.5 + 1,800*(5/3)
+        //                        = 1,000 + 1,800 + 3,000 = 5,800
+        //   blended = 5,800 / 4,000 = 1.45 exactly -- no repeating decimal, no rounding needed.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("5"), new BigDecimal("3"), new BigDecimal("200"), null, 1),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("8"), new BigDecimal("4"), new BigDecimal("150"), null, 2),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("6"), new BigDecimal("2"), new BigDecimal("300"), null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.45");
+    }
+
+    @Test
+    void itemDerivedWeight_importSourcedLine_contributesExactlyOneX_regardlessOfStoredMultiplier() {
+        // Item A: qty 4 @ price 500, fully stock-sourced (qtyFromStock = 4) at x2.
+        //   itemValue_A       = 4 * 500 = 2,000
+        //   effectiveWeight_A = 1 + (2-1) * (4/4) = 2
+        // Item B: qty 5 @ price 200, import-sourced -- qtyFromStock = 0 -- so stockFraction = 0
+        // and effectiveWeight_B = 1 + (n-1)*0 = 1 for ANY stored weightMultiplier n. Proved below
+        // by running the SAME deal twice with two different stored multipliers on item B (x2, then
+        // x3) and asserting the blended result is numerically identical both times.
+        //   itemValue_B = 5 * 200 = 1,000
+        //
+        //   totalItemValue       = 2,000 + 1,000 = 3,000
+        //   weightedContribution = 2,000*2 + 1,000*1 = 5,000
+        //   blended = 5,000 / 3,000 = 1.6666666666... -> 1.666667 at the stored 6dp scale
+        //   (HALF_UP) -- identical for both variants of item B, since qtyFromStock = 0 removes n
+        //   from the arithmetic entirely (price_i * (qty_i + (n-1)*0) = price_i * qty_i).
+        CommissionCalculator.ItemStockWeightInput stockItem = new CommissionCalculator.ItemStockWeightInput(
+            new BigDecimal("4"), new BigDecimal("4"), new BigDecimal("500"), null, 2);
+        CommissionCalculator.ItemStockWeightInput importItemStoredTwoX = new CommissionCalculator.ItemStockWeightInput(
+            new BigDecimal("5"), BigDecimal.ZERO, new BigDecimal("200"), null, 2);
+        CommissionCalculator.ItemStockWeightInput importItemStoredThreeX = new CommissionCalculator.ItemStockWeightInput(
+            new BigDecimal("5"), BigDecimal.ZERO, new BigDecimal("200"), null, 3);
+
+        Optional<BigDecimal> weightWithTwoXStored =
+            calculator.itemDerivedWeight(List.of(stockItem, importItemStoredTwoX), new BigDecimal("100000.00"));
+        Optional<BigDecimal> weightWithThreeXStored =
+            calculator.itemDerivedWeight(List.of(stockItem, importItemStoredThreeX), new BigDecimal("100000.00"));
+
+        assertThat(weightWithTwoXStored).isPresent();
+        assertThat(weightWithThreeXStored).isPresent();
+        assertThat(weightWithTwoXStored.get()).isEqualByComparingTo("1.666667");
+        // The import-sourced line's stored multiplier (x2 vs x3) must not change the result at
+        // all -- qtyFromStock = 0 means it never earns credit above 1x either way.
+        assertThat(weightWithThreeXStored.get()).isEqualByComparingTo(weightWithTwoXStored.get());
+    }
 }
