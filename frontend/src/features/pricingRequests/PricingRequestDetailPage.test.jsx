@@ -555,10 +555,11 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     await waitForLoaded();
 
     // Raw data IS visible to CEO.
-    // By role, not text: "ราคาโรงงาน" now also names a column in the
-    // response-entry grid, so a bare text query can match more than one node.
-    // The assertion here is that the SECTION is present.
-    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
+    // By role and a prefix regex, not exact text: the section header is now
+    // "รายการสินค้า (N รายการ)" (owner-supplied mockup, factory-price-import-ui redesign) with a
+    // dynamic count, so a bare/exact text query can never match it. The assertion here is that the
+    // SECTION is present.
+    expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
     expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
     expect(screen.getByText('SCG Ceramics')).not.toBeNull();
     expect(screen.getByText('COST-2026-0001')).not.toBeNull();
@@ -574,12 +575,19 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.queryByRole('button', { name: 'เจรจา' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'คำนวณใหม่' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
+    // The two new per-factory-group actions (factory-price-import-ui redesign) are Import-only too.
+    expect(screen.queryByRole('button', { name: 'ร่างอีเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
     // No editable email-draft or response-entry form fields either. Queried by
     // accessible name, not placeholder: these fields carry real labels now, so
     // a placeholder query would report "absent" for a field that is present and
     // simply has no placeholder — an assertion that passes for the wrong reason.
     expect(screen.queryByLabelText('อีเมลโรงงาน')).toBeNull();
-    expect(screen.queryByLabelText(/^ราคาโรงงาน/)).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
+    // The per-factory currency/unit controls are read-only text for CEO, not a live select.
+    expect(screen.queryByLabelText('สกุลเงิน')).toBeNull();
+    expect(screen.queryByLabelText('หน่วยราคา')).toBeNull();
   });
 });
 
@@ -590,9 +598,14 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const toInput = screen.getByLabelText('อีเมลโรงงาน');
-    const subjectInput = screen.getByLabelText('หัวข้ออีเมล');
-    const bodyInput = screen.getByLabelText('เนื้อหาอีเมล');
+    // The To/Subject/Body composer moved into a modal behind the factory group's own "ร่างอีเมล"
+    // button (factory-price-import-ui redesign) — open it before looking for the fields.
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
+
+    const toInput = within(dialog).getByLabelText('อีเมลโรงงาน');
+    const subjectInput = within(dialog).getByLabelText('หัวข้ออีเมล');
+    const bodyInput = within(dialog).getByLabelText('เนื้อหาอีเมล');
 
     fireEvent.change(toInput, { target: { value: 'purchasing@scg-factory.example' } });
     fireEvent.change(subjectInput, { target: { value: 'ขอราคาใหม่ SCG A1' } });
@@ -627,20 +640,32 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // (One of them, costingClientRequestId, went away with #747; this baseline absorbed that.)
     const callsBeforeAnySend = uuidSpy.mock.calls.length;
 
+    // The To/Subject/Body composer + ส่งแล้ว now live behind the factory group's ร่างอีเมล modal.
+    // Requesting send closes THAT modal before opening the shared ConfirmDialog (one focus-trapped
+    // dialog at a time — see FactoryEmailDraftModal's own doc comment), so each attempt below
+    // reopens ร่างอีเมล first. "ยกเลิก" alone would now also match this quote's own (unrelated)
+    // discard-edits button in the item-price grid, so the ConfirmDialog's is scoped with `within`.
+
     // First open: mints and caches a clientRequestId for this quote.
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
+    const firstConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
+    expect(firstConfirmDialog).not.toBeNull();
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
 
-    // Cancel without confirming, then reopen: must reuse the cached id, not mint a new one.
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+    // Cancel without confirming, reopen ร่างอีเมล, request send again: must reuse the cached id.
+    fireEvent.click(within(firstConfirmDialog).getByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
+    const secondConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
+    expect(secondConfirmDialog).not.toBeNull();
     // Still no new call — reused the cached id, not regenerated.
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งอีเมล' }));
+    fireEvent.click(within(secondConfirmDialog).getByRole('button', { name: 'ส่งอีเมล' }));
 
     await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledTimes(1));
     const [, payload] = api.pricingRequests.sendFactoryQuote.mock.calls[0];
@@ -656,10 +681,13 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // Import types ONE thing: the price. เลขอ้างอิงใบเสนอราคา / เงื่อนไขการชำระเงิน /
     // ระยะเวลาผลิต-ส่งมอบ were removed from this form (owner ruling 2026-08-11) — all three are
     // optional in ReceiveFactoryQuoteRequest, so the payload simply carries null for them.
-    const priceInput = screen.getByLabelText(/^ราคาโรงงาน/);
+    const priceInput = screen.getByLabelText(/^ราคาที่เสนอ/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces บันทึกคำตอบ/รอบแก้ไข: a REQUESTED
+    // quote has no response on file yet, so confirming calls receiveFactoryQuote (this assertion)
+    // and then markFactoryQuoteReady — see confirmFactoryQuote's own doc comment.
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -669,6 +697,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
         items: [expect.objectContaining({ pricingRequestItemId: 1, rawUnitPrice: 55.5 })],
       }),
     ));
+    // ...then marks the (in-place-updated, same-id) quote ready for the CEO — one click, both
+    // calls, ending at READY_FOR_COSTING as the task brief specifies.
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
     // The removed fields must not be resurrected as inputs.
     expect(screen.queryByLabelText('เลขอ้างอิงใบเสนอราคา')).toBeNull();
     expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
@@ -715,8 +746,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '55.5' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '55.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -735,14 +766,16 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
+    // หน่วยราคา (factory-price-import-ui redesign): one select per FACTORY GROUP now, not per line
+    // — every line in the group shares it — but still built from the same backend catalog.
     const unitSelect = await screen.findByLabelText(/^หน่วย/);
     expect(within(unitSelect).getAllByRole('option').map((option) => option.value)).toEqual([
       'PER_PIECE', 'PER_SQM', 'PER_BOX', 'PER_LINEAR_M',
     ]);
 
     fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '10' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -777,8 +810,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
 
     const sqmInput = screen.getByLabelText(/^ตร\.ม\.\/หน่วย/);
     fireEvent.change(sqmInput, { target: { value: '0.36' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '120' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -813,9 +846,15 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' }));
+    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces ส่งให้ CEO อนุมัติราคา. A response is
+    // already on file (RESPONSE_RECEIVED) and nothing was edited this session, so confirmFactoryQuote
+    // must skip receiveFactoryQuote entirely — see its own doc comment for why an unconditional
+    // receive() call here would be wrong, not merely redundant (it would spuriously bump the
+    // revision and notify the CEO of a "revision" that never happened).
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
+    expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
     expect(api.pricingRequests.createCosting).not.toHaveBeenCalled();
     expect(api.pricingRequests.recalculateCosting).not.toHaveBeenCalled();
     expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
@@ -824,13 +863,47 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
   // The regression the bug report called out as "clicking again is worse": on the old code a quote
   // already at READY_FOR_COSTING re-rendered the button, skipped step 1, and fired a pure 409.
   // markFactoryQuoteReady is not idempotent — markReady's UPDATE matches zero rows on an
-  // already-ready quote and the service 409s — so the action must not be offered there at all.
-  it('does not offer ส่งให้ CEO อนุมัติราคา on a quote that is already READY_FOR_COSTING', async () => {
+  // already-ready quote and the service 409s — so the action must not be offered there at all
+  // while nothing has been edited (an edit re-opens it — see the next test).
+  it('does not offer ยืนยันราคาเสนอ on an untouched quote that is already READY_FOR_COSTING', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+  });
+
+  // An edit on an already-READY_FOR_COSTING quote (Import revising an already-sent price) DOES
+  // re-offer ยืนยันราคาเสนอ — confirming it must go through receiveFactoryQuote again (a genuine
+  // revision, matching FactoryQuoteService.receive's own supersede-and-create-new-row branch for
+  // this exact status) before re-marking ready.
+  it('re-offers ยืนยันราคาเสนอ once Import edits an already-READY_FOR_COSTING quote, and revises through receiveFactoryQuote', async () => {
+    const quote = buildFactoryQuote({
+      status: 'READY_FOR_COSTING',
+      items: [{
+        id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+        quotedQuantity: 20, quotedUnit: 'PER_PIECE', unitBasis: 'PER_PIECE', rawUnitPrice: 50, currency: 'THB', sqmPerUnit: null,
+      }],
+    });
+    api.pricingRequests.receiveFactoryQuote.mockResolvedValue({ factoryQuote: { ...quote, id: 92, revisionNo: 2 } });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '48' } });
+    expect(await screen.findByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ rawUnitPrice: 48 })] }),
+    ));
+    // markReady is called on the NEW revision id receiveFactoryQuote resolved to, not the
+    // now-superseded original — the exact bug the old two-button flow could not hit (it never
+    // chained these two calls together at all).
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(92));
   });
 
   // Wrong-way-round: the point is that these surfaces are ABSENT for Import, not merely different.
@@ -873,6 +946,9 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
+    // ส่งแล้ว lives inside the factory group's ร่างอีเมล modal now (factory-price-import-ui redesign).
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
@@ -1368,13 +1444,14 @@ describe('PricingRequestDetailPage mobile layout', () => {
     expect(screen.getByText('รายการสินค้าและราคาตั้งต้น')).not.toBeNull();
     // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
     // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
-    // getAllByText, not getByText: the ราคาโรงงาน response row now echoes the same product name
-    // back as read-only context ("ที่ Sales ขอ: …"), so this string legitimately appears twice.
+    // getAllByText, not getByText: the grouped-by-factory item row (ยี่ห้อ/รุ่น column) now echoes
+    // the same product name back, alongside "รายการสินค้าและราคาตั้งต้น" above it, so this string
+    // legitimately appears twice.
     expect(screen.getAllByText('SCG A1').length).toBeGreaterThan(0);
-    // By role, not text: "ราคาโรงงาน" now also names a column in the
-    // response-entry grid, so a bare text query can match more than one node.
-    // The assertion here is that the SECTION is present.
-    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
+    // By role and a prefix regex, not exact text: the section header is "รายการสินค้า (N รายการ)"
+    // with a dynamic count (factory-price-import-ui redesign). The assertion here is that the
+    // SECTION is present.
+    expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
     // ต้นทุนนำเข้า is deliberately absent for Import — see the hiding test above.
   });
 });
