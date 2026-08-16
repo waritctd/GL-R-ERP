@@ -97,12 +97,13 @@ describe('attendanceSourceLabel', () => {
 
 describe('pricing workflow status labels', () => {
   it('maps backend pricing workflow codes to user-facing Thai labels', () => {
-    // Relabelled 2026-08-15. The CONSTANT is a fossil — V141 severed the costing aggregate, so
-    // there is no costing step for a quote to be "ready for" — and the old label advertised it,
-    // which Import read as the request being stuck. "ส่งให้ CEO แล้ว" rather than "รอ CEO อนุมัติราคา"
-    // because this badge is on ONE QUOTE: with two factories, one can be sent while another is
-    // still in negotiation, and the request has not advanced yet.
-    expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'ส่งให้ CEO แล้ว', tone: 'success' });
+    // Relabelled again 2026-08-16 (owner ruling, factory-price-import-ui redesign) — "รอ CEO
+    // อนุมัติราคา", one wording for this state everywhere it appears. See format.js's own comment on
+    // FACTORY_QUOTE_STATUS_LABELS.READY_FOR_COSTING for the superseded 2026-08-15 reasoning (the
+    // CONSTANT NAME is still a fossil of V141 severing the costing aggregate; only the label text
+    // changed here, not the key, so statusCatalog.test.js's digest guard — which pins backend STATUS
+    // KEYS, never label text — needed no update).
+    expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'รอ CEO อนุมัติราคา', tone: 'success' });
     expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
     expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
     // Absorbed from a deleted 'keeps stale costing visible' case: that test only ever exercised
