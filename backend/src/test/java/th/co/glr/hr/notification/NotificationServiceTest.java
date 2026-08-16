@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
@@ -278,8 +279,24 @@ class NotificationServiceOverrideConfiguredTest {
     // never reached at all, despite being configured. Observed on UAT 2026-08-09: one welfare submit
     // fanned out 5 notifications, and the 3 recipients with no email on file were silently dropped
     // despite APP_MAIL_OVERRIDE_TO being set.
+    //
+    // #782 UPDATE: this test used to assert mailer.sendHtml received "tester@example.com" - the
+    // override ADDRESS - and a body containing "no email on file", because NotificationEmailService
+    // used to compute both itself (the swap, and a redirect note that happened to name the reason).
+    // Neither happens in this class any more (see its overrideConfigured Javadoc): recipient
+    // redirection AND the distinguishing note now live entirely in
+    // th.co.glr.hr.mail.OverrideRedirectingMailer, which wraps the REAL Mailer bean in production but
+    // is NOT present in this test's hand-wired TestConfig (mailer() below is a bare mock) - so `to` is
+    // asserted null here, and the body is asserted to be the ORDINARY template with no note of any
+    // kind, exactly what a no-override send would also produce. What this test still proves is the
+    // half that is genuinely still this layer's: an addressless employee is NOT skipped when an
+    // override is configured (attempts the send instead). The address-swap itself is proven end-to-end
+    // against a real decorator in
+    // th.co.glr.hr.mail.MailOverrideContainmentTest#notificationEmailServiceStillRedirectsWhenTheEmployeeHasNoAddressOnFile.
+    // Losing either half silently would be exactly the kind of regression this file exists to catch,
+    // so neither is dropped - each now lives at the layer that actually owns it.
     @Test
-    void notifyRedirectsToOverrideWhenEmployeeHasNoEmailOnFile() {
+    void notifyStillAttemptsEmailWhenEmployeeHasNoEmailOnFileAndOverrideIsConfigured() {
         NotificationDto saved = new NotificationDto(
             42L, 7L, null, null, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1", false,
@@ -299,14 +316,14 @@ class NotificationServiceOverrideConfiguredTest {
             true);
 
         verify(mailer).sendHtml(
-            eq("tester@example.com"),
+            isNull(),
             eq("[GL&R HR] Leave submitted"),
             argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
                 && html.contains("Your leave request was submitted.")
-                && html.contains("no email on file")),
+                && !html.contains("Redirected for testing")),
             argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
                 && text.contains("Your leave request was submitted.")
-                && text.contains("no email on file")),
+                && !text.contains("Redirected for testing")),
             argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
     }
 
