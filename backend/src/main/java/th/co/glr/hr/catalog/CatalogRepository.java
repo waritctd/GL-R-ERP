@@ -1,7 +1,10 @@
 package th.co.glr.hr.catalog;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -12,6 +15,49 @@ public class CatalogRepository {
 
     public CatalogRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * {@code price_catalog.product_prices.thickness_mm} for one catalog price row — used by
+     * {@code LandedCostCalculator#resolveThicknessMm} for V109's freight-band lookup. Returns
+     * empty (never a fallback value) when the row does not exist or its {@code thickness_mm} is
+     * NULL — the caller turns either case into a loud, item-naming failure rather than guessing.
+     */
+    public Optional<BigDecimal> findThicknessMm(long priceId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject(
+                "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :priceId",
+                new MapSqlParameterSource().addValue("priceId", priceId), BigDecimal.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The ISO 3166-1 alpha-2 origin country code for one catalog price row's factory —
+     * {@code price_catalog.factories.country} via {@code price_catalog.product_prices.factory_id}.
+     * This is V151's canonical source (the SAME column {@code
+     * sales.pricing_freight_rate.origin_country_code} is normalised against, joined via {@code
+     * price_catalog.country}) — used by {@code LandedCostCalculator#resolveOriginCountryCode} for
+     * V109's freight-band lookup. Deliberately NOT {@code sales.factory_config.country}: that is a
+     * free-text field on a different table (RFQ email routing settings) V151 never touched, and
+     * reading it here would silently reintroduce the exact free-text/ISO-code mismatch V151's own
+     * migration fixed. Returns empty (never a fallback) when the row does not exist — the caller
+     * turns that into a loud, item-naming failure rather than guessing, the same as {@link
+     * #findThicknessMm}.
+     */
+    public Optional<String> findOriginCountryCode(long priceId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT f.country
+                  FROM price_catalog.product_prices pp
+                  JOIN price_catalog.factories f ON f.factory_id = pp.factory_id
+                 WHERE pp.price_id = :priceId
+                """,
+                new MapSqlParameterSource().addValue("priceId", priceId), String.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public List<CatalogDto> search(String q) {

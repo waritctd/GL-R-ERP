@@ -55,4 +55,13 @@ public final class PricingDecisionRequests {
      * clearing is money-affecting too, exactly like setting one (mirrors {@link
      * ReturnPricingDecisionRequest}'s own mandatory-reason precedent). */
     public record CostOverrideRequest(BigDecimal manualLandedCostPerUnitThb, String reason) {}
+
+    /** V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
+     * override — {@code productType == null} (or blank) CLEARS the override, reverting to
+     * {@code LandedCostCalculator}'s TILE default. Unlike {@link CostOverrideRequest}, no reason
+     * field: this does not replace a computed figure the way a cost/price override does, it
+     * changes which duty rate the FORMULA itself looks up — the resulting number is still fully
+     * formula-derived and auditable from the product_type alone, recorded on the row itself
+     * ({@code pricing_costing_item.product_type}), not just in the event trail. */
+    public record ProductTypeOverrideRequest(String productType) {}
 }

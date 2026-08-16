@@ -51,6 +51,20 @@ import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 
+// V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
+// override (LandedCostCalculator defaults every item to TILE — see PricingFormulaEngine's own
+// DEFAULT_PRODUCT_TYPE). Hardcodes V109's two seeded product_type codes rather than fetching
+// sales.pricing_formula_config's duty rates live: correct for the CEO's actual real-world need
+// today, but a new duty type the CEO adds later via /api/pricing-formula-config would not appear
+// here until this list is updated too — a known drift risk, not a hidden one.
+const DUTY_PRODUCT_TYPE_OPTIONS = [
+  { value: 'TILE', label: 'กระเบื้อง (TILE) — อากร 30%' },
+  { value: 'GLASS_MOSAIC', label: 'โมเสคแก้ว (GLASS_MOSAIC) — อากร 10%' },
+];
+const DUTY_PRODUCT_TYPE_LABELS = Object.fromEntries(
+  DUTY_PRODUCT_TYPE_OPTIONS.map((opt) => [opt.value, opt.label]),
+);
+
 function isImport(user) {
   return user?.role === 'import';
 }
@@ -630,6 +644,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId) && canSeeRawPricingDecision(user),
   });
 
+  // V152 (V109 engine wiring): the LIVE selling_buffer/selling_price_round_up_to, so the "วิธี
+  // คำนวณราคานี้" panel's formula text shows the buffer and round-up that actually ran, not the
+  // pre-V109 "cost x (1+margin)" shape. Same read gate as PricingFormulaConfigController itself
+  // ({ceo, import}) — this page's own canSeeRawPricingDecision is a superset, so no new access
+  // is opened up by fetching it here.
+  const formulaConfigQuery = useQuery({
+    queryKey: queryKeys.pricingFormulaConfig(),
+    queryFn: () => api.pricingFormulaConfig.get().then((r) => r.formulaConfig),
+    enabled: canSeeRawPricingDecision(user) && !isImport(user),
+    staleTime: 5 * 60 * 1000,
+  });
+
   // Sales-facing approved-price projection — a distinct query/DTO, not a client-side filter of
   // decisionsQuery above (which sales never even fetches).
   const decisionSalesViewQuery = useQuery({
@@ -843,6 +869,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ decision, item, manualLandedCostPerUnitThb, reason }) =>
       api.pricingRequests.overridePricingDecisionItemCost(decision.id, item.id, { manualLandedCostPerUnitThb, reason }),
     'บันทึกต้นทุนที่ปรับแล้ว',
+  );
+  // V152 (V109 engine wiring), owner ruling 2026-08-16: product_type has no source in deal data
+  // today, so LandedCostCalculator defaults every item to TILE (30% import duty). This is the
+  // CEO's per-item escape hatch when the default over/under-taxes an item — the owner's own
+  // example: โมเสคแก้ว must be taxed at 10%, not TILE's 30%. Recomputes the WHOLE line
+  // immediately server-side (PricingDecisionService#overrideItemProductType mirrors
+  // recalculateCost), so the new duty/price is visible right after this call resolves — no
+  // separate manual "recalculate" step, unlike the cost override above (which needs one because
+  // it REPLACES the computed figure rather than feeding a formula input).
+  const overrideItemProductType = useActionMutation(
+    ({ decision, item, productType }) =>
+      api.pricingRequests.overridePricingDecisionItemProductType(decision.id, item.id, { productType }),
+    'บันทึกประเภทสินค้าแล้ว',
   );
   const approveDecision = useMutation({
     mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
@@ -1813,6 +1852,43 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   ) : null}
                                 </div>
                               ) : null}
+                              {costingItem ? (
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle p-2">
+                                  <span>
+                                    ประเภทสินค้า (สำหรับอากรขาเข้า):{' '}
+                                    <code className={costingItem.productType === 'TILE' ? undefined : 'font-bold text-override'}>
+                                      {DUTY_PRODUCT_TYPE_LABELS[costingItem.productType] ?? costingItem.productType ?? 'TILE (ค่าเริ่มต้น)'}
+                                    </code>
+                                    {costingItem.productType && costingItem.productType !== 'TILE' ? (
+                                      <span className="ml-1 text-2xs text-override">ปรับเอง</span>
+                                    ) : null}
+                                  </span>
+                                  {editable ? (
+                                    <select
+                                      className="form-select text-2xs"
+                                      value=""
+                                      disabled={overrideItemProductType.isPending}
+                                      onChange={(e) => {
+                                        const value = e.target.value;
+                                        e.target.value = '';
+                                        if (!value) return;
+                                        overrideItemProductType.mutate({
+                                          decision, item, productType: value === '__CLEAR__' ? null : value,
+                                        });
+                                      }}
+                                      data-testid={`pcr-ceo-product-type-override-${item.id}`}
+                                    >
+                                      <option value="">เปลี่ยนประเภทสินค้า…</option>
+                                      {DUTY_PRODUCT_TYPE_OPTIONS.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                      ))}
+                                      {costingItem.productType && costingItem.productType !== 'TILE' ? (
+                                        <option value="__CLEAR__">ล้างการปรับ (กลับเป็น TILE)</option>
+                                      ) : null}
+                                    </select>
+                                  ) : null}
+                                </div>
+                              ) : null}
                               {costingItem?.overrideStale ? (
                                 <p className="m-0 text-2xs text-warning-dark">
                                   อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
@@ -1828,13 +1904,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   </p>
                                 ) : null}
                                 <p className="m-0 mt-1">
-                                  ราคาขาย/หน่วยที่ขอ = ต้นทุน/หน่วยที่ขอ × (1 + อัตรากำไร){decision.currency !== 'THB' ? ' ÷ อัตราแลกเปลี่ยน' : ''}
+                                  ราคาขาย/หน่วยที่ขอ = ปัดขึ้น[ ต้นทุน/หน่วยที่ขอ × (1 + อัตรากำไร) × ตัวคูณราคาขาย ,
+                                  ให้เป็นทวีคูณของ ฿{formulaConfigQuery.data?.sellingPriceRoundUpTo ?? '10'} ]
+                                  {decision.currency !== 'THB' ? ' ÷ อัตราแลกเปลี่ยน' : ''}
                                 </p>
                                 <p className="m-0 mt-1">
-                                  = {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')} × (1 + {item.proposedMarginPct ?? '-'})
+                                  = ปัดขึ้น[{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')} × (1 + {item.proposedMarginPct ?? '-'}) × {formulaConfigQuery.data?.sellingBuffer ?? '-'}]
                                   {decision.currency !== 'THB' ? ` ÷ ${decision.fxRateUsed}` : ''}
                                   {' = '}
                                   <code>{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                                </p>
+                                <p className="m-0 mt-1 text-2xs text-text-muted">
+                                  ตัวคูณราคาขายเป็นค่าบัฟเฟอร์ต้นทุน ไม่ใช่ VAT — ใบเสนอราคาจะเพิ่ม VAT 7% แยกต่างหากอีกขั้นหนึ่ง
                                 </p>
                                 {decision.currency !== 'THB' ? (
                                   <p className="m-0 mt-1 text-2xs text-text-muted">

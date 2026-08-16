@@ -124,8 +124,8 @@ public class PricingCostingRepository {
                  pieces_per_box, fx_rate, fx_source, fx_effective_date, fx_fetched_at,
                  calculation_config_id, calculation_config_version, goods_cost_thb, freight_cost_thb,
                  insurance_cost_thb, import_duty_thb, inland_transport_cost_thb, other_cost_thb,
-                 cif_cost_thb, landed_cost_per_unit_thb, total_landed_cost_thb, calculated_at,
-                 calculation_snapshot)
+                 cif_cost_thb, landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb,
+                 product_type, calculated_at, calculation_snapshot)
             VALUES
                 (:costingId, :pricingRequestItemId, :factoryQuoteId, :factoryQuoteItemId,
                  :factoryQuoteRevisionNo, :factoryId, :factoryName, :supplierQuoteRef, :rawUnitPrice,
@@ -134,8 +134,8 @@ public class PricingCostingRepository {
                  :piecesPerBox, :fxRate, :fxSource, :fxEffectiveDate, :fxFetchedAt,
                  :calculationConfigId, :calculationConfigVersion, :goodsCostThb, :freightCostThb,
                  :insuranceCostThb, :importDutyThb, :inlandTransportCostThb, :otherCostThb,
-                 :cifCostThb, :landedCostPerUnitThb, :totalLandedCostThb, now(),
-                 CAST(:calculationSnapshot AS jsonb))
+                 :cifCostThb, :landedCostPerUnitThb, :totalLandedCostThb, :clearanceFeeThb,
+                 :productType, now(), CAST(:calculationSnapshot AS jsonb))
             ON CONFLICT (pricing_costing_id, pricing_request_item_id) DO UPDATE SET
                  factory_quote_id = EXCLUDED.factory_quote_id,
                  factory_quote_item_id = EXCLUDED.factory_quote_item_id,
@@ -169,6 +169,8 @@ public class PricingCostingRepository {
                  cif_cost_thb = EXCLUDED.cif_cost_thb,
                  landed_cost_per_unit_thb = EXCLUDED.landed_cost_per_unit_thb,
                  total_landed_cost_thb = EXCLUDED.total_landed_cost_thb,
+                 clearance_fee_thb = EXCLUDED.clearance_fee_thb,
+                 product_type = EXCLUDED.product_type,
                  calculated_at = EXCLUDED.calculated_at,
                  calculation_snapshot = EXCLUDED.calculation_snapshot
             """, batch);
@@ -274,8 +276,8 @@ public class PricingCostingRepository {
                    fx_rate, fx_source, fx_effective_date, fx_fetched_at, calculation_config_id,
                    calculation_config_version, goods_cost_thb, freight_cost_thb, insurance_cost_thb,
                    import_duty_thb, inland_transport_cost_thb, other_cost_thb, cif_cost_thb,
-                   landed_cost_per_unit_thb, total_landed_cost_thb, calculated_at,
-                   calculation_snapshot::text AS calculation_snapshot,
+                   landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb, product_type,
+                   calculated_at, calculation_snapshot::text AS calculation_snapshot,
                    manual_landed_cost_per_unit_thb, override_reason, overridden_by, overridden_at,
                    override_fx_rate, override_calc_config_version
               FROM sales.pricing_costing_item
@@ -377,6 +379,8 @@ public class PricingCostingRepository {
             rs.getBigDecimal("cif_cost_thb"),
             landedCostPerUnitThb,
             rs.getBigDecimal("total_landed_cost_thb"),
+            rs.getBigDecimal("clearance_fee_thb"),
+            rs.getString("product_type"),
             rs.getTimestamp("calculated_at").toInstant(),
             rs.getString("calculation_snapshot"),
             manualLandedCostPerUnitThb,
@@ -435,6 +439,8 @@ public class PricingCostingRepository {
         BigDecimal cifCostThb,
         BigDecimal landedCostPerUnitThb,
         BigDecimal totalLandedCostThb,
+        BigDecimal clearanceFeeThb,
+        String productType,
         String calculationSnapshot
     ) {
         MapSqlParameterSource toParams(long costingId) {
@@ -473,6 +479,8 @@ public class PricingCostingRepository {
                 .addValue("cifCostThb", cifCostThb)
                 .addValue("landedCostPerUnitThb", landedCostPerUnitThb)
                 .addValue("totalLandedCostThb", totalLandedCostThb)
+                .addValue("clearanceFeeThb", clearanceFeeThb)
+                .addValue("productType", productType)
                 .addValue("calculationSnapshot", calculationSnapshot == null ? "{}" : calculationSnapshot);
         }
     }

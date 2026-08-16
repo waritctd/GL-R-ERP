@@ -47,7 +47,8 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
+import th.co.glr.hr.catalog.CatalogRepository;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
@@ -139,11 +140,13 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        th.co.glr.hr.pricingcosting.PricingFormulaEngine formulaEngine =
+            new th.co.glr.hr.pricingcosting.PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
+        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+                new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -153,7 +156,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -174,33 +177,33 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
+        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin
+        // countries (Italy/Spain/China) or LandedCostCalculator's freight lookup 422s ("ไม่พบ
+        // อัตราค่าขนส่ง") — 'Thailand'/'TestLand4' (pre-V109) are no longer costable. Every
+        // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
+        // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
+        // open-ended, so ANY quantity resolves — see that helper's own comment).
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                ('Factory A4', 'factory-a4@example.com', 'THB', 'piece', 'Thailand'),
-                ('Factory B4', 'factory-b4@example.com', 'THB', 'piece', 'Thailand')
+                ('Factory A4', 'factory-a4@example.com', 'THB', 'piece', 'Italy'),
+                ('Factory B4', 'factory-b4@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "TH", "TEST-A4-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "IT", "TEST-A4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "TH", "TEST-B4-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "IT", "TEST-B4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C4', 'factory-c4@example.com', 'THB', 'piece', 'TestLand4')
+            VALUES ('Factory C4', 'factory-c4@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "VN", "TEST-C4-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "IT", "TEST-C4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        jdbc.update("""
-            INSERT INTO sales.price_calc_config
-                (version, country, freight_per_sqm, insurance_per_sqm, inland_factory_to_port_per_sqm,
-                 inland_port_to_warehouse_per_sqm, import_duty_pct, margin_pct, is_current)
-            VALUES (1, 'TestLand4', 0, 0, 0, 0, 0, 0, TRUE)
-            """, Map.of());
 
         CustomerDto customer = customers.create(
             "บริษัท Step 4 จำกัด", "0100000000004", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0004");
@@ -326,11 +329,32 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Per-REQUESTED-UNIT price differs (per box vs per piece)...
         assertThat(perBoxItem.finalUnitPrice()).isNotEqualByComparingTo(perPieceItem.finalUnitPrice());
-        // ...but at the SAME physical quantity and same per-piece economics, the LINE TOTAL
-        // (final_unit_price * requested_quantity, both in the SAME requested-unit basis) is
-        // identical — the exact rule the task calls out as the highest financial risk.
-        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo(perPieceItem.lineSubtotal());
-        assertThat(perBoxQuotation.subtotalAmount()).isEqualByComparingTo(perPieceQuotation.subtotalAmount());
+        // V152 (V109 engine wiring): the LANDED COST itself is still exactly basis-invariant —
+        // both scenarios share the same 200 pieces / 100 sqm physical quantity at Italy [8,12)mm,
+        // so both land on the identical TC=91537.0232 (hand-verified the same way
+        // LandedCostCalculatorFormulaIntegrationTest does; see that class for the full
+        // step-by-step derivation) — landed cost per box = 91537.0200/10 = 9153.7020, landed cost
+        // per piece = 91537.0200/200 = 457.6851, and 9153.7020*10 == 457.6851*200 exactly.
+        //
+        // But the LINE TOTAL below is no longer basis-invariant, and that is now CORRECT, not a
+        // regression: V109's RoundUp[cost x (1+margin) x selling_buffer, nearest ฿10] rounds at
+        // the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity — so the same underlying
+        // cost rounds up by a different RELATIVE amount depending on how large the per-unit price
+        // is, and that per-unit rounding slop gets multiplied by a different quantity (10 boxes
+        // vs 200 pieces) on each side. Hand-verified at margin=0.10 (approvedSingleItemPricingRequest's
+        // own default), sellingBuffer=1.07:
+        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> RoundUp/10 -> ฿10,780.0000/box
+        //              x 10 boxes   = ฿107,800.0000
+        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> RoundUp/10 -> ฿540.0000/piece
+        //              x 200 pieces = ฿108,000.0000
+        // A genuine ฿200 difference on a ฿108k order (≈0.19%) — the price of rounding granularity,
+        // not a computation error; asserting the two independently-derived expectations (rather
+        // than asserting the two totals equal EACH OTHER, which is no longer true) is what proves
+        // that.
+        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo("107800.0000");
+        assertThat(perPieceItem.lineSubtotal()).isEqualByComparingTo("108000.0000");
+        assertThat(perBoxQuotation.subtotalAmount()).isEqualByComparingTo(perBoxItem.lineSubtotal());
+        assertThat(perPieceQuotation.subtotalAmount()).isEqualByComparingTo(perPieceItem.lineSubtotal());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

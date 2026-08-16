@@ -357,6 +357,10 @@ export const API_ROUTES = {
     pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
     pricingDecisionItemCostOverride: (decisionId, itemId) =>
       `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
+    // V152 (V109 engine wiring). CEO per-item duty product_type override — mirrors
+    // PricingDecisionController.overrideItemProductType.
+    pricingDecisionItemProductTypeOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/product-type-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,

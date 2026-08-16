@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -56,10 +57,11 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequ
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -156,11 +158,12 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-                new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+                new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -172,7 +175,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
         PriceCalcService priceCalcMock = mock(PriceCalcService.class);
         ticketService = new TicketService(tickets, notifications, priceCalcMock,
@@ -208,7 +211,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private void insertFactory(String name) {
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, :email, 'THB', 'piece', 'Thailand')
+            VALUES (:factory, :email, 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", name, "email", name.toLowerCase().replace(" ", "-") + "@example.com"));
@@ -596,9 +599,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     private DealFixture driveToQuotationIssuedNotYetAccepted(String factoryA, String factoryB) {
-        long catalogProductIdA = insertCatalogProduct(factoryA, "TH", "TEST-PO-" + factoryA.hashCode(),
+        long catalogProductIdA = insertCatalogProduct(factoryA, "IT", "TEST-PO-" + factoryA.hashCode(),
             new BigDecimal("100.00"), "THB", "per_piece");
-        long catalogProductIdB = insertCatalogProduct(factoryB, "TH", "TEST-PO-" + factoryB.hashCode(),
+        long catalogProductIdB = insertCatalogProduct(factoryB, "IT", "TEST-PO-" + factoryB.hashCode(),
             new BigDecimal("200.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
@@ -673,7 +676,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private long createSecondPricingRequestCostingItem() {
         String factory = "Factory PO Foreign";
         insertFactory(factory);
-        long catalogProductId = insertCatalogProduct(factory, "TH", "TEST-PO-FOREIGN-" + UUID.randomUUID().toString().substring(0, 8),
+        long catalogProductId = insertCatalogProduct(factory, "IT", "TEST-PO-FOREIGN-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("50.00"), "THB", "per_piece");
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
         ProjectRepository projectsRepo = new ProjectRepository(jdbc);
@@ -728,7 +731,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      * test that calls this for the full reasoning). */
     private long addSecondPricingRequestDrivenToQuotationIssued(long ticketId) {
         String factory = FACTORY_A;
-        long catalogProductId = insertCatalogProduct(factory, "TH",
+        long catalogProductId = insertCatalogProduct(factory, "IT",
             "TEST-PO-2ND-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile 2nd PR", "SCG Tile 2nd PR", null, null, "60x60", factory,

@@ -27,6 +27,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -51,12 +52,13 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
@@ -149,10 +151,11 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
+        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview/recalculateCost.
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -162,7 +165,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -182,26 +185,32 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
+        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin
+        // countries (Italy/Spain/China) or LandedCostCalculator's freight lookup 422s ("ไม่พบ
+        // อัตราค่าขนส่ง") — 'Thailand'/'TestLand3' (pre-V109) are no longer costable. Every
+        // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
+        // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
+        // open-ended, so ANY quantity resolves — see that helper's own comment).
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                ('Factory A3', 'factory-a3@example.com', 'THB', 'piece', 'Thailand'),
-                ('Factory B3', 'factory-b3@example.com', 'THB', 'piece', 'Thailand')
+                ('Factory A3', 'factory-a3@example.com', 'THB', 'piece', 'Italy'),
+                ('Factory B3', 'factory-b3@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A3", "TH", "TEST-A3-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A3", "IT", "TEST-A3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "TH", "TEST-B3-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "IT", "TEST-B3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C3', 'factory-c3@example.com', 'THB', 'piece', 'TestLand3')
+            VALUES ('Factory C3', 'factory-c3@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "VN", "TEST-C3-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "IT", "TEST-C3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         jdbc.update("""
             INSERT INTO sales.price_calc_config
@@ -244,7 +253,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         for (PricingDecisionItemDto item : decision.items()) {
             assertThat(item.proposedMarginPct()).isEqualByComparingTo("0.20");
             assertThat(item.proposedSellingPricePerRequestedUnit())
-                .isEqualByComparingTo(item.frozenLandedCostPerRequestedUnitThb().multiply(new BigDecimal("1.20")));
+                .isEqualByComparingTo(formulaSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), "0.20"));
         }
 
         // CEO changes Item A's margin to 35% and sets minimum selling prices for both items
@@ -261,7 +270,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
         assertThat(updatedA.proposedMarginPct()).isEqualByComparingTo("0.35");
         assertThat(updatedA.proposedSellingPricePerRequestedUnit())
-            .isEqualByComparingTo(updatedA.frozenLandedCostPerRequestedUnitThb().multiply(new BigDecimal("1.35")));
+            .isEqualByComparingTo(formulaSellingPrice(updatedA.frozenLandedCostPerRequestedUnitThb(), "0.35"));
 
         // CEO approves all items.
         PricingDecisionDto approved = decisionService.approve(decision.id(),
@@ -271,8 +280,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         for (PricingDecisionItemDto item : approved.items()) {
             assertThat(item.approvedMarginPct()).isEqualByComparingTo(item.proposedMarginPct());
             assertThat(item.approvedSellingPricePerRequestedUnit())
-                .isEqualByComparingTo(item.frozenLandedCostPerRequestedUnitThb()
-                    .multiply(BigDecimal.ONE.add(item.approvedMarginPct())));
+                .isEqualByComparingTo(formulaSellingPrice(
+                    item.frozenLandedCostPerRequestedUnitThb(), item.approvedMarginPct()));
         }
         assertThat(pricingRequestService.get(pricingRequestId, ceoActor).summary().status())
             .isEqualTo(PricingRequestStatus.APPROVED_FOR_QUOTATION);
@@ -350,14 +359,34 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         // ...but the TOTAL (price-per-unit * requested quantity) is identical.
         BigDecimal perBoxTotal = perBoxItem.frozenLandedCostPerRequestedUnitThb().multiply(perBoxItem.requestedQuantity());
         BigDecimal perPieceTotal = perPieceItem.frozenLandedCostPerRequestedUnitThb().multiply(perPieceItem.requestedQuantity());
-        assertThat(perBoxTotal).isEqualByComparingTo("10000.0000");
-        assertThat(perPieceTotal).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): both scenarios cost 200 pieces / 100 sqm total at Italy
+        // [8,12)mm — hand-verified: C=10000, i=55.3725, F=50000 (qty band [1,101)), cif=60055.3725,
+        // duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232, +clearance(qty band [1,101))=8000
+        // => TC=91537.0232, which rounds through the per-piece column back to 91537.0200 total —
+        // no longer 10000.0000 now that freight/insurance/duty/clearance are real, not an all-zero
+        // config. The point of this test (basis-invariance) is unchanged: both bases still land on
+        // the SAME total.
+        assertThat(perBoxTotal).isEqualByComparingTo("91537.0200");
+        assertThat(perPieceTotal).isEqualByComparingTo("91537.0200");
         assertThat(perBoxTotal).isEqualByComparingTo(perPieceTotal);
 
-        // Selling price at the same margin is also basis-invariant in TOTAL terms.
+        // V152 (V109 engine wiring): the SELLING price total is no longer basis-invariant, and
+        // that is now CORRECT, not a regression — see LandedCostCalculatorFormulaIntegrationTest
+        // and CustomerQuotationIntegrationTest's identical scenario for the full explanation.
+        // RoundUp[cost x (1+margin) x selling_buffer, nearest ฿10] rounds at the PER-REQUESTED-
+        // UNIT level BEFORE multiplying by quantity, so the same underlying landed cost
+        // (91537.0200 total either way) rounds up by a different RELATIVE amount depending on
+        // how large the per-unit price is, and that per-unit slop is multiplied by a different
+        // quantity (10 boxes vs 200 pieces) on each side. Hand-verified at margin=0.10 (this
+        // test's own default), sellingBuffer=1.07:
+        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> RoundUp/10 -> ฿10,780.0000/box
+        //              x 10 boxes   = ฿107,800.0000
+        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> RoundUp/10 -> ฿540.0000/piece
+        //              x 200 pieces = ฿108,000.0000
         BigDecimal perBoxSellingTotal = perBoxItem.proposedSellingPricePerRequestedUnit().multiply(perBoxItem.requestedQuantity());
         BigDecimal perPieceSellingTotal = perPieceItem.proposedSellingPricePerRequestedUnit().multiply(perPieceItem.requestedQuantity());
-        assertThat(perBoxSellingTotal).isEqualByComparingTo(perPieceSellingTotal);
+        assertThat(perBoxSellingTotal).isEqualByComparingTo("107800.0000");
+        assertThat(perPieceSellingTotal).isEqualByComparingTo("108000.0000");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -880,8 +909,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
                 new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         PricingDecisionItemDto item = decision.items().get(0);
-        BigDecimal correctPrice = item.frozenLandedCostPerRequestedUnitThb().multiply(new BigDecimal("1.20"))
-            .setScale(4, java.math.RoundingMode.HALF_UP);
+        BigDecimal correctPrice = formulaSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), "0.20");
 
         // Corrupt the stored proposed price directly — a malicious/buggy client cannot influence
         // approval through this column.
@@ -1202,8 +1230,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         // The frozen cost approve() froze in is the OVERRIDE, and the approved selling price is
         // built on it — never the (fx-refreshed) computed figure.
         assertThat(approvedItemA.frozenLandedCostPerPieceThb()).isEqualByComparingTo(manualCost);
-        BigDecimal expectedSellingPrice = approvedItemA.frozenLandedCostPerRequestedUnitThb()
-            .multiply(BigDecimal.ONE.add(approvedItemA.approvedMarginPct())).setScale(4, java.math.RoundingMode.HALF_UP);
+        BigDecimal expectedSellingPrice = formulaSellingPrice(
+            approvedItemA.frozenLandedCostPerRequestedUnitThb(), approvedItemA.approvedMarginPct());
         assertThat(approvedItemA.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(expectedSellingPrice);
     }
 
@@ -1335,6 +1363,25 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private FactoryQuoteDto quoteFor(List<FactoryQuoteDto> quotes, String factoryName) {
         return quotes.stream().filter(q -> factoryName.equals(q.factoryName())).findFirst().orElseThrow();
+    }
+
+    /**
+     * V109 selling-price formula (V152) hand-reimplemented independently of
+     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#roundUpSellingPrice}: {@code cost x
+     * (1+margin) x selling_buffer}, rounded UP to the nearest {@code selling_price_round_up_to} —
+     * replacing the old bare {@code cost x (1+margin)} this test suite hard-coded before the
+     * engine swap. Buffer (1.07) and round-up-to (10) match V109's seeded defaults, which every
+     * fixture in this class relies on being current (nothing here mutates
+     * {@code sales.pricing_formula_config}).
+     */
+    private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
+        BigDecimal raw = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(new BigDecimal("1.07"));
+        BigDecimal units = raw.divide(BigDecimal.TEN, 0, java.math.RoundingMode.CEILING);
+        return units.multiply(BigDecimal.TEN).setScale(4, java.math.RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, String marginPct) {
+        return formulaSellingPrice(costPerRequestedUnitThb, new BigDecimal(marginPct));
     }
 
     private ReceiveFactoryQuoteRequest response(String ref, String currency, String price, long pricingRequestItemId) {

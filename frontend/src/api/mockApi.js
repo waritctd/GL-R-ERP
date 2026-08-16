@@ -9549,6 +9549,34 @@ export const api = {
       return delay({ decision });
     },
 
+    // V152 (V109 engine wiring). Mirrors PricingDecisionService.overrideItemProductType's shape
+    // (role -> decision open-for-mutation -> item-belongs-to-decision), but does NOT recompute
+    // duty/cost from a formula: this mock has no freight/duty/clearance band engine at all (V109
+    // is real backend-only money math — CLAUDE.md's own guidance is not to reimplement that
+    // here). It only updates the displayed productType and stamps updatedAt, so mock-mode
+    // verification can exercise the UI plumbing (the control renders, calls this endpoint, the
+    // label updates) but is NOT evidence the resulting duty/price is correct — that is proven by
+    // the real Java tests only (LandedCostCalculatorFormulaIntegrationTest).
+    async overridePricingDecisionItemProductType(decisionId, itemId, payload = {}) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      costingItem.productType = payload.productType || 'TILE';
+      costingItem.calculatedAt = new Date().toISOString();
+      item.updatedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
