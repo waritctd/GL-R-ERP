@@ -864,7 +864,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("50.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("50.00"), null, null, false))), ceoActor);
         }
         decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
         return pricingRequestId;
@@ -880,7 +880,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.10"), "THB", null, null), ceoActor);
         PricingDecisionItemDto item = decision.items().get(0);
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+            new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
         return pricingRequestId;
     }

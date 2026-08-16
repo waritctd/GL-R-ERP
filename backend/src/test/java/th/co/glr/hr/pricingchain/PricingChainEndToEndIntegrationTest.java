@@ -336,10 +336,10 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         // CEO changes item A's margin, sets minimum selling prices on both (required at approval).
         PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             "ปรับ margin item A", List.of(
-                new UpdatePricingDecisionItemRequest(rawItemA.id(), new BigDecimal("0.35"), null,
-                    new BigDecimal("10.00"), null),
-                new UpdatePricingDecisionItemRequest(rawItemB.id(), null, null,
-                    new BigDecimal("10.00"), null))),
+                new UpdatePricingDecisionItemRequest(rawItemA.id(), new BigDecimal("0.35"),
+                    new BigDecimal("10.00"), null, null, false),
+                new UpdatePricingDecisionItemRequest(rawItemB.id(), null,
+                    new BigDecimal("10.00"), null, null, false))),
             ceoActor);
         PricingDecisionItemDto updatedItemA = decisionItemFor(updated, itemAId);
         assertThat(updatedItemA.proposedMarginPct()).isEqualByComparingTo("0.35");
@@ -524,7 +524,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(decisionV2.pricingCostingId()).isNotEqualTo(decisionV1.pricingCostingId());
         for (PricingDecisionItemDto item : decisionV2.items()) {
             decisionService.update(decisionV2.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         PricingDecisionDto approvedV2 = decisionService.approve(decisionV2.id(),
             new ApprovePricingDecisionRequest("อนุมัติ v2", UUID.randomUUID().toString()), ceoActor);

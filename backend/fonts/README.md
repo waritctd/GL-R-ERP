@@ -64,6 +64,21 @@ Pushing to GHCR needs a token with `write:packages` — `gh`'s default scopes do
 `--also-latest` exists but prefer not to use it here: `render.yaml` pins an explicit tag so a deploy
 is a deliberate act, and a moving `:latest` undermines that.
 
+### Check the font set before you build
+
+```bash
+./scripts/check-fonts.sh              # checks backend/fonts/
+./scripts/check-fonts.sh /some/dir    # or a set you have just been handed
+```
+
+Same family+style comparison the Dockerfile makes, in a second instead of two minutes into a
+build. It reads the required list **out of `backend/Dockerfile`**, so the two cannot drift — add a
+face there and this script follows automatically.
+
+It uses `fc-scan` on the files rather than `fc-match`, deliberately: `fc-match` queries the fonts
+installed on *your machine*, and a Mac with Angsana New installed system-wide would report success
+for a completely empty `backend/fonts/`. `fc-scan` reads the actual files that get COPYed in.
+
 ### What the build verifies: every FAMILY + STYLE pair, not every family
 
 ```

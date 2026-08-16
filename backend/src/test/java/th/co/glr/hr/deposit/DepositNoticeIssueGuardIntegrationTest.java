@@ -330,7 +330,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         List<UpdatePricingDecisionItemRequest> updates = decision.items().stream()
-            .map(decisionItem -> new UpdatePricingDecisionItemRequest(decisionItem.id(), null, null, new BigDecimal("1.00"), null))
+            .map(decisionItem -> new UpdatePricingDecisionItemRequest(decisionItem.id(), null, new BigDecimal("1.00"), null, null, false))
             .toList();
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, updates), ceoActor);
         decisionService.approve(decision.id(),

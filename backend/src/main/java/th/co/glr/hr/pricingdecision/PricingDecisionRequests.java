@@ -15,12 +15,26 @@ public final class PricingDecisionRequests {
         String ceoNote, List<UpdatePricingDecisionItemRequest> items) {}
 
     /** Every field except {@code pricingDecisionItemId} is optional — omit a field to leave that
-     * item column unchanged. Deliberately has NO selling-price field: the server always
-     * (re)computes {@code proposedSellingPricePerRequestedUnit} from the frozen cost and
-     * {@code marginPct}; a client can influence the price only by changing the margin. */
+     * item column unchanged (COALESCE semantics in {@link PricingDecisionRepository#updateItems}).
+     * {@code marginPct} still only ever influences the FORMULA's own computed price
+     * ({@code proposedSellingPricePerRequestedUnit}) — the server (re)computes that column from
+     * the frozen cost and this margin, never trusting a client-supplied price for it.
+     *
+     * <p>{@code sellingPriceOverride}/{@code clearSellingPriceOverride} are the one deliberate
+     * exception to "never trust a client-supplied price" (Phase 1 UI simplification,
+     * "ปรับราคาเอง"): a real, explicit, reason-logged CEO action that sets the FINAL price
+     * directly, bypassing margin for that line entirely. The two fields together form a tri-state
+     * the COALESCE-based columns above cannot express on their own — set (
+     * {@code sellingPriceOverride} non-null), clear ({@code clearSellingPriceOverride} true,
+     * mirroring {@link PricingDecisionRequests.CostOverrideRequest}'s own null-means-clear
+     * convention, which does not fit this bulk/COALESCE endpoint's "omit = unchanged" shape), or
+     * leave untouched (both absent). Reason is mandatory in BOTH directions and is carried in
+     * {@code decisionNote} on the SAME request — see
+     * {@link PricingDecisionService#applyItemUpdates}. */
     public record UpdatePricingDecisionItemRequest(
-        long pricingDecisionItemId, BigDecimal marginPct, BigDecimal discountCeilingPct,
-        BigDecimal minimumSellingPrice, String decisionNote) {}
+        long pricingDecisionItemId, BigDecimal marginPct,
+        BigDecimal minimumSellingPrice, String decisionNote,
+        BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride) {}
 
     /** {@code defaultMarginPct}, if present, is written onto the decision and reapplied to
      * EVERY item's proposed margin (overwriting any prior per-item customization) — an explicit

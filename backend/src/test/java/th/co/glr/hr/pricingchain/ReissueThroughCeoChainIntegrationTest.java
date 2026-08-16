@@ -637,7 +637,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             // A deliberately low floor: several tests here discount a FIRST quotation by 5.0000 to
             // prove Policy B still works, and a realistic floor would 422 that instead.
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);

@@ -6,6 +6,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Button } from '../../components/common/Button.jsx';
+import { CollapsibleSection } from '../../components/common/CollapsibleSection.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { InfoTip } from '../../components/common/InfoTip.jsx';
@@ -449,6 +450,119 @@ function CostOverrideModal({ item, costingItem, onClose, onSubmit, pending }) {
   );
 }
 
+/**
+ * "ปรับราคาเอง" (Phase 1 UI simplification, owner ruling 2026-08-16) — a REAL behaviour change,
+ * not a relabel of the cost override above: this overrides the SELLING PRICE directly, and the
+ * formula (cost x margin) stops driving that line entirely, rather than feeding it a different
+ * cost to recompute from. Same shape as {@link CostOverrideModal} deliberately — mandatory reason
+ * in BOTH directions (set and clear), current computed value shown for comparison — because that
+ * pattern is already established and reviewed here (V141), not because the two overrides mean the
+ * same thing.
+ */
+function PriceOverrideModal({ item, decision, onClose, onSubmit, pending }) {
+  const hasOverride = item.manualSellingPricePerRequestedUnit != null;
+  const [amount, setAmount] = useState(() => String(
+    hasOverride ? item.manualSellingPricePerRequestedUnit : item.proposedSellingPricePerRequestedUnit ?? '',
+  ));
+  const [reason, setReason] = useState('');
+  const [amountError, setAmountError] = useState(null);
+  const [reasonError, setReasonError] = useState(null);
+
+  function validateReason() {
+    if (reason.trim()) {
+      setReasonError(null);
+      return true;
+    }
+    setReasonError('กรุณาระบุเหตุผลในการปรับราคาขาย');
+    return false;
+  }
+
+  function handleSet(event) {
+    event.preventDefault();
+    const reasonOk = validateReason();
+    const numericAmount = Number(amount);
+    const amountOk = amount !== '' && !Number.isNaN(numericAmount) && numericAmount >= 0;
+    setAmountError(amountOk ? null : 'กรุณากรอกราคาที่ปรับให้ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)');
+    if (!reasonOk || !amountOk) return;
+    onSubmit({ sellingPriceOverride: numericAmount, clearSellingPriceOverride: false, reason: reason.trim() });
+  }
+
+  function handleClear() {
+    if (!validateReason()) return;
+    onSubmit({ sellingPriceOverride: null, clearSellingPriceOverride: true, reason: reason.trim() });
+  }
+
+  return (
+    <Modal
+      title={hasOverride ? 'แก้ไขราคาที่ปรับ' : 'ปรับราคาเอง'}
+      subtitle={[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || undefined}
+      onClose={onClose}
+      testId="price-override-modal"
+      footer={
+        <>
+          <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
+          {hasOverride ? (
+            <Button type="button" variant="secondary" disabled={pending} onClick={handleClear}>
+              ล้างค่าที่ปรับ
+            </Button>
+          ) : null}
+          <Button type="submit" form="price-override-form" variant="primary" disabled={pending}>
+            {pending ? 'กำลังบันทึก…' : 'บันทึกราคาที่ปรับ'}
+          </Button>
+        </>
+      }
+    >
+      <SafeForm id="price-override-form" onSubmit={handleSet} noValidate>
+        <div className="grid gap-3">
+          <div className="rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs">
+            <div>
+              ราคาขายที่คำนวณอัตโนมัติ:{' '}
+              <code className="text-info">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+            </div>
+            {hasOverride ? (
+              <div className="mt-1">
+                ราคาที่ปรับปัจจุบัน:{' '}
+                <code className="font-bold text-override">{formatCurrency(item.manualSellingPricePerRequestedUnit, decision.currency)}</code>
+              </div>
+            ) : null}
+            <p className="m-0 mt-1 text-2xs text-text-muted">
+              เมื่อปรับแล้ว สูตรจะไม่คำนวณราคาขายของรายการนี้อีก — ราคาที่ปรับจะถูกใช้แทนจนกว่าจะล้างค่า
+            </p>
+          </div>
+          <FormField
+            label={`ราคาที่ปรับ (${decision.currency}/หน่วยที่ขอ)`}
+            htmlFor="price-override-amount"
+            error={amountError}
+          >
+            <input
+              id="price-override-amount"
+              type="number"
+              min="0"
+              step="0.0001"
+              value={amount}
+              onChange={(e) => {
+                setAmount(e.target.value);
+                if (amountError) setAmountError(null);
+              }}
+            />
+          </FormField>
+          <FormField label="เหตุผล" htmlFor="price-override-reason" error={reasonError} required>
+            <textarea
+              id="price-override-reason"
+              className="min-h-20"
+              value={reason}
+              onChange={(e) => {
+                setReason(e.target.value);
+                if (reasonError) setReasonError(null);
+              }}
+            />
+          </FormField>
+        </div>
+      </SafeForm>
+    </Modal>
+  );
+}
+
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
@@ -669,7 +783,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 3: CEO Selling Price Decision.
   const [decisionDefaultMargin, setDecisionDefaultMargin] = useState('0.20');
   const [startReviewClientRequestId] = useState(() => generateClientRequestId());
-  const [decisionItemDrafts, setDecisionItemDrafts] = useState({});
+  // Phase 1 UI simplification: the per-item margin/minimum/ceiling draft grid is gone (the main
+  // view "asks for nothing" — see the CEO panel below). The only remaining CEO-typed input on a
+  // decision item is "ปรับราคาเอง", which opens PriceOverrideModal per item — no draft state is
+  // needed for it (the modal owns its own form state, same pattern as costOverrideItem below).
+  const [priceOverrideItem, setPriceOverrideItem] = useState(null);
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
   // Step 4: Customer Quotation Generation and Issuance.
   const [createQuotationClientRequestId, setCreateQuotationClientRequestId] = useState(() => generateClientRequestId());
@@ -691,18 +809,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
     }),
     'เริ่มพิจารณาราคาขายแล้ว',
   );
-  const saveDecisionItems = useActionMutation(({ decision, items }) => api.pricingRequests.updatePricingDecision(decision.id, {
-    items: items.map((item) => {
-      const draft = decisionItemDrafts[item.id] ?? {};
-      return {
-        pricingDecisionItemId: item.id,
-        marginPct: cleanNumber(draft.marginPct ?? item.proposedMarginPct),
-        discountCeilingPct: cleanNumber(draft.discountCeilingPct ?? item.discountCeilingPct),
-        minimumSellingPrice: cleanNumber(draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit),
-        decisionNote: draft.decisionNote ?? item.decisionNote ?? null,
-      };
-    }),
-  }), 'บันทึกราคาขายที่เสนอแล้ว');
+  // "ปรับราคาเอง" (Phase 1 UI simplification) — reuses PUT /pricing-decisions/{id} (the same
+  // endpoint the old per-item margin/minimum/ceiling grid called) rather than a new route: the
+  // owner's steer was to prefer the existing update endpoint over inventing one, and this is the
+  // same PricingDecisionService#update -> applyItemUpdates path, just with a single-item payload.
+  // sellingPriceOverride/clearSellingPriceOverride/decisionNote are the three fields that matter
+  // here — marginPct/minimumSellingPrice are left unset (server leaves them unchanged, COALESCE
+  // semantics) since this action never touches either.
+  const overrideSellingPrice = useActionMutation(
+    ({ decision, item, sellingPriceOverride, clearSellingPriceOverride, reason }) =>
+      api.pricingRequests.updatePricingDecision(decision.id, {
+        items: [{
+          pricingDecisionItemId: item.id,
+          sellingPriceOverride: clearSellingPriceOverride ? null : sellingPriceOverride,
+          clearSellingPriceOverride: Boolean(clearSellingPriceOverride),
+          decisionNote: reason,
+        }],
+      }),
+    'บันทึกราคาที่ปรับแล้ว',
+  );
   // V141 ("CEO owns costing", PR #702): recomputes the bound costing in place, preserving every
   // per-line override — see recalculatePricingDecisionCost's own doc comment in hrApi.js. Never
   // changes status, margins, or approved_* — it only refreshes cost.
@@ -901,6 +1026,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => pricingDecisions.find((d) => d.status === 'DRAFT') ?? [...pricingDecisions].reverse()[0] ?? null,
     [pricingDecisions],
   );
+  // Phase 1 UI simplification: lifted out of the render IIFE so both the Panel's `actions` slot
+  // (the small refresh control "at the top of the section") and the body below can read it —
+  // mirrors PricingDecisionService's own DRAFT + CEO_REVIEWING + canActOnPricingDecision guard.
+  const decisionEditable = Boolean(currentDecision) && currentDecision.status === 'DRAFT'
+    && canActOnPricingDecision(user, summary);
   // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
   // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
   // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
@@ -1525,9 +1655,34 @@ export function PricingRequestDetailPage({ user, showToast }) {
           CEO's own selling-price decision is no longer on Import's page — canSeeRawPricingDecision
           covers import+ceo, and only the CEO half is wanted here. The predicate itself is
           unchanged (it still governs cost/margin visibility elsewhere); this render site adds the
-          role narrowing rather than editing the shared gate. */}
+          role narrowing rather than editing the shared gate.
+
+          Phase 1 UI simplification (owner ruling 2026-08-16): the main view now shows numbers and
+          asks for nothing — read-only base cost, the automatically computed selling price, a
+          small refresh control at the top of the section (this Panel's `actions` slot, replacing
+          the old "คำนวณต้นทุนใหม่" button), and exactly two actions (อนุมัติราคาขาย /
+          ตีกลับให้ฝ่ายนำเข้าแก้ไข). Everything a CEO who doubts the number would want — the cost
+          breakdown, the formula's actual derivation, ปรับต้นทุนเอง (V141, relocated but otherwise
+          unchanged), and ปรับราคาเอง (new) — lives inside a per-item "วิธีคำนวณราคานี้"
+          CollapsibleSection, collapsed by default. */}
       {canSeeRawPricingDecision(user) && !isImport(user) ? (
-        <Panel flush title="การพิจารณาราคาขายของ CEO">
+        <Panel
+          flush
+          title="การพิจารณาราคาขายของ CEO"
+          actions={currentDecision && decisionEditable ? (
+            <Button
+              type="button"
+              variant="icon"
+              size="sm"
+              title="คำนวณต้นทุนใหม่ — ดึงต้นทุนและอัตราแลกเปลี่ยนล่าสุด (ไม่ลบค่าที่ปรับเองไว้)"
+              disabled={recalculateDecisionCost.isPending}
+              onClick={() => recalculateDecisionCost.mutate(currentDecision)}
+              data-testid="pcr-ceo-recalculate-cost"
+            >
+              <Icon name="refresh" size={16} />
+            </Button>
+          ) : null}
+        >
           <div className="flex flex-col gap-3 p-4">
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -1551,13 +1706,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {currentDecision ? (() => {
               const decision = currentDecision;
               const decisionStatus = pricingDecisionStatusLabel(decision.status);
-              const isDraft = decision.status === 'DRAFT';
-              const editable = isDraft && canActOnPricingDecision(user, summary);
+              const editable = decisionEditable;
+              // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input (auto-populated
+              // server-side at approve() — see PricingDecisionService#approve), so it can never
+              // block approval here any more. A "ปรับราคาเอง" override needs no margin at all —
+              // its price is fixed directly, mirroring PricingDecisionService#approve's own
+              // missingMargin exemption for an overridden item.
               const missingBeforeApprove = decision.items.filter((item) => {
-                const draft = decisionItemDrafts[item.id] ?? {};
-                const margin = draft.marginPct ?? item.proposedMarginPct;
-                const minPrice = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit;
-                return margin == null || margin === '' || minPrice == null || minPrice === '';
+                const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
+                return !hasPriceOverride && (item.proposedMarginPct == null || item.proposedMarginPct === '');
               });
               // V141: mirrors PricingDecisionService.approve's own stale-override 409 guard, so the
               // CEO discovers it here instead of via a failed approve. The server stays
@@ -1575,100 +1732,129 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
                     </span>
                   </div>
-                  <div className="mt-3 flex flex-col gap-2">
+                  <div className="mt-3 flex flex-col gap-3">
                     {decision.items.map((item) => {
-                      const draft = decisionItemDrafts[item.id] ?? {};
-                      const effectiveMargin = draft.marginPct ?? item.proposedMarginPct ?? '';
-                      const effectiveMinimum = draft.minimumSellingPrice ?? item.minimumSellingPricePerRequestedUnit ?? '';
-                      const effectiveCeiling = draft.discountCeilingPct ?? item.discountCeilingPct ?? '';
-                      const belowMinimum = effectiveMinimum !== '' && item.proposedSellingPricePerRequestedUnit != null
-                        && Number(item.proposedSellingPricePerRequestedUnit) < Number(effectiveMinimum);
                       // V141: the bound costing line this decision item was frozen from — may
                       // legitimately be undefined (costings never fetched, or not yet loaded), in
-                      // which case this renders only the decision item's own frozen cost above,
-                      // with no override affordance at all.
+                      // which case the derivation below renders only the decision item's own
+                      // frozen cost, with no cost-override affordance at all.
                       const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
-                      const hasOverride = costingItem?.manualLandedCostPerUnitThb != null;
+                      const hasCostOverride = costingItem?.manualLandedCostPerUnitThb != null;
+                      const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
+                      // Frozen (post-approval) beats an active override, which beats the formula's
+                      // own computed figure — the one number the main view shows. Never a fourth,
+                      // client-recomputed value: this is exactly what the server will freeze in
+                      // (design correction 7 + the ปรับราคาเอง exception to it), never a preview.
+                      const effectivePrice = item.approvedSellingPricePerRequestedUnit
+                        ?? (hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.proposedSellingPricePerRequestedUnit);
+                      const effectiveMargin = item.approvedMarginPct ?? item.proposedMarginPct;
                       return (
-                        <div key={item.id} className="rounded-md border border-border-subtle p-2">
+                        <div key={item.id} className="rounded-md border border-border-subtle p-3">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
                             <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                             <span>{item.factoryName ?? '-'}</span>
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
-                            <span>ต้นทุน/หน่วยที่ขอ: {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</span>
-                            {belowMinimum ? <StatusBadge tone="danger">ต่ำกว่าราคาขั้นต่ำ</StatusBadge> : null}
+                            {hasPriceOverride ? <span className="font-bold text-override">ราคาปรับเอง</span> : null}
                             {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
                           </div>
-                          {costingItem ? (
-                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border-subtle pt-1.5 text-xs">
-                              <span>
-                                ต้นทุนคำนวณ/ชิ้น:{' '}
-                                <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
-                              </span>
-                              {hasOverride ? (
-                                <span className="flex min-w-0 items-baseline gap-1.5">
-                                  ต้นทุนที่ปรับ/ชิ้น:{' '}
-                                  <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
-                                  <span className="text-2xs text-override">ปรับเอง</span>
-                                  {costingItem.overrideReason ? (
-                                    <span
-                                      className="min-w-0 max-w-[220px] truncate text-2xs text-text-muted"
-                                      title={costingItem.overrideReason}
-                                    >
-                                      ({costingItem.overrideReason})
+                          {/* The two numbers, read-only, asking for nothing. */}
+                          <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                            <span className="text-xs text-text-muted">
+                              ต้นทุนโรงงาน (ฐาน):{' '}
+                              <code>{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code>
+                            </span>
+                            <span className="text-[length:var(--text-base)] font-bold text-text">
+                              ราคาขาย: {formatCurrency(effectivePrice, decision.currency)}
+                            </span>
+                          </div>
+                          {!editable ? (
+                            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                              <span>อัตรากำไร: {effectiveMargin ?? '-'}</span>
+                              <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
+                            </div>
+                          ) : null}
+                          <CollapsibleSection
+                            title="วิธีคำนวณราคานี้"
+                            defaultOpen={false}
+                            id={`pcr-ceo-derivation-${item.id}`}
+                          >
+                            <div className="flex flex-col gap-2 text-xs">
+                              {costingItem ? (
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle p-2">
+                                  <span>
+                                    ต้นทุนคำนวณ/ชิ้น:{' '}
+                                    <code className="text-info">{formatCurrency(costingItem.landedCostPerUnitThb, 'THB')}</code>
+                                  </span>
+                                  {hasCostOverride ? (
+                                    <span className="flex min-w-0 items-baseline gap-1.5">
+                                      ต้นทุนที่ปรับ/ชิ้น:{' '}
+                                      <code className="font-bold text-override">{formatCurrency(costingItem.manualLandedCostPerUnitThb, 'THB')}</code>
+                                      <span className="text-2xs text-override">ปรับเอง</span>
+                                      {costingItem.overrideReason ? (
+                                        <span
+                                          className="min-w-0 max-w-[220px] truncate text-2xs text-text-muted"
+                                          title={costingItem.overrideReason}
+                                        >
+                                          ({costingItem.overrideReason})
+                                        </span>
+                                      ) : null}
                                     </span>
                                   ) : null}
-                                </span>
+                                  {editable ? (
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      className="text-2xs px-2 py-[3px]"
+                                      onClick={() => setCostOverrideItem({ decision, item, costingItem })}
+                                      data-testid={`pcr-ceo-cost-override-${item.id}`}
+                                    >
+                                      {hasCostOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+                                    </Button>
+                                  ) : null}
+                                </div>
                               ) : null}
+                              {costingItem?.overrideStale ? (
+                                <p className="m-0 text-2xs text-warning-dark">
+                                  อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
+                                </p>
+                              ) : null}
+                              <div className="rounded-md border border-border-subtle p-2">
+                                <p className="m-0 font-bold text-text">สูตรคำนวณราคาขาย</p>
+                                {hasPriceOverride ? (
+                                  <p className="m-0 mt-1">
+                                    ราคานี้ถูก <span className="font-bold text-override">ปรับเอง</span> เป็น{' '}
+                                    <code className="font-bold text-override">{formatCurrency(item.manualSellingPricePerRequestedUnit, decision.currency)}</code>
+                                    {' '}— สูตรด้านล่างไม่ได้ใช้คำนวณราคานี้อีกต่อไป
+                                  </p>
+                                ) : null}
+                                <p className="m-0 mt-1">
+                                  ราคาขาย/หน่วยที่ขอ = ต้นทุน/หน่วยที่ขอ × (1 + อัตรากำไร){decision.currency !== 'THB' ? ' ÷ อัตราแลกเปลี่ยน' : ''}
+                                </p>
+                                <p className="m-0 mt-1">
+                                  = {formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')} × (1 + {item.proposedMarginPct ?? '-'})
+                                  {decision.currency !== 'THB' ? ` ÷ ${decision.fxRateUsed}` : ''}
+                                  {' = '}
+                                  <code>{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
+                                </p>
+                                {decision.currency !== 'THB' ? (
+                                  <p className="m-0 mt-1 text-2xs text-text-muted">
+                                    อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+                                  </p>
+                                ) : null}
+                              </div>
                               {editable ? (
                                 <Button
                                   type="button"
                                   variant="secondary"
-                                  className="text-2xs px-2 py-[3px]"
-                                  onClick={() => setCostOverrideItem({ decision, item, costingItem })}
-                                  data-testid={`pcr-ceo-cost-override-${item.id}`}
+                                  className="self-start text-2xs px-2 py-[3px]"
+                                  onClick={() => setPriceOverrideItem({ decision, item })}
+                                  data-testid={`pcr-ceo-price-override-${item.id}`}
                                 >
-                                  {hasOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
+                                  {hasPriceOverride ? 'แก้ไขราคาที่ปรับ' : 'ปรับราคาเอง'}
                                 </Button>
                               ) : null}
                             </div>
-                          ) : null}
-                          {costingItem?.overrideStale ? (
-                            <p className="m-0 mt-1 text-2xs text-warning-dark">
-                              อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับต้นทุน — ต้องคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ
-                            </p>
-                          ) : null}
-                          {editable ? (
-                            <div className="mt-2 grid gap-2 md:grid-cols-4">
-                              <input
-                                className="form-input"
-                                value={effectiveMargin}
-                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, marginPct: e.target.value } }))}
-                                placeholder="อัตรากำไร เช่น 0.20 = 20%"
-                              />
-                              <input
-                                className="form-input"
-                                value={effectiveMinimum}
-                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, minimumSellingPrice: e.target.value } }))}
-                                placeholder="ราคาขั้นต่ำ"
-                              />
-                              <input
-                                className="form-input"
-                                value={effectiveCeiling}
-                                onChange={(e) => setDecisionItemDrafts((cur) => ({ ...cur, [item.id]: { ...draft, discountCeilingPct: e.target.value } }))}
-                                placeholder="ส่วนลดสูงสุด เช่น 0.10 = 10%"
-                              />
-                              <span className="self-center text-xs text-text-muted">
-                                ราคาขายเสนอ: {formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                              <span>อัตรากำไร: {item.approvedMarginPct ?? item.proposedMarginPct ?? '-'}</span>
-                              <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit ?? item.proposedSellingPricePerRequestedUnit, decision.currency)}</span>
-                              <span>ราคาขั้นต่ำ: {item.minimumSellingPricePerRequestedUnit != null ? formatCurrency(item.minimumSellingPricePerRequestedUnit, decision.currency) : '-'}</span>
-                            </div>
-                          )}
+                          </CollapsibleSection>
                         </div>
                       );
                     })}
@@ -1676,24 +1862,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   {editable ? (
                     <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
                       <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={recalculateDecisionCost.isPending}
-                          onClick={() => recalculateDecisionCost.mutate(decision)}
-                          data-testid="pcr-ceo-recalculate-cost"
-                        >
-                          คำนวณต้นทุนใหม่
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={saveDecisionItems.isPending}
-                          onClick={() => saveDecisionItems.mutate({ decision, items: decision.items })}
-                          data-testid="pcr-ceo-save-decision-items"
-                        >
-                          บันทึกการเปลี่ยนแปลง
-                        </Button>
                         <Button
                           type="button"
                           variant="primary"
@@ -1712,11 +1880,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           ตีกลับให้ฝ่ายนำเข้าแก้ไข
                         </Button>
                       </div>
-                      <p className="m-0 text-xs text-text-muted">
-                        คำนวณต้นทุนใหม่จะดึงต้นทุนล่าสุดมาคำนวณ โดยไม่ลบค่าที่ปรับเองไว้ — ถ้าอัตราแลกเปลี่ยนหรือสูตรคำนวณเปลี่ยนไป ค่าที่ปรับเองอาจล้าสมัยและต้องยืนยันอีกครั้งก่อนอนุมัติ
-                      </p>
                       {missingBeforeApprove.length > 0 ? (
-                        <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรและราคาขั้นต่ำก่อนอนุมัติ</span>
+                        <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรก่อนอนุมัติ (หรือปรับราคาเอง)</span>
                       ) : null}
                       {staleOverrideItems.length > 0 ? (
                         <span className="text-xs text-danger">
@@ -1749,7 +1914,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
                   <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
-                  {item.discountCeilingPct != null ? <span>ส่วนลดสูงสุด: {item.discountCeilingPct}</span> : null}
                 </div>
               </div>
             ))}
@@ -2121,6 +2285,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
           onSubmit={(payload) => overrideItemCost.mutate(
             { decision: costOverrideItem.decision, item: costOverrideItem.item, ...payload },
             { onSuccess: () => setCostOverrideItem(null) },
+          )}
+        />
+      ) : null}
+
+      {priceOverrideItem ? (
+        <PriceOverrideModal
+          item={priceOverrideItem.item}
+          decision={priceOverrideItem.decision}
+          pending={overrideSellingPrice.isPending}
+          onClose={() => setPriceOverrideItem(null)}
+          onSubmit={(payload) => overrideSellingPrice.mutate(
+            { decision: priceOverrideItem.decision, item: priceOverrideItem.item, ...payload },
+            { onSuccess: () => setPriceOverrideItem(null) },
           )}
         />
       ) : null}
