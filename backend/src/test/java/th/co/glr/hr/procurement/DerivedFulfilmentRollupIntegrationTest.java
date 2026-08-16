@@ -526,9 +526,9 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
     }
 
     private DealFixture driveToQuotationIssuedNotYetAccepted(String factoryA, String factoryB) {
-        long catalogProductIdA = insertCatalogProduct(factoryA, "TH", "TEST-ROLLUP-" + factoryA.hashCode(),
+        long catalogProductIdA = insertCatalogProduct(factoryA, "IT", "TEST-ROLLUP-" + factoryA.hashCode(),
             new BigDecimal("100.00"), "THB", "per_piece");
-        long catalogProductIdB = insertCatalogProduct(factoryB, "TH", "TEST-ROLLUP-" + factoryB.hashCode(),
+        long catalogProductIdB = insertCatalogProduct(factoryB, "IT", "TEST-ROLLUP-" + factoryB.hashCode(),
             new BigDecimal("200.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);

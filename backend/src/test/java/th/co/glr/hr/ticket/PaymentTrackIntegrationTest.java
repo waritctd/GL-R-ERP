@@ -647,7 +647,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private record Deal(long ticketId, long pricingRequestId) {}
 
     private Deal buildDealToQuotationAccepted(String uniqueTag) {
-        long catalogProductId = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-PAYTRACK-" + uniqueTag + "-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("100.00"), "THB", "per_piece");
 

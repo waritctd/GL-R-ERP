@@ -431,7 +431,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     /** Same as {@link #driveDealToClosedPaid} but stops right after delivery — DELIVERED, not yet
      * CLOSED_PAID. Used by the "gate rejects a not-yet-closed deal" test. */
     private long driveDealThroughDeliveryOnly(BigDecimal quantity) {
-        long catalogProductId = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-COMM-A2-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);

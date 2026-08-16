@@ -214,9 +214,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factoryA", FACTORY_A, "factoryB", FACTORY_B));
-        catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "TH", "TEST-CHAIN-A-001",
+        catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "IT", "TEST-CHAIN-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "TH", "TEST-CHAIN-B-001",
+        catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-CHAIN-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

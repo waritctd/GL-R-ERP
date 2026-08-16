@@ -142,6 +142,13 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
 
+        // sales.factory_config: RFQ-email-routing settings only. Its `country` is free text and,
+        // as of V151, is NOT what the freight lookup reads (see LandedCostCalculator's class
+        // Javadoc, V151 section) -- kept populated here only because the RFQ-generation flow
+        // (generateDrafts) needs a row for the factory to exist at all. The catalog product each
+        // helper creates below (via insertCatalogProduct, country "IT") is what actually feeds
+        // the freight lookup; see originCountry_resolvesFromTheCatalogFactoryJoin_... for a test
+        // that pins this precisely by making the two tables' country DISAGREE.
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES ('Formula Factory', 'formula-factory@example.com', 'THB', 'piece', 'Italy')
@@ -235,6 +242,43 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(costingItem.freightCostThb()).isEqualByComparingTo("792.0792");
     }
 
+    /**
+     * V151 ("one canonical country, so the freight lookup can join") end to end: the origin
+     * country that actually drives the freight lookup is {@code price_catalog.factories.country}
+     * (via the item's catalog link), NOT {@code sales.factory_config.country} (the RFQ-email-
+     * routing table's free-text field). Proven by deliberately setting the two to DIFFERENT,
+     * unrelated values — {@code sales.factory_config.country} gets a string that matches no
+     * seeded ISO code at all ("Nowhere"), while {@code price_catalog.factories.country} (via
+     * {@code insertCatalogProduct}) gets a real, V151-seeded code ("IT"). If the engine ever
+     * regressed to reading the RFQ table instead (or as a fallback), this would 422 with "ไม่พบ
+     * อัตราค่าขนส่ง" instead of resolving cleanly — exactly the system-wide defect V151 fixed
+     * ("every freight lookup returned nothing, for all nine factories"), reproduced and pinned at
+     * the one unit this branch owns. A test built on hand-seeded rows that happen to share one
+     * value across both tables would NOT catch a regression back to the wrong table; this one
+     * would, because the two are deliberately never equal.
+     */
+    @Test
+    void originCountry_resolvesFromTheCatalogFactoryJoin_notFromFactoryConfigsFreeTextCountry() {
+        String factoryName = "Mismatched Country Factory " + UUID.randomUUID();
+        jdbc.update("""
+            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
+            VALUES (:name, 'mismatch@example.com', 'THB', 'piece', 'Nowhere')
+            """, Map.of("name", factoryName));
+        long productId = insertCatalogProduct(factoryName, "IT", "MISMATCH-001",
+            new BigDecimal("100.00"), "THB", "per_piece");
+
+        long pricingRequestId = readyForReviewWithProduct(productId, factoryName, new BigDecimal("100"),
+            UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100"), "100.00",
+            new BigDecimal("1"), null, null);
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        PricingCostingItemDto costingItem = costingItemFor(decision);
+        // Resolves the REAL Italy [8,12)mm, qty [1,101) band (฿50,000 / 100 pieces = ฿500.0000/pc)
+        // -- proof the lookup used the catalog's "IT", never factory_config's "Nowhere".
+        assertThat(costingItem.freightCostThb()).isEqualByComparingTo("500.0000");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Multi-item factory shipment: F/S are looked up ONCE and allocated proportionally by sqm
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -318,7 +362,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void missingFreightBand_countryNotInFormulaConfig_refusesToPrice_neverZero() {
-        long pricingRequestId = readyForReviewInCountry("Thailand", new BigDecimal("10"), "100.00");
+        // "TH" is a genuinely valid, V151-seeded price_catalog.country row (so the catalog INSERT
+        // itself succeeds) — V109 simply never seeded any Thailand freight rows, so the lookup
+        // still correctly fails at the freight-band step, not the fixture-setup step.
+        long pricingRequestId = readyForReviewInCountry("TH", new BigDecimal("10"), "100.00");
         assertThatThrownBy(() -> decisionService.startReview(pricingRequestId,
                 new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
@@ -480,9 +527,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             RETURNING formula_config_id
             """, Map.of(), Long.class);
         jdbc.update("""
-            INSERT INTO sales.pricing_freight_rate (formula_config_id, origin_country, thickness_min_mm,
+            INSERT INTO sales.pricing_freight_rate (formula_config_id, origin_country_code, thickness_min_mm,
                 thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb)
-            SELECT :newId, origin_country, thickness_min_mm, thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb
+            SELECT :newId, origin_country_code, thickness_min_mm, thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb
               FROM sales.pricing_freight_rate WHERE formula_config_id = :oldId
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
             .addValue("newId", newId).addValue("oldId", currentId));
@@ -520,9 +567,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("oldId", currentId),
             Long.class);
         jdbc.update("""
-            INSERT INTO sales.pricing_freight_rate (formula_config_id, origin_country, thickness_min_mm,
+            INSERT INTO sales.pricing_freight_rate (formula_config_id, origin_country_code, thickness_min_mm,
                 thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb)
-            SELECT :newId, origin_country, thickness_min_mm, thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb
+            SELECT :newId, origin_country_code, thickness_min_mm, thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb
               FROM sales.pricing_freight_rate WHERE formula_config_id = :oldId
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
             .addValue("newId", newId).addValue("oldId", currentId));
@@ -555,13 +602,23 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             quotedUnitBasis, quotedQuantity, rawPrice, sqmPerUnit, piecesPerBox, linearMPerUnit);
     }
 
-    private long readyForReviewInCountry(String country, BigDecimal requestedQty, String rawPrice) {
+    /**
+     * {@code originCountryCode} is the CATALOG's factory country ({@code
+     * price_catalog.factories.country}) — the value that actually drives V109's freight lookup as
+     * of V151 (see {@code LandedCostCalculator#resolveOriginCountryCode}). Must be one of the
+     * twelve codes V151 seeds into {@code price_catalog.country} (its FK target), or the fixture
+     * INSERT itself fails — this is deliberately NOT a free-text field any more, the exact thing
+     * V151 fixed. {@code sales.factory_config.country} (a different, still-free-text table used
+     * only for RFQ email routing) is set to a throwaway value alongside it, since nothing in the
+     * pricing path reads it.
+     */
+    private long readyForReviewInCountry(String originCountryCode, BigDecimal requestedQty, String rawPrice) {
         String factoryName = "Country Test Factory " + UUID.randomUUID();
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'ct@example.com', 'THB', 'piece', :country)
-            """, Map.of("name", factoryName, "country", country));
-        long productId = insertCatalogProduct(factoryName, "XX", "COUNTRY-TEST-" + UUID.randomUUID(),
+            VALUES (:name, 'ct@example.com', 'THB', 'piece', 'Unused')
+            """, Map.of("name", factoryName));
+        long productId = insertCatalogProduct(factoryName, originCountryCode, "COUNTRY-TEST-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
         return readyForReviewWithProduct(productId, factoryName, requestedQty, UnitBasis.PER_PIECE,
             UnitBasis.PER_PIECE, requestedQty, rawPrice, new BigDecimal("1"), null, null);

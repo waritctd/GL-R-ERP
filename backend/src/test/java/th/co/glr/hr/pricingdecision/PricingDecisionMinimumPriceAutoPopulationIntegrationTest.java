@@ -176,7 +176,7 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductId = insertCatalogProduct("Factory MinPriceAutoPop", "TH", "TEST-MPA-001",
+        catalogProductId = insertCatalogProduct("Factory MinPriceAutoPop", "IT", "TEST-MPA-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

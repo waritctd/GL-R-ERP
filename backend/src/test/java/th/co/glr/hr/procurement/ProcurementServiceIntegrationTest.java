@@ -599,9 +599,9 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     private DealFixture driveToQuotationIssuedNotYetAccepted(String factoryA, String factoryB) {
-        long catalogProductIdA = insertCatalogProduct(factoryA, "TH", "TEST-PO-" + factoryA.hashCode(),
+        long catalogProductIdA = insertCatalogProduct(factoryA, "IT", "TEST-PO-" + factoryA.hashCode(),
             new BigDecimal("100.00"), "THB", "per_piece");
-        long catalogProductIdB = insertCatalogProduct(factoryB, "TH", "TEST-PO-" + factoryB.hashCode(),
+        long catalogProductIdB = insertCatalogProduct(factoryB, "IT", "TEST-PO-" + factoryB.hashCode(),
             new BigDecimal("200.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
@@ -676,7 +676,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private long createSecondPricingRequestCostingItem() {
         String factory = "Factory PO Foreign";
         insertFactory(factory);
-        long catalogProductId = insertCatalogProduct(factory, "TH", "TEST-PO-FOREIGN-" + UUID.randomUUID().toString().substring(0, 8),
+        long catalogProductId = insertCatalogProduct(factory, "IT", "TEST-PO-FOREIGN-" + UUID.randomUUID().toString().substring(0, 8),
             new BigDecimal("50.00"), "THB", "per_piece");
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
         ProjectRepository projectsRepo = new ProjectRepository(jdbc);
@@ -731,7 +731,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      * test that calls this for the full reasoning). */
     private long addSecondPricingRequestDrivenToQuotationIssued(long ticketId) {
         String factory = FACTORY_A;
-        long catalogProductId = insertCatalogProduct(factory, "TH",
+        long catalogProductId = insertCatalogProduct(factory, "IT",
             "TEST-PO-2ND-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile 2nd PR", "SCG Tile 2nd PR", null, null, "60x60", factory,

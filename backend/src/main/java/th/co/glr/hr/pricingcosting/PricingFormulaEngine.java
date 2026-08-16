@@ -73,12 +73,21 @@ public class PricingFormulaEngine {
      * than one match means the config was somehow corrupted; treated as a hard error, not silently
      * resolved by picking one). {@code itemLabel} names the item/shipment in the message so
      * Import/CEO can see exactly what needs fixing.
+     *
+     * <p>{@code originCountryCode} is matched EXACTLY (V151, "one canonical country, so the
+     * freight lookup can join"): both this parameter and {@link PricingFreightRateDto#originCountryCode()}
+     * are ISO 3166-1 alpha-2 codes FK-constrained to {@code price_catalog.country}, so an exact
+     * {@code equals} is correct and sufficient — there is deliberately no fuzzy/case-insensitive
+     * matching here any more. V151's whole point was that free-text-vs-code was the bug (every
+     * freight lookup returned nothing, for all nine factories); a fuzzy matcher bridging the two
+     * canonical codes back together would just be a second, redundant source of truth for the same
+     * fact, and the exact defect class this repo keeps hitting.
      */
-    public PricingFreightRateDto selectFreightRate(List<PricingFreightRateDto> rates, String originCountry,
+    public PricingFreightRateDto selectFreightRate(List<PricingFreightRateDto> rates, String originCountryCode,
                                                     BigDecimal thicknessMm, BigDecimal qtySqm, String itemLabel) {
         PricingFreightRateDto match = null;
         for (PricingFreightRateDto rate : rates) {
-            if (!sameCountry(originCountry, rate.originCountry())) {
+            if (!rate.originCountryCode().equals(originCountryCode)) {
                 continue;
             }
             if (thicknessMm.compareTo(rate.thicknessMinMm()) < 0) {
@@ -95,14 +104,14 @@ public class PricingFormulaEngine {
             }
             if (match != null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "สูตรคำนวณราคามีอัตราค่าขนส่งที่ซ้อนทับกันสำหรับ " + itemLabel + " (ต้นทาง=" + originCountry
+                    "สูตรคำนวณราคามีอัตราค่าขนส่งที่ซ้อนทับกันสำหรับ " + itemLabel + " (ต้นทาง=" + originCountryCode
                         + " ความหนา=" + thicknessMm + " มม. จำนวน=" + qtySqm + " ตร.ม.) — กรุณาตรวจสอบสูตรคำนวณราคา");
             }
             match = rate;
         }
         if (match == null) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ไม่พบอัตราค่าขนส่งสำหรับ " + itemLabel + " (ต้นทาง=" + originCountry
+                "ไม่พบอัตราค่าขนส่งสำหรับ " + itemLabel + " (ต้นทาง=" + originCountryCode
                     + " ความหนา=" + thicknessMm + " มม. จำนวน=" + qtySqm + " ตร.ม.) — กรุณาตั้งค่าสูตรคำนวณราคาให้ครอบคลุม");
         }
         return match;
@@ -146,10 +155,6 @@ public class PricingFormulaEngine {
         throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
             "ไม่พบอัตราอากรขาเข้าสำหรับประเภทสินค้า '" + productType + "' (" + itemLabel
                 + ") — กรุณาตั้งค่าสูตรคำนวณราคาให้ครอบคลุม หรือเลือกประเภทสินค้าอื่น");
-    }
-
-    private boolean sameCountry(String requested, String bandCountry) {
-        return requested != null && bandCountry != null && requested.trim().equals(bandCountry.trim());
     }
 
     // ── Pure arithmetic — every THB amount is money4'd (HALF_UP to 4dp) at the point it becomes

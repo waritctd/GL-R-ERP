@@ -191,9 +191,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "TH", "TEST-A4-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "IT", "TEST-A4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "TH", "TEST-B4-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "IT", "TEST-B4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
@@ -202,7 +202,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "VN", "TEST-C4-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "IT", "TEST-C4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

@@ -598,9 +598,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     private TwoItemDeal createTwoItemDeal(BigDecimal qtyA, BigDecimal qtyB, boolean recordAcceptance) {
-        long catalogProductIdA = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductIdA = insertCatalogProduct(FACTORY, "IT",
             "TEST-INV-A-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
-        long catalogProductIdB = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductIdB = insertCatalogProduct(FACTORY, "IT",
             "TEST-INV-B-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
@@ -716,7 +716,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     private Deal createDealAndDriveFirstPricingRequest(BigDecimal quantity, boolean recordAcceptance) {
-        long catalogProductId = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-INV-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);

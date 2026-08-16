@@ -199,9 +199,9 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A3", "TH", "TEST-A3-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A3", "IT", "TEST-A3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "TH", "TEST-B3-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "IT", "TEST-B3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
@@ -210,7 +210,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "VN", "TEST-C3-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "IT", "TEST-C3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         jdbc.update("""
             INSERT INTO sales.price_calc_config

@@ -28,14 +28,18 @@ class PricingFormulaEngineTest {
 
     // ── Freight band selection — half-open [min, max), both axes ────────────────────────────
 
-    /** Mirrors V109's own Italy [8,12)mm row exactly: qty bands [1,101)/[101,451)/[451,801)/[801,NULL). */
+    /** Mirrors V109's own Italy [8,12)mm row exactly: qty bands [1,101)/[101,451)/[451,801)/[801,NULL).
+     * V151 ("one canonical country, so the freight lookup can join"): {@code originCountryCode} is
+     * the ISO 3166-1 alpha-2 join key ("IT"); {@code originCountryName} is display-only (this
+     * fixture is DB-free, so it is hand-filled here rather than joined from {@code
+     * price_catalog.country} the way the real repository resolves it). */
     private List<PricingFreightRateDto> italyFreightRates() {
         return List.of(
-            new PricingFreightRateDto(1L, "Italy", bd("3"), bd("8"), bd("1"), bd("101"), bd("80000")),
-            new PricingFreightRateDto(2L, "Italy", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
-            new PricingFreightRateDto(3L, "Italy", bd("8"), bd("12"), bd("101"), bd("451"), bd("80000")),
-            new PricingFreightRateDto(4L, "Italy", bd("8"), bd("12"), bd("451"), bd("801"), bd("90000")),
-            new PricingFreightRateDto(5L, "Italy", bd("8"), bd("12"), bd("801"), null, bd("100000"))
+            new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("3"), bd("8"), bd("1"), bd("101"), bd("80000")),
+            new PricingFreightRateDto(2L, "IT", "อิตาลี", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
+            new PricingFreightRateDto(3L, "IT", "อิตาลี", bd("8"), bd("12"), bd("101"), bd("451"), bd("80000")),
+            new PricingFreightRateDto(4L, "IT", "อิตาลี", bd("8"), bd("12"), bd("451"), bd("801"), bd("90000")),
+            new PricingFreightRateDto(5L, "IT", "อิตาลี", bd("8"), bd("12"), bd("801"), null, bd("100000"))
         );
     }
 
@@ -43,50 +47,59 @@ class PricingFormulaEngineTest {
     void freightQtyBand_minIsInclusive_101FallsInSecondBandNotFirst() {
         // 101 is the SECOND band's min and the FIRST band's max — max-exclusive means it must
         // land in [101,451), never [1,101).
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("101"), "test");
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("101"), "test");
         assertThat(match.amountThb()).isEqualByComparingTo("80000");
         assertThat(match.qtyMinSqm()).isEqualByComparingTo("101");
     }
 
     @Test
     void freightQtyBand_justBelowMax_staysInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("100.99"), "test");
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("100.99"), "test");
         assertThat(match.amountThb()).isEqualByComparingTo("50000");
     }
 
     @Test
     void freightQtyBand_exactMin_1FallsInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("1"), "test");
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("1"), "test");
         assertThat(match.amountThb()).isEqualByComparingTo("50000");
     }
 
     @Test
     void freightQtyBand_nullMaxCatchesEverythingAboveTheTopBoundary() {
-        PricingFreightRateDto atBoundary = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("801"), "test");
+        PricingFreightRateDto atBoundary = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("801"), "test");
         assertThat(atBoundary.amountThb()).isEqualByComparingTo("100000");
-        PricingFreightRateDto wayAbove = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("999999999"), "test");
+        PricingFreightRateDto wayAbove = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("999999999"), "test");
         assertThat(wayAbove.amountThb()).isEqualByComparingTo("100000");
         // And the band just below the NULL-max band's start is still the PREVIOUS (finite) band.
-        PricingFreightRateDto justBelow = engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("800.99"), "test");
+        PricingFreightRateDto justBelow = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("800.99"), "test");
         assertThat(justBelow.amountThb()).isEqualByComparingTo("90000");
     }
 
     @Test
     void freightThicknessBand_minIsInclusive_8FallsInSecondBandNotFirst() {
         // 8 is band2's min and band1's max — must land in [8,12), never [3,8).
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "Italy", bd("8"), bd("50"), "test");
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("8"), bd("50"), "test");
         assertThat(match.amountThb()).isEqualByComparingTo("50000");
     }
 
     @Test
     void freightThicknessBand_justBelowMax_staysInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "Italy", bd("7.99"), bd("50"), "test");
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("7.99"), bd("50"), "test");
         assertThat(match.amountThb()).isEqualByComparingTo("80000");
+    }
+
+    /** V151's whole point: the country match is now EXACT on the canonical ISO code, no fuzzy
+     * matching — "Italy" (a display name, what the pre-V151 free-text column held) must NOT match
+     * the "IT" rows, exactly as much a miss as an unrelated code like "VN". */
+    @Test
+    void freight_countryCodeMustMatchExactly_displayNameIsNotAFallback() {
+        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "Italy", bd("10"), bd("50"), "รายการที่ 7"))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(422));
     }
 
     @Test
     void freight_missingCountry_throwsRatherThanReturningZero() {
-        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "Vietnam", bd("10"), bd("50"), "รายการที่ 42"))
+        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "VN", bd("10"), bd("50"), "รายการที่ 42"))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus().value()).isEqualTo(422);
                 assertThat(e.getMessage()).contains("รายการที่ 42");
@@ -95,7 +108,7 @@ class PricingFormulaEngineTest {
 
     @Test
     void freight_thicknessBeyondEverySeededBand_throwsRatherThanReturningZero() {
-        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "Italy", bd("25"), bd("50"), "รายการที่ 9"))
+        assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "IT", bd("25"), bd("50"), "รายการที่ 9"))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus().value()).isEqualTo(422);
                 assertThat(e.getMessage()).contains("รายการที่ 9");
@@ -105,10 +118,10 @@ class PricingFormulaEngineTest {
     @Test
     void freight_overlappingBands_throwsInsteadOfSilentlyPickingOne() {
         List<PricingFreightRateDto> corrupted = List.of(
-            new PricingFreightRateDto(1L, "Italy", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
-            new PricingFreightRateDto(2L, "Italy", bd("8"), bd("12"), bd("50"), bd("150"), bd("999999"))
+            new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
+            new PricingFreightRateDto(2L, "IT", "อิตาลี", bd("8"), bd("12"), bd("50"), bd("150"), bd("999999"))
         );
-        assertThatThrownBy(() -> engine.selectFreightRate(corrupted, "Italy", bd("10"), bd("60"), "test"))
+        assertThatThrownBy(() -> engine.selectFreightRate(corrupted, "IT", bd("10"), bd("60"), "test"))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(422));
     }
 
@@ -257,7 +270,7 @@ class PricingFormulaEngineTest {
     private PricingFormulaConfigDto config(BigDecimal ivf, BigDecimal ir, BigDecimal ib, BigDecimal costBuffer,
                                            BigDecimal sellingBuffer) {
         return new PricingFormulaConfigDto(1L, 1, ivf, ir, ib, costBuffer, sellingBuffer, bd("0.20"), bd("10"),
-            true, java.time.LocalDate.now(), java.time.Instant.now(), List.of(), List.of(), List.of());
+            true, java.time.LocalDate.now(), java.time.Instant.now(), List.of(), List.of(), List.of(), List.of());
     }
 
     private static BigDecimal bd(String value) {

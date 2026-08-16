@@ -166,9 +166,9 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A-CostingAuthz", "TH", "TEST-CA-A-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A-CostingAuthz", "IT", "TEST-CA-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B-CostingAuthz", "TH", "TEST-CA-B-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B-CostingAuthz", "IT", "TEST-CA-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

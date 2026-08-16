@@ -195,9 +195,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 unit = EXCLUDED.unit,
                 country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A", "TH", "TEST-A-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A", "IT", "TEST-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B", "TH", "TEST-B-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B", "IT", "TEST-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
@@ -209,7 +209,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 unit = EXCLUDED.unit,
                 country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "VN", "TEST-C-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "IT", "TEST-C-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(
@@ -1549,7 +1549,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void submitCatalogGate_rejectsItemPointingAtNonActivePriceListVersion() {
-        long archivedProductId = insertCatalogProduct("Factory Archived", "TH", "ARCHIVED-001",
+        long archivedProductId = insertCatalogProduct("Factory Archived", "IT", "ARCHIVED-001",
             new BigDecimal("50.00"), "THB", "per_piece", "ARCHIVED");
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(

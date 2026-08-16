@@ -270,7 +270,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     }
 
     private IssuedNoticeFixture buildTicketWithIssuedDepositNotice() {
-        long catalogProductId = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-GUARD1-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);

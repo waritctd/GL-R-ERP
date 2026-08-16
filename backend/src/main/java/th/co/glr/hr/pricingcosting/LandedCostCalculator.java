@@ -12,7 +12,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
@@ -54,15 +53,24 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * factory within the same request share ONE shipment. See {@link #costShipment} for the grouping
  * and per-item allocation this implies.
  *
- * <p>Freight additionally varies by {@code thickness_mm} (one of {@code
- * sales.pricing_freight_rate}'s own lookup keys, alongside origin country and quantity) — a
- * physical driver distinct from the shipment/factory grouping, since a shipment can in principle
- * carry more than one thickness. {@code F} is therefore looked up and allocated at the finer grain
- * of (shipment × thickness); {@code S} (clearance fee — the schema keys it on {@code qty_sqm}
- * alone, nothing else) stays at the whole-shipment grain. In the overwhelmingly common case (one
- * factory quote = one product spec = one thickness) both grains coincide with the whole shipment,
+ * <p>Freight additionally varies by {@code origin_country_code} and {@code thickness_mm} (V151 +
+ * V109's own lookup keys, alongside quantity) — physical drivers distinct from the shipment/
+ * factory grouping, since a shipment can in principle carry more than one product spec. {@code F}
+ * is therefore looked up and allocated at the finer grain of (shipment × origin country ×
+ * thickness); {@code S} (clearance fee — the schema keys it on {@code qty_sqm} alone, nothing
+ * else) stays at the whole-shipment grain. In the overwhelmingly common case (one factory quote =
+ * one product spec = one country = one thickness) both grains coincide with the whole shipment,
  * and the allocation described below collapses to "the item gets the whole flat amount",
  * unchanged from what a single-item shipment would produce on its own.
+ *
+ * <p><b>Origin country (V151, "one canonical country, so the freight lookup can join"):</b>
+ * resolved PER ITEM from the catalog link — {@code price_catalog.factories.country} via {@code
+ * price_catalog.product_prices.factory_id} — the SAME ISO 3166-1 alpha-2 source {@code
+ * sales.pricing_freight_rate.origin_country_code} is normalised against, and the SAME catalog link
+ * {@link #resolveThicknessMm} already uses. Deliberately NOT {@code sales.factory_config.country}
+ * (the RFQ-email-routing table's free-text field, a different table V151 never touched) — reading
+ * that here would silently reintroduce the exact free-text/ISO-code mismatch V151's migration
+ * fixed (its own words: "every freight lookup returned nothing, for all nine factories").
  *
  * <p>{@code C} (goods cost), {@code i} (insurance) and {@code T} (duty) stay genuinely per-item:
  * different products in the same shipment can have different factory prices, and — via the CEO's
@@ -122,14 +130,14 @@ public class LandedCostCalculator {
                                                         PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
         FactoryQuoteDto quote = shipment.get(0).quote();
         String factoryName = quote.factoryName();
-        FactoryConfigDto factoryConfig = factoryConfigs.findByName(factoryName)
+        // Existence check only, now — V151 moved the freight lookup's origin-country input to the
+        // catalog link (see resolveOriginCountryCode / the class Javadoc's V151 section), so this
+        // RFQ-settings row's own (free-text, never-normalised) country is no longer read. The
+        // check itself is unchanged: the factory this quote is FOR must still be a configured RFQ
+        // factory.
+        factoryConfigs.findByName(factoryName)
             .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบ factory config สำหรับโรงงาน: " + factoryName));
-        String originCountry = firstText(factoryConfig.country(), null);
-        if (originCountry == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "factory config ของ " + factoryName + " ไม่มีประเทศ");
-        }
         String shipmentLabel = "ใบเสนอราคาโรงงาน " + factoryName + " (" + quote.quoteCode() + ")";
 
         List<ItemPhysicals> items = new ArrayList<>();
@@ -137,38 +145,42 @@ public class LandedCostCalculator {
             items.add(resolveItemPhysicals(source, formulaConfig));
         }
 
-        // F: grouped by thickness within the shipment (see class Javadoc).
-        Map<BigDecimal, BigDecimal> qtySqmByThickness = new LinkedHashMap<>();
+        // F: grouped by (origin country, thickness) within the shipment (see class Javadoc) —
+        // both are per-item catalog-sourced physical drivers of the freight-table lookup key.
+        Map<FreightGroupKey, BigDecimal> qtySqmByGroup = new LinkedHashMap<>();
         for (ItemPhysicals item : items) {
-            qtySqmByThickness.merge(item.thicknessMm(), item.qtySqm(), BigDecimal::add);
+            qtySqmByGroup.merge(
+                new FreightGroupKey(item.originCountryCode(), item.thicknessMm()), item.qtySqm(), BigDecimal::add);
         }
-        Map<BigDecimal, BigDecimal> freightAmountByThickness = new LinkedHashMap<>();
-        for (Map.Entry<BigDecimal, BigDecimal> entry : qtySqmByThickness.entrySet()) {
-            BigDecimal thicknessMm = entry.getKey();
-            BigDecimal thicknessGroupQtySqm = entry.getValue();
+        Map<FreightGroupKey, BigDecimal> freightAmountByGroup = new LinkedHashMap<>();
+        for (Map.Entry<FreightGroupKey, BigDecimal> entry : qtySqmByGroup.entrySet()) {
+            FreightGroupKey key = entry.getKey();
+            BigDecimal groupQtySqm = entry.getValue();
             PricingFreightRateDto freightRate = formulaEngine.selectFreightRate(formulaConfig.freightRates(),
-                originCountry, thicknessMm, thicknessGroupQtySqm, shipmentLabel + " หนา " + thicknessMm + " มม.");
-            freightAmountByThickness.put(thicknessMm, freightRate.amountThb());
+                key.originCountryCode(), key.thicknessMm(), groupQtySqm,
+                shipmentLabel + " ต้นทาง " + key.originCountryCode() + " หนา " + key.thicknessMm() + " มม.");
+            freightAmountByGroup.put(key, freightRate.amountThb());
         }
 
-        // S: whole shipment, regardless of thickness.
+        // S: whole shipment, regardless of country or thickness.
         BigDecimal shipmentQtySqm = ZERO;
-        for (BigDecimal thicknessGroupQtySqm : qtySqmByThickness.values()) {
-            shipmentQtySqm = shipmentQtySqm.add(thicknessGroupQtySqm);
+        for (BigDecimal groupQtySqm : qtySqmByGroup.values()) {
+            shipmentQtySqm = shipmentQtySqm.add(groupQtySqm);
         }
         PricingClearanceFeeDto clearanceFee = formulaEngine.selectClearanceFee(
             formulaConfig.clearanceFees(), shipmentQtySqm, shipmentLabel);
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
         for (ItemPhysicals item : items) {
-            BigDecimal thicknessGroupQtySqm = qtySqmByThickness.get(item.thicknessMm());
-            BigDecimal freightAmountForThickness = freightAmountByThickness.get(item.thicknessMm());
+            FreightGroupKey key = new FreightGroupKey(item.originCountryCode(), item.thicknessMm());
+            BigDecimal freightGroupQtySqm = qtySqmByGroup.get(key);
+            BigDecimal freightAmountForGroup = freightAmountByGroup.get(key);
             // F/S allocation is inherently a TOTAL-for-the-item quantity (a share of a flat,
             // shipment-level amount, proportional to the item's own share of the group's sqm —
             // see class Javadoc) — computed once here, in totals, then carried through the
             // formula's own C/i/F/T/S/TC/UC pipeline (also totals, per V109's own definition: TC
             // is dimensionally a total, only UC=TC/Q converts it to a per-sqm rate).
-            BigDecimal freightShareTotal = allocate(freightAmountForThickness, item.qtySqm(), thicknessGroupQtySqm);
+            BigDecimal freightShareTotal = allocate(freightAmountForGroup, item.qtySqm(), freightGroupQtySqm);
             BigDecimal clearanceShareTotal = allocate(clearanceFee.amountThb(), item.qtySqm(), shipmentQtySqm);
 
             PricingDutyRateDto dutyRate = formulaEngine.selectDutyRate(
@@ -199,8 +211,8 @@ public class LandedCostCalculator {
             BigDecimal cifPerPiece = money4(cifTotal.divide(item.qtyPieces(), 8, RoundingMode.HALF_UP));
             BigDecimal clearancePerPiece = money4(clearanceShareTotal.divide(item.qtyPieces(), 8, RoundingMode.HALF_UP));
 
-            String snapshot = buildSnapshot(item, originCountry, freightAmountForThickness, freightShareTotal,
-                thicknessGroupQtySqm, clearanceFee.amountThb(), clearanceShareTotal, shipmentQtySqm,
+            String snapshot = buildSnapshot(item, freightAmountForGroup, freightShareTotal,
+                freightGroupQtySqm, clearanceFee.amountThb(), clearanceShareTotal, shipmentQtySqm,
                 dutyRate.dutyPct(), formulaConfig, calculatedAt);
 
             ResolvedSource source = item.source();
@@ -267,9 +279,10 @@ public class LandedCostCalculator {
         BigDecimal goodsCostThb = money4(goodsCostPerPiece.multiply(qtyPieces));
         BigDecimal insuranceThb = formulaEngine.insurance(goodsCostThb, formulaConfig);
         BigDecimal thicknessMm = resolveThicknessMm(source.requestItem());
+        String originCountryCode = resolveOriginCountryCode(source.requestItem());
         String productType = resolveProductType(source.requestItem());
         return new ItemPhysicals(source, sqmPerPiece, qtyPieces, qtySqm, goodsCostPerPiece, goodsCostThb,
-            insuranceThb, thicknessMm, productType, fx);
+            insuranceThb, thicknessMm, originCountryCode, productType, fx);
     }
 
     /**
@@ -293,6 +306,27 @@ public class LandedCostCalculator {
                     + "— ไม่สามารถคำนวณค่าขนส่งได้ กรุณาเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่มีความหนาระบุไว้");
         }
         return thicknessMm;
+    }
+
+    /**
+     * Origin country comes ONLY from the catalog link — {@code price_catalog.factories.country}
+     * via {@code price_catalog.product_prices.factory_id} — resolved through the SAME {@code
+     * catalog_price_id}/{@code product_id} link {@link #resolveThicknessMm} uses (see class
+     * Javadoc's V151 section for why: this is the canonical ISO 3166-1 alpha-2 source {@code
+     * sales.pricing_freight_rate.origin_country_code} is normalised against; {@code
+     * sales.factory_config.country}, a different table's free-text field, is never read for
+     * pricing). An item with no resolvable catalog link fails costing LOUDLY here, naming the
+     * item, for the same reason a missing thickness does.
+     */
+    private String resolveOriginCountryCode(PricingRequestItemDto requestItem) {
+        Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
+        String countryCode = priceId == null ? null : catalog.findOriginCountryCode(priceId).orElse(null);
+        if (countryCode == null) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                itemLabel(requestItem) + " ไม่มีประเทศต้นทาง (origin country) จาก Price Catalog "
+                    + "— ไม่สามารถคำนวณค่าขนส่งได้ กรุณาเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่ระบุโรงงานและประเทศต้นทางไว้");
+        }
+        return countryCode;
     }
 
     /** Owner ruling 2026-08-16: {@code product_type} has no source in deal data today, so every
@@ -332,8 +366,8 @@ public class LandedCostCalculator {
         return money4(flatAmountThb.multiply(ratio));
     }
 
-    private String buildSnapshot(ItemPhysicals item, String originCountry, BigDecimal freightAmountForThickness,
-                                 BigDecimal freightShare, BigDecimal thicknessGroupQtySqm, BigDecimal clearanceAmount,
+    private String buildSnapshot(ItemPhysicals item, BigDecimal freightAmountForGroup,
+                                 BigDecimal freightShare, BigDecimal freightGroupQtySqm, BigDecimal clearanceAmount,
                                  BigDecimal clearanceShare, BigDecimal shipmentQtySqm, BigDecimal dutyPct,
                                  PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
         // Every value quoted as a JSON STRING (never a bare number) — mirrors the pre-V109
@@ -344,12 +378,12 @@ public class LandedCostCalculator {
             + ",\"calculatedAt\":\"" + calculatedAt + "\""
             + ",\"formulaConfigId\":\"" + formulaConfig.formulaConfigId() + "\""
             + ",\"formulaConfigVersion\":\"" + formulaConfig.version() + "\""
-            + ",\"originCountry\":\"" + originCountry + "\""
+            + ",\"originCountryCode\":\"" + item.originCountryCode() + "\""
             + ",\"thicknessMm\":\"" + item.thicknessMm() + "\""
             + ",\"productType\":\"" + item.productType() + "\""
             + ",\"itemQtySqm\":\"" + item.qtySqm() + "\""
-            + ",\"freightThicknessGroupQtySqm\":\"" + thicknessGroupQtySqm + "\""
-            + ",\"freightAmountThbForGroup\":\"" + freightAmountForThickness + "\""
+            + ",\"freightGroupQtySqm\":\"" + freightGroupQtySqm + "\""
+            + ",\"freightAmountThbForGroup\":\"" + freightAmountForGroup + "\""
             + ",\"freightShareThb\":\"" + freightShare + "\""
             + ",\"shipmentQtySqm\":\"" + shipmentQtySqm + "\""
             + ",\"clearanceAmountThbForShipment\":\"" + clearanceAmount + "\""
@@ -514,8 +548,17 @@ public class LandedCostCalculator {
      * TOTAL for this item's full requested quantity) are both kept: the formula pipeline
      * (C/i/F/T/S/TC/UC) runs in totals, but the stored "breakdown" columns report per-piece
      * (see {@link #costShipment}'s own comment) — keeping the direct per-piece value here avoids
-     * re-deriving it by dividing the total back down, which would compound a second rounding. */
+     * re-deriving it by dividing the total back down, which would compound a second rounding.
+     * {@code originCountryCode} is the catalog-sourced ISO 3166-1 alpha-2 code (V151) — see
+     * {@link #resolveOriginCountryCode}. */
     private record ItemPhysicals(ResolvedSource source, BigDecimal sqmPerPiece, BigDecimal qtyPieces,
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
-                                 BigDecimal insuranceThb, BigDecimal thicknessMm, String productType, FxSnapshot fx) {}
+                                 BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,
+                                 String productType, FxSnapshot fx) {}
+
+    /** Freight lookup/allocation grain within a shipment — both fields are per-item, catalog-
+     * sourced physical drivers of {@code sales.pricing_freight_rate}'s lookup key (origin country
+     * since V151, thickness since V109) — see the class Javadoc. A plain record gets correct
+     * {@code equals}/{@code hashCode} for free, which is all a {@code Map} key needs here. */
+    private record FreightGroupKey(String originCountryCode, BigDecimal thicknessMm) {}
 }

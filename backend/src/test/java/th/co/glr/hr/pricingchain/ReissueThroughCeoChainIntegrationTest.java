@@ -188,7 +188,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", FACTORY));
-        catalogProductId = insertCatalogProduct(FACTORY, "TH", "TEST-REISSUE-001",
+        catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-REISSUE-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

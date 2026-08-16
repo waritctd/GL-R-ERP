@@ -171,9 +171,9 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A3-rollback", "TH", "TEST-A3-RB-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A3-rollback", "IT", "TEST-A3-RB-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B3-rollback", "TH", "TEST-B3-RB-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B3-rollback", "IT", "TEST-B3-RB-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(

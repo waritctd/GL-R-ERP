@@ -363,7 +363,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
      * yet collected, so the deal is deliberately NOT YET at CLOSED_PAID. Used by the "gate
      * rejects a not-yet-closed deal" test. */
     private long driveDealThroughDeliveryOnly(BigDecimal quantity) {
-        long catalogProductId = insertCatalogProduct(FACTORY, "TH",
+        long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-COMM-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerRepository customersRepo = new CustomerRepository(jdbc);
