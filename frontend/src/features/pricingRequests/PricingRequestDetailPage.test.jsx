@@ -1127,6 +1127,19 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
   }
 
+  // "ต้นทุนโรงงาน (ฐาน): <code>฿60.00</code>" splits its label and value across an element
+  // boundary (the <code> wraps the figure, matching every other computed-money display in this
+  // panel) — the default getByText text matcher does not read across that boundary (it is a
+  // known testing-library limitation, not a markup defect: the "ราคาขาย" line right next to it
+  // has no such boundary and matches a plain regex fine). A function matcher reading the whole
+  // element's combined textContent, restricted to the leaf that owns it, is the documented fix.
+  function byCombinedText(regex) {
+    return (_content, element) => {
+      if (!regex.test(element.textContent)) return false;
+      return Array.from(element.children).every((child) => !regex.test(child.textContent));
+    };
+  }
+
   it('lets the CEO start a review from READY_FOR_CEO_REVIEW, calling startPricingDecision', async () => {
     const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
     renderDetailPage({ user: ceoUser, request });
@@ -1164,7 +1177,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    expect(screen.getByText(/ต้นทุนโรงงาน.*฿60\.00/)).not.toBeNull();
+    expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
     expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
     // The old per-item margin/minimum/ceiling grid is gone entirely.
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
@@ -1238,6 +1251,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       // ต้นทุนคำนวณ/ชิ้น (computed, info) — never destroyed by the override.
       expect(screen.getByText('฿55.00')).not.toBeNull();
@@ -1245,16 +1259,17 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByText('฿75.00')).not.toBeNull();
       expect(screen.getByText('ปรับเอง')).not.toBeNull();
       expect(screen.getByText('(ราคาต้นทุนจริงจากใบขนสินค้า)')).not.toBeNull();
-      // The per-requested-unit basis (a different number, 60) still renders, labelled distinctly
-      // ("ต้นทุน/หน่วยที่ขอ", not wrapped in its own <code> like the per-piece figures above, so
-      // this is a substring match against the combined "label: value" text of that line).
-      expect(screen.getByText(/ต้นทุน\/หน่วยที่ขอ.*฿60\.00/)).not.toBeNull();
+      // The per-requested-unit basis (a different number, 60) still renders in the main
+      // (collapsed) view under its Phase-1-simplification label — a substring match against the
+      // combined "label: value" text of that line.
+      expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
     });
 
     it('refuses to SAVE an override with a blank reason, client-side, without calling the API', async () => {
       renderWithCostingItem();
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
@@ -1271,6 +1286,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
@@ -1284,6 +1300,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem();
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
@@ -1300,6 +1317,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
@@ -1311,7 +1329,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    it('renders the stale-override warning badge and disables approval when a fixture has overrideStale: true', async () => {
+    // The stale-override badge is deliberately in the MAIN (collapsed) header row, not inside the
+    // derivation disclosure — a CEO must see it without expanding anything.
+    it('renders the stale-override warning badge (uncollapsed) and disables approval when a fixture has overrideStale: true', async () => {
       renderWithCostingItem({
         manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม',
         overrideFxRate: 1, overrideCalcConfigVersion: 1, calculationConfigVersion: 2, overrideStale: true,
@@ -1333,10 +1353,165 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  it('disables approval until every item has a margin and a minimum selling price (mirrors the server 422 gate)', async () => {
+  // Phase 1 UI simplification ("ปรับราคาเอง", owner ruling 2026-08-16) — a REAL behaviour change:
+  // overrides the SELLING PRICE directly (not the cost), and the formula stops driving that line
+  // entirely. Reuses PUT /pricing-decisions/{id} (updatePricingDecision) rather than a new
+  // endpoint — see PricingDecisionRequests.UpdatePricingDecisionItemRequest's own doc comment for
+  // why sellingPriceOverride/clearSellingPriceOverride need a tri-state that plain COALESCE can't
+  // express, and PriceOverrideModal / the overrideSellingPrice mutation in the page itself.
+  describe('CEO per-line selling-price override ("ปรับราคาเอง")', () => {
+    it('shows the automatically computed price by default, opens the derivation, and offers ปรับราคาเอง', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByText('ราคาปรับเอง')).toBeNull();
+      expandDerivation();
+      expect(screen.getByRole('button', { name: 'ปรับราคาเอง' })).not.toBeNull();
+    });
+
+    it('refuses to SAVE a price override with a blank reason, client-side, without calling the API', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับราคาเอง' });
+      fireEvent.change(within(dialog).getByLabelText(/^ราคาที่ปรับ/), { target: { value: '90' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกราคาที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับราคาขาย')).not.toBeNull();
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('refuses to CLEAR a price override with a blank reason, client-side, without calling the API', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขราคาที่ปรับ' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับราคาขาย')).not.toBeNull();
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('saves a new price override — happy path SET, calling updatePricingDecision with a single-item payload', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับราคาเอง' });
+      fireEvent.change(within(dialog).getByLabelText(/^ราคาที่ปรับ/), { target: { value: '90' } });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'ลูกค้าต่อรองราคาสุดท้าย' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกราคาที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            sellingPriceOverride: 90,
+            clearSellingPriceOverride: false,
+            decisionNote: 'ลูกค้าต่อรองราคาสุดท้าย',
+          }],
+        },
+      ));
+    });
+
+    it('clears an existing price override — happy path CLEAR', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขราคาที่ปรับ' });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'กลับไปใช้ราคาอัตโนมัติ' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            sellingPriceOverride: null,
+            clearSellingPriceOverride: true,
+            decisionNote: 'กลับไปใช้ราคาอัตโนมัติ',
+          }],
+        },
+      ));
+    });
+
+    // Uncollapsed, same as the stale-override badge — a CEO must see AT A GLANCE that a price was
+    // fixed manually, without expanding anything.
+    it('shows a "ราคาปรับเอง" indicator in the main (collapsed) view and the overridden price, once active', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByText('ราคาปรับเอง')).not.toBeNull();
+      expect(screen.getByText(/ราคาขาย.*฿90\.00/)).not.toBeNull();
+      // The formula's own output (72) is superseded, not deleted — never shown as THE price.
+      expect(screen.queryByText(/ราคาขาย.*฿72\.00/)).toBeNull();
+    });
+
+    // Mirrors PricingDecisionService#approve's own missingMargin exemption for an overridden
+    // item: a "ปรับราคาเอง" line needs no margin at all to approve.
+    it('does not require a margin on an overridden line to enable approval', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          items: [buildDecisionItem({ proposedMarginPct: null, manualSellingPricePerRequestedUnit: 90 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(false);
+    });
+
+    it('shows Import no price-override button anywhere', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+
+      expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
+    });
+  });
+
+  // ราคาขั้นต่ำ is no longer a CEO input (auto-populated server-side at approve() — see
+  // PricingDecisionService#approve), so only a missing MARGIN can block approval now, and only on
+  // a line with no active "ปรับราคาเอง" override.
+  it('disables approval until every item has a margin (mirrors the server 422 gate)', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({
-      items: [buildDecision({ items: [buildDecisionItem({ minimumSellingPricePerRequestedUnit: null })] })],
+      items: [buildDecision({ items: [buildDecisionItem({ proposedMarginPct: null })] })],
     });
     renderDetailPage({ user: ceoUser, request });
     await waitForLoaded(request);
@@ -1389,7 +1564,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
 
     expect(screen.queryByText('PCD-2026-0001')).toBeNull();
-    expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'วิธีคำนวณราคานี้' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'อนุมัติราคาขาย' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
   });
