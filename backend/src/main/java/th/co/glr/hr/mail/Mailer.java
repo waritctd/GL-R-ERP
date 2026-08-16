@@ -17,6 +17,13 @@ import java.util.List;
  * <p>Callers ({@link th.co.glr.hr.notification.NotificationEmailService},
  * {@link th.co.glr.hr.factory.FactoryEmailService}) depend on this interface, never a concrete
  * transport - swapping providers is a config change, not a code change.
+ *
+ * <p><b>{@code app.mail.override-to} containment lives here too, transparently.</b> When that
+ * property is set, {@link MailOverrideBeanPostProcessor} wraps whichever transport is active in
+ * {@link OverrideRedirectingMailer}, so the {@code Mailer} bean any of the above actually receives
+ * already redirects every send. No implementor of this interface, and no caller of it, needs its own
+ * override-to check - see {@link OverrideRedirectingMailer}'s Javadoc for why one hand-rolled per
+ * caller (issue #782) was the bug, not a pattern to repeat for the next caller.
  */
 public interface Mailer {
     /**

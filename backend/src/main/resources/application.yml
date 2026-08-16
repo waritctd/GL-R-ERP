@@ -110,11 +110,18 @@ app:
       password: ${APP_MAIL_SMTP_PASSWORD:}
       starttls: ${APP_MAIL_SMTP_STARTTLS:true}
     # OFF by default (blank) = 1-to-many: each notification goes to the real per-employee address.
-    # Set only on a test/UAT deployment to redirect every notification email to one inbox
-    # (regardless of the employee's actual/fake seeded address) so the pipeline can be verified
-    # without real mailboxes. This is the BASE default every profile inherits, including prod —
-    # it must stay blank here; a non-blank override belongs only in a test/UAT-specific profile,
-    # never in this file.
+    # Set only on a test/UAT deployment to redirect EVERY outbound email - notifications and
+    # factory-quote mail alike, and any future Mailer caller - to one inbox (regardless of the
+    # caller-supplied address) so the pipeline can be verified without real mailboxes. This is the
+    # BASE default every profile inherits, including prod — it must stay blank here; a non-blank
+    # override belongs only in a test/UAT-specific profile, never in this file. ProductionReadinessConfig
+    # additionally refuses to boot the prod profile at all if this ends up set anyway (when the active
+    # provider sends real mail) — see that class.
+    #
+    # The redirect itself is enforced in exactly one place regardless of caller: see
+    # th.co.glr.hr.mail.OverrideRedirectingMailer, installed transparently around the active Mailer
+    # bean by MailOverrideBeanPostProcessor. Nothing that calls Mailer implements this rule itself
+    # (#782 was exactly that: one caller had its own copy, another had none).
     override-to: ${APP_MAIL_OVERRIDE_TO:}
     # Appended (not prepended) to the subject so a test/UAT deployment never lets a real inbox
     # mistake test mail for real, without putting a bracketed keyword at the FRONT of the subject -

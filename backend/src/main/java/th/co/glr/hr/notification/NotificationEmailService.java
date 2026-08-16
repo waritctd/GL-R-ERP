@@ -28,7 +28,26 @@ public class NotificationEmailService {
     private static final String FONT_STACK = "'Sarabun',-apple-system,'Segoe UI',Tahoma,sans-serif";
 
     private final Mailer mailer;
-    private final String overrideTo;
+    /**
+     * Whether {@code app.mail.override-to} is configured - NOT the address itself, and NOT used to
+     * pick a recipient. Recipient redirection now lives entirely in
+     * {@link th.co.glr.hr.mail.OverrideRedirectingMailer}, which wraps the {@link Mailer} bean this
+     * class is handed (issue #782: this class and {@code FactoryEmailService} used to each need their
+     * own copy of {@code overrideTo.isBlank() ? to : overrideTo} - one of them simply didn't have it -
+     * which is the defect the decorator exists to make structurally impossible; see that class).
+     *
+     * <p>This class still needs to know WHETHER an override is active, for a narrower and unrelated
+     * reason: {@code to} can legitimately arrive null/blank (an employee with no email on file -
+     * {@code NotificationService} no longer gates on the address before calling this), and normally
+     * that means there is nothing to send. Except when an override IS configured, where attempting the
+     * send anyway - and letting the Mailer redirect it - is what lets a UAT/test deployment exercise
+     * the full notification pipeline even for an employee seeded without a real address. That
+     * send-or-skip decision is this class's business, not the Mailer's; the address actually dialled,
+     * and the note marking a redirected send as redirected, are the Mailer's alone now - see
+     * {@link #send} / {@link #sendWithAttachment} below, both of which pass {@code to} to the Mailer
+     * completely unchanged, override configured or not.
+     */
+    private final boolean overrideConfigured;
     private final String subjectSuffix;
     private final String appBaseUrl;
     /** The logo, pre-wrapped as the single-element list {@link Mailer#sendHtml} expects - computed
@@ -60,7 +79,7 @@ public class NotificationEmailService {
                                     // actually forces a real value in a real deployment.
                                     @Value("${app.mail.app-base-url:}") String appBaseUrl) {
         this.mailer = mailer;
-        this.overrideTo = clean(overrideTo);
+        this.overrideConfigured = !clean(overrideTo).isBlank();
         this.subjectSuffix = subjectSuffix == null ? "" : subjectSuffix;
         this.appBaseUrl = stripTrailingSlash(clean(appBaseUrl));
         byte[] logoBytes = brandAssets.logoBytes();
@@ -71,60 +90,49 @@ public class NotificationEmailService {
 
     @Async
     public void send(long employeeId, String to, String recipientName, String subject, String body, String link) {
-        // override-to lets a test deployment redirect every notification email to one real inbox
-        // (regardless of the employee's actual/fake address, or even a missing one) so the email
-        // pipeline can be verified without real per-employee mailboxes. Blank on every other
-        // deployment, so real deployments behave exactly as before.
-        // NotificationService no longer gates on the address before calling this, so `to` really can
-        // arrive null in production now, not just from a direct test call - this null/blank branch
-        // below is what makes the "or even a missing one" promise above true end-to-end.
-        String recipient = overrideTo.isBlank() ? to : overrideTo;
-        if (recipient == null || recipient.isBlank()) {
+        // See overrideConfigured's Javadoc above: this is a send-or-skip decision, not a "who do I
+        // send to" decision. `to` reaches the Mailer exactly as received below, whether or not an
+        // override is configured - the Mailer is what redirects it (and marks that it did) when one
+        // is active.
+        if ((to == null || to.isBlank()) && !overrideConfigured) {
             log.info("Notification email skipped: employee={} has no email and no override configured",
                 employeeId);
             return;
         }
         String finalSubject = "[GL&R HR] " + subject + subjectSuffix;
-        String redirectNote = overrideTo.isBlank()
-            ? null
-            : "Redirected for testing — originally addressed to employee #" + employeeId
-                + (to == null || to.isBlank() ? " (no email on file)." : " (" + to + ").");
-        String htmlBody = htmlBody(recipientName, body, link, redirectNote);
-        String textBody = textBody(recipientName, body, link, redirectNote);
+        String htmlBody = htmlBody(recipientName, body, link);
+        String textBody = textBody(recipientName, body, link);
         try {
-            mailer.sendHtml(recipient, finalSubject, htmlBody, textBody, logoInlineImages);
-            log.info("Notification email sent: employee={} to={}", employeeId, recipient);
+            mailer.sendHtml(to, finalSubject, htmlBody, textBody, logoInlineImages);
+            log.info("Notification email dispatched: employee={} to={}", employeeId,
+                (to == null || to.isBlank()) ? "(none - relying on app.mail.override-to)" : to);
         } catch (Exception exception) {
             log.error("Failed to send notification email: employee={} to={} error={}",
-                employeeId, recipient, exception.getMessage());
+                employeeId, to, exception.getMessage());
         }
     }
 
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
-        String recipient = overrideTo.isBlank() ? to : overrideTo;
-        if (recipient == null || recipient.isBlank()) {
+        if ((to == null || to.isBlank()) && !overrideConfigured) {
             throw new IllegalArgumentException("Email recipient is required");
         }
         if (bytes == null || bytes.length == 0) {
             throw new IllegalArgumentException("Attachment is required");
         }
         String finalSubject = subject + subjectSuffix;
-        String finalBody = overrideTo.isBlank()
-            ? clean(body)
-            : clean(body) + "\n\nRedirected for testing — originally addressed to "
-                + (to == null || to.isBlank() ? "no email on file." : to + ".");
+        String finalBody = clean(body);
         try {
-            mailer.sendWithAttachment(recipient, finalSubject, finalBody, filename, bytes);
-            log.info("Notification email with attachment sent: to={} filename={}", recipient, filename);
+            mailer.sendWithAttachment(to, finalSubject, finalBody, filename, bytes);
+            log.info("Notification email with attachment dispatched: to={} filename={}", to, filename);
         } catch (Exception exception) {
             log.error("Failed to send notification email with attachment: to={} filename={} error={}",
-                recipient, filename, exception.getMessage());
+                to, filename, exception.getMessage());
             throw new IllegalStateException("Failed to send email with attachment", exception);
         }
     }
 
-    /** Plain-text alternative - the original body format, unchanged, plus the redirect note when set. */
-    private String textBody(String recipientName, String body, String link, String redirectNote) {
+    /** Plain-text alternative - the original body format, unchanged. */
+    private String textBody(String recipientName, String body, String link) {
         String greeting = clean(recipientName).isBlank()
             ? "เรียน ท่านผู้ใช้งาน,"
             : "เรียน คุณ" + clean(recipientName) + ",";
@@ -143,9 +151,6 @@ public class NotificationEmailService {
         message.append("ขอแสดงความนับถือ\n")
             .append("ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)\n")
             .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ");
-        if (redirectNote != null) {
-            message.append("\n\n").append(redirectNote);
-        }
         return message.toString();
     }
 
@@ -155,20 +160,13 @@ public class NotificationEmailService {
      * particular is often free text typed by a manager (e.g. a leave reviewerNote) and must not be
      * able to inject markup.
      */
-    private String htmlBody(String recipientName, String body, String link, String redirectNote) {
+    private String htmlBody(String recipientName, String body, String link) {
         String cleanName = clean(recipientName);
         String greeting = cleanName.isBlank()
             ? "เรียน ท่านผู้ใช้งาน,"
             : "เรียน คุณ" + escapeHtml(cleanName) + ",";
         String messageHtml = escapeHtml(clean(body)).replace("\r\n", "\n").replace("\n", "<br>");
         String cta = ctaHtml(link);
-        String redirectHtml = redirectNote == null ? "" : """
-            <tr>
-              <td style="padding:16px 32px 0 32px;">
-                <p style="margin:0;font-family:%s;font-size:12px;color:#9ca3af;">%s</p>
-              </td>
-            </tr>
-            """.formatted(FONT_STACK, escapeHtml(redirectNote));
         String logoSrc = "cid:" + LOGO_CONTENT_ID;
 
         // The GL&R artwork is black-on-white with NO alpha channel, so the header band stays white
@@ -214,7 +212,6 @@ public class NotificationEmailService {
                             <p style="margin:0;font-family:%s;font-size:12px;color:#9ca3af;">— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ</p>
                           </td>
                         </tr>
-                        %s
                       </table>
                     </td>
                   </tr>
@@ -222,7 +219,7 @@ public class NotificationEmailService {
               </body>
             </html>
             """.formatted(BRAND_COLOR, logoSrc, FONT_STACK, FONT_STACK, greeting, messageHtml, cta, FONT_STACK,
-                FONT_STACK, redirectHtml);
+                FONT_STACK);
     }
 
     /** Bulletproof CTA: a background-colored {@code <table>} with a padded {@code <a>}, not a styled
