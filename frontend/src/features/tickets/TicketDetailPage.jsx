@@ -947,7 +947,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // unchanged — those are already stable, already covered by e2e specs,
     // and are a different kind of primary (server-gated, not
     // resolver-derived), so they are not folded into this generic id.
-    if (to && to !== `/tickets/${ticketId}`) {
+    // `!jumpId` is load-bearing: an action that has an in-page target on THIS page must scroll to
+    // it, never navigate away, even when its resolver supplies a `to`.
+    //
+    // Before the /fulfilment workspace existed, nextImportAction returned `/tickets/:id` for the
+    // four fulfilment codes, so this condition was false for them and the cascade fell through to
+    // the `else if (jumpId)` branch below — the sticky button scrolled down to
+    // DealFulfilmentPanel, where the real server-gated control lives. Pointing those codes at
+    // /fulfilment made this branch fire instead, so an import user standing ON the deal, one
+    // scroll away from the button they wanted, was ejected to a list page to find the same deal
+    // again. That is a longer round trip than the one the workspace exists to remove, and it
+    // silently disabled four IN_PAGE_JUMP_TARGET entries while recordDelivery — which kept a
+    // `/tickets/:id` `to` — went on scrolling, so one bar had two behaviours.
+    //
+    // Deciding it here rather than in nextImportAction is deliberate: the resolver serves the
+    // dashboard and the workspace too, and for THOSE callers /fulfilment is the correct
+    // destination. Only this page knows it already contains the target.
+    if (to && to !== `/tickets/${ticketId}` && !jumpId) {
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
           {workStateAction.label}

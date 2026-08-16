@@ -34,7 +34,12 @@ const PATH_LABELS = {
   '/finance': 'งานการเงิน',
   '/payroll': 'เงินเดือน',
   '/price-import': 'นำเข้าราคา',
-  '/pricing-requests': 'คิวคำขอราคา',
+  // Was 'คิวคำขอราคา' — stale since ebaf6888 renamed the nav item (and the page
+  // title it lands on) to คิวขอราคา. This map's own header requires it to mirror
+  // AppShell's nav label, so the refusal named a page that no longer exists
+  // under that name.
+  '/pricing-requests': 'คิวขอราคา',
+  '/fulfilment': 'งานนำเข้า',
   '/ceo-settings': 'ตั้งค่าราคา',
   '/factory-purchase-orders': 'ใบสั่งซื้อโรงงาน',
   '/employee-requests': 'คำขอ (OT / สวัสดิการ)',

@@ -459,6 +459,17 @@ export const ROLE_PERMISSIONS = {
   canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
+  // งานนำเข้า (/fulfilment) — Import's cross-deal fulfilment workspace, which
+  // advances the four stage-12 transitions in place. Mirrors
+  // TicketService.FULFILMENT_ROLES = Set.of("import", "ceo") exactly — the gate
+  // on issueImportRequest / markIrSent / markShipping / markGoodsReceived.
+  //
+  // PRESENTATION ONLY, like every entry in this map: adding a role here would
+  // show it the page and earn it four 403s, not grant it anything. Deliberately
+  // NARROWER than canViewPricingRequestQueue (its nav neighbour, which includes
+  // sales_manager) — a sales_manager on this page would see rows whose every
+  // button the backend refuses.
+  canActOnFulfilment: ['import', 'ceo'],
   canProposePrices: ['import'],
   canApproveReject: ['ceo'],
   canGenerateQuotation: ['sales'],

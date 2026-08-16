@@ -185,6 +185,31 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/settings/leave-policy', ceo)).toBe(true);
   });
 
+  // ── /fulfilment (งานนำเข้า) — the same fail-open shape a third time ────────
+  // A brand-new path with no PATH_GUARDS entry is reachable by EVERY authenticated
+  // role, so these refusals are the assertions that matter. Written wrong-way-round
+  // per CLAUDE.md: deleting the guard entry makes the first test fail.
+  //
+  // FRONTEND ROUTING ONLY. This proves which roles the SPA will route to the page;
+  // it is NOT evidence about the server. The real gate is
+  // TicketService.FULFILMENT_ROLES {import, ceo} on the four endpoints the page
+  // calls, unchanged by this branch and NOT verified here.
+  it('refuses every role but import/ceo on the fulfilment workspace', () => {
+    expect(canAccessPath('/fulfilment', employee)).toBe(false);
+    expect(canAccessPath('/fulfilment', sales)).toBe(false);
+    expect(canAccessPath('/fulfilment', hr)).toBe(false);
+    expect(canAccessPath('/fulfilment', account)).toBe(false);
+    // Narrower than its nav neighbour /pricing-requests, which DOES admit
+    // sales_manager — a sales_manager here would find every button 403s.
+    expect(canAccessPath('/fulfilment', { role: 'sales_manager', employeeId: 8 })).toBe(false);
+    expect(canAccessPath('/pricing-requests', { role: 'sales_manager', employeeId: 8 })).toBe(true);
+  });
+
+  it('lets import and ceo reach the fulfilment workspace, mirroring FULFILMENT_ROLES', () => {
+    expect(canAccessPath('/fulfilment', importer)).toBe(true);
+    expect(canAccessPath('/fulfilment', ceo)).toBe(true);
+  });
+
   it('scopes ticket paths to ticket roles', () => {
     expect(canAccessPath('/tickets', sales)).toBe(true);
     expect(canAccessPath('/tickets/12', sales)).toBe(true);

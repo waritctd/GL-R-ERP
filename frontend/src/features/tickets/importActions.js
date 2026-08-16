@@ -1,9 +1,14 @@
 // Single source of truth for "what does Import need to do next on this deal" —
 // factored OUT of DealFulfilmentPanel's fulfilment-chain `can.*` status
 // matching (role-scoped-views plan, Import build — docs/role-scoped-views.md)
-// so ImportOverview's worklist CTA, ProcurementFulfilmentPage's fulfilment
-// worklist, and the panel that actually performs the mutation can never
-// disagree about which stage a deal is at.
+// so ImportOverview's worklist CTA, ImportFulfilmentPage's fulfilment worklist,
+// and the panel that actually performs the mutation can never disagree about
+// which stage a deal is at.
+//
+// The third consumer was ProcurementFulfilmentPage until ebaf6888 deleted it;
+// this header went on naming it for six days after it stopped existing.
+// features/fulfilment/ImportFulfilmentPage.jsx (งานนำเข้า) is the live one, and
+// unlike its predecessor it PERFORMS the transitions rather than linking to them.
 //
 // Deliberately status-only (no `hasAction`/`availableActions` check):
 // DealFulfilmentPanel still gates the real button on
@@ -50,6 +55,22 @@ export function nextFulfilmentActionCode(ticket) {
 }
 
 /**
+ * The four fulfilment-chain codes the งานนำเข้า workspace (/fulfilment) owns and
+ * performs in place — stage 12, DealStage.PROCUREMENT.
+ *
+ * Exported so the workspace selects its rows from the SAME list this module uses
+ * to route CTAs there. A second copy in the page would drift the day delivery
+ * moves: the page would keep filtering one set while the CTA routed another.
+ *
+ * `recordDelivery` — the fifth code nextFulfilmentActionCode can return — is
+ * deliberately absent. Delivery is being reassigned to Sales (owner ruling), so
+ * the workspace excludes it and its CTA stays on the deal page.
+ */
+export const FULFILMENT_WORKSPACE_CODES = [
+  'issueImportRequest', 'markIrSent', 'markShipping', 'markGoodsReceived',
+];
+
+/**
  * The full "what does Import own next" decision for a deal, including the
  * PricingRequest pickup step upstream of fulfilment. DealFulfilmentPanel has
  * no opinion on pickup (it only owns the fulfilment chain), but Import's
@@ -61,9 +82,19 @@ export function nextFulfilmentActionCode(ticket) {
  * fulfilment cannot proceed until pricing is resolved.
  *
  * Returns `{ code, label, to }` or `null` when there is nothing for Import to
- * do on this deal right now. `to` is the CTA's navigation target —
- * '/pricing-requests' (the queue page, where the actual pickup button lives)
- * for a pickup, otherwise `/tickets/:id`.
+ * do on this deal right now.
+ *
+ * `to` is the CTA's navigation target, and it always points at THE PAGE THAT CAN
+ * PERFORM THE ACTION — never at a page that merely displays it:
+ *
+ *   pickupPricingRequest  -> '/pricing-requests'  (คิวขอราคา — the pickup button)
+ *   the four import steps -> '/fulfilment'        (งานนำเข้า — acts in place)
+ *   recordDelivery        -> '/tickets/:id'       (the deal's จัดซื้อ-ส่งมอบ tab)
+ *
+ * Delivery keeps the deal deep link because งานนำเข้า deliberately excludes it
+ * (owner ruling: delivery is being reassigned to Sales), so the deal page really
+ * is the only surface that can record one. Sending it to /fulfilment would land
+ * the user on a page with no delivery control and no row for their deal.
  */
 export function nextImportAction(ticket, pricingRequests = []) {
   const hasUnpickedRequest = pricingRequests.some((pr) => pr.status === 'SUBMITTED');
@@ -72,5 +103,6 @@ export function nextImportAction(ticket, pricingRequests = []) {
   }
   const code = nextFulfilmentActionCode(ticket);
   if (!code) return null;
-  return { code, label: IMPORT_ACTION_LABELS[code], to: `/tickets/${ticket.id}` };
+  const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/tickets/${ticket.id}`;
+  return { code, label: IMPORT_ACTION_LABELS[code], to };
 }

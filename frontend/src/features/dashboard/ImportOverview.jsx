@@ -182,6 +182,15 @@ export function ImportOverview({ user, employee }) {
   // nextImportAction is the SAME helper DealFulfilmentPanel's `can.*` gates
   // derive from, so this worklist can never disagree with the panel that
   // actually performs the mutation.
+  //
+  // The CTA now hands off to งานนำเข้า (/fulfilment) for the four import-chain
+  // steps instead of deep-linking /tickets/:id — the destination lives in
+  // nextImportAction, not here, so both surfaces move together. This dashboard
+  // stays the AT-A-GLANCE summary and deliberately grows no mutating buttons of
+  // its own: duplicating the workspace is exactly what killed /procurement
+  // (ebaf6888). Division of labour: this page says what is happening (six
+  // buckets, both streams), /fulfilment does the next thing (four stages, one
+  // stream). ส่งมอบ rows still point at the deal — งานนำเข้า excludes delivery.
   const worklistRows = useMemo(() => {
     const rows = tickets
       .map((ticket) => ({ ticket, action: nextImportAction(ticket, prByTicket.get(ticket.id) ?? []) }))

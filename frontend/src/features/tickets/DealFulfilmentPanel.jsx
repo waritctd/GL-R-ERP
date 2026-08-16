@@ -202,8 +202,14 @@ export function DealFulfilmentPanel({
   // Role-scoped views (Import build): the status/fulfillmentStatus matching
   // for the four linear fulfilment-chain steps is now factored into
   // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's
-  // worklist CTA and ProcurementFulfilmentPage — so the two surfaces can
-  // never disagree with this panel about which stage a deal is at.
+  // worklist CTA and ImportFulfilmentPage (งานนำเข้า) — so those surfaces can
+  // never disagree with this panel about which stage a deal is at. (It named
+  // ProcurementFulfilmentPage until ebaf6888 deleted that page.)
+  //
+  // ImportFulfilmentPage now performs the same four transitions from a list row,
+  // so it invalidates the identical query-key set invalidateAfterFulfilmentChange
+  // uses above. Change one and change the other, or a deal advanced on one
+  // surface renders its old stage on the other.
   // hasAction(...) && isFulfilment still gate whether THIS viewer may act on
   // it (list rows don't carry availableActions, so that check stays local).
   const fulfilmentActionCode = nextFulfilmentActionCode({ status: st, fulfillmentStatus: fs });
