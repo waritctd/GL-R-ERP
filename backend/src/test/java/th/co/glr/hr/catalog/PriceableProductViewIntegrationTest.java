@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * V153: the per-sqm basis, the thickness fallback chain, and the view the pricing engine will read.
+ * V152: the per-sqm basis, the thickness fallback chain, and the view the pricing engine will read.
  *
  * <p>The formula works entirely in square metres ({@code UC = TC / Q}, and both the freight and
  * clearance bands key off Q in sqm) while the catalogue stores whatever unit each factory quotes
@@ -46,7 +46,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void perSqmPriceIsTheSourcePriceUnchanged() {
-        long id = insertCatalogProduct("V153 F1", "IT", "SQM-1",
+        long id = insertCatalogProduct("V152 F1", "IT", "SQM-1",
             new BigDecimal("74.50"), "EUR", "per_sqm", "ACTIVE");
         setGeometry(id, "60x120", 600, 1200, new BigDecimal("9"), null, new BigDecimal("1.44"));
 
@@ -56,7 +56,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void perPiecePriceIsDividedByTheAreaOfOnePiece() {
-        long id = insertCatalogProduct("V153 F2", "IT", "PC-1",
+        long id = insertCatalogProduct("V152 F2", "IT", "PC-1",
             new BigDecimal("18.00"), "EUR", "per_piece", "ACTIVE");
         // 0.36 m2 per piece -> 18.00 / 0.36 = 50.00 per m2
         setGeometry(id, "60x60", 600, 600, new BigDecimal("9"), new BigDecimal("0.36"), null);
@@ -74,7 +74,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
      */
     @Test
     void linearMetrePriceIsDividedByTheProfileHeight() {
-        long id = insertCatalogProduct("V153 F3", "IT", "ML-1",
+        long id = insertCatalogProduct("V152 F3", "IT", "ML-1",
             new BigDecimal("22.00"), "EUR", "per_linear_m", "ACTIVE");
         setGeometry(id, "7x60", 70, 600, new BigDecimal("8.5"), null, new BigDecimal("6"));
 
@@ -84,7 +84,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
     /** The mislabelled box quantity: 6 "m2/box" is really 6 linear metres = 0.42 m2. */
     @Test
     void perMetreBoxQuantityIsCorrectedFromLinearMetresToSquareMetres() {
-        long id = insertCatalogProduct("V153 F4", "IT", "ML-2",
+        long id = insertCatalogProduct("V152 F4", "IT", "ML-2",
             new BigDecimal("22.00"), "EUR", "per_linear_m", "ACTIVE");
         setGeometry(id, "7x60", 70, 600, new BigDecimal("8.5"), null, new BigDecimal("6"));
 
@@ -96,7 +96,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void aRowWithNoConvertibleUnitIsReportedUnpriceableRatherThanGuessed() {
-        long id = insertCatalogProduct("V153 F5", "IT", "UNK-1",
+        long id = insertCatalogProduct("V152 F5", "IT", "UNK-1",
             new BigDecimal("15.00"), "EUR", "unknown", "ACTIVE");
         setGeometry(id, "080x600", 80, 600, new BigDecimal("9"), null, null);
 
@@ -108,7 +108,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void aRowWithNoThicknessIsUnpriceableUntilTheCeoSuppliesADefault() {
-        long id = insertCatalogProduct("V153 F6", "ES", "TH-1",
+        long id = insertCatalogProduct("V152 F6", "ES", "TH-1",
             new BigDecimal("40.00"), "EUR", "per_sqm", "ACTIVE");
         setGeometry(id, "20x20", 200, 200, null, null, null);
         jdbc.update("UPDATE price_catalog.product_prices SET collection = 'ALTEA' WHERE price_id = :id",
@@ -133,7 +133,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void theMostSpecificThicknessDefaultWins() {
-        long id = insertCatalogProduct("V153 F7", "ES", "TH-2",
+        long id = insertCatalogProduct("V152 F7", "ES", "TH-2",
             new BigDecimal("40.00"), "EUR", "per_sqm", "ACTIVE");
         setGeometry(id, "30x60", 300, 600, null, null, null);
         jdbc.update("UPDATE price_catalog.product_prices SET collection = 'BARNET' WHERE price_id = :id",
@@ -155,7 +155,7 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void aThicknessOutsideTheSeededFreightBandsIsFlaggedNotSilentlyPriced() {
-        long id = insertCatalogProduct("V153 F8", "IT", "TH-3",
+        long id = insertCatalogProduct("V152 F8", "IT", "TH-3",
             new BigDecimal("90.00"), "EUR", "per_sqm", "ACTIVE");
         // Freight bands cover [3,21) mm only; a 30 mm slab matches nothing.
         setGeometry(id, "120x120", 1200, 1200, new BigDecimal("30"), null, null);
@@ -167,9 +167,9 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void theViewShowsOnlyTheActiveVersion() {
-        long active = insertCatalogProduct("V153 F9", "IT", "VER-1",
+        long active = insertCatalogProduct("V152 F9", "IT", "VER-1",
             new BigDecimal("50.00"), "EUR", "per_sqm", "ACTIVE");
-        long draft = insertCatalogProduct("V153 F10", "IT", "VER-2",
+        long draft = insertCatalogProduct("V152 F10", "IT", "VER-2",
             new BigDecimal("50.00"), "EUR", "per_sqm", "DRAFT");
 
         Integer activeSeen = jdbc.queryForObject(
