@@ -44,13 +44,21 @@ function sampleFormulaConfig() {
     defaultMarginPct: 0.24,
     sellingPriceRoundUpTo: 10,
     freightRates: [
-      { freightRateId: 1, originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
+      { freightRateId: 1, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
     ],
     dutyRates: [
       { dutyRateId: 1, productType: 'TILE', productLabel: 'กระเบื้อง', dutyPct: 0.3 },
     ],
     clearanceFees: [
       { clearanceFeeId: 1, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 8000 },
+    ],
+    // V151: the freight editor's country <select> is populated from this, not from the countries
+    // already present in freightRates -- otherwise a new supplier country could never be added.
+    // 'ES' is here but absent from freightRates above, which is exactly the case that matters.
+    availableCountries: [
+      { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
+      { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
+      { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
     ],
   };
 }
@@ -66,8 +74,8 @@ function sampleFormulaConfigWithBlankCell() {
     ...base,
     freightRates: [
       ...base.freightRates,
-      { freightRateId: 2, originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
-      { freightRateId: 3, originCountry: 'China', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
+      { freightRateId: 2, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
+      { freightRateId: 3, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
       // China [7,12) x [100, null) is DELIBERATELY missing -- the blank cell under test.
     ],
   };
@@ -305,7 +313,8 @@ describe('CeoSettingsPage', () => {
         defaultMarginPct: 0.24,
         sellingPriceRoundUpTo: 10,
         freightRates: [
-          { originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
+          // Code only: originCountryName is display data resolved server-side, never sent back.
+          { originCountryCode: 'CN', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
         ],
         dutyRates: [
           { productType: 'TILE', productLabel: 'กระเบื้อง', dutyPct: 0.3 },
@@ -327,12 +336,12 @@ describe('CeoSettingsPage', () => {
       await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
       const addCellButton = await screen.findByRole(
         'button',
-        { name: 'เพิ่มค่าขนส่ง China หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
+        { name: 'เพิ่มค่าขนส่ง จีน หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
       );
       fireEvent.click(addCellButton);
 
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('China');
+      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('CN');
       expect(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)').value).toBe('7');
       expect(within(dialog).getByLabelText('ถึง (<) (มม.)').value).toBe('12');
       expect(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)').value).toBe('100');
@@ -348,7 +357,7 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
 
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'Spain' } });
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'ES' } });
       fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '21' } });
       fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '25' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
@@ -357,7 +366,7 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
 
       await waitFor(() => expect(api.pricingFormulaConfig.addFreightRate).toHaveBeenCalledWith({
-        originCountry: 'Spain',
+        originCountryCode: 'ES',
         thicknessMinMm: 21,
         thicknessMaxMm: 25,
         qtyMinSqm: 1,
@@ -374,7 +383,7 @@ describe('CeoSettingsPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
       fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
 
-      expect(await within(dialog).findByText('กรุณากรอกประเทศต้นทาง')).not.toBeNull();
+      expect(await within(dialog).findByText('กรุณาเลือกประเทศต้นทาง')).not.toBeNull();
       expect(api.pricingFormulaConfig.addFreightRate).not.toHaveBeenCalled();
     });
 
@@ -388,7 +397,7 @@ describe('CeoSettingsPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'China' } });
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'CN' } });
       fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '3' } });
       fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '7' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
@@ -406,7 +415,7 @@ describe('CeoSettingsPage', () => {
   // cannot make these tests pass or fail for the wrong reason.
   describe('freight-row delete (issue #436)', () => {
     async function openDeleteConfirm() {
-      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง China/ });
+      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง จีน/ });
       fireEvent.click(deleteButton);
       return screen.findByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' });
     }
@@ -416,7 +425,7 @@ describe('CeoSettingsPage', () => {
       await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
 
       const dialog = await openDeleteConfirm();
-      expect(within(dialog).getByText(/China/)).not.toBeNull();
+      expect(within(dialog).getByText(/จีน/)).not.toBeNull();
       expect(within(dialog).getByText(/60,000\.00 บาท/)).not.toBeNull();
     });
 

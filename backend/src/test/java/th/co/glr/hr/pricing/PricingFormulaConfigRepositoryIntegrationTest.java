@@ -59,19 +59,19 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
     void findCurrent_theDeliberatelyBlankFreightCellsAreAbsentNotZero() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
 
-        for (String country : List.of("Italy", "Spain")) {
+        for (String country : List.of("IT", "ES")) {
             // [12,17)mm band4 (801+) is blank in the sheet.
             assertThat(hasFreightRow(config, country, "12", "17", "801")).isFalse();
             // [17,21)mm band3 (451-800) and band4 (801+) are blank in the sheet.
             assertThat(hasFreightRow(config, country, "17", "21", "451")).isFalse();
             assertThat(hasFreightRow(config, country, "17", "21", "801")).isFalse();
         }
-        assertThat(hasFreightRow(config, "China", "12", "17", "801")).isFalse();
-        assertThat(hasFreightRow(config, "China", "17", "21", "451")).isFalse();
-        assertThat(hasFreightRow(config, "China", "17", "21", "801")).isFalse();
+        assertThat(hasFreightRow(config, "CN", "12", "17", "801")).isFalse();
+        assertThat(hasFreightRow(config, "CN", "17", "21", "451")).isFalse();
+        assertThat(hasFreightRow(config, "CN", "17", "21", "801")).isFalse();
 
         // Sanity: a cell that IS in the sheet is present.
-        assertThat(hasFreightRow(config, "China", "3", "8", "1")).isTrue();
+        assertThat(hasFreightRow(config, "CN", "3", "8", "1")).isTrue();
     }
 
     /**
@@ -97,7 +97,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
 
         // China [3,8)mm x [1,101)sqm is the band a 7.5mm/100.5sqm order should land in.
         long matchingFreightBands = config.freightRates().stream()
-            .filter(rate -> "China".equals(rate.originCountry()))
+            .filter(rate -> "CN".equals(rate.originCountryCode()))
             .filter(rate -> inHalfOpenBand(thickness, rate.thicknessMinMm(), rate.thicknessMaxMm()))
             .filter(rate -> inHalfOpenBand(qty, rate.qtyMinSqm(), rate.qtyMaxSqm()))
             .count();
@@ -107,12 +107,12 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
         // not just China's: exactly one qty band per thickness band matches 100.5 sqm.
         record ThicknessBand(String country, BigDecimal min, BigDecimal max) {}
         List<ThicknessBand> thicknessBands = config.freightRates().stream()
-            .map(rate -> new ThicknessBand(rate.originCountry(), rate.thicknessMinMm(), rate.thicknessMaxMm()))
+            .map(rate -> new ThicknessBand(rate.originCountryCode(), rate.thicknessMinMm(), rate.thicknessMaxMm()))
             .distinct()
             .toList();
         for (ThicknessBand band : thicknessBands) {
             long matches = config.freightRates().stream()
-                .filter(rate -> rate.originCountry().equals(band.country())
+                .filter(rate -> rate.originCountryCode().equals(band.country())
                     && rate.thicknessMinMm().compareTo(band.min()) == 0
                     && rate.thicknessMaxMm().compareTo(band.max()) == 0)
                 .filter(rate -> inHalfOpenBand(qty, rate.qtyMinSqm(), rate.qtyMaxSqm()))
@@ -131,7 +131,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
     void findCurrent_freightAndClearanceAreOrderedDeterministically() {
         PricingFormulaConfigDto config = formulaConfigs.findCurrent().orElseThrow();
 
-        List<String> countries = config.freightRates().stream().map(r -> r.originCountry()).distinct().toList();
+        List<String> countries = config.freightRates().stream().map(r -> r.originCountryCode()).distinct().toList();
         assertThat(countries).isSorted();
 
         List<BigDecimal> clearanceMins = config.clearanceFees().stream().map(f -> f.qtyMinSqm()).toList();
@@ -148,7 +148,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
             new BigDecimal("1.20"), new BigDecimal("0.0050"), new BigDecimal("1.10"),
             new BigDecimal("1.10"), new BigDecimal("1.10"), new BigDecimal("0.25"),
             new BigDecimal("20"), null,
-            List.of(new FreightRateRequest("Vietnam", new BigDecimal("3"), new BigDecimal("7"),
+            List.of(new FreightRateRequest("VN", new BigDecimal("3"), new BigDecimal("7"),
                 new BigDecimal("1"), new BigDecimal("100"), new BigDecimal("70000"))),
             List.of(new DutyRateRequest("TILE", "กระเบื้อง", new BigDecimal("0.30"))),
             List.of(new ClearanceFeeRequest(new BigDecimal("1"), null, new BigDecimal("9000"))));
@@ -160,7 +160,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
         assertThat(updated.formulaConfigId()).isNotEqualTo(originalId);
         assertThat(updated.insuranceValueFactor()).isEqualByComparingTo("1.20");
         assertThat(updated.freightRates()).hasSize(1);
-        assertThat(updated.freightRates().get(0).originCountry()).isEqualTo("Vietnam");
+        assertThat(updated.freightRates().get(0).originCountryCode()).isEqualTo("VN");
         assertThat(updated.dutyRates()).hasSize(1);
         assertThat(updated.clearanceFees()).hasSize(1);
 
@@ -185,7 +185,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
             new BigDecimal("1.15"), new BigDecimal("0.0045"), new BigDecimal("1.07"),
             new BigDecimal("1.07"), new BigDecimal("1.07"), new BigDecimal("0.2"),
             new BigDecimal("10"), null,
-            List.of(new FreightRateRequest("China", new BigDecimal("3"), new BigDecimal("7"),
+            List.of(new FreightRateRequest("CN", new BigDecimal("3"), new BigDecimal("7"),
                 new BigDecimal("1"), null, new BigDecimal("60000"))),
             List.of(new DutyRateRequest("TILE", "กระเบื้อง", new BigDecimal("0.30"))),
             List.of(new ClearanceFeeRequest(new BigDecimal("1"), null, new BigDecimal("8000"))));
@@ -200,7 +200,7 @@ class PricingFormulaConfigRepositoryIntegrationTest extends AbstractPostgresInte
 
     private boolean hasFreightRow(PricingFormulaConfigDto config, String country, String thicknessMin, String thicknessMax, String qtyMin) {
         return config.freightRates().stream().anyMatch(r ->
-            r.originCountry().equals(country)
+            r.originCountryCode().equals(country)
                 && r.thicknessMinMm().compareTo(new BigDecimal(thicknessMin)) == 0
                 && r.thicknessMaxMm().compareTo(new BigDecimal(thicknessMax)) == 0
                 && r.qtyMinSqm().compareTo(new BigDecimal(qtyMin)) == 0);
