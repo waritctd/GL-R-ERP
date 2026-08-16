@@ -132,6 +132,21 @@ db.paymentReceipts = db.paymentReceipts || [
   { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
   { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
   { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
+  // Tickets 19-25 (ฝ่ายบัญชี money-cycle deals, demoSales.js). These rows are
+  // what put each deal in its intended bucket: derivePaymentFields derives
+  // amountOutstanding as payable - sum(receipts), and both `overdue` and
+  // closeReady() gate on that number, not on paymentStatus. So a half-paid
+  // deal needs exactly one DEPOSIT row and a closed one needs DEPOSIT+BALANCE
+  // summing to the quotation total, or the bucket silently changes.
+  //
+  // Deliberately absent: 19, 20 (notice issued, nothing banked yet) and 22
+  // (credit customer, whole invoice outstanding and overdue).
+  { receiptId: 5, ticketId: 21, kind: 'DEPOSIT', amount: 445000, currency: 'THB', receivedAt: '2026-06-30T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50% ตามใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-21-DEP', createdAt: '2026-06-30T08:00:00Z' },
+  { receiptId: 6, ticketId: 23, kind: 'DEPOSIT', amount: 780000, currency: 'THB', receivedAt: '2026-06-09T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-23-DEP', createdAt: '2026-06-09T08:00:00Z' },
+  { receiptId: 7, ticketId: 24, kind: 'DEPOSIT', amount: 324000, currency: 'THB', receivedAt: '2026-06-01T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-24-DEP', createdAt: '2026-06-01T08:00:00Z' },
+  { receiptId: 8, ticketId: 24, kind: 'BALANCE', amount: 324000, currency: 'THB', receivedAt: '2026-08-08T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ โอนผ่านธนาคารกสิกรไทย', depositNoticeId: null, receiptRef: 'MOCK-24-BAL', createdAt: '2026-08-08T08:00:00Z' },
+  { receiptId: 9, ticketId: 25, kind: 'DEPOSIT', amount: 396000, currency: 'THB', receivedAt: '2026-05-25T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-25-DEP', createdAt: '2026-05-25T08:00:00Z' },
+  { receiptId: 10, ticketId: 25, kind: 'BALANCE', amount: 396000, currency: 'THB', receivedAt: '2026-08-04T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-25-BAL', createdAt: '2026-08-04T08:00:00Z' },
 ];
 const partialDeliveryDemo = db.tickets.find((t) => t.id === 13);
 if (partialDeliveryDemo?.items?.[0]) {
