@@ -48,6 +48,16 @@ public class TicketService {
     private static final Set<String> STOCK_DECLARATION_ROLES =
         Stream.concat(FULFILMENT_ROLES.stream(), SALES_ROLES.stream())
             .collect(Collectors.toUnmodifiableSet());
+    // V148 (per-item stock-commission weighting): a DIFFERENT gate from STOCK_DECLARATION_ROLES
+    // above, deliberately. qty_from_stock is the rep's own DECLARATION (owner ruling "Sales
+    // declares" -- canDeclareStockCoverage excludes sales_manager from that gate on purpose, even
+    // though requireDealOwnership would otherwise grant it, because that write feeds the OWNING
+    // rep's own commission input). This multiplier is the opposite direction: a manager APPROVING
+    // a weight against a rep's commission input -- the same oversight role sales_manager already
+    // holds at the record level (CommissionService#updateDeductions's requireManagerOrCeo). ceo is
+    // included for the same reason it is included there: the existing record-level setter is
+    // manager-or-CEO, and the more granular per-item control has no reason to be MORE restrictive.
+    private static final Set<String> ITEM_WEIGHT_ROLES = Set.of("sales_manager", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
@@ -1103,6 +1113,63 @@ public class TicketService {
     /** {@code 100.00 -> "100"}, so a quantity reads as a quantity in a human-facing message. */
     private static String plainQty(BigDecimal qty) {
         return qty.stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * V148 (per-item stock-commission weighting): a sales_manager/CEO sets this deal's per-line
+     * 1/2/3 commission weight -- the manager-APPROVED counterpart to {@link #reserveStock}'s
+     * rep-DECLARED {@code qtyFromStock}. See {@link #ITEM_WEIGHT_ROLES}'s own comment for why this
+     * is a separate role set from {@link #STOCK_DECLARATION_ROLES} rather than a reuse of it.
+     *
+     * <p>Setting this multiplier changes NO money by itself and has no stage floor, unlike {@link
+     * #reserveStock} -- it carries no fulfilment-status/sales-stage side effect to protect, so
+     * there is nothing here for a stage gate to guard against. It only takes effect the NEXT time a
+     * SALE commission record is created against this ticket: {@link
+     * th.co.glr.hr.commission.CommissionService#submit}/{@code #createFromDeal} read this ticket's
+     * items ONCE at that moment and freeze the blended result onto the new commission row (see
+     * {@code sales.commission_record.effective_weight_multiplier}'s migration comment, V148) --
+     * editing this value after a commission already exists for this ticket never moves that
+     * commission's money, by the same "freeze, never recompute live" discipline {@code
+     * pricing_decision} (V72) already established for landed cost.
+     *
+     * <p>Two gates in the same order {@link #reserveStock} uses: the coarse {@link
+     * #ITEM_WEIGHT_ROLES} role check runs BEFORE the ticket is loaded, so a role that can never
+     * reach this endpoint gets 403 without a row being read (never a 404 existence probe); {@link
+     * #requireLineItem} then applies the per-line "does this item actually belong to this ticket"
+     * check that {@link #reserveStock} also runs.
+     */
+    @Transactional
+    public TicketDto setItemWeightMultipliers(long ticketId, ItemWeightMultiplierRequest request, UserPrincipal actor) {
+        requireRole(actor, ITEM_WEIGHT_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        requireActive(s);
+        List<ItemWeightMultiplierRequest.Line> lines = request == null ? List.of() : request.lines();
+        if (lines == null || lines.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการสินค้า");
+        }
+        Map<Long, TicketItemDto> itemsById = itemMap(ticket.items());
+        for (ItemWeightMultiplierRequest.Line line : lines) {
+            requireLineItem(itemsById, line.itemId());
+        }
+        tickets.updateItemWeightMultipliers(ticketId, lines);
+        tickets.addEvent(ticketId, actor.id(), actor.name(),
+            TicketEventKind.EDITED, s.status(), s.status(),
+            "ตั้งน้ำหนักคอมมิชชั่นต่อรายการ " + lines.size() + " รายการ");
+        return requireTicket(ticketId);
+    }
+
+    /**
+     * Who may set THIS deal's per-item commission weight -- the single source of truth for {@link
+     * #setItemWeightMultipliers}'s gate and for whether {@link #actions} advertises {@code
+     * SET_ITEM_WEIGHT_MULTIPLIER}, exactly the same "one predicate, never two copies" discipline
+     * {@link #canReserveStock} documents for {@code RESERVE_STOCK}. No ownership/stage nuance:
+     * {@link #ITEM_WEIGHT_ROLES} are both blanket oversight roles here, the same shape {@code
+     * CommissionService#updateDeductions}'s {@code requireManagerOrCeo} already has at the record
+     * level.
+     */
+    private boolean canSetItemWeightMultiplier(TicketSummaryDto s, UserPrincipal actor) {
+        return DealLifecycle.ACTIVE.equals(s.lifecycle()) && ITEM_WEIGHT_ROLES.contains(actor.role());
     }
 
     @Transactional
@@ -2216,7 +2283,15 @@ public class TicketService {
                 // hand-edits a descriptive field, see TicketCreateModal.jsx's updateItem), so
                 // this stays a pure passthrough with no merge logic of its own.
                 BigDecimal.ZERO, BigDecimal.ZERO, null,
-                r.catalogPriceId(), r.catalogProductCode()
+                r.catalogPriceId(), r.catalogProductCode(),
+                // V148: weightMultiplier is a sales_manager/CEO decision (setItemWeightMultipliers),
+                // never something this sales/import item-edit request carries an opinion on -- same
+                // "guarded, prior wins" treatment as proposedPrice/approvedPrice/calcedCost above,
+                // not the "request wins" treatment brand/model/qty get. replaceItemsPreservingPricing
+                // gives every edited row a brand-new item_id (DELETE + re-INSERT), so this is the
+                // ONLY thing standing between an innocuous item edit and silently resetting a
+                // manager-approved weight back to the column default of 1.
+                prior != null ? prior.weightMultiplier() : 1
             ));
         }
         return merged;
@@ -2376,6 +2451,10 @@ public class TicketService {
         if (canReserveStock(ticket, actor)) {
             actions.add(new TicketActionDto("RESERVE_STOCK", "fulfillment", "จองสินค้าจากสต็อก",
                 List.of("lines")));
+        }
+        if (canSetItemWeightMultiplier(s, actor)) {
+            actions.add(new TicketActionDto("SET_ITEM_WEIGHT_MULTIPLIER", "fulfillment",
+                "ตั้งน้ำหนักคอมมิชชั่นต่อรายการ", List.of("lines")));
         }
         if (canRecordDelivery(ticket, actor)) {
             actions.add(new TicketActionDto("RECORD_PARTIAL_DELIVERY", "fulfillment", "บันทึกการส่งสินค้า",

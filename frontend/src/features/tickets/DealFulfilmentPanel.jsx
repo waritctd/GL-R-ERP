@@ -113,6 +113,11 @@ export function DealFulfilmentPanel({
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
   const [stockOpen, setStockOpen] = useState(false);
   const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
+  // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from
+  // the stock-declaration modal above, matching the backend's separate authorization boundary
+  // (TicketService#setItemWeightMultipliers, gated to a DIFFERENT role set than reserveStock).
+  const [weightOpen, setWeightOpen] = useState(false);
+  const [weightDraft, setWeightDraft] = useState({});
 
   const st = summary?.status;
   const fs = summary?.fulfillmentStatus ?? null;
@@ -174,6 +179,11 @@ export function DealFulfilmentPanel({
     onSuccess: () => { showToast?.('success', 'บันทึกสินค้าจากสต็อกแล้ว'); setStockOpen(false); invalidateAfterFulfilmentChange(); },
     onError,
   });
+  const setItemWeightMutation = useMutation({
+    mutationFn: (payload) => api.tickets.updateItemWeightMultipliers(ticketId, payload),
+    onSuccess: () => { showToast?.('success', 'บันทึกน้ำหนักคอมมิชชั่นต่อรายการแล้ว'); setWeightOpen(false); invalidateAfterFulfilmentChange(); },
+    onError,
+  });
   const recordDeliveryMutation = useMutation({
     mutationFn: (payload) => api.tickets.recordDelivery(ticketId, payload),
     onSuccess: () => { showToast?.('success', 'บันทึกการส่งสินค้าแล้ว'); setDeliveryOpen(false); invalidateAfterFulfilmentChange(); },
@@ -218,6 +228,11 @@ export function DealFulfilmentPanel({
     reserveStock:       hasAction('RESERVE_STOCK'),
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
     completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
+    // above, this DOES keep a local role check alongside hasAction(), matching every other entry
+    // in this object except reserveStock's own documented exception. The backend gate
+    // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
+    setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
 
   function openDeliveryModal() {
@@ -235,6 +250,13 @@ export function DealFulfilmentPanel({
     items.forEach((item) => { lines[item.id] = String(item.qtyFromStock ?? 0); });
     setStockDraft({ note: '', lines });
     setStockOpen(true);
+  }
+
+  function openWeightModal() {
+    const lines = {};
+    items.forEach((item) => { lines[item.id] = String(item.weightMultiplier ?? 1); });
+    setWeightDraft(lines);
+    setWeightOpen(true);
   }
 
   function handleRecordDelivery() {
@@ -255,6 +277,14 @@ export function DealFulfilmentPanel({
       note: stockDraft.note.trim() || null,
     }));
     reserveStockMutation.mutate({ lines });
+  }
+
+  function handleSetItemWeight() {
+    const lines = items.map((item) => ({
+      itemId: item.id,
+      weightMultiplier: Number(weightDraft[item.id] || 1),
+    }));
+    setItemWeightMutation.mutate({ lines });
   }
 
   return (
@@ -301,6 +331,12 @@ export function DealFulfilmentPanel({
               <Button type="button" variant="secondary" disabled={reserveStockMutation.isPending}
                 onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
                 จองสินค้าจากสต็อก
+              </Button>
+            ) : null}
+            {can.setItemWeight ? (
+              <Button type="button" variant="secondary" disabled={setItemWeightMutation.isPending}
+                onClick={openWeightModal} data-testid="deal-fulfilment-set-item-weight">
+                ตั้งน้ำหนักคอมมิชชั่นต่อรายการ
               </Button>
             ) : null}
           </div>
@@ -475,6 +511,49 @@ export function DealFulfilmentPanel({
               <textarea className="min-h-16" value={stockDraft.note}
                 onChange={(e) => setStockDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
+          </div>
+        </Modal>
+      ) : null}
+
+      {weightOpen ? (
+        <Modal
+          title="ตั้งน้ำหนักคอมมิชชั่นต่อรายการ"
+          onClose={() => setWeightOpen(false)}
+          footer={(
+            <>
+              <Button type="button" variant="secondary" onClick={() => setWeightOpen(false)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={setItemWeightMutation.isPending}
+                onClick={handleSetItemWeight} data-testid="deal-fulfilment-set-item-weight-submit">
+                บันทึก
+              </Button>
+            </>
+          )}
+        >
+          <div className="flex flex-col gap-3">
+            <p className="text-xs text-text-muted">
+              น้ำหนัก 2 หรือ 3 เท่ามีผลเฉพาะสัดส่วนของแต่ละรายการที่มาจากสต็อกเท่านั้น ส่วนที่สั่งนำเข้ายังคงนับ 1 เท่าเสมอ
+              การตั้งค่านี้จะมีผลกับค่าคอมมิชชั่นครั้งถัดไปที่บันทึกสำหรับดีลนี้เท่านั้น ไม่กระทบรายการที่บันทึกไปแล้ว
+            </p>
+            {items.map((item) => (
+              <label key={item.id} className="grid grid-cols-[1fr_110px] items-center gap-2.5 text-sm">
+                <span>
+                  <span className="sr-only">น้ำหนักคอมมิชชั่น</span>
+                  <strong>{item.brand} {item.model || ''}</strong>
+                  <small className="block text-text-muted">
+                    จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} / สั่ง {Number(item.qty || 0).toLocaleString('en-US')}
+                  </small>
+                </span>
+                <select
+                  aria-label={`น้ำหนักคอมมิชชั่น ${item.brand} ${item.model || ''}`}
+                  value={weightDraft[item.id] ?? 1}
+                  onChange={(e) => setWeightDraft((draft) => ({ ...draft, [item.id]: e.target.value }))}
+                >
+                  <option value={1}>1 เท่า (ปกติ)</option>
+                  <option value={2}>2 เท่า</option>
+                  <option value={3}>3 เท่า</option>
+                </select>
+              </label>
+            ))}
           </div>
         </Modal>
       ) : null}

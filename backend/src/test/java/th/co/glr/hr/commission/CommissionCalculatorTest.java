@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class CommissionCalculatorTest {
@@ -337,5 +338,182 @@ class CommissionCalculatorTest {
         assertThat(tierCommission).isEqualByComparingTo(new BigDecimal("115433.75"));
         assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
         assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("140433.75"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // V148 — itemDerivedWeight: per-item stock-commission weighting, the pure blending math.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void itemDerivedWeight_singleFullyStockedItem_twoX_yieldsExactlyTwo() {
+        // The brief's own sanity check: a single fully-stock item at x2 must yield
+        // effectiveWeight = 2, independent of the item's absolute qty/price.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("100.00"), new BigDecimal("100.00"), new BigDecimal("500.0000"), null, 2));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    void itemDerivedWeight_halfStockCoverage_twoX_yieldsOneAndAHalf_notTheFullTwo() {
+        // The brief's own worked example: a half-stock line at x2 earns 1.5, not 2.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("100.00"), new BigDecimal("50.00"), new BigDecimal("500.0000"), null, 2));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.5");
+    }
+
+    @Test
+    void itemDerivedWeight_wrongWayRound_zeroStockShare_storedThreeX_contributesOnlyOneX() {
+        // The owner's own workbook case: a row marked *3 but sourced against an import request
+        // (qtyFromStock = 0) must NOT be credited — only stock-sourced quantity ever earns weight.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("100.00"), BigDecimal.ZERO, new BigDecimal("500.0000"), null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void itemDerivedWeight_mixedStockAndImportLines_matchesTheBriefsOwnOneSixExample() {
+        // A deal mixing a fully-stock x2 line (60 units) with a fully-import line (40 units, never
+        // weighted): (60*2 + 40*1) / 100 = 1.6 — the brief's own worked figure.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("60.00"), new BigDecimal("60.00"), new BigDecimal("1000.0000"), null, 2),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("40.00"), BigDecimal.ZERO, new BigDecimal("1000.0000"), null, 1));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.6");
+    }
+
+    @Test
+    void itemDerivedWeight_approvedPriceNull_fallsBackToProposedPrice() {
+        // Fallback chosen for this task: approvedPrice missing -> proposedPrice. Constructed so
+        // the fallback being SKIPPED (price treated as 0) would produce a different, wrong answer
+        // (1.0 instead of 1.666667) — a real test of the fallback being consulted, not just a
+        // price-invariant identity.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            // Fully import (qtyFromStock = 0): contributes itemValue 1,000 at weight 1 regardless
+            // of its own weightMultiplier=2 (never consulted -- zero stock share).
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("100.0000"), null, 2),
+            // approvedPrice NULL, proposedPrice 50 -- fully stock, x3: itemValue 500 (using the
+            // fallback price), contribution 500*30 = 15,000.
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("10.00"), null, new BigDecimal("50.0000"), 3));
+        // totalItemValue = 1,000 + 500 = 1,500; weightedContribution = 1,000 + 15,000 = ... wait,
+        // see the Javadoc math: contribution_1 = 100*(10 + 1*0) = 1,000; contribution_2 =
+        // 50*(10 + 2*10) = 50*30 = 1,500. Total contribution = 1,000 + 1,500 = 2,500. blended =
+        // 2,500 / 1,500 = 1.666666... -> 1.666667 at the stored 6dp scale.
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.666667");
+    }
+
+    @Test
+    void itemDerivedWeight_bothPricesNull_itemContributesNothing_doesNotSkewOtherItems() {
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            // Priced normally: single fully-stock item at x2 -> would alone yield 2 exactly.
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("100.0000"), null, 2),
+            // approvedPrice AND proposedPrice both null -> price treated as 0 -> contributes ZERO
+            // to both numerator and denominator, as if this line did not exist for weighting.
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("5.00"), new BigDecimal("5.00"), null, null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    void itemDerivedWeight_singleItem_bothPricesNull_totalItemValueZero_returnsEmpty() {
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("10.00"), null, null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("1000.00"));
+
+        assertThat(weight).isEmpty();
+    }
+
+    @Test
+    void itemDerivedWeight_zeroQtyItem_doesNotSkewOrDivideByZero() {
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            // qty = 0 -> the V54 CHECK guarantees qtyFromStock is also 0 for this row in real
+            // data; itemValue = 0, contributes nothing either way.
+            new CommissionCalculator.ItemStockWeightInput(
+                BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("999.0000"), null, 3),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("5.00"), new BigDecimal("200.0000"), null, 2));
+        // Without the qty=0 item: itemValue 2,000, contribution 200*(10+1*5)=3,000, blended 1.5 --
+        // asserting the SAME 1.5 below proves the zero-qty item did not skew the result.
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1.5");
+    }
+
+    @Test
+    void itemDerivedWeight_emptyOrNullItems_returnsEmpty() {
+        assertThat(calculator.itemDerivedWeight(List.of(), new BigDecimal("1000.00"))).isEmpty();
+        assertThat(calculator.itemDerivedWeight(null, new BigDecimal("1000.00"))).isEmpty();
+    }
+
+    @Test
+    void itemDerivedWeight_nullOrNonPositiveActualReceived_returnsEmpty_evenWithValidItems() {
+        List<CommissionCalculator.ItemStockWeightInput> validItems = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("100.0000"), null, 2));
+
+        assertThat(calculator.itemDerivedWeight(validItems, null)).isEmpty();
+        assertThat(calculator.itemDerivedWeight(validItems, BigDecimal.ZERO)).isEmpty();
+        assertThat(calculator.itemDerivedWeight(validItems, new BigDecimal("-100.00"))).isEmpty();
+    }
+
+    @Test
+    void itemDerivedWeight_allItemsZeroQty_totalItemValueZero_returnsEmpty() {
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("100.0000"), null, 2),
+            new CommissionCalculator.ItemStockWeightInput(BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("200.0000"), null, 3));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("1000.00"));
+
+        assertThat(weight).isEmpty();
+    }
+
+    @Test
+    void itemDerivedWeight_resultIsClampedToOneToThree_evenWithMalformedNegativePriceInput() {
+        // Defensive clamp: a negative price (this column has no CHECK against one) can otherwise
+        // pull the weighted average below 1 -- raw blended here would be 7,000/9,000 = 0.777778.
+        List<CommissionCalculator.ItemStockWeightInput> items = List.of(
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("-100.0000"), null, 3),
+            new CommissionCalculator.ItemStockWeightInput(
+                new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("1000.0000"), null, 1));
+
+        Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
+
+        assertThat(weight).isPresent();
+        assertThat(weight.get()).isEqualByComparingTo("1");
     }
 }

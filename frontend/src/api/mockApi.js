@@ -121,6 +121,10 @@ for (const t of db.tickets) {
     qtyDelivered: item.qtyDelivered ?? 0,
     qtyFromStock: item.qtyFromStock ?? 0,
     stockNote: item.stockNote ?? null,
+    // V148 (per-item stock-commission weighting): mirrors sales.ticket_item.weight_multiplier's
+    // own DEFAULT 1 -- every mock item gets the same "no weighting" default a brand-new real row
+    // gets, regardless of which code path created it.
+    weightMultiplier: item.weightMultiplier ?? 1,
   }));
 }
 db.paymentReceipts = db.paymentReceipts || [
@@ -2400,6 +2404,23 @@ function reserveStockForTicket(ticket, user, payload = {}) {
   }
 }
 
+// V148 (per-item stock-commission weighting): the manager-approved counterpart to
+// reserveStockForTicket above -- same absolute-SET-keyed-on-item-id shape. Mirrors
+// TicketService#setItemWeightMultipliers / TicketRepository#updateItemWeightMultipliers.
+function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
+  const lines = payload.lines ?? [];
+  if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
+  for (const line of lines) {
+    const item = ticket.items.find((it) => it.id === Number(line.itemId));
+    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
+    const weight = Number(line.weightMultiplier);
+    if (![1, 2, 3].includes(weight)) fail('น้ำหนักคอมมิชชั่นต้องเป็น 1, 2 หรือ 3', 400);
+    item.weightMultiplier = weight;
+  }
+  pushEvent(ticket, user, 'EDITED', ticket.status, ticket.status,
+    `ตั้งน้ำหนักคอมมิชชั่นต่อรายการ ${lines.length} รายการ`);
+}
+
 function recordDeliveryForTicket(ticket, user, payload = {}, completing = false) {
   const source = String(payload.source ?? '').trim().toUpperCase();
   if (!['WAREHOUSE', 'STOCK'].includes(source)) fail('source ต้องเป็น WAREHOUSE หรือ STOCK', 400);
@@ -4428,6 +4449,17 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a DIFFERENT gate from
+    // reserveStock above (import/ceo), matching TicketService#setItemWeightMultipliers's own
+    // Javadoc on why this is a separate role set, not a reuse of STOCK_DECLARATION_ROLES.
+    async updateItemWeightMultipliers(id, payload) {
+      const user = hasRole('sales_manager', 'ceo');
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      updateItemWeightMultipliersForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
     async recordDelivery(id, payload) {
       const user = hasRole('import', 'ceo');
       const ticket = findTicketRaw(Number(id));
@@ -4510,6 +4542,12 @@ export const api = {
         if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
             && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
           add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
+        }
+        // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
+        // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
+        // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
+        if (['sales_manager', 'ceo'].includes(user.role)) {
+          add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
         }
         if (['import', 'ceo'].includes(user.role) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
           add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });

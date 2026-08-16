@@ -297,6 +297,10 @@ export const api = {
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
+    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
+    // reserveStock above.
+    updateItemWeightMultipliers: (id, payload) =>
+      apiRequest(API_ROUTES.tickets.itemWeightMultipliers(id), { method: 'POST', body: payload }),
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
     completeDelivery: (id, payload = {}) => apiRequest(API_ROUTES.tickets.completeDelivery(id), { method: 'POST', body: payload }),
     actions: (id) => apiRequest(API_ROUTES.tickets.action(id, 'actions')),

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -11,6 +12,14 @@ public class CommissionCalculator {
     private static final BigDecimal VAT_DIVISOR = new BigDecimal("1.07");
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
     private static final int MONEY_SCALE = 2;
+    // V148 (per-item stock-commission weighting): storage precision for the frozen blended
+    // weight -- see sales.commission_record.effective_weight_multiplier's migration comment
+    // (NUMERIC(9,6)) for why a fractional weight needs more than 2dp. Rounded ONLY at the very
+    // end of itemDerivedWeight, matching this class's existing "round once, at the final figure"
+    // discipline (monthlyTierBase/progressiveCommission never round an intermediate).
+    private static final int ITEM_WEIGHT_SCALE = 6;
+    private static final BigDecimal ONE = BigDecimal.ONE;
+    private static final BigDecimal THREE = new BigDecimal("3");
     // Commission redesign calc-refine: the monthly TIER BASE is computed at this many decimal
     // places (not 2dp) so the single VAT-strip division doesn't reintroduce the per-receipt
     // rounding error the whole point of this slice is to remove. "8+" per the workbook
@@ -182,4 +191,131 @@ public class CommissionCalculator {
         BigDecimal blocks = receipts.divide(config.blockAmount(), 0, RoundingMode.FLOOR);
         return blocks.multiply(config.bonusPerBlock()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
+
+    /**
+     * V148 (per-item stock-commission weighting). Blends each line's own STOCK-EARNED weight into
+     * ONE record-level effective weight, cash-weighted by each item's own share of the deal's
+     * total item value -- the model:
+     * <pre>
+     *   itemValue_i        = qty_i &times; price_i        (price_i = COALESCE(approvedPrice_i, proposedPrice_i, 0))
+     *   stockFraction_i    = qtyFromStock_i / qty_i        (0 when qty_i = 0)
+     *   effectiveWeight_i  = 1 + (weightMultiplier_i - 1) &times; stockFraction_i
+     *   blendedWeight      = &Sigma;(itemValue_i &times; effectiveWeight_i) / &Sigma;(itemValue_i)
+     * </pre>
+     * Only STOCK-sourced quantity ever earns credit above 1x -- an import-sourced remainder on the
+     * SAME line is deliberately never weighted: {@code stockFraction_i < 1} pulls {@code
+     * effectiveWeight_i} toward 1, never all the way to {@code weightMultiplier_i}, for a
+     * partially-stocked line. This is exactly how the owner's own workbook treats a row marked
+     * {@code *3} that was actually sourced against an import request: not credited, because the
+     * stock-sourced share of that line was zero.
+     *
+     * <p><b>Algebraic simplification (division-free per item, exact until the single final
+     * division).</b> Substituting {@code itemValue_i = qty_i * price_i} into {@code itemValue_i *
+     * effectiveWeight_i} and cancelling {@code qty_i} gives, for {@code qty_i != 0}:
+     * <pre>
+     *   itemValue_i * effectiveWeight_i = price_i * (qty_i + (weightMultiplier_i - 1) * qtyFromStock_i)
+     * </pre>
+     * -- an EXACT identity, no rounding. For {@code qty_i == 0}: the V54 CHECK ({@code 0 &le;
+     * qty_from_stock &le; qty}) guarantees {@code qtyFromStock_i} is also 0 in that case, so the
+     * same formula evaluates to {@code price_i * (0 + (n-1)*0) = 0} -- exactly what {@code
+     * itemValue_i (= 0) * effectiveWeight_i (defined as 1 for qty_i = 0)} would also give. No
+     * {@code qty_i == 0} special case is needed: it falls out of the algebra plus the DB-enforced
+     * invariant, which is why {@code weightedContribution} below is computed from this closed form
+     * rather than dividing per item.
+     *
+     * <p><b>Also algebraically eliminated:</b> the brief's formula routes through {@code
+     * allocatedCash_i = actualReceived * itemValue_i / totalItemValue} and only then {@code
+     * SUM(allocatedCash_i * effectiveWeight_i) / actualReceived}. {@code actualReceived} cancels
+     * out of that two-step form exactly (provided it is nonzero), leaving the same {@code
+     * SUM(itemValue_i * effectiveWeight_i) / totalItemValue} this method computes directly -- so
+     * {@code actualReceived} never appears in the arithmetic below, only in the initial "is there
+     * anything to allocate" guard (a blended weight is undefined, and moot -- {@code 0 * anything
+     * = 0} -- when there is no cash to weight).
+     *
+     * <p><b>Edge cases, each returning {@link Optional#empty()}</b> (the frozen column stays
+     * {@code null}, and payroll falls back to the record's plain {@code weightMultiplier} exactly
+     * as before this feature -- see {@code sales.commission_record.effective_weight_multiplier}'s
+     * migration comment):
+     * <ul>
+     *   <li>{@code items} null/empty -- nothing to derive a weight from (every unlinked/manual
+     *       commission never reaches this method at all -- see {@code
+     *       CommissionService#computeItemDerivedWeight}).</li>
+     *   <li>{@code actualReceived} null or &le; 0 -- undefined (the brief's own formula divides by
+     *       it) and operationally moot (a non-positive receipt contributes nothing to the weighted
+     *       base regardless of weight).</li>
+     *   <li>{@code SUM(itemValue) &le; 0} -- every item has qty 0, or every item's price is null
+     *       on both {@code approvedPrice} and {@code proposedPrice} (the fallback chosen for this
+     *       task: an item with NO price ever set contributes ZERO to both the numerator and
+     *       denominator, as if it did not exist for weighting purposes, rather than being treated
+     *       as an error).</li>
+     * </ul>
+     *
+     * <p>The result is clamped to {@code [1, 3]} before being returned, defensively -- for
+     * well-formed data (non-negative qty/price, weightMultiplier &isin; {1,2,3}) the weighted
+     * average is already provably within this range, so the clamp is a no-op; it exists only so a
+     * malformed input (e.g. a negative price, which this column has no CHECK against) can never
+     * produce a value that would trip {@code effective_weight_multiplier}'s own CHECK constraint
+     * at insert time.
+     */
+    public Optional<BigDecimal> itemDerivedWeight(List<ItemStockWeightInput> items, BigDecimal actualReceived) {
+        if (items == null || items.isEmpty() || actualReceived == null || actualReceived.signum() <= 0) {
+            return Optional.empty();
+        }
+        BigDecimal totalItemValue = BigDecimal.ZERO;
+        BigDecimal weightedContribution = BigDecimal.ZERO;
+        for (ItemStockWeightInput item : items) {
+            BigDecimal qty = item.qty() == null ? BigDecimal.ZERO : item.qty();
+            BigDecimal qtyFromStock = item.qtyFromStock() == null ? BigDecimal.ZERO : item.qtyFromStock();
+            BigDecimal price = itemPrice(item);
+            totalItemValue = totalItemValue.add(qty.multiply(price));
+            BigDecimal stockCreditedQty = qty.add(
+                BigDecimal.valueOf(item.weightMultiplier() - 1).multiply(qtyFromStock));
+            weightedContribution = weightedContribution.add(price.multiply(stockCreditedQty));
+        }
+        if (totalItemValue.signum() <= 0) {
+            return Optional.empty();
+        }
+        BigDecimal blended = weightedContribution.divide(totalItemValue, ITEM_WEIGHT_SCALE, RoundingMode.HALF_UP);
+        return Optional.of(blended.max(ONE).min(THREE));
+    }
+
+    /**
+     * {@code approvedPrice} is nullable on {@code sales.ticket_item} (the column has always
+     * allowed NULL); {@code proposedPrice} is the chosen fallback for THIS task ("decide and
+     * document the fallback" per the brief) -- an item that reached stock declaration without ever
+     * having a price approved still usually has the import-proposed one. Both null: price 0, so
+     * the item contributes nothing to either the numerator or denominator of {@link
+     * #itemDerivedWeight}.
+     */
+    private BigDecimal itemPrice(ItemStockWeightInput item) {
+        if (item.approvedPrice() != null) {
+            return item.approvedPrice();
+        }
+        if (item.proposedPrice() != null) {
+            return item.proposedPrice();
+        }
+        return BigDecimal.ZERO;
+    }
+
+    /**
+     * Minimal, decoupled input shape for {@link #itemDerivedWeight} -- deliberately NOT {@code
+     * th.co.glr.hr.ticket.TicketItemDto} (a 34-field record from a different package), so this
+     * calculator stays dependency-free and trivially unit-testable with plain constructed values.
+     * {@code qty} is ALWAYS the piece-count quantity, regardless of {@code unitBasis} ('PIECE' vs
+     * 'SQM') -- deliberately never {@code qtySqm} -- the same convention {@link
+     * CommissionRepository#sumActiveStockActualReceived}'s own {@code
+     * SUM(qty_from_stock)/SUM(qty)} and the V54 {@code qty_from_stock <= qty} CHECK already use
+     * for this exact ratio; this does not invent a second, diverging quantity convention for the
+     * same table.
+     *
+     * @param weightMultiplier the item's own 1/2/3 stock-commission weight
+     *                         ({@code sales.ticket_item.weight_multiplier}, V148)
+     */
+    public record ItemStockWeightInput(
+        BigDecimal qty,
+        BigDecimal qtyFromStock,
+        BigDecimal approvedPrice,
+        BigDecimal proposedPrice,
+        int weightMultiplier
+    ) {}
 }

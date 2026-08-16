@@ -78,7 +78,7 @@ class CommissionServiceTest {
         // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month
         // M+1 -- invoiceDate June 15 lands payroll_month July 1, not June 1.
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 7, 1)),
-                eq(calculation), eq((BigDecimal) null), eq(false)))
+                eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
             .thenReturn(900L);
         CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         when(commissions.findById(900L)).thenReturn(Optional.of(created));
@@ -172,7 +172,7 @@ class CommissionServiceTest {
         when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-                eq(calculation), eq(new BigDecimal("1030.00")), eq(false)))
+                eq(calculation), eq(new BigDecimal("1030.00")), eq(false), eq((BigDecimal) null)))
             .thenReturn(900L);
         CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         when(commissions.findById(900L)).thenReturn(Optional.of(created));
@@ -182,7 +182,7 @@ class CommissionServiceTest {
 
         assertThat(result.id()).isEqualTo(900L);
         verify(commissions).createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-            eq(calculation), eq(new BigDecimal("1030.00")), eq(false));
+            eq(calculation), eq(new BigDecimal("1030.00")), eq(false), eq((BigDecimal) null));
     }
 
     @Test
@@ -198,7 +198,7 @@ class CommissionServiceTest {
         when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-                eq(calculation), eq(new BigDecimal("1200.00")), eq(true)))
+                eq(calculation), eq(new BigDecimal("1200.00")), eq(true), eq((BigDecimal) null)))
             .thenReturn(900L);
         CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         when(commissions.findById(900L)).thenReturn(Optional.of(created));
@@ -208,7 +208,7 @@ class CommissionServiceTest {
 
         assertThat(result.id()).isEqualTo(900L);
         verify(commissions).createCommissionRecord(eq(500L), eq(42L), eq(30L), eq(30L), any(),
-            eq(calculation), eq(new BigDecimal("1200.00")), eq(true));
+            eq(calculation), eq(new BigDecimal("1200.00")), eq(true), eq((BigDecimal) null));
     }
 
     @Test
@@ -222,7 +222,7 @@ class CommissionServiceTest {
         when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), any(),
-                eq(calculation), eq((BigDecimal) null), eq(false)))
+                eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
             .thenReturn(900L);
         CommissionRecord created = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         when(commissions.findById(900L)).thenReturn(Optional.of(created));
@@ -309,7 +309,7 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(ownerId), eq(30L), any(),
-                eq(calculation), any(), eq(false))).thenReturn(900L);
+                eq(calculation), any(), eq(false), eq((BigDecimal) null))).thenReturn(900L);
         CommissionRecord created = record(900L, ownerId, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         when(commissions.findById(900L)).thenReturn(Optional.of(created));
         when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
@@ -320,7 +320,7 @@ class CommissionServiceTest {
 
         assertThat(result.salesRepId()).isEqualTo(ownerId);
         verify(commissions).createCommissionRecord(eq(500L), eq(ticketId), eq(ownerId), eq(30L), any(),
-            eq(calculation), any(), eq(false));
+            eq(calculation), any(), eq(false), eq((BigDecimal) null));
         // The same upload also becomes the ticket's INVOICE attachment (invoiceOnFile gate).
         verify(attachments).save(eq(ticketId), isNull(), any(), any(), any(), any(), eq(AttachType.INVOICE), eq(30L));
         verify(auditService).record(any(), eq("CREATE_COMMISSION_FROM_DEAL"), eq("commission_record"), eq(900L), isNull(), eq(created));
@@ -341,7 +341,7 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
-                eq(calculation), any(), any(Boolean.class))).thenReturn(900L);
+                eq(calculation), any(), any(Boolean.class), eq((BigDecimal) null))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
             Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
         when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
@@ -369,7 +369,7 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), any(),
-                eq(calculation), any(), any(Boolean.class))).thenReturn(900L);
+                eq(calculation), any(), any(Boolean.class), eq((BigDecimal) null))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
             Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
         when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
@@ -398,7 +398,7 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-                eq(calculation), eq((BigDecimal) null), eq(false)))
+                eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
             .thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
             Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
@@ -407,7 +407,7 @@ class CommissionServiceTest {
         service.submit(request, invoiceFile(), accountUser());
 
         verify(commissions).createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-            eq(calculation), eq((BigDecimal) null), eq(false));
+            eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null));
     }
 
     /**
@@ -428,7 +428,7 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), any(), any(), any(), any(), anyLong(), any())).thenReturn(700L);
         when(commissions.createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-                eq(calculation), any(), eq(false))).thenReturn(900L);
+                eq(calculation), any(), eq(false), eq((BigDecimal) null))).thenReturn(900L);
         when(commissions.findById(900L)).thenReturn(
             Optional.of(record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED)));
         when(commissions.findSalesManagerApproverEmployeeIds()).thenReturn(List.of(88L));
@@ -437,7 +437,7 @@ class CommissionServiceTest {
             null, null, null, null, null, null, null, null, invoiceFile(), accountUser());
 
         verify(commissions).createCommissionRecord(eq(500L), eq(ticketId), eq(30L), eq(30L), eq(LocalDate.of(2026, 6, 1)),
-            eq(calculation), any(), eq(false));
+            eq(calculation), any(), eq(false), eq((BigDecimal) null));
     }
 
     /**
@@ -636,6 +636,10 @@ class CommissionServiceTest {
             null,
             false,
             null,
+            null,
+            // V148 (per-item stock-commission weighting): NULL here -- this fixture predates the
+            // feature and effectiveWeight() falls back to the plain weightMultiplier (1) above,
+            // matching this record's behavior before V148 existed.
             null
         );
     }
