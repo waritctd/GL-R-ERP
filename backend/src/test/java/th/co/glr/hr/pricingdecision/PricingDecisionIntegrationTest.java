@@ -253,10 +253,10 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingDecisionItemDto itemB = decision.items().get(1);
         PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             "ปรับ margin item A", List.of(
-                new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.35"), new BigDecimal("0.10"),
-                    new BigDecimal("90.00"), null),
-                new UpdatePricingDecisionItemRequest(itemB.id(), null, new BigDecimal("0.10"),
-                    new BigDecimal("90.00"), null))),
+                new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.35"),
+                    new BigDecimal("90.00"), null, null, false),
+                new UpdatePricingDecisionItemRequest(itemB.id(), null,
+                    new BigDecimal("90.00"), null, null, false))),
             ceoActor);
         PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
         assertThat(updatedA.proposedMarginPct()).isEqualByComparingTo("0.35");
@@ -640,11 +640,19 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Design correction 5+7: minimum selling price + margin required, server recomputes
+    // Design correction 7 + Phase 1 UI simplification: margin required (unless overridden),
+    // minimum selling price auto-populated, server recomputes
     // ─────────────────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Was {@code approve_rejectsWhenAnyItemLacksMinimumSellingPriceOrMargin} — ราคาขั้นต่ำ is no
+     * longer a CEO input (Phase 1 UI simplification, owner ruling 2026-08-16), so a null minimum
+     * can no longer block approval; it auto-populates instead. Margin is still required. The
+     * wrong-way-round proof that the auto-populated minimum still refuses a discount lives in
+     * {@code PricingDecisionMinimumPriceAutoPopulationIntegrationTest}.
+     */
     @Test
-    void approve_rejectsWhenAnyItemLacksMinimumSellingPriceOrMargin() {
+    void approve_rejectsWhenAnyItemLacksMargin_butNoLongerRequiresAnExplicitMinimumSellingPrice() {
         long pricingRequestId = twoItemSubmittedCosting();
         // No defaultMarginPct at all -> every item starts with a null margin and null price.
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
@@ -654,23 +662,205 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new ApprovePricingDecisionRequest(null, null), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
-        // Set margin on both items but leave minimum selling price null on one -> still rejected.
+        // Set margin on both items — no minimum selling price on either, and no ability to set
+        // one from the new UI any more — approval now succeeds anyway.
         PricingDecisionItemDto itemA = decision.items().get(0);
         PricingDecisionItemDto itemB = decision.items().get(1);
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.2"), null, new BigDecimal("10"), null),
-            new UpdatePricingDecisionItemRequest(itemB.id(), new BigDecimal("0.2"), null, null, null))), ceoActor);
+            new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.2"), null, null, null, false),
+            new UpdatePricingDecisionItemRequest(itemB.id(), new BigDecimal("0.2"), null, null, null, false))), ceoActor);
 
-        assertThatThrownBy(() -> decisionService.approve(decision.id(),
-            new ApprovePricingDecisionRequest(null, null), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
-
-        // Fill in the last minimum selling price -> approval now succeeds.
-        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(itemB.id(), null, null, new BigDecimal("10"), null))), ceoActor);
         PricingDecisionDto approved = decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest(null, null), ceoActor);
         assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
+        // Auto-populated with the approved selling price itself on BOTH items — the "any discount
+        // refused" floor this phase deliberately keeps (see PricingDecisionService#approve).
+        for (PricingDecisionItemDto item : approved.items()) {
+            assertThat(item.minimumSellingPricePerRequestedUnit())
+                .isEqualByComparingTo(item.approvedSellingPricePerRequestedUnit());
+        }
+    }
+
+    /** An explicitly-set (lower) floor, still settable through {@code update()} exactly as
+     * before, is honoured rather than silently overwritten by the auto-population fallback —
+     * only a still-NULL minimum falls back to the approved price. */
+    @Test
+    void approve_honoursAnExplicitlySetMinimumSellingPrice_ratherThanOverwritingItWithTheApprovedPrice() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto itemA = decision.items().get(0);
+        BigDecimal explicitMinimum = itemA.frozenLandedCostPerRequestedUnitThb(); // well below the 20%-margin price
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
+            new UpdatePricingDecisionItemRequest(itemA.id(), null, explicitMinimum, null, null, false))), ceoActor);
+
+        PricingDecisionDto approved = decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest(null, null), ceoActor);
+
+        PricingDecisionItemDto approvedA = itemById(approved, itemA.id());
+        assertThat(approvedA.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(explicitMinimum);
+        assertThat(approvedA.minimumSellingPricePerRequestedUnit())
+            .isNotEqualByComparingTo(approvedA.approvedSellingPricePerRequestedUnit());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // "ปรับราคาเอง" (Phase 1 UI simplification) — CEO selling-price override, via
+    // PUT /pricing-decisions/{id} (PricingDecisionService#update -> applyItemUpdates). Mirrors
+    // the sibling cost override's contract (mandatory reason in BOTH directions, non-negative)
+    // as closely as the shared bulk-update endpoint allows — see UpdatePricingDecisionItemRequest
+    // and PricingDecisionRepository#updateItems's own Javadoc for why set/clear/untouched need a
+    // tri-state here rather than a plain COALESCE.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void sellingPriceOverride_setsTheFinalPrice_andTheFormulaStopsDrivingThatLine() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto item = decision.items().get(0);
+        BigDecimal formulaPrice = item.proposedSellingPricePerRequestedUnit();
+        BigDecimal overridePrice = formulaPrice.add(new BigDecimal("777.0000"));
+
+        PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
+                "ลูกค้าต่อรองราคาสุดท้ายเป็นตัวเลขนี้โดยตรง", overridePrice, false))), ceoActor);
+
+        PricingDecisionItemDto overridden = itemById(updated, item.id());
+        assertThat(overridden.manualSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
+        // The formula's own output survives untouched, sitting beside the override — never
+        // overwritten (same shape as the cost override's manualLandedCostPerUnitThb precedent).
+        assertThat(overridden.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo(formulaPrice);
+        assertThat(overridden.effectiveSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
+
+        // approve() freezes the OVERRIDE verbatim, not a margin recomputation — the formula never
+        // runs for this line at all, so a margin that produces a totally different number is
+        // irrelevant to the frozen result.
+        PricingDecisionDto approved = decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest(null, null), ceoActor);
+        PricingDecisionItemDto approvedItem = itemById(approved, item.id());
+        assertThat(approvedItem.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
+        // Minimum auto-population also uses the OVERRIDDEN (effective) price, not the formula's.
+        assertThat(approvedItem.minimumSellingPricePerRequestedUnit()).isEqualByComparingTo(overridePrice);
+    }
+
+    @Test
+    void sellingPriceOverride_exemptsThatLineFromTheMissingMarginGate() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        // No defaultMarginPct -> both items start with a null margin.
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(null, "THB", null, null), ceoActor);
+        PricingDecisionItemDto itemA = decision.items().get(0);
+        PricingDecisionItemDto itemB = decision.items().get(1);
+
+        // Item A gets a genuine margin; item B gets a direct price override instead — neither
+        // route through the "must have a margin" gate the same way, and both should clear it.
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
+            new UpdatePricingDecisionItemRequest(itemA.id(), new BigDecimal("0.20"), null, null, null, false),
+            new UpdatePricingDecisionItemRequest(itemB.id(), null, null,
+                "ราคาที่ตกลงกับลูกค้าโดยตรง ไม่ผ่านสูตร", new BigDecimal("999.0000"), false))), ceoActor);
+
+        PricingDecisionDto approved = decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest(null, null), ceoActor);
+        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
+        assertThat(itemById(approved, itemB.id()).approvedSellingPricePerRequestedUnit())
+            .isEqualByComparingTo("999.0000");
+    }
+
+    @Test
+    void sellingPriceOverride_refusesANullOrBlankReason_onEitherTheSetOrClearPath_andWritesNothing() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto item = decision.items().get(0);
+
+        // SET path, null reason.
+        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, null,
+                new BigDecimal("500.0000"), false))), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
+            });
+        // SET path, blank (whitespace-only) reason.
+        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "   ",
+                new BigDecimal("500.0000"), false))), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        PricingDecisionItemDto untouched = itemById(decisionService.get(decision.id(), ceoActor), item.id());
+        assertThat(untouched.manualSellingPricePerRequestedUnit()).isNull();
+
+        // Legitimately set an override so the CLEAR path has something to clear...
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
+                "ราคาที่ตกลงกับลูกค้า", new BigDecimal("500.0000"), false))), ceoActor);
+
+        // ...then CLEAR path, null reason — clearing is money-affecting too (same precedent as
+        // the cost override's own mandatory-reason-on-clear rule).
+        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, null, null, true))), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
+            });
+        PricingDecisionItemDto stillOverridden = itemById(decisionService.get(decision.id(), ceoActor), item.id());
+        assertThat(stillOverridden.manualSellingPricePerRequestedUnit()).isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void sellingPriceOverride_refusesSettingAndClearingInTheSameCall() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto item = decision.items().get(0);
+
+        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "เหตุผล",
+                new BigDecimal("500.0000"), true))), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void sellingPriceOverride_refusesANegativePrice_andWritesNothing() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto item = decision.items().get(0);
+
+        assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null, "พิมพ์ผิด",
+                new BigDecimal("-1.0000"), false))), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(e.getMessage()).isEqualTo("ราคาที่ปรับต้องไม่ติดลบ");
+            });
+        PricingDecisionItemDto untouched = itemById(decisionService.get(decision.id(), ceoActor), item.id());
+        assertThat(untouched.manualSellingPricePerRequestedUnit()).isNull();
+    }
+
+    @Test
+    void sellingPriceOverride_clearedWithAReason_revertsToTheFormulaDrivenPriceAtApproval() {
+        long pricingRequestId = twoItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto item = decision.items().get(0);
+        BigDecimal formulaPrice = item.proposedSellingPricePerRequestedUnit();
+
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
+                "ราคาชั่วคราว", new BigDecimal("500.0000"), false))), ceoActor);
+        PricingDecisionDto clearedDecision = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null,
+            List.of(new UpdatePricingDecisionItemRequest(item.id(), null, null,
+                "กลับไปใช้ราคาที่คำนวณอัตโนมัติ", null, true))), ceoActor);
+
+        PricingDecisionItemDto cleared = itemById(clearedDecision, item.id());
+        assertThat(cleared.manualSellingPricePerRequestedUnit()).isNull();
+        assertThat(cleared.effectiveSellingPricePerRequestedUnit()).isEqualByComparingTo(formulaPrice);
+
+        PricingDecisionDto approved = decisionService.approve(decision.id(),
+            new ApprovePricingDecisionRequest(null, null), ceoActor);
+        assertThat(itemById(approved, item.id()).approvedSellingPricePerRequestedUnit())
+            .isEqualByComparingTo(formulaPrice);
     }
 
     /**
@@ -687,7 +877,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         PricingDecisionItemDto item = decision.items().get(0);
         BigDecimal correctPrice = item.frozenLandedCostPerRequestedUnitThb().multiply(new BigDecimal("1.20"))
@@ -720,7 +910,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         String clientRequestId = UUID.randomUUID().toString();
 
@@ -757,7 +947,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
 
         var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
@@ -959,7 +1149,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         PricingDecisionItemDto itemA = decision.items().get(0);
         BigDecimal manualCost = itemA.frozenLandedCostPerPieceThb().add(new BigDecimal("5.0000"));
@@ -1083,7 +1273,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             new StartPricingDecisionRequest(marginPct, "THB", null, null), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         return decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
     }

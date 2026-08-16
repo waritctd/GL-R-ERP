@@ -352,9 +352,10 @@ function buildDecisionItem(overrides = {}) {
     approvedMarginPct: null,
     proposedSellingPricePerRequestedUnit: 72,
     approvedSellingPricePerRequestedUnit: null,
-    discountCeilingPct: 0.1,
     minimumSellingPricePerRequestedUnit: 65,
     decisionNote: null,
+    // Phase 1 UI simplification ("ปรับราคาเอง") — no override by default.
+    manualSellingPricePerRequestedUnit: null,
     ...overrides,
   };
 }
@@ -398,7 +399,6 @@ function buildSalesView(overrides = {}) {
         requestedUnitBasis: 'PER_PIECE',
         requestedQuantity: 20,
         approvedSellingPricePerRequestedUnit: 72,
-        discountCeilingPct: 0.1,
         minimumSellingPricePerRequestedUnit: 65,
       },
     ],
@@ -1118,6 +1118,15 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
 });
 
 describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level only — see file header)', () => {
+  // Phase 1 UI simplification (owner ruling 2026-08-16): the cost breakdown, the formula
+  // derivation, ปรับต้นทุนเอง, and ปรับราคาเอง all live inside a per-item "วิธีคำนวณราคานี้"
+  // CollapsibleSection, collapsed by default (CollapsibleSection unmounts its body rather than
+  // CSS-hiding it — see that component's own doc comment) — every test below that needs to reach
+  // one of those controls must open it first.
+  function expandDerivation() {
+    fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
+  }
+
   it('lets the CEO start a review from READY_FOR_CEO_REVIEW, calling startPricingDecision', async () => {
     const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
     renderDetailPage({ user: ceoUser, request });
@@ -1148,23 +1157,24 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(api.pricingRequests.listPricingDecisions).not.toHaveBeenCalled();
   });
 
-  it('lets the CEO edit an item margin/minimum price and save via updatePricingDecision', async () => {
+  it('shows the read-only base cost and the automatically computed selling price, asking for nothing, with no per-item input anywhere', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
     renderDetailPage({ user: ceoUser, request });
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    const marginInput = screen.getByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%');
-    fireEvent.change(marginInput, { target: { value: '0.35' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }));
-
-    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
-      7001,
-      expect.objectContaining({
-        items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.35, minimumSellingPrice: 65 })],
-      }),
-    ));
+    expect(screen.getByText(/ต้นทุนโรงงาน.*฿60\.00/)).not.toBeNull();
+    expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
+    // The old per-item margin/minimum/ceiling grid is gone entirely.
+    expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
+    expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
+    expect(screen.queryByPlaceholderText('ส่วนลดสูงสุด เช่น 0.10 = 10%')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' })).toBeNull();
+    // The only two actions left — asserted by role name so a stray extra button would show up as
+    // "found 2" against getByRole's own strictness, not silently pass.
+    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
   });
 
   // V141 ("CEO owns costing", PR #702, commit 1).

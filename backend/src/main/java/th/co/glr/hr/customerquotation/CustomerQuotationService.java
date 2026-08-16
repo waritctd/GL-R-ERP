@@ -225,9 +225,12 @@ public class CustomerQuotationService {
             //
             // Scoped to revisions (parentQuotationId != null) on purpose. Discount Policy B on a
             // FIRST quotation is untouched: there the CEO's own decision supplied
-            // discount_ceiling_pct / minimum_selling_price_per_requested_unit, so discounting down
-            // to that floor is authority the CEO granted, not authority Sales took. The ruling is
-            // about moving a price AFTER the customer has been given one.
+            // minimum_selling_price_per_requested_unit (Phase 1 UI simplification, owner ruling
+            // 2026-08-16: ส่วนลดสูงสุด/discount_ceiling_pct is retired system-wide; the floor is
+            // now auto-populated with the approved selling price unless the CEO explicitly set a
+            // lower one — see PricingDecisionService#approve), so discounting down to that floor
+            // is authority the CEO granted, not authority Sales took. The ruling is about moving a
+            // price AFTER the customer has been given one.
             //
             // The check is on the RESOLVED discount, not on req.salesDiscount(), so it cannot be
             // slipped past by omitting the field and relying on a non-zero value already sitting

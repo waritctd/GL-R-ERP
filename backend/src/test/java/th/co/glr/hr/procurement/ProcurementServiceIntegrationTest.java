@@ -653,7 +653,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         List<UpdatePricingDecisionItemRequest> updates = decision.items().stream()
-            .map(item -> new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))
+            .map(item -> new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))
             .toList();
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, updates), ceoActor);
         PricingDecisionDto approved = decisionService.approve(decision.id(),
@@ -764,7 +764,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         PricingDecisionItemDto decisionItem = decision.items().get(0);
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-            new UpdatePricingDecisionItemRequest(decisionItem.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+            new UpdatePricingDecisionItemRequest(decisionItem.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
 

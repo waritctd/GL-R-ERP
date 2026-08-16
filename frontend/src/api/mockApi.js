@@ -9320,11 +9320,15 @@ export const api = {
             approvedMarginPct: null,
             proposedSellingPricePerRequestedUnit,
             approvedSellingPricePerRequestedUnit: null,
-            discountCeilingPct: null,
             minimumSellingPricePerRequestedUnit: null,
             decisionNote: null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            // Phase 1 UI simplification ("ปรับราคาเอง") — mirrors
+            // PricingDecisionRepository#mapItem's manualSellingPricePerRequestedUnit /
+            // effectiveSellingPricePerRequestedUnit pair. NULL = no override, the formula drives
+            // this line's price.
+            manualSellingPricePerRequestedUnit: null,
           };
         }),
       };
@@ -9364,7 +9368,6 @@ export const api = {
             requestedUnitBasis: item.requestedUnitBasis,
             requestedQuantity: item.requestedQuantity,
             approvedSellingPricePerRequestedUnit: item.approvedSellingPricePerRequestedUnit,
-            discountCeilingPct: item.discountCeilingPct,
             minimumSellingPricePerRequestedUnit: item.minimumSellingPricePerRequestedUnit,
           })),
         },
@@ -9378,6 +9381,12 @@ export const api = {
       return delay({ decision });
     },
 
+    // Phase 1 UI simplification ("ปรับราคาเอง"): sellingPriceOverride/clearSellingPriceOverride
+    // mirror PricingDecisionService#applyItemUpdates's own validation ORDER exactly — item
+    // belongs to decision -> set+clear mutually exclusive -> reason mandatory in BOTH directions
+    // -> non-negative -> apply. discountCeilingPct is gone (retired system-wide, owner ruling
+    // 2026-08-16) — any payload still carrying it is silently ignored, same as any other field
+    // the real backend's DTO no longer declares.
     async updatePricingDecision(id, payload) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -9387,13 +9396,27 @@ export const api = {
       for (const itemPayload of payload.items ?? []) {
         const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
         if (!item) fail(`รายการที่ ${itemPayload.pricingDecisionItemId} ไม่ได้เป็นของมติราคานี้`, 400);
+        const touchesPriceOverride = itemPayload.sellingPriceOverride != null || itemPayload.clearSellingPriceOverride;
+        if (itemPayload.sellingPriceOverride != null && itemPayload.clearSellingPriceOverride) {
+          fail('ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้', 400);
+        }
+        if (touchesPriceOverride && !itemPayload.decisionNote?.trim()) {
+          fail('ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม', 400);
+        }
+        if (itemPayload.sellingPriceOverride != null && Number(itemPayload.sellingPriceOverride) < 0) {
+          fail('ราคาที่ปรับต้องไม่ติดลบ', 400);
+        }
         if (itemPayload.marginPct != null) {
           item.proposedMarginPct = itemPayload.marginPct;
           item.proposedSellingPricePerRequestedUnit =
             item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
         }
-        if (itemPayload.discountCeilingPct != null) item.discountCeilingPct = itemPayload.discountCeilingPct;
         if (itemPayload.minimumSellingPrice != null) item.minimumSellingPricePerRequestedUnit = itemPayload.minimumSellingPrice;
+        if (itemPayload.clearSellingPriceOverride) {
+          item.manualSellingPricePerRequestedUnit = null;
+        } else if (itemPayload.sellingPriceOverride != null) {
+          item.manualSellingPricePerRequestedUnit = Number(itemPayload.sellingPriceOverride);
+        }
         if (itemPayload.decisionNote != null) item.decisionNote = itemPayload.decisionNote;
         item.updatedAt = new Date().toISOString();
       }
@@ -9539,16 +9562,34 @@ export const api = {
           409,
         );
       }
-      const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
-      const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
-      if (missingMargin.length || missingMinimum.length) {
-        fail(`ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: [${missingMargin}], รายการที่ยังไม่มีราคาขายขั้นต่ำ: [${missingMinimum}]`, 422);
+      // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be
+      // "missing" any more (see the auto-population below) — and an item with an active
+      // "ปรับราคาเอง" override needs no margin at all, mirroring
+      // PricingDecisionService#approve's own missingMargin exemption for an overridden item.
+      const missingMargin = decision.items
+        .filter((i) => i.proposedMarginPct == null && i.manualSellingPricePerRequestedUnit == null)
+        .map((i) => i.id);
+      if (missingMargin.length) {
+        fail(`ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: [${missingMargin}]`, 422);
       }
-      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin.
+      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin,
+      // UNLESS an explicit "ปรับราคาเอง" override is active, in which case that value freezes in
+      // verbatim and the formula never runs for this line at all (mirrors
+      // PricingDecisionService#approve's own override-vs-formula precedence).
       for (const item of decision.items) {
+        const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
+        item.approvedSellingPricePerRequestedUnit = hasPriceOverride
+          ? item.manualSellingPricePerRequestedUnit
+          : item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
         item.approvedMarginPct = item.proposedMarginPct;
-        item.approvedSellingPricePerRequestedUnit =
-          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        // Money hole this closes (Phase 1 UI simplification, owner ruling 2026-08-16):
+        // CustomerQuotationService's three below-minimum 422 guards are each null-guarded, so a
+        // NULL minimum silently disarms every one of them. Auto-populate with the approved price
+        // itself (today's "any discount refused" outcome) whenever the CEO has not explicitly set
+        // a lower floor — mirrors PricingDecisionService#approve exactly.
+        if (item.minimumSellingPricePerRequestedUnit == null) {
+          item.minimumSellingPricePerRequestedUnit = item.approvedSellingPricePerRequestedUnit;
+        }
         item.updatedAt = new Date().toISOString();
       }
       decision.status = 'APPROVED';
