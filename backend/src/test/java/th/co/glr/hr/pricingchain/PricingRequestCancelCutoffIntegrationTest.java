@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -47,10 +48,11 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -158,15 +160,16 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
             .thenReturn(UUID.randomUUID().toString());
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, new AppProperties(),
             landedCosts);
 
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisions, pricingRequests,
-            new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts);
+            new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts, formulaEngine);
 
         TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -180,7 +183,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
 
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-cancel@example.com', 'THB', 'piece', 'Thailand')
+            VALUES (:factory, 'factory-cancel@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", FACTORY));

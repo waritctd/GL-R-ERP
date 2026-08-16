@@ -1,7 +1,10 @@
 package th.co.glr.hr.catalog;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -12,6 +15,22 @@ public class CatalogRepository {
 
     public CatalogRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * {@code price_catalog.product_prices.thickness_mm} for one catalog price row — used by
+     * {@code LandedCostCalculator#resolveThicknessMm} for V109's freight-band lookup. Returns
+     * empty (never a fallback value) when the row does not exist or its {@code thickness_mm} is
+     * NULL — the caller turns either case into a loud, item-naming failure rather than guessing.
+     */
+    public Optional<BigDecimal> findThicknessMm(long priceId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject(
+                "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :priceId",
+                new MapSqlParameterSource().addValue("priceId", priceId), BigDecimal.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public List<CatalogDto> search(String q) {

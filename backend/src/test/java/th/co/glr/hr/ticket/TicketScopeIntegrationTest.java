@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.config.AppProperties;
@@ -36,10 +37,11 @@ import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -100,9 +102,11 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         // auto-advance check) and, in production, PricingDecisionService — this file only reads
         // through PricingCostingService (see pricingCostingService.get below), so the calculator
         // is wired but never exercised beyond satisfying the constructor.
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
-                new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+                new FxRateRepository(jdbc), new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc),
+                formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
             notifications, fileStorage, new AppProperties(), landedCostCalculator);

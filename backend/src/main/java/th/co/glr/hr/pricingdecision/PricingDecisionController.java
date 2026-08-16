@@ -16,6 +16,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -95,6 +96,17 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("decision", decisions.overrideItemCost(decisionId, itemId, request, user));
+    }
+
+    @PutMapping("/pricing-decisions/{decisionId}/items/{itemId}/product-type-override")
+    Map<String, PricingDecisionDto> overrideItemProductType(
+        @PathVariable long decisionId,
+        @PathVariable long itemId,
+        @RequestBody ProductTypeOverrideRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("decision", decisions.overrideItemProductType(decisionId, itemId, request, user));
     }
 
     @PostMapping("/pricing-decisions/{decisionId}/approve")

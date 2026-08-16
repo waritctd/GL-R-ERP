@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -51,9 +52,10 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
 import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -156,8 +158,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .thenReturn(UUID.randomUUID().toString());
         AppProperties dispatchProperties = new AppProperties();
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCosts);
@@ -165,7 +168,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisions, pricingRequests,
             new th.co.glr.hr.pricingcosting.PricingCostingRepository(jdbc), tickets, fxRates, notifications,
-            landedCosts);
+            landedCosts, formulaEngine);
 
         TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -181,7 +184,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         // carry-forward's own gate is LandedCostCalculator.isFullyResolvable.
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-reissue@example.com', 'THB', 'piece', 'Thailand')
+            VALUES (:factory, 'factory-reissue@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", FACTORY));

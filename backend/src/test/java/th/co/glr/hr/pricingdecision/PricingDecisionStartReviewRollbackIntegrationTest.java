@@ -21,6 +21,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
@@ -41,10 +42,11 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
@@ -99,6 +101,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
     private NotificationRepository notifications;
     private FxRateRepository fxRates;
     private LandedCostCalculator landedCostCalculator;
+    private PricingFormulaEngine formulaEngine;
 
     private long salesRepId;
     private long importUserId;
@@ -136,10 +139,11 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         fxRates = new FxRateRepository(jdbc);
+        formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview (see buildDecisionService).
         landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -162,8 +166,8 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                ('Factory A3-rollback', 'factory-a3-rollback@example.com', 'THB', 'piece', 'Thailand'),
-                ('Factory B3-rollback', 'factory-b3-rollback@example.com', 'THB', 'piece', 'Thailand')
+                ('Factory A3-rollback', 'factory-a3-rollback@example.com', 'THB', 'piece', 'Italy'),
+                ('Factory B3-rollback', 'factory-b3-rollback@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
@@ -335,7 +339,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
 
     private PricingDecisionService buildDecisionService(PricingRequestRepository pricingRequestsForDecision) {
         return new PricingDecisionService(decisionRepository, pricingRequestsForDecision, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
     }
 
     /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW, mirroring {@code

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -40,11 +41,12 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
@@ -129,8 +131,9 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -138,7 +141,7 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
         TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
@@ -158,8 +161,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                ('Factory A-CostingAuthz', 'factory-a-costing-authz@example.com', 'THB', 'piece', 'Thailand'),
-                ('Factory B-CostingAuthz', 'factory-b-costing-authz@example.com', 'THB', 'piece', 'Thailand')
+                ('Factory A-CostingAuthz', 'factory-a-costing-authz@example.com', 'THB', 'piece', 'Italy'),
+                ('Factory B-CostingAuthz', 'factory-b-costing-authz@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());

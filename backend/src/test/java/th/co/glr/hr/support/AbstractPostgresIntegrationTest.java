@@ -174,8 +174,10 @@ public abstract class AbstractPostgresIntegrationTest {
         return new th.co.glr.hr.factoryquote.FactoryQuoteCarryForward(factoryQuotes, pricingRequests,
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
                 new th.co.glr.hr.pricing.FxRateRepository(jdbc),
-                new th.co.glr.hr.pricing.PriceCalcConfigRepository(jdbc),
-                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc)));
+                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc),
+                new th.co.glr.hr.catalog.CatalogRepository(jdbc),
+                new th.co.glr.hr.pricingcosting.PricingFormulaEngine(
+                    new th.co.glr.hr.pricing.PricingFormulaConfigRepository(jdbc))));
     }
 
     private static DataSource dataSource() {
@@ -230,6 +232,25 @@ public abstract class AbstractPostgresIntegrationTest {
      */
     protected long insertCatalogProduct(String factoryName, String countryCode2, String productCode,
                                         BigDecimal price, String currency, String priceUnit, String versionStatus) {
+        // V152 (V109 engine wiring): every pricing-costing test needs a resolvable thickness_mm —
+        // LandedCostCalculator#resolveThicknessMm refuses to cost an item without one (owner
+        // ruling: refuse to price rather than guess). 10mm sits inside V109's seeded [8,12) band
+        // for EVERY seeded origin country (Italy/Spain/China), and that band is the one seeded
+        // with NO gap all the way to its open-ended top (qty [801,NULL)) — so a test using this
+        // default is costable at ANY quantity, not just a specific range. A test that cares about
+        // thickness itself uses the explicit overload below instead.
+        return insertCatalogProduct(factoryName, countryCode2, productCode, price, currency, priceUnit,
+            versionStatus, new BigDecimal("10"));
+    }
+
+    /**
+     * Full control over {@code thickness_mm} — for tests exercising V109's thickness-banded
+     * freight lookup itself (band edges, the "missing thickness" refusal), or a scenario that
+     * must NOT default to the safe 10mm above.
+     */
+    protected long insertCatalogProduct(String factoryName, String countryCode2, String productCode,
+                                        BigDecimal price, String currency, String priceUnit, String versionStatus,
+                                        BigDecimal thicknessMm) {
         Long factoryId = jdbc.queryForObject("""
             INSERT INTO price_catalog.factories (name, country, default_currency)
             VALUES (:name, :country, :currency)
@@ -251,8 +272,9 @@ public abstract class AbstractPostgresIntegrationTest {
                 .addValue("status", versionStatus),
             Long.class);
         Long priceId = jdbc.queryForObject("""
-            INSERT INTO price_catalog.product_prices (factory_id, version_id, product_code, price, currency, price_unit)
-            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit)
+            INSERT INTO price_catalog.product_prices
+                (factory_id, version_id, product_code, price, currency, price_unit, thickness_mm)
+            VALUES (:factoryId, :versionId, :productCode, :price, :currency, :priceUnit, :thicknessMm)
             RETURNING price_id
             """,
             new MapSqlParameterSource()
@@ -261,7 +283,8 @@ public abstract class AbstractPostgresIntegrationTest {
                 .addValue("productCode", productCode)
                 .addValue("price", price)
                 .addValue("currency", currency)
-                .addValue("priceUnit", priceUnit),
+                .addValue("priceUnit", priceUnit)
+                .addValue("thicknessMm", thicknessMm),
             Long.class);
         return priceId;
     }
