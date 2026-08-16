@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.CountryDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.ClearanceFeeRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.CreatePricingFormulaConfigRequest;
@@ -53,11 +54,13 @@ public class PricingFormulaConfigRepository {
 
         long formulaConfigId = parent.formulaConfigId();
         List<PricingFreightRateDto> freightRates = jdbc.query("""
-            SELECT freight_rate_id, origin_country, thickness_min_mm, thickness_max_mm,
-                   qty_min_sqm, qty_max_sqm, amount_thb
-              FROM sales.pricing_freight_rate
-             WHERE formula_config_id = :formulaConfigId
-             ORDER BY origin_country, thickness_min_mm, qty_min_sqm
+            SELECT r.freight_rate_id, r.origin_country_code, c.name_th AS origin_country_name,
+                   r.thickness_min_mm, r.thickness_max_mm,
+                   r.qty_min_sqm, r.qty_max_sqm, r.amount_thb
+              FROM sales.pricing_freight_rate r
+              JOIN price_catalog.country c ON c.country_code = r.origin_country_code
+             WHERE r.formula_config_id = :formulaConfigId
+             ORDER BY c.name_th, r.thickness_min_mm, r.qty_min_sqm
             """, Map.of("formulaConfigId", formulaConfigId), (rs, i) -> mapFreightRate(rs));
 
         List<PricingDutyRateDto> dutyRates = jdbc.query("""
@@ -74,12 +77,19 @@ public class PricingFormulaConfigRepository {
              ORDER BY qty_min_sqm
             """, Map.of("formulaConfigId", formulaConfigId), (rs, i) -> mapClearanceFee(rs));
 
+        List<CountryDto> countries = jdbc.query("""
+            SELECT country_code, name_en, name_th
+              FROM price_catalog.country
+             ORDER BY name_th
+            """, Map.of(), (rs, i) -> new CountryDto(
+                rs.getString("country_code"), rs.getString("name_en"), rs.getString("name_th")));
+
         return Optional.of(new PricingFormulaConfigDto(
             parent.formulaConfigId(), parent.version(),
             parent.insuranceValueFactor(), parent.insuranceRate(), parent.insuranceBuffer(),
             parent.costBuffer(), parent.sellingBuffer(), parent.defaultMarginPct(),
             parent.sellingPriceRoundUpTo(), parent.isCurrent(), parent.effectiveFrom(), parent.updatedAt(),
-            freightRates, dutyRates, clearanceFees));
+            freightRates, dutyRates, clearanceFees, countries));
     }
 
     @Transactional
@@ -121,15 +131,15 @@ public class PricingFormulaConfigRepository {
         for (FreightRateRequest freight : request.freightRates()) {
             jdbc.update("""
                 INSERT INTO sales.pricing_freight_rate
-                    (formula_config_id, origin_country, thickness_min_mm, thickness_max_mm,
+                    (formula_config_id, origin_country_code, thickness_min_mm, thickness_max_mm,
                      qty_min_sqm, qty_max_sqm, amount_thb)
                 VALUES
-                    (:formulaConfigId, :originCountry, :thicknessMinMm, :thicknessMaxMm,
+                    (:formulaConfigId, :originCountryCode, :thicknessMinMm, :thicknessMaxMm,
                      :qtyMinSqm, :qtyMaxSqm, :amountThb)
                 """,
                 new MapSqlParameterSource()
                     .addValue("formulaConfigId", formulaConfigId)
-                    .addValue("originCountry", freight.originCountry())
+                    .addValue("originCountryCode", freight.originCountryCode())
                     .addValue("thicknessMinMm", freight.thicknessMinMm())
                     .addValue("thicknessMaxMm", freight.thicknessMaxMm())
                     .addValue("qtyMinSqm", freight.qtyMinSqm())
@@ -178,13 +188,14 @@ public class PricingFormulaConfigRepository {
             rs.getBoolean("is_current"),
             rs.getDate("effective_from").toLocalDate(),
             rs.getTimestamp("updated_at").toInstant(),
-            List.of(), List.of(), List.of());
+            List.of(), List.of(), List.of(), List.of());
     }
 
     private PricingFreightRateDto mapFreightRate(ResultSet rs) throws SQLException {
         return new PricingFreightRateDto(
             rs.getLong("freight_rate_id"),
-            rs.getString("origin_country"),
+            rs.getString("origin_country_code"),
+            rs.getString("origin_country_name"),
             rs.getBigDecimal("thickness_min_mm"),
             rs.getBigDecimal("thickness_max_mm"),
             rs.getBigDecimal("qty_min_sqm"),

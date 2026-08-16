@@ -99,14 +99,14 @@ class TransactionalHarnessIntegrationTest extends AbstractPostgresIntegrationTes
 
         @Transactional
         public void insertThenThrow_annotated(String name) {
-            jdbc.update("INSERT INTO price_catalog.factories (name) VALUES (:name)",
+            jdbc.update("INSERT INTO price_catalog.factories (name, country) VALUES (:name, 'TH')",
                 new MapSqlParameterSource().addValue("name", name));
             throw new RuntimeException("harness probe: annotated failure");
         }
 
         // Deliberately NOT @Transactional — the negative half of the guard above.
         public void insertThenThrow_unannotated(String name) {
-            jdbc.update("INSERT INTO price_catalog.factories (name) VALUES (:name)",
+            jdbc.update("INSERT INTO price_catalog.factories (name, country) VALUES (:name, 'TH')",
                 new MapSqlParameterSource().addValue("name", name));
             throw new RuntimeException("harness probe: unannotated failure");
         }
@@ -188,7 +188,7 @@ class TransactionalHarnessIntegrationTest extends AbstractPostgresIntegrationTes
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private void insertFactory(String name) {
-        jdbc.update("INSERT INTO price_catalog.factories (name) VALUES (:name)",
+        jdbc.update("INSERT INTO price_catalog.factories (name, country) VALUES (:name, 'TH')",
             new MapSqlParameterSource().addValue("name", name));
     }
 

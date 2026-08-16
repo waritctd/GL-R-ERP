@@ -193,7 +193,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "XX", "TEST-C4-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "VN", "TEST-C4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         jdbc.update("""
             INSERT INTO sales.price_calc_config
