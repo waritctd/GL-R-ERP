@@ -503,7 +503,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);

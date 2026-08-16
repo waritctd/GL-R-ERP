@@ -226,7 +226,7 @@ public class PricingDecisionService {
             }
             BigDecimal sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), margin,
                 decision.fxRateUsed(), decision.currency());
-            updates.add(new ItemUpdate(item.id(), margin, sellingPrice, null, null, null));
+            updates.add(new ItemUpdate(item.id(), margin, sellingPrice, null, null, null, false));
         }
         decisions.updateItems(decisionId, updates);
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
@@ -378,29 +378,50 @@ public class PricingDecisionService {
                     + "— รายการที่ล้าสมัย: " + staleItemIds);
         }
 
-        List<Long> missingMargin = new ArrayList<>();
-        List<Long> missingMinimum = new ArrayList<>();
-        for (PricingDecisionItemDto item : decision.items()) {
-            if (item.proposedMarginPct() == null) {
-                missingMargin.add(item.id());
-            }
-            if (item.minimumSellingPricePerRequestedUnit() == null) {
-                missingMinimum.add(item.id());
-            }
-        }
-        if (!missingMargin.isEmpty() || !missingMinimum.isEmpty()) {
+        // Phase 1 UI simplification: an item with an active "ปรับราคาเอง" override needs no
+        // margin at all — its price is fixed directly, the formula (and therefore margin) never
+        // drives it. Only a NON-overridden item without a margin blocks approval now.
+        List<Long> missingMargin = decision.items().stream()
+            .filter(item -> item.proposedMarginPct() == null && item.manualSellingPricePerRequestedUnit() == null)
+            .map(PricingDecisionItemDto::id)
+            .toList();
+        if (!missingMargin.isEmpty()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: "
-                    + missingMargin + ", รายการที่ยังไม่มีราคาขายขั้นต่ำ: " + missingMinimum);
+                "ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: " + missingMargin);
         }
 
         // Design correction 7: never trust a stored/client-supplied selling price at approval —
-        // always recompute fresh from the frozen cost and the margin being frozen in.
+        // always recompute fresh from the frozen cost and the margin being frozen in. The ONE
+        // deliberate exception is an active "ปรับราคาเอง" override (Phase 1 UI simplification):
+        // there the CEO's own fixed value freezes in verbatim and the formula is not consulted at
+        // all for that line, exactly as overrideItemCost already does for the cost side.
+        //
+        // ราคาขั้นต่ำ ("ราคาขั้นต่ำ") is no longer a CEO input in the UI (Phase 1 UI
+        // simplification, owner ruling 2026-08-16) — the per-item text field is gone. Left unset,
+        // minimum_selling_price_per_requested_unit would stay NULL forever, and
+        // CustomerQuotationService's three below-minimum 422 guards are each explicitly
+        // null-guarded (`item.minimumSellingPricePerRequestedUnit() != null && ...`), so a NULL
+        // minimum does not merely fail open on ONE check — it silently disarms all three,
+        // un-guarding every future discount on this request. Auto-populating it here with the
+        // approved selling price itself closes that hole by construction: the CEO types nothing,
+        // and — because floor == price — today's "any discount refused" outcome (Discount Policy
+        // B's zero-width case) holds for every new decision without any special-casing downstream.
+        // An explicitly-set LOWER floor is honoured, not overwritten, if one is already on the row
+        // (still settable through PUT /pricing-decisions/{id}, which is unchanged) — only a still-
+        // NULL minimum falls back to the approved price. See PricingDecisionCostOverrideValidation-
+        // IntegrationTest's sibling in PricingDecisionMinimumPriceAutoPopulationIntegrationTest for
+        // the wrong-way-round proof that a discounted quotation line is still refused.
         List<ApprovedItem> approvedItems = new ArrayList<>();
         for (PricingDecisionItemDto item : decision.items()) {
-            BigDecimal approvedSellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(),
-                item.proposedMarginPct(), decision.fxRateUsed(), decision.currency());
-            approvedItems.add(new ApprovedItem(item.id(), item.proposedMarginPct(), approvedSellingPrice));
+            BigDecimal approvedSellingPrice = item.manualSellingPricePerRequestedUnit() != null
+                ? item.manualSellingPricePerRequestedUnit()
+                : computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), item.proposedMarginPct(),
+                    decision.fxRateUsed(), decision.currency());
+            BigDecimal minimumSellingPrice = item.minimumSellingPricePerRequestedUnit() != null
+                ? item.minimumSellingPricePerRequestedUnit()
+                : approvedSellingPrice;
+            approvedItems.add(new ApprovedItem(item.id(), item.proposedMarginPct(), approvedSellingPrice,
+                minimumSellingPrice));
         }
         decisions.approveItems(decisionId, approvedItems);
 
@@ -499,6 +520,22 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "รายการที่ " + req.pricingDecisionItemId() + " ไม่ได้เป็นของมติราคานี้");
             }
+            // "ปรับราคาเอง" (Phase 1 UI simplification) — mirrors overrideItemCost's own check
+            // ORDER exactly: reason (mandatory in BOTH directions) before the negative-amount
+            // check, before anything else. Set and clear are mutually exclusive in one call.
+            if (req.sellingPriceOverride() != null && req.clearSellingPriceOverride()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้");
+            }
+            boolean touchesPriceOverride = req.sellingPriceOverride() != null || req.clearSellingPriceOverride();
+            if (touchesPriceOverride && (req.decisionNote() == null || req.decisionNote().isBlank())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
+            }
+            if (req.sellingPriceOverride() != null && req.sellingPriceOverride().compareTo(BigDecimal.ZERO) < 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาที่ปรับต้องไม่ติดลบ");
+            }
+
             BigDecimal marginPct = req.marginPct();
             BigDecimal sellingPrice = null;
             if (marginPct != null) {
@@ -506,16 +543,12 @@ public class PricingDecisionService {
                 sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), marginPct,
                     decision.fxRateUsed(), decision.currency());
             }
-            if (req.discountCeilingPct() != null
-                    && (req.discountCeilingPct().compareTo(BigDecimal.ZERO) < 0
-                        || req.discountCeilingPct().compareTo(BigDecimal.ONE) > 0)) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "discountCeilingPct ต้องอยู่ระหว่าง 0 ถึง 1");
-            }
             if (req.minimumSellingPrice() != null && req.minimumSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาขายขั้นต่ำต้องไม่ติดลบ");
             }
-            updates.add(new ItemUpdate(item.id(), marginPct, sellingPrice, req.discountCeilingPct(),
-                req.minimumSellingPrice(), req.decisionNote()));
+            updates.add(new ItemUpdate(item.id(), marginPct, sellingPrice,
+                req.minimumSellingPrice(), req.decisionNote(),
+                req.sellingPriceOverride(), req.clearSellingPriceOverride()));
         }
         int rows = decisions.updateItems(decision.id(), updates);
         if (rows != updates.size()) {

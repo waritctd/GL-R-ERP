@@ -60,11 +60,23 @@ public final class PricingDecisionDtos {
         BigDecimal approvedMarginPct,
         BigDecimal proposedSellingPricePerRequestedUnit,
         BigDecimal approvedSellingPricePerRequestedUnit,
-        BigDecimal discountCeilingPct,
         BigDecimal minimumSellingPricePerRequestedUnit,
         String decisionNote,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        // ── CEO selling-price override ("ปรับราคาเอง", Phase 1 UI simplification) ────────────
+        // Sits BESIDE proposedSellingPricePerRequestedUnit above, which keeps holding the
+        // FORMULA's own computed output forever — an override never overwrites it. NULL means
+        // "no override, the formula drives this line"; non-null is the CEO's fixed final price,
+        // in the SAME per-requested-unit basis and currency. The mandatory reason for setting OR
+        // clearing this lives in decisionNote (see PricingDecisionService#applyItemUpdates) —
+        // reused rather than a second dedicated column, mirroring the sibling cost override's
+        // overrideReason but without a second column for it.
+        BigDecimal manualSellingPricePerRequestedUnit,
+        // Derived, never stored (mirrors PricingCostingItemDto#effectiveLandedCostPerUnitThb) —
+        // recomputed on every read (PricingDecisionRepository#mapItem) so it can never drift out
+        // of sync with the two columns it is derived from.
+        BigDecimal effectiveSellingPricePerRequestedUnit
     ) {}
 
     /**
@@ -95,7 +107,6 @@ public final class PricingDecisionDtos {
         String requestedUnitBasis,
         BigDecimal requestedQuantity,
         BigDecimal approvedSellingPricePerRequestedUnit,
-        BigDecimal discountCeilingPct,
         BigDecimal minimumSellingPricePerRequestedUnit
     ) {}
 }

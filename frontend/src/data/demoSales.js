@@ -279,9 +279,10 @@ export function buildDemoSalesSeed() {
         currency: 'THB', proposedMarginPct: marginPct, approvedMarginPct: approved ? marginPct : null,
         proposedSellingPricePerRequestedUnit: proposedSelling,
         approvedSellingPricePerRequestedUnit: approved ? proposedSelling : null,
-        discountCeilingPct: approved ? 0.05 : null,
         minimumSellingPricePerRequestedUnit: approved ? Math.round(perUnit * 1.1) : null,
         decisionNote: null, createdAt, updatedAt: createdAt,
+        // Phase 1 UI simplification ("ปรับราคาเอง") — no override in the demo seed by default.
+        manualSellingPricePerRequestedUnit: null,
       };
     });
     const decision = {
