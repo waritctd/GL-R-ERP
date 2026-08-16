@@ -41,17 +41,32 @@ class EmployeeReferenceRepositoryIntegrationTest extends AbstractPostgresIntegra
     @Test
     void duplicateNamesWithDifferentCodes_lowestDivisionIdWinsDeterministically() {
         // Mirrors a real production shape: "Sales Support 1" carries both source_code '0011' and
-        // '0013' on two separate rows. '0011' is inserted first so it gets the lower division_id,
-        // and must be the one the deterministic tie-break returns -- pinned to that exact value,
-        // not merely "some code", so a future change to the tie-break direction is caught here.
+        // '0013' on two separate rows. Both codes stay non-blank and different from each other
+        // for the whole test, so the code-preference sort key always ties between the two rows
+        // and ONLY `division_id ASC` can decide the winner -- if it could not, this test would
+        // prove nothing about that half of the ORDER BY.
+        //
+        // Insertion order alone is NOT a real adversary for `division_id ASC`: on a freshly
+        // inserted, never-updated table, a sequential scan happens to return rows in insertion
+        // order, which is ALSO division_id order here -- so even a plain unordered `LIMIT 1`
+        // would land on the right row by coincidence, and a silently-removed `division_id ASC`
+        // would go undetected. To make physical scan order diverge from division_id order, the
+        // LOWER-id row is UPDATED after both inserts, changing its UNIQUE-indexed source_code (so
+        // this cannot be a no-op HOT update that leaves its heap position untouched): Postgres
+        // MVCC writes the update as a brand-new heap tuple, physically placed AFTER the
+        // higher-id row's never-touched tuple, so an unordered scan now reaches the HIGHER-id row
+        // first. The fix's `division_id ASC` must still correctly return the LOWER-id row despite
+        // that -- confirmed by mutation check: removing only `division_id ASC` from the ORDER BY
+        // (leaving the code-preference term) turns this specific test red.
         long lowerId = insertDivision("Sales Support 1", "0011");
         long higherId = insertDivision("Sales Support 1", "0013");
         assertThat(lowerId).isLessThan(higherId);
+        updateSourceCode(lowerId, "0011R"); // still non-blank, still distinct from '0013'
 
         Long divisionId = references.ensureDivision(null, "Sales Support 1");
 
         assertThat(divisionId).isEqualTo(lowerId);
-        assertThat(sourceCodeOf(divisionId)).isEqualTo("0011");
+        assertThat(sourceCodeOf(divisionId)).isEqualTo("0011R");
     }
 
     @Test
@@ -110,5 +125,16 @@ class EmployeeReferenceRepositoryIntegrationTest extends AbstractPostgresIntegra
     private String sourceCodeOf(long divisionId) {
         return jdbc.queryForObject("SELECT source_code FROM hr.division WHERE division_id = :id",
             Map.of("id", divisionId), String.class);
+    }
+
+    /**
+     * Forces a real (non-HOT) tuple rewrite of an existing row: {@code source_code} carries a
+     * UNIQUE index, so changing its value cannot take the same-page/same-slot HOT-update shortcut
+     * that would leave the row's position in a sequential scan unchanged. See the caller for why
+     * this matters -- it is what makes physical scan order diverge from {@code division_id} order.
+     */
+    private void updateSourceCode(long divisionId, String sourceCode) {
+        jdbc.update("UPDATE hr.division SET source_code = :sourceCode WHERE division_id = :id",
+            new MapSqlParameterSource().addValue("sourceCode", sourceCode).addValue("id", divisionId));
     }
 }
