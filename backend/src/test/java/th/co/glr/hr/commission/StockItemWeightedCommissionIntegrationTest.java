@@ -16,6 +16,8 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.AttachmentRepository;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
@@ -228,6 +230,100 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Reviewer finding (2026-08-16): the manager's record-level override must still reach real
+    // payroll money on a record created through the REAL production paths, not a hand-built
+    // fixture that bypasses CommissionCalculator#itemDerivedWeight entirely. Both #submit and
+    // #createFromDeal call the freeze (see CommissionService:141-142 and :297-298 respectively —
+    // createFromDeal calls calculator.itemDerivedWeight directly rather than through the
+    // computeItemDerivedWeight wrapper, since it already has the ticket loaded; a grep for the
+    // wrapper's name alone would miss this call site).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Drives the REAL {@link CommissionService#submit} — including a real invoice file upload
+     * through real {@link FileStorageService}/{@link CommissionAttachmentRepository}/{@link
+     * AttachmentRepository} (mocking any of those while {@code commissions} stays real risks a
+     * real foreign-key violation on {@code invoice_details.invoice_attachment_id} — see V35) —
+     * against an ORDINARY ticket: one item, fully priced, at the column DEFAULT weight (1x), no
+     * stock declared. This is the overwhelmingly common case for a real deal.
+     *
+     * <p>Before the fix, {@code submit} would freeze a non-null {@code 1.000000} onto this exact
+     * record (the defect {@link CommissionCalculator#itemDerivedWeight}'s Javadoc now documents in
+     * full), and the manager's {@code weightMultiplier} override below would silently do nothing —
+     * this test would have gone red without the fix, proving the fix on the path that actually
+     * ships, not a fixture that already assumed the answer.
+     */
+    @Test
+    void managersRecordLevelOverride_stillReachesPayroll_onARecordCreatedThroughRealSubmit() {
+        long salesRepId = ownerId;
+        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
+        // Deliberately UNTOUCHED — no reserveStock, no setItemWeightMultipliers. submit() requires
+        // CLOSED_PAID when sourceTicketId is set (resolveDealLinkage) — set directly, the same way
+        // createSingleItemTicketAtOrderReceived already forces ORDER_RECEIVED, since this test is
+        // about the commission freeze, not the deal-stage pipeline.
+        tickets.updateSalesStage(ticketId, DealStage.CLOSED_PAID);
+
+        CommissionService realSubmitService = realCommissionService();
+        SubmitCommissionRequest request = new SubmitCommissionRequest(
+            ticketId, salesRepId, "INV-OVERRIDE-" + UUID.randomUUID(), INVOICE_DATE,
+            new BigDecimal("100000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+        // submit()'s SUBMIT_ROLES is {account, sales_manager, ceo} -- "sales" was removed from it
+        // entirely by Slice A2 (commission creation moved to the accountant's auto-create trigger).
+        // salesRepId is passed explicitly in the request either way, so this attributes the
+        // commission to the deal owner regardless of who submits it.
+        CommissionRecord created = realSubmitService.submit(request, invoiceFile(), salesManager);
+
+        // The freeze must NOT have captured a redundant, control-defeating 1.000000.
+        assertThat(created.effectiveWeightMultiplier()).isNull();
+
+        UpdateCommissionDeductionsRequest setWeight = new UpdateCommissionDeductionsRequest(
+            null, null, null, null, null, null, null, null, 2,
+            "manager applies the record-level override -- this ticket carries no per-item signal");
+        realSubmitService.updateDeductions(created.id(), setWeight, salesManager);
+        realSubmitService.approve(created.id(), salesManager);
+        realSubmitService.approve(created.id(), ceoActor);
+
+        LocalDate realPayrollMonth = INVOICE_DATE.withDayOfMonth(1).plusMonths(1); // FLAG-10, M+1
+        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(salesRepId, realPayrollMonth);
+        assertThat(weighted).isEqualByComparingTo("200000.00"); // 100,000 x 2, not x 1.
+        BigDecimal expectedCommission = calculator.progressiveCommission(calculator.monthlyTierBase(new BigDecimal("200000.00")));
+        Map<Long, BigDecimal> totals = realSubmitService.payrollCommissionTotalsByEmployee(realPayrollMonth);
+        assertThat(totals.get(salesRepId)).isEqualByComparingTo(expectedCommission);
+    }
+
+    /** Same proof, through {@link CommissionService#createFromDeal} — the second real creation
+     * path, and the one a reviewer could not find calling the freeze via a name-only grep for
+     * {@code computeItemDerivedWeight} (it calls {@code calculator.itemDerivedWeight} directly).
+     * Closes that out with a positive result on the real path, not just a code-reading rebuttal. */
+    @Test
+    void managersRecordLevelOverride_stillReachesPayroll_onARecordCreatedThroughRealCreateFromDeal() {
+        long salesRepId = ownerId; // createFromDeal always attributes to the ticket's own owner.
+        long ticketId = createSingleItemTicketAtOrderReceived(new BigDecimal("10.00"), new BigDecimal("500.0000"));
+        tickets.updateSalesStage(ticketId, DealStage.CLOSED_PAID);
+
+        CommissionService realService = realCommissionService();
+        CommissionRecord created = realService.createFromDeal(
+            ticketId, "INV-OVERRIDE-DEAL-" + UUID.randomUUID(), INVOICE_DATE,
+            new BigDecimal("100000.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            invoiceFile(), accountActor());
+
+        assertThat(created.effectiveWeightMultiplier()).isNull();
+
+        UpdateCommissionDeductionsRequest setWeight = new UpdateCommissionDeductionsRequest(
+            null, null, null, null, null, null, null, null, 3,
+            "manager applies the record-level override -- this ticket carries no per-item signal");
+        realService.updateDeductions(created.id(), setWeight, salesManager);
+        realService.approve(created.id(), salesManager);
+        realService.approve(created.id(), ceoActor);
+
+        LocalDate realPayrollMonth = INVOICE_DATE.withDayOfMonth(1).plusMonths(1);
+        BigDecimal weighted = commissions.sumActiveWeightedActualReceived(salesRepId, realPayrollMonth);
+        assertThat(weighted).isEqualByComparingTo("300000.00"); // 100,000 x 3, not x 1.
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -250,9 +346,13 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         assertThat(items.get(0).weightMultiplier()).isEqualTo(3);
         assertThat(items.get(0).qtyFromStock()).isEqualByComparingTo("0.00");
 
+        // Reviewer finding (2026-08-16): the blend is exactly 1 here (no genuine stock-earned
+        // credit), so the real ticket state produces EMPTY, not a frozen 1.000000 -- see
+        // CommissionCalculator#itemDerivedWeight's own Javadoc for the dead-control defect this
+        // prevents (a non-null frozen 1.000000 would permanently defeat the manager's
+        // record-level weightMultiplier override for this record).
         Optional<BigDecimal> weight = calculator.itemDerivedWeight(toInputs(items), new BigDecimal("100000.00"));
-        assertThat(weight).isPresent();
-        assertThat(weight.get()).isEqualByComparingTo("1");
+        assertThat(weight).isEmpty();
     }
 
     /**
@@ -359,6 +459,39 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * A {@link CommissionService} wired for a REAL {@code submit}/{@code createFromDeal} call —
+     * every collaborator on the file-storage/attachment chain is real, not mocked, because {@code
+     * commissions} (this class's shared {@link CommissionRepository}) is real: {@code
+     * invoice_details.invoice_attachment_id} carries a plain (non-deferrable) foreign key to
+     * {@code hr.file_attachment} (V35), so a MOCKED {@link CommissionAttachmentRepository}
+     * returning a fabricated id would fail that constraint the moment {@link
+     * CommissionRepository#attachInvoiceFile} runs for real. Mirrors {@code
+     * CommissionAutoCreateIntegrationTest}'s own wiring for the identical reason. {@link
+     * AuditService}/{@link NotificationService} stay mocked — side effects of an already-decided
+     * outcome, not the money path under test.
+     */
+    private CommissionService realCommissionService() {
+        return new CommissionService(
+            commissions,
+            new CommissionAttachmentRepository(jdbc),
+            calculator,
+            new FileStorageService("/tmp/glr-item-weight-override-test-uploads"),
+            mock(AuditService.class),
+            mock(NotificationService.class),
+            tickets,
+            new AttachmentRepository(jdbc));
+    }
+
+    private MultipartFile invoiceFile() {
+        return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf-bytes".getBytes());
+    }
+
+    private UserPrincipal accountActor() {
+        long accountId = createEmployee("ฝ่ายบัญชี น้ำหนักรายการ", "account-itemweight@glr.co.th", "AC", "แผนกบัญชี");
+        return principal(accountId, "account");
+    }
 
     /** Creates a fully stock-covered, x2-weighted, single-item ticket and its SUBMITTED
      * commission record — the repeating unit the reconciliation test sums seven of. Asserts the

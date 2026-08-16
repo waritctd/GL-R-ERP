@@ -248,14 +248,40 @@ public class CommissionCalculator {
      *       task: an item with NO price ever set contributes ZERO to both the numerator and
      *       denominator, as if it did not exist for weighting purposes, rather than being treated
      *       as an error).</li>
+     *   <li><b>The computed blend equals exactly 1</b> -- i.e. NO item carries genuine stock-earned
+     *       credit (every item with positive {@code itemValue} has either {@code weightMultiplier
+     *       = 1} or {@code qtyFromStock = 0}). Reviewer finding (2026-08-16), a real defect that
+     *       shipped and was caught before merge: without this case, an ORDINARY ticket -- every
+     *       item at the column DEFAULT of 1x, the overwhelmingly common case -- still returns a
+     *       concrete, non-empty {@code Optional.of(1.000000)} (the loop above computes {@code
+     *       weightedContribution == totalItemValue} exactly whenever every item's {@code
+     *       effectiveWeight_i = 1}, so the division is {@code X/X = 1} exactly, no rounding
+     *       involved). {@link CommissionService#submit}/{@code #createFromDeal} would then freeze
+     *       that non-null {@code 1.000000} onto EVERY ticket-linked commission, and {@link
+     *       CommissionRepository#sumActiveWeightedActualReceived}'s {@code
+     *       COALESCE(effective_weight_multiplier, weight_multiplier)} always prefers a non-null
+     *       frozen value -- so the pre-existing, still-rendered {@code weightMultiplier} manager
+     *       control ({@link CommissionService#updateDeductions}, V82) would silently stop
+     *       affecting payroll for any ticket-linked sale, the exact class of dead-control-on-a-
+     *       money-path bug CLAUDE.md exists to prevent. Returning {@link Optional#empty()} here
+     *       instead means an untouched deal freezes NULL, exactly like a pre-V148 row, and the
+     *       manager's existing override goes on working precisely as it did before this feature.
+     *       Mathematically equivalent to "no item has a genuine stock-weighted credit": every
+     *       {@code effectiveWeight_i} for an item with positive {@code itemValue_i} is provably
+     *       {@code &ge; 1} for well-formed (non-negative) input, so a weighted average of them
+     *       equals exactly 1 if and only if every one of them individually equals 1 -- there is no
+     *       cancelling combination that reaches exactly 1 by coincidence.</li>
      * </ul>
      *
-     * <p>The result is clamped to {@code [1, 3]} before being returned, defensively -- for
-     * well-formed data (non-negative qty/price, weightMultiplier &isin; {1,2,3}) the weighted
+     * <p>The result is clamped to {@code [1, 3]} before the equals-1 check above, defensively --
+     * for well-formed data (non-negative qty/price, weightMultiplier &isin; {1,2,3}) the weighted
      * average is already provably within this range, so the clamp is a no-op; it exists only so a
      * malformed input (e.g. a negative price, which this column has no CHECK against) can never
      * produce a value that would trip {@code effective_weight_multiplier}'s own CHECK constraint
-     * at insert time.
+     * at insert time. Clamping BEFORE the equals-1 check is deliberate: a pathological input that
+     * clamps up to exactly 1 (e.g. a negative price dragging the raw blend below 1) is exactly as
+     * "no genuine signal" as a natural 1 is, and falling back to the plain {@code weightMultiplier}
+     * is the safer behaviour for degenerate data either way.
      */
     public Optional<BigDecimal> itemDerivedWeight(List<ItemStockWeightInput> items, BigDecimal actualReceived) {
         if (items == null || items.isEmpty() || actualReceived == null || actualReceived.signum() <= 0) {
@@ -276,7 +302,15 @@ public class CommissionCalculator {
             return Optional.empty();
         }
         BigDecimal blended = weightedContribution.divide(totalItemValue, ITEM_WEIGHT_SCALE, RoundingMode.HALF_UP);
-        return Optional.of(blended.max(ONE).min(THREE));
+        BigDecimal clamped = blended.max(ONE).min(THREE);
+        // Reviewer finding (2026-08-16): exactly 1 means no item carried genuine stock-earned
+        // credit -- freeze nothing, so COALESCE falls back to the still-live weightMultiplier
+        // control instead of a redundant, control-defeating 1.000000. See this method's own
+        // Javadoc for the full defect this closes.
+        if (clamped.compareTo(ONE) == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(clamped);
     }
 
     /**

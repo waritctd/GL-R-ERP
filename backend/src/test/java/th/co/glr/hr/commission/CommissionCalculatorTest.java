@@ -375,14 +375,18 @@ class CommissionCalculatorTest {
     void itemDerivedWeight_wrongWayRound_zeroStockShare_storedThreeX_contributesOnlyOneX() {
         // The owner's own workbook case: a row marked *3 but sourced against an import request
         // (qtyFromStock = 0) must NOT be credited — only stock-sourced quantity ever earns weight.
+        // Reviewer finding (2026-08-16): the blend computes to exactly 1 here (no genuine
+        // stock-earned credit), so the method returns EMPTY, not Optional.of(1) — freezing a
+        // redundant, non-null 1.000000 would silently defeat the record-level weightMultiplier
+        // manager control (COALESCE always prefers a non-null frozen value). Empty is what lets
+        // that control go on working for a ticket like this one.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("100.00"), BigDecimal.ZERO, new BigDecimal("500.0000"), null, 3));
 
         Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
 
-        assertThat(weight).isPresent();
-        assertThat(weight.get()).isEqualByComparingTo("1");
+        assertThat(weight).isEmpty();
     }
 
     @Test
@@ -504,7 +508,10 @@ class CommissionCalculatorTest {
     @Test
     void itemDerivedWeight_resultIsClampedToOneToThree_evenWithMalformedNegativePriceInput() {
         // Defensive clamp: a negative price (this column has no CHECK against one) can otherwise
-        // pull the weighted average below 1 -- raw blended here would be 7,000/9,000 = 0.777778.
+        // pull the weighted average below 1 -- raw blended here would be 7,000/9,000 = 0.777778,
+        // clamped up to exactly 1. Reviewer finding (2026-08-16): a value clamped UP to exactly 1
+        // is exactly as "no genuine signal" as a natural 1, so this now returns EMPTY too (falls
+        // back to the plain weightMultiplier) rather than freezing a redundant 1.000000.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("-100.0000"), null, 3),
@@ -513,7 +520,6 @@ class CommissionCalculatorTest {
 
         Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
 
-        assertThat(weight).isPresent();
-        assertThat(weight.get()).isEqualByComparingTo("1");
+        assertThat(weight).isEmpty();
     }
 }
