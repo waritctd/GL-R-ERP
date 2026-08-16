@@ -30,12 +30,26 @@ public final class PricingFormulaConfigDtos {
         Instant updatedAt,
         List<PricingFreightRateDto> freightRates,
         List<PricingDutyRateDto> dutyRates,
-        List<PricingClearanceFeeDto> clearanceFees
+        List<PricingClearanceFeeDto> clearanceFees,
+        // The countries a freight row may reference. Carried on the config response rather than a
+        // separate endpoint: the CEO editor is the only consumer, and it already fetches this.
+        // Without it the freight editor could only ever offer countries already in use, so a new
+        // supplier country could never be added -- a regression on the free-text field it replaces.
+        List<CountryDto> availableCountries
+    ) {}
+
+    public record CountryDto(
+        String countryCode,
+        String nameEn,
+        String nameTh
     ) {}
 
     public record PricingFreightRateDto(
         long freightRateId,
-        String originCountry,
+        // ISO 3166-1 alpha-2. This is the join key to price_catalog.factories.country; the name
+        // below is display only, resolved from price_catalog.country so the two cannot drift.
+        String originCountryCode,
+        String originCountryName,
         BigDecimal thicknessMinMm,
         BigDecimal thicknessMaxMm,
         BigDecimal qtyMinSqm,

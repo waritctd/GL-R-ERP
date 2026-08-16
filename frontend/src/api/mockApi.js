@@ -524,8 +524,22 @@ let mockFormulaDutyRateSeq = 1;
 let mockFormulaClearanceFeeSeq = 1;
 let mockFormulaConfigSeq = 1;
 
-function formulaFreightRow(originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
-  return { freightRateId: mockFormulaFreightRateSeq++, originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb };
+// Mirrors price_catalog.country (V151). The real API returns this on the formula config so the
+// freight editor can offer a select; a new supplier country is a row here, not free text.
+const MOCK_COUNTRIES = [
+  { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
+  { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
+  { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
+  { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+];
+
+function formulaFreightRow(originCountryCode, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
+  // originCountryName is display only — PricingFormulaConfigRepository resolves it by joining
+  // price_catalog.country, so it is never independently editable and cannot drift from the code.
+  const originCountryName =
+    MOCK_COUNTRIES.find((c) => c.countryCode === originCountryCode)?.nameTh ?? originCountryCode;
+  return { freightRateId: mockFormulaFreightRateSeq++, originCountryCode, originCountryName,
+    thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb };
 }
 function formulaDutyRow(productType, productLabel, dutyPct) {
   return { dutyRateId: mockFormulaDutyRateSeq++, productType, productLabel, dutyPct };
@@ -550,54 +564,54 @@ function buildSeedFormulaConfig() {
     updatedAt: new Date().toISOString(),
     freightRates: [
       // Italy: thickness [3,8) mm
-      formulaFreightRow('Italy', 3, 8, 1, 101, 80000),
-      formulaFreightRow('Italy', 3, 8, 101, 451, 90000),
-      formulaFreightRow('Italy', 3, 8, 451, 801, 100000),
-      formulaFreightRow('Italy', 3, 8, 801, null, 100000),
+      formulaFreightRow('IT', 3, 8, 1, 101, 80000),
+      formulaFreightRow('IT', 3, 8, 101, 451, 90000),
+      formulaFreightRow('IT', 3, 8, 451, 801, 100000),
+      formulaFreightRow('IT', 3, 8, 801, null, 100000),
       // Italy: thickness [8,12) mm
-      formulaFreightRow('Italy', 8, 12, 1, 101, 50000),
-      formulaFreightRow('Italy', 8, 12, 101, 451, 80000),
-      formulaFreightRow('Italy', 8, 12, 451, 801, 90000),
-      formulaFreightRow('Italy', 8, 12, 801, null, 100000),
+      formulaFreightRow('IT', 8, 12, 1, 101, 50000),
+      formulaFreightRow('IT', 8, 12, 101, 451, 80000),
+      formulaFreightRow('IT', 8, 12, 451, 801, 90000),
+      formulaFreightRow('IT', 8, 12, 801, null, 100000),
       // Italy: thickness [12,17) mm (band4 blank in sheet -- no row)
-      formulaFreightRow('Italy', 12, 17, 1, 101, 50000),
-      formulaFreightRow('Italy', 12, 17, 101, 451, 90000),
-      formulaFreightRow('Italy', 12, 17, 451, 801, 100000),
+      formulaFreightRow('IT', 12, 17, 1, 101, 50000),
+      formulaFreightRow('IT', 12, 17, 101, 451, 90000),
+      formulaFreightRow('IT', 12, 17, 451, 801, 100000),
       // Italy: thickness [17,21) mm (band3/band4 blank in sheet -- no rows)
-      formulaFreightRow('Italy', 17, 21, 1, 101, 60000),
-      formulaFreightRow('Italy', 17, 21, 101, 451, 100000),
+      formulaFreightRow('IT', 17, 21, 1, 101, 60000),
+      formulaFreightRow('IT', 17, 21, 101, 451, 100000),
 
       // Spain: identical values to Italy (the sheet groups them; separate rows let the CEO
       // diverge them later without a schema change).
-      formulaFreightRow('Spain', 3, 8, 1, 101, 80000),
-      formulaFreightRow('Spain', 3, 8, 101, 451, 90000),
-      formulaFreightRow('Spain', 3, 8, 451, 801, 100000),
-      formulaFreightRow('Spain', 3, 8, 801, null, 100000),
-      formulaFreightRow('Spain', 8, 12, 1, 101, 50000),
-      formulaFreightRow('Spain', 8, 12, 101, 451, 80000),
-      formulaFreightRow('Spain', 8, 12, 451, 801, 90000),
-      formulaFreightRow('Spain', 8, 12, 801, null, 100000),
-      formulaFreightRow('Spain', 12, 17, 1, 101, 50000),
-      formulaFreightRow('Spain', 12, 17, 101, 451, 90000),
-      formulaFreightRow('Spain', 12, 17, 451, 801, 100000),
-      formulaFreightRow('Spain', 17, 21, 1, 101, 60000),
-      formulaFreightRow('Spain', 17, 21, 101, 451, 100000),
+      formulaFreightRow('ES', 3, 8, 1, 101, 80000),
+      formulaFreightRow('ES', 3, 8, 101, 451, 90000),
+      formulaFreightRow('ES', 3, 8, 451, 801, 100000),
+      formulaFreightRow('ES', 3, 8, 801, null, 100000),
+      formulaFreightRow('ES', 8, 12, 1, 101, 50000),
+      formulaFreightRow('ES', 8, 12, 101, 451, 80000),
+      formulaFreightRow('ES', 8, 12, 451, 801, 90000),
+      formulaFreightRow('ES', 8, 12, 801, null, 100000),
+      formulaFreightRow('ES', 12, 17, 1, 101, 50000),
+      formulaFreightRow('ES', 12, 17, 101, 451, 90000),
+      formulaFreightRow('ES', 12, 17, 451, 801, 100000),
+      formulaFreightRow('ES', 17, 21, 1, 101, 60000),
+      formulaFreightRow('ES', 17, 21, 101, 451, 100000),
 
       // China
-      formulaFreightRow('China', 3, 8, 1, 101, 60000),
-      formulaFreightRow('China', 3, 8, 101, 451, 60000),
-      formulaFreightRow('China', 3, 8, 451, 801, 50000),
-      formulaFreightRow('China', 3, 8, 801, null, 50000),
-      formulaFreightRow('China', 8, 12, 1, 101, 30000),
-      formulaFreightRow('China', 8, 12, 101, 451, 50000),
-      formulaFreightRow('China', 8, 12, 451, 801, 70000),
-      formulaFreightRow('China', 8, 12, 801, null, 50000),
-      formulaFreightRow('China', 12, 17, 1, 101, 30000),
-      formulaFreightRow('China', 12, 17, 101, 451, 50000),
-      formulaFreightRow('China', 12, 17, 451, 801, 70000),
+      formulaFreightRow('CN', 3, 8, 1, 101, 60000),
+      formulaFreightRow('CN', 3, 8, 101, 451, 60000),
+      formulaFreightRow('CN', 3, 8, 451, 801, 50000),
+      formulaFreightRow('CN', 3, 8, 801, null, 50000),
+      formulaFreightRow('CN', 8, 12, 1, 101, 30000),
+      formulaFreightRow('CN', 8, 12, 101, 451, 50000),
+      formulaFreightRow('CN', 8, 12, 451, 801, 70000),
+      formulaFreightRow('CN', 8, 12, 801, null, 50000),
+      formulaFreightRow('CN', 12, 17, 1, 101, 30000),
+      formulaFreightRow('CN', 12, 17, 101, 451, 50000),
+      formulaFreightRow('CN', 12, 17, 451, 801, 70000),
       // China 12-17 band4 (801+) is blank in the sheet -- no row.
-      formulaFreightRow('China', 17, 21, 1, 101, 40000),
-      formulaFreightRow('China', 17, 21, 101, 451, 50000),
+      formulaFreightRow('CN', 17, 21, 1, 101, 40000),
+      formulaFreightRow('CN', 17, 21, 101, 451, 50000),
       // China 17-21 band3/band4 are blank in the sheet -- no rows.
     ],
     dutyRates: [
@@ -629,8 +643,9 @@ function currentFormulaConfig() {
 function sortedFormulaConfig(config) {
   return {
     ...config,
+    availableCountries: MOCK_COUNTRIES,
     freightRates: [...config.freightRates].sort((a, b) =>
-      a.originCountry.localeCompare(b.originCountry)
+      a.originCountryCode.localeCompare(b.originCountryCode)
       || a.thicknessMinMm - b.thicknessMinMm
       || a.qtyMinSqm - b.qtyMinSqm),
     dutyRates: [...config.dutyRates].sort((a, b) => a.productType.localeCompare(b.productType)),
@@ -670,7 +685,7 @@ function createNewFormulaConfigVersion(current, freightRows) {
     effectiveFrom: current.effectiveFrom,
     updatedAt: new Date().toISOString(),
     freightRates: freightRows.map((r) => formulaFreightRow(
-      r.originCountry, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
+      r.originCountryCode, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
     dutyRates: current.dutyRates.map((d) => formulaDutyRow(d.productType, d.productLabel, d.dutyPct)),
     clearanceFees: current.clearanceFees.map((c) => formulaClearanceRow(c.qtyMinSqm, c.qtyMaxSqm, c.amountThb)),
   };
@@ -694,16 +709,16 @@ function freightBandsOverlap(aMin, aMax, bMin, bMax) {
 function validateFreightRates(rows) {
   for (const row of rows) {
     if (row.thicknessMinMm >= row.thicknessMaxMm) {
-      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountryCode} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
     }
     if (row.qtyMaxSqm != null && row.qtyMinSqm >= row.qtyMaxSqm) {
-      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountryCode} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
     }
   }
   const byCountry = new Map();
   for (const row of rows) {
-    if (!byCountry.has(row.originCountry)) byCountry.set(row.originCountry, []);
-    byCountry.get(row.originCountry).push(row);
+    if (!byCountry.has(row.originCountryCode)) byCountry.set(row.originCountryCode, []);
+    byCountry.get(row.originCountryCode).push(row);
   }
   for (const [country, group] of byCountry) {
     for (let i = 0; i < group.length; i += 1) {
@@ -734,7 +749,7 @@ function validateFreightRates(rows) {
  */
 function validateFreightRemovalLeavesNoInteriorGap(all, target) {
   const sameThicknessBand = all
-    .filter((r) => r.originCountry === target.originCountry
+    .filter((r) => r.originCountryCode === target.originCountryCode
       && r.thicknessMinMm === target.thicknessMinMm && r.thicknessMaxMm === target.thicknessMaxMm)
     .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
 
@@ -745,7 +760,7 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
     const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
     if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
       fail(
-        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountry} `
+        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountryName} `
         + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ช่วง `
         + `${target.qtyMinSqm}-${target.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด`,
         400,
@@ -757,13 +772,13 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
   // The row is the last one in its thickness band, so removing it empties that band. Apply the
   // same edge-only rule one level up, across the country's thickness ladder.
   const thicknessMins = [...new Set(
-    all.filter((r) => r.originCountry === target.originCountry).map((r) => r.thicknessMinMm),
+    all.filter((r) => r.originCountryCode === target.originCountryCode).map((r) => r.thicknessMinMm),
   )].sort((a, b) => a - b);
   if (thicknessMins.length > 1
     && thicknessMins[0] !== target.thicknessMinMm
     && thicknessMins[thicknessMins.length - 1] !== target.thicknessMinMm) {
     fail(
-      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountry} `
+      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountryName} `
       + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด`,
       400,
     );
@@ -8045,7 +8060,7 @@ export const api = {
       const current = currentFormulaConfig();
       if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
       const newRow = {
-        originCountry: payload.originCountry,
+        originCountryCode: payload.originCountryCode,
         thicknessMinMm: Number(payload.thicknessMinMm),
         thicknessMaxMm: Number(payload.thicknessMaxMm),
         qtyMinSqm: Number(payload.qtyMinSqm),
@@ -8086,7 +8101,7 @@ export const api = {
         effectiveFrom: payload.effectiveFrom ?? new Date().toISOString().slice(0, 10),
         updatedAt: new Date().toISOString(),
         freightRates: (payload.freightRates ?? []).map((r) => formulaFreightRow(
-          r.originCountry, Number(r.thicknessMinMm), Number(r.thicknessMaxMm),
+          r.originCountryCode, Number(r.thicknessMinMm), Number(r.thicknessMaxMm),
           Number(r.qtyMinSqm), r.qtyMaxSqm == null ? null : Number(r.qtyMaxSqm), Number(r.amountThb))),
         dutyRates: (payload.dutyRates ?? []).map((r) => formulaDutyRow(r.productType, r.productLabel, Number(r.dutyPct))),
         clearanceFees: (payload.clearanceFees ?? []).map((r) => formulaClearanceRow(

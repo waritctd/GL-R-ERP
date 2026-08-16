@@ -200,7 +200,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 unit = EXCLUDED.unit,
                 country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "XX", "TEST-C-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "VN", "TEST-C-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         // All-zero config: freight/insurance/inland/duty all 0, so goodsCostThb ==
         // landedCostPerUnitThb exactly for every line costed against "Factory C" — see the

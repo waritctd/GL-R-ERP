@@ -191,7 +191,7 @@ public class PricingFormulaConfigController {
      */
     private void validateRemovalLeavesNoInteriorGap(List<PricingFreightRateDto> all, PricingFreightRateDto target) {
         List<PricingFreightRateDto> sameThicknessBand = all.stream()
-            .filter(rate -> rate.originCountry().equals(target.originCountry()))
+            .filter(rate -> rate.originCountryCode().equals(target.originCountryCode()))
             .filter(rate -> rate.thicknessMinMm().compareTo(target.thicknessMinMm()) == 0)
             .filter(rate -> rate.thicknessMaxMm().compareTo(target.thicknessMaxMm()) == 0)
             .sorted(Comparator.comparing(PricingFreightRateDto::qtyMinSqm))
@@ -204,7 +204,7 @@ public class PricingFormulaConfigController {
             long highestId = sameThicknessBand.get(sameThicknessBand.size() - 1).freightRateId();
             if (target.freightRateId() != lowestId && target.freightRateId() != highestId) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — " + target.originCountry()
+                    "ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — " + target.originCountryName()
                         + " หนา " + target.thicknessMinMm() + "-" + target.thicknessMaxMm() + " มม. ช่วง "
                         + target.qtyMinSqm() + "-" + (target.qtyMaxSqm() == null ? "ไม่จำกัด" : target.qtyMaxSqm())
                         + " ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด");
@@ -216,7 +216,7 @@ public class PricingFormulaConfigController {
         // the same edge-only rule one level up, across the country's thickness ladder.
         TreeSet<BigDecimal> thicknessMins = new TreeSet<>();
         for (PricingFreightRateDto rate : all) {
-            if (rate.originCountry().equals(target.originCountry())) {
+            if (rate.originCountryCode().equals(target.originCountryCode())) {
                 thicknessMins.add(rate.thicknessMinMm());
             }
         }
@@ -224,7 +224,7 @@ public class PricingFormulaConfigController {
             && thicknessMins.first().compareTo(target.thicknessMinMm()) != 0
             && thicknessMins.last().compareTo(target.thicknessMinMm()) != 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — " + target.originCountry()
+                "ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — " + target.originCountryName()
                     + " หนา " + target.thicknessMinMm() + "-" + target.thicknessMaxMm()
                     + " มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด");
         }
@@ -239,7 +239,7 @@ public class PricingFormulaConfigController {
     private List<FreightRateRequest> toFreightRequests(List<PricingFreightRateDto> rates) {
         List<FreightRateRequest> requests = new ArrayList<>();
         for (PricingFreightRateDto rate : rates) {
-            requests.add(new FreightRateRequest(rate.originCountry(), rate.thicknessMinMm(),
+            requests.add(new FreightRateRequest(rate.originCountryCode(), rate.thicknessMinMm(),
                 rate.thicknessMaxMm(), rate.qtyMinSqm(), rate.qtyMaxSqm(), rate.amountThb()));
         }
         return requests;
@@ -285,11 +285,11 @@ public class PricingFormulaConfigController {
         for (FreightRateRequest freight : request.freightRates()) {
             if (freight.thicknessMinMm().compareTo(freight.thicknessMaxMm()) >= 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "ช่วงความหนาไม่ถูกต้อง: " + freight.originCountry() + " " + freight.thicknessMinMm() + "-" + freight.thicknessMaxMm());
+                    "ช่วงความหนาไม่ถูกต้อง: " + freight.originCountryCode() + " " + freight.thicknessMinMm() + "-" + freight.thicknessMaxMm());
             }
             if (freight.qtyMaxSqm() != null && freight.qtyMinSqm().compareTo(freight.qtyMaxSqm()) >= 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
-                    "ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: " + freight.originCountry() + " " + freight.thicknessMinMm() + "-" + freight.thicknessMaxMm());
+                    "ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: " + freight.originCountryCode() + " " + freight.thicknessMinMm() + "-" + freight.thicknessMaxMm());
             }
         }
         // Overlap check within the same origin_country: two freight rows conflict when BOTH their
@@ -304,7 +304,7 @@ public class PricingFormulaConfigController {
         // same-thickness case is still covered.
         Map<String, List<FreightRateRequest>> byCountry = new java.util.LinkedHashMap<>();
         for (FreightRateRequest freight : request.freightRates()) {
-            byCountry.computeIfAbsent(freight.originCountry(), k -> new ArrayList<>()).add(freight);
+            byCountry.computeIfAbsent(freight.originCountryCode(), k -> new ArrayList<>()).add(freight);
         }
         for (Map.Entry<String, List<FreightRateRequest>> entry : byCountry.entrySet()) {
             List<FreightRateRequest> group = entry.getValue();

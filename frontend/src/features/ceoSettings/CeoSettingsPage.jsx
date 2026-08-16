@@ -233,7 +233,10 @@ function buildFormulaDefaultValues(config) {
 // as a non-editable placeholder, never a zero-amount input, so it can never be silently saved as 0.
 function buildFreightMatrixDims(freightRates) {
   const bandKey = (min, max) => `${min}-${max ?? 'inf'}`;
-  const countries = [...new Set(freightRates.map((rate) => rate.originCountry))].sort();
+  // Keyed by ISO code (originCountryCode) because that is what joins price_catalog.factories;
+  // originCountryName is display only, resolved server-side from price_catalog.country.
+  const countries = [...new Set(freightRates.map((rate) => rate.originCountryCode))].sort();
+  const countryName = new Map(freightRates.map((rate) => [rate.originCountryCode, rate.originCountryName]));
   const thicknessBands = [...new Map(freightRates.map((rate) =>
     [bandKey(rate.thicknessMinMm, rate.thicknessMaxMm), { min: rate.thicknessMinMm, max: rate.thicknessMaxMm }])).values()]
     .sort((a, b) => a.min - b.min);
@@ -241,8 +244,8 @@ function buildFreightMatrixDims(freightRates) {
     [bandKey(rate.qtyMinSqm, rate.qtyMaxSqm), { min: rate.qtyMinSqm, max: rate.qtyMaxSqm }])).values()]
     .sort((a, b) => a.min - b.min);
   const byCell = new Map(freightRates.map((rate) =>
-    [`${rate.originCountry}|${bandKey(rate.thicknessMinMm, rate.thicknessMaxMm)}|${bandKey(rate.qtyMinSqm, rate.qtyMaxSqm)}`, rate]));
-  return { countries, thicknessBands, qtyBands, bandKey, byCell };
+    [`${rate.originCountryCode}|${bandKey(rate.thicknessMinMm, rate.thicknessMaxMm)}|${bandKey(rate.qtyMinSqm, rate.qtyMaxSqm)}`, rate]));
+  return { countries, countryName, thicknessBands, qtyBands, bandKey, byCell };
 }
 
 function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
@@ -271,7 +274,7 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
       payload[field.key] = field.isPercent ? raw / 100 : raw;
     });
     payload.freightRates = config.freightRates.map((rate) => ({
-      originCountry: rate.originCountry,
+      originCountryCode: rate.originCountryCode,
       thicknessMinMm: rate.thicknessMinMm,
       thicknessMaxMm: rate.thicknessMaxMm,
       qtyMinSqm: rate.qtyMinSqm,
@@ -349,7 +352,7 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
                 <tbody>
                   {matrix.countries.flatMap((country) => matrix.thicknessBands.map((thickness) => (
                     <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} className="border-b border-surface-subtle">
-                      <td className="px-2.5 py-1.5 font-semibold">{country}</td>
+                      <td className="px-2.5 py-1.5 font-semibold">{matrix.countryName.get(country) ?? country}</td>
                       <td className="px-2.5 py-1.5 text-text-muted">{thicknessBandLabel(thickness.min, thickness.max)}</td>
                       {matrix.qtyBands.map((qty) => {
                         const cellKey = `${country}|${matrix.bandKey(thickness.min, thickness.max)}|${matrix.bandKey(qty.min, qty.max)}`;
@@ -452,7 +455,10 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
 // `freight_${rate.freightRateId}`. Opening the amount-edit modal at the same moment a freightRateId
 // changes underneath it would silently orphan its form state.
 const addFreightRateSchema = z.object({
-  originCountry: z.string().trim().min(1, 'กรุณากรอกประเทศต้นทาง'),
+  // ISO 3166-1 alpha-2, chosen from price_catalog.country rather than typed. V151 replaced the
+  // free-text column: it never matched price_catalog.factories.country, so every freight lookup
+  // returned nothing. A typo here would silently reintroduce exactly that.
+  originCountryCode: z.string().trim().length(2, 'กรุณาเลือกประเทศต้นทาง'),
   thicknessMinMm: numberFieldSchema,
   thicknessMaxMm: numberFieldSchema,
   qtyMinSqm: numberFieldSchema,
@@ -481,7 +487,7 @@ const addFreightRateSchema = z.object({
  * with nothing guarding it against drifting from the real one. Its 400 surfaces verbatim through
  * the existing showToast('error', ...) path below.
  */
-function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
+function AddFreightRateModal({ prefill, availableCountries, saving, onClose, onSubmit }) {
   const {
     register,
     handleSubmit,
@@ -489,7 +495,7 @@ function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
   } = useForm({
     resolver: zodResolver(addFreightRateSchema),
     defaultValues: {
-      originCountry: prefill.originCountry ?? '',
+      originCountryCode: prefill.originCountryCode ?? '',
       thicknessMinMm: prefill.thicknessMinMm != null ? String(prefill.thicknessMinMm) : '',
       thicknessMaxMm: prefill.thicknessMaxMm != null ? String(prefill.thicknessMaxMm) : '',
       qtyMinSqm: prefill.qtyMinSqm != null ? String(prefill.qtyMinSqm) : '',
@@ -502,7 +508,7 @@ function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
 
   function submit(values) {
     onSubmit({
-      originCountry: values.originCountry.trim(),
+      originCountryCode: values.originCountryCode.trim(),
       thicknessMinMm: Number(values.thicknessMinMm),
       thicknessMaxMm: Number(values.thicknessMaxMm),
       qtyMinSqm: Number(values.qtyMinSqm),
@@ -527,13 +533,20 @@ function AddFreightRateModal({ prefill, saving, onClose, onSubmit }) {
     >
       <SafeForm id="add-freight-rate-form" onSubmit={handleSubmit(submit)} noValidate>
         <div className="grid gap-3">
-          <FormField label="ประเทศต้นทาง" htmlFor="freight-add-country" error={errors.originCountry?.message}>
-            <input
+          <FormField label="ประเทศต้นทาง" htmlFor="freight-add-country" error={errors.originCountryCode?.message}>
+            <select
               id="freight-add-country"
-              aria-invalid={errors.originCountry ? true : undefined}
-              aria-describedby={errors.originCountry ? fieldErrorId('freight-add-country') : undefined}
-              {...register('originCountry')}
-            />
+              aria-invalid={errors.originCountryCode ? true : undefined}
+              aria-describedby={errors.originCountryCode ? fieldErrorId('freight-add-country') : undefined}
+              {...register('originCountryCode')}
+            >
+              <option value="">— เลือกประเทศ —</option>
+              {availableCountries.map((country) => (
+                <option key={country.countryCode} value={country.countryCode}>
+                  {country.nameTh} ({country.countryCode})
+                </option>
+              ))}
+            </select>
           </FormField>
           <div className="grid gap-3 md:grid-cols-2">
             <FormField label="ความหนาตั้งแต่ (มม.)" htmlFor="freight-add-thickness-min" error={errors.thicknessMinMm?.message}>
@@ -614,7 +627,7 @@ function DeleteFreightRateModal({ rate, deleting, onClose, onConfirm }) {
       }
     >
       <p className="m-0 text-sm">
-        ลบค่าขนส่ง <strong>{rate.originCountry}</strong> หนา {thicknessBandLabel(rate.thicknessMinMm, rate.thicknessMaxMm)}{' '}
+        ลบค่าขนส่ง <strong>{rate.originCountryName}</strong> หนา {thicknessBandLabel(rate.thicknessMinMm, rate.thicknessMaxMm)}{' '}
         ช่วง {qtyBandLabel(rate.qtyMinSqm, rate.qtyMaxSqm)} จำนวน <strong>{moneyDisplay(rate.amountThb)} บาท</strong> ใช่หรือไม่?
       </p>
       <p className="m-0 mt-2 text-2xs text-text-muted">
@@ -999,12 +1012,12 @@ export function CeoSettingsPage({ showToast }) {
                       <tbody>
                         {matrix.countries.flatMap((country) => matrix.thicknessBands.map((thickness) => (
                           <tr key={`${country}|${matrix.bandKey(thickness.min, thickness.max)}`} className="border-b border-surface-subtle">
-                            <td className="px-2.5 py-1.5 font-semibold">{country}</td>
+                            <td className="px-2.5 py-1.5 font-semibold">{matrix.countryName.get(country) ?? country}</td>
                             <td className="px-2.5 py-1.5 text-text-muted">{thicknessBandLabel(thickness.min, thickness.max)}</td>
                             {matrix.qtyBands.map((qty) => {
                               const cellKey = `${country}|${matrix.bandKey(thickness.min, thickness.max)}|${matrix.bandKey(qty.min, qty.max)}`;
                               const rate = matrix.byCell.get(cellKey);
-                              const cellLabel = `${country} หนา ${thicknessBandLabel(thickness.min, thickness.max)} ช่วง ${qtyBandLabel(qty.min, qty.max)}`;
+                              const cellLabel = `${matrix.countryName.get(country) ?? country} หนา ${thicknessBandLabel(thickness.min, thickness.max)} ช่วง ${qtyBandLabel(qty.min, qty.max)}`;
                               return (
                                 <td key={cellKey} className="px-2.5 py-1.5">
                                   {rate ? (
@@ -1031,7 +1044,7 @@ export function CeoSettingsPage({ showToast }) {
                                       className="text-2xs px-1.5 py-[1px] text-text-muted italic"
                                       aria-label={`เพิ่มค่าขนส่ง ${cellLabel}`}
                                       onClick={() => setAddFreightPrefill({
-                                        originCountry: country,
+                                        originCountryCode: country,
                                         thicknessMinMm: thickness.min,
                                         thicknessMaxMm: thickness.max,
                                         qtyMinSqm: qty.min,
@@ -1119,6 +1132,7 @@ export function CeoSettingsPage({ showToast }) {
       {addFreightPrefill && (
         <AddFreightRateModal
           prefill={addFreightPrefill}
+          availableCountries={formulaConfig?.availableCountries ?? []}
           saving={addFreightRateMutation.isPending}
           onClose={() => setAddFreightPrefill(null)}
           onSubmit={(payload) => addFreightRateMutation.mutate(payload)}
