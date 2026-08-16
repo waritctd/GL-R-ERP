@@ -48,5 +48,27 @@ public record CommissionRecord(
     // reason. Both null for SALE/CLAWBACK -- those keep going through actualReceived/
     // commissionableBase/the tier calc exactly as before. See CommissionService#createManualCommission.
     BigDecimal manualAmount,
-    String manualReason
-) {}
+    String manualReason,
+    // V148 (per-item stock-commission weighting): the FROZEN, blended per-item weight -- see
+    // sales.commission_record.effective_weight_multiplier's migration comment (V148) for the full
+    // backward-compatibility rationale. NULL for every record that predates this feature and for
+    // every record this feature does not apply to (unlinked/manual, no items, zero item value);
+    // non-null only for a SALE/CLAWBACK whose ticket had priced, stock-covered items at the moment
+    // the record was created. Use #effectiveWeight() below to read "the weight payroll actually
+    // uses" -- never read weightMultiplier() directly expecting it to be authoritative.
+    BigDecimal effectiveWeightMultiplier
+) {
+    /**
+     * The weight payroll/simulate/monthlySummary actually use for this record: the frozen
+     * item-derived blend when one was computed, else the plain manager-set {@link
+     * #weightMultiplier()} -- the exact {@code COALESCE(effective_weight_multiplier,
+     * weight_multiplier)} {@link CommissionRepository#sumActiveWeightedActualReceived} runs in
+     * SQL, mirrored here in Java for {@link CommissionService#computeRepPayrollCommissions}'s
+     * per-record accumulation, which cannot use a single SQL aggregate (it also layers in manual
+     * entries per rep). The two must never diverge -- if this method's logic ever changes, that
+     * repository method's SQL must change with it, and vice versa.
+     */
+    public BigDecimal effectiveWeight() {
+        return effectiveWeightMultiplier != null ? effectiveWeightMultiplier : BigDecimal.valueOf(weightMultiplier);
+    }
+}

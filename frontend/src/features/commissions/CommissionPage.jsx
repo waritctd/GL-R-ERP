@@ -63,6 +63,27 @@ function isManualKind(kind) {
   return Object.prototype.hasOwnProperty.call(MANUAL_KIND_LABELS, kind);
 }
 
+// V148 (per-item stock-commission weighting): a record's weight badge now has two possible
+// sources — the frozen, blended per-item weight (effectiveWeightMultiplier, non-null only for a
+// SALE/CLAWBACK whose ticket had priced, stock-covered items at creation time) when one exists,
+// else the plain manager-set weightMultiplier fallback exactly as before this feature. When the
+// frozen weight is present it is authoritative for payroll (CommissionRepository
+// #sumActiveWeightedActualReceived's COALESCE) — editing the record-level dropdown below has no
+// effect on this record's money, so the badge must show the number that actually counts, not the
+// possibly-stale fallback field. Returns null when the effective weight is exactly 1 (nothing to
+// call out).
+function describeCommissionWeight(record) {
+  const itemDerived = record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
+  const value = Number(itemDerived ? record.effectiveWeightMultiplier : record?.weightMultiplier);
+  if (!(value > 1)) return null;
+  const formatted = Number.isInteger(value) ? String(value) : value.toFixed(2);
+  return {
+    itemDerived,
+    label: itemDerived ? `น้ำหนักจากรายการสินค้า ${formatted} เท่า` : `น้ำหนักฐานคอม ${formatted} เท่า`,
+    compactLabel: itemDerived ? `${formatted}x (รายการ)` : `${formatted}x`,
+  };
+}
+
 const emptyManualForm = {
   salesRepId: '',
   kind: 'ADJUSTMENT',
@@ -145,10 +166,8 @@ function CommissionCalcBreakdown({ record }) {
     <div className="grid gap-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-        {record.weightMultiplier > 1 ? (
-          <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>
-            น้ำหนักฐานคอม {record.weightMultiplier} เท่า{record.weightMultiplier === 3 ? ' (ยังไม่ยืนยันนโยบาย)' : ''}
-          </StatusBadge>
+        {describeCommissionWeight(record) ? (
+          <StatusBadge tone="info">{describeCommissionWeight(record).label}</StatusBadge>
         ) : null}
         {record.dealAmountMismatch ? <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge> : null}
       </div>
@@ -248,8 +267,8 @@ function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onTo
       )}
 
       <div className="flex flex-wrap gap-1.5">
-        {record.weightMultiplier > 1 ? (
-          <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>{record.weightMultiplier}x</StatusBadge>
+        {describeCommissionWeight(record) ? (
+          <StatusBadge tone="info">{describeCommissionWeight(record).compactLabel}</StatusBadge>
         ) : null}
         {record.dealAmountMismatch && (
           <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
@@ -549,9 +568,9 @@ export function CommissionPage({ user, showToast }) {
           return (
             <span>
               <code>{formatMoney(record.actualReceived)}</code>
-              {record.weightMultiplier > 1 && (
+              {describeCommissionWeight(record) && (
                 <span className="block mt-1">
-                  <StatusBadge tone={record.weightMultiplier === 3 ? 'warning' : 'info'}>น้ำหนัก {record.weightMultiplier} เท่า</StatusBadge>
+                  <StatusBadge tone="info">{describeCommissionWeight(record).label}</StatusBadge>
                 </span>
               )}
               {record.dealAmountMismatch && (
@@ -1523,13 +1542,22 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
           >
             <option value={1}>1 เท่า (ปกติ)</option>
             <option value={2}>2 เท่า (ยืนยันนโยบายแล้ว)</option>
-            <option value={3}>3 เท่า (ยังไม่ยืนยันนโยบาย)</option>
+            <option value={3}>3 เท่า (ยืนยันนโยบายแล้ว)</option>
           </select>
         </label>
       </div>
-      {draft.weightMultiplier === 3 ? (
+      {record.effectiveWeightMultiplier !== null && record.effectiveWeightMultiplier !== undefined ? (
+        // V148 (per-item stock-commission weighting): this record already carries a FROZEN,
+        // blended weight computed from its ticket's items at creation time — it wins over the
+        // dropdown above via CommissionRepository#sumActiveWeightedActualReceived's COALESCE, so
+        // changing the selection below would silently do nothing to this record's money. Said
+        // here rather than disabling the control, so the fallback stays editable for audit/record
+        // purposes without misleading the reviewer about which number actually counts.
         <p className="mt-2">
-          <StatusBadge tone="warning">น้ำหนัก 3 เท่ายังไม่ได้รับการยืนยันเป็นนโยบาย — ใช้เฉพาะเมื่อจำเป็นและมีการตรวจสอบแล้วเท่านั้น</StatusBadge>
+          <StatusBadge tone="info">
+            รายการนี้คำนวณน้ำหนักจากรายการสินค้าอัตโนมัติแล้ว ({Number(record.effectiveWeightMultiplier).toFixed(2)} เท่า) —
+            การเลือกด้านบนจะไม่มีผลกับยอดเงินของรายการนี้
+          </StatusBadge>
         </p>
       ) : null}
 
