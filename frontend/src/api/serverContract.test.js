@@ -254,6 +254,24 @@ const SERVER_ONLY = {
   // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
   // the leave page links; this endpoint is the server-side archive of record, not that reader.
 
+  // ── Capability built backend-first, UI not landed ─────────────────────────
+  // All three are READ-ONLY and render/describe the ใบขอซื้อ (F-SM-001) for a deal. Gated to
+  // {import, ceo} in ImportRequestService, proven wrong-way-round against real Postgres by
+  // ImportRequestServiceIntegrationTest. Deliberately NOT wired into hrApi.js yet: the surface that
+  // will call them is the /fulfilment workspace's own IR control, which is a separate change. They
+  // are reachable today by hand from an import/CEO session, which is how the form gets generated
+  // until that lands — so this is a capability awaiting its UI, not dead code.
+  'GET /api/tickets/{}/import-request':
+    'Streams the filled F-SM-001 (04) PDF for one BRAND of a deal (one form per brand, per owner '
+    + 'ruling). ref/requiredBy are caller-supplied because nothing is stored — see '
+    + 'ImportRequestQueryRepository\'s Javadoc for why the stored aggregate ships separately.',
+  'GET /api/tickets/{}/import-request/brands':
+    'Lists the brands on a deal, i.e. how many separate F-SM-001 forms it needs. Feeds the brand '
+    + 'picker the /fulfilment IR control will have.',
+  'GET /api/tickets/{}/import-request/pages':
+    'Sheet count for one brand\'s form, so a client can warn before downloading a 2-sheet form. '
+    + 'F-SM-001 holds 26 rows and has no continuation variant.',
+
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
   // backend test classes and — by V145 — the V112 table itself, so there is no longer an endpoint
