@@ -20,6 +20,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -69,7 +70,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย สรุปเดือน", "sm-monthlysummary@glr.co.th", "SA", "แผนกขาย");
         managerActor = principal(managerEmployeeId, "sales_manager");
         ceoEmployeeId = createEmployee("ผู้บริหาร สรุปเดือน", "ceo-monthlysummary@glr.co.th", "MD", "ผู้บริหาร");

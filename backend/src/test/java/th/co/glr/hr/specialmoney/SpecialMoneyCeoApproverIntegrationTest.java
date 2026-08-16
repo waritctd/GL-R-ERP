@@ -2,33 +2,41 @@ package th.co.glr.hr.specialmoney;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Real-DB pin for {@link SpecialMoneyRepository#findCeoApproverEmployeeIds()} now that it uses
- * {@link th.co.glr.hr.notification.CeoApproverRule#SQL_PREDICATE} instead of the {@code
- * MD%}/{@code MN%} division-prefix convention it carried until this change (still visible in
- * {@code git log -p} for this file). NOT a permission gate -- see that class's Javadoc; this
- * repository's only caller is {@code SpecialMoneyService#notifySubmitted}, which feeds the
- * returned ids straight into {@code notificationService.notify(...)}.
+ * Real-DB pin for the CEO-notification recipient lookup {@code SpecialMoneyService} uses. This
+ * class used to construct {@code SpecialMoneyRepository} directly and call its own copy of the
+ * query, {@code findCeoApproverEmployeeIds()}. The 2026-08-16 consolidation (see {@link
+ * CeoApproverRepository}'s class Javadoc) deleted that copy -- along with the equivalent copies on
+ * {@code CommissionRepository}, {@code OvertimeRepository} and {@code
+ * AttendanceCorrectionRepository} -- in favour of the single shared {@link
+ * CeoApproverRepository#findEmployeeIds()} that {@code SpecialMoneyService} now depends on directly
+ * (a constructor-injected {@code ceoApprovers} field). This test is rewritten against that shared
+ * repository, keeping its original assertions verbatim, so the coverage this file has always
+ * provided -- proving SpecialMoneyService's actual CEO-notification behaviour, not just a decision
+ * in isolation -- survives the consolidation rather than being deleted with the method it used to
+ * call. NOT a permission gate -- see {@code CeoApproverRule}'s Javadoc; the only caller of this
+ * lookup, {@code SpecialMoneyService#notifySubmitted}, feeds the returned ids straight into {@code
+ * notificationService.notify(...)}.
  *
  * <p>Mirrors {@link th.co.glr.hr.notification.CeoApproverRepositoryIntegrationTest}'s wrong-way-
- * round shape, trimmed to what is specific to THIS repository's own SQL assembly (the shared
- * predicate's whitespace-stripping and inactive-employee behaviour are already pinned once, there
- * -- re-proving them here would test the shared constant's content again, not this query).
+ * round shape, trimmed to what was specific to this call site (the shared predicate's whitespace-
+ * stripping and inactive-employee behaviour are pinned once there, and independently re-proven for
+ * the consolidated lookup by {@code CeoApproverConsolidationIntegrationTest}).
  */
 class SpecialMoneyCeoApproverIntegrationTest extends AbstractPostgresIntegrationTest {
-    private SpecialMoneyRepository repository;
+    private CeoApproverRepository repository;
     private int positionSequence;
 
     @BeforeEach
     void wireRepository() {
-        repository = new SpecialMoneyRepository(jdbc, new ObjectMapper());
+        repository = new CeoApproverRepository(jdbc);
         positionSequence = 0;
     }
 
@@ -37,7 +45,7 @@ class SpecialMoneyCeoApproverIntegrationTest extends AbstractPostgresIntegration
         long divisionId = insertDivision("MD", "ผู้บริหารระดับสูง");
         long employeeId = insertEmployee("SMC1", divisionId, "กรรมการผู้จัดการ", true);
 
-        assertThat(repository.findCeoApproverEmployeeIds()).contains(employeeId);
+        assertThat(repository.findEmployeeIds()).contains(employeeId);
     }
 
     /**
@@ -51,7 +59,7 @@ class SpecialMoneyCeoApproverIntegrationTest extends AbstractPostgresIntegration
         long divisionId = insertDivision("MD", "ผู้บริหารระดับสูง2");
         long employeeId = insertEmployee("SMC2", divisionId, "ผู้จัดการ", true);
 
-        assertThat(repository.findCeoApproverEmployeeIds()).doesNotContain(employeeId);
+        assertThat(repository.findEmployeeIds()).doesNotContain(employeeId);
     }
 
     /**
@@ -63,7 +71,7 @@ class SpecialMoneyCeoApproverIntegrationTest extends AbstractPostgresIntegration
     void noDivisionWithManagingDirectorPosition_isReturned() {
         long employeeId = insertEmployee("SMC3", null, "กรรมการผู้จัดการ", true);
 
-        assertThat(repository.findCeoApproverEmployeeIds()).contains(employeeId);
+        assertThat(repository.findEmployeeIds()).contains(employeeId);
     }
 
     private long insertDivision(String code, String name) {

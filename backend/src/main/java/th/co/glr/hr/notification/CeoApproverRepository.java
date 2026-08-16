@@ -12,6 +12,13 @@ import org.springframework.stereotype.Repository;
  * query -- plus a fifth inline copy in {@code NotificationRepository#notifyByRoleInternal}'s
  * {@code "ceo"} case. Every one of those five call sites lived inside a {@code notify*} method;
  * none was a permission gate, and this class is not one either -- see {@link CeoApproverRule}.
+ *
+ * <p>Consolidation (2026-08-16): the four repository methods (already byte-identical -- each
+ * ported to {@link CeoApproverRule#SQL_PREDICATE} in an earlier change) are gone, not just
+ * synchronized. {@code CommissionService}, {@code OvertimeService}, {@code SpecialMoneyService}
+ * and {@code AttendanceCorrectionService} now depend on this class directly (a constructor-injected
+ * {@code ceoApprovers} field) instead of on their own repository's copy, so there is exactly one
+ * SQL statement backing this rule -- nothing left to drift.
  */
 @Repository
 public class CeoApproverRepository {

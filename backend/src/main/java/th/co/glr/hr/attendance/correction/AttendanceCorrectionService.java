@@ -13,6 +13,7 @@ import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
 /**
@@ -39,16 +40,19 @@ public class AttendanceCorrectionService {
     private final AttendanceDailyService dailyService;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    private final CeoApproverRepository ceoApprovers;
 
     public AttendanceCorrectionService(
             AttendanceCorrectionRepository repository,
             AttendanceDailyService dailyService,
             AuditService auditService,
-            NotificationService notificationService) {
+            NotificationService notificationService,
+            CeoApproverRepository ceoApprovers) {
         this.repository = repository;
         this.dailyService = dailyService;
         this.auditService = auditService;
         this.notificationService = notificationService;
+        this.ceoApprovers = ceoApprovers;
     }
 
     public List<AttendanceCorrectionRequestDto> list(UserPrincipal user, Long requestedEmployeeId, String requestedStatus) {
@@ -321,7 +325,7 @@ public class AttendanceCorrectionService {
      * on a page with nothing about attendance correction on it) instead of erroring.
      */
     private void notifyCeoOfSubmission(AttendanceCorrectionRequestDto created) {
-        for (long ceoEmployeeId : repository.findCeoApproverEmployeeIds()) {
+        for (long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "ATTENDANCE_CORRECTION_SUBMITTED",

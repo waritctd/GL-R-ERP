@@ -52,6 +52,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.notification.NotificationService;
@@ -199,7 +200,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         NotificationService notificationService = mock(NotificationService.class);
         commissionService = new CommissionService(commissions, commissionAttachments, new CommissionCalculator(),
             new FileStorageService("/tmp/glr-commission-linkage-test-invoices"), auditService, notificationService,
-            tickets, new AttachmentRepository(jdbc));
+            tickets, new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย เก้า", "sales-step9@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เก้า", "import-step9@glr.co.th", "PCIM", "ฝ่ายนำเข้า");

@@ -23,6 +23,7 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
@@ -77,6 +78,7 @@ public class CommissionService {
     private final NotificationService notificationService;
     private final TicketRepository tickets;
     private final AttachmentRepository attachments;
+    private final CeoApproverRepository ceoApprovers;
 
     public CommissionService(
             CommissionRepository commissions,
@@ -86,7 +88,8 @@ public class CommissionService {
             AuditService auditService,
             NotificationService notificationService,
             TicketRepository tickets,
-            AttachmentRepository attachments) {
+            AttachmentRepository attachments,
+            CeoApproverRepository ceoApprovers) {
         this.commissions = commissions;
         this.commissionAttachments = commissionAttachments;
         this.calculator = calculator;
@@ -95,6 +98,7 @@ public class CommissionService {
         this.notificationService = notificationService;
         this.tickets = tickets;
         this.attachments = attachments;
+        this.ceoApprovers = ceoApprovers;
     }
 
     public List<CommissionRecord> list(LocalDate payrollMonth, UserPrincipal actor) {
@@ -1208,7 +1212,7 @@ public class CommissionService {
             "/commissions",
             true
         );
-        for (Long ceoEmployeeId : commissions.findCeoApproverEmployeeIds()) {
+        for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(
                 ceoEmployeeId,
                 "COMMISSION_PENDING_CEO",
@@ -1267,7 +1271,7 @@ public class CommissionService {
             true
         );
         if (!fullyApproved) {
-            for (Long ceoEmployeeId : commissions.findCeoApproverEmployeeIds()) {
+            for (Long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
                 notificationService.notify(
                     ceoEmployeeId,
                     "COMMISSION_PENDING_CEO",

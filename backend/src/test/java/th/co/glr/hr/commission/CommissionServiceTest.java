@@ -25,6 +25,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
@@ -41,6 +42,7 @@ class CommissionServiceTest {
     private final NotificationService notificationService = mock(NotificationService.class);
     private final TicketRepository tickets = mock(TicketRepository.class);
     private final AttachmentRepository attachments = mock(AttachmentRepository.class);
+    private final CeoApproverRepository ceoApprovers = mock(CeoApproverRepository.class);
     private final CommissionService service = new CommissionService(
         commissions,
         commissionAttachments,
@@ -49,7 +51,8 @@ class CommissionServiceTest {
         auditService,
         notificationService,
         tickets,
-        attachments
+        attachments,
+        ceoApprovers
     );
 
     @Test
@@ -496,7 +499,7 @@ class CommissionServiceTest {
         CommissionRecord existing = record(900L, 30L, CommissionKind.SALE, CommissionStatus.SUBMITTED);
         CommissionRecord managerApproved = record(900L, 30L, CommissionKind.SALE, CommissionStatus.MANAGER_APPROVED);
         when(commissions.findById(900L)).thenReturn(Optional.of(existing), Optional.of(managerApproved));
-        when(commissions.findCeoApproverEmployeeIds()).thenReturn(List.of(500L));
+        when(ceoApprovers.findEmployeeIds()).thenReturn(List.of(500L));
         UserPrincipal approver = approverUser();
 
         CommissionRecord result = service.approve(900L, approver);

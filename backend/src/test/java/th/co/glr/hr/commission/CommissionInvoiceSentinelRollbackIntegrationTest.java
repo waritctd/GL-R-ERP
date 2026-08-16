@@ -25,6 +25,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
@@ -103,7 +104,7 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
             org.mockito.Mockito.mock(AuditService.class),
             org.mockito.Mockito.mock(NotificationService.class),
             org.mockito.Mockito.mock(TicketRepository.class),
-            org.mockito.Mockito.mock(AttachmentRepository.class));
+            org.mockito.Mockito.mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         // Deliberately kept RAW here. The hand-wired service has no Spring proxy, so
         // @Transactional does nothing to it — every test that needs the production transaction
         // boundary wraps it in transactional(...) at the call site, and the control test below
@@ -351,7 +352,7 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
             failingAudit,
             mock(NotificationService.class),
             realTickets,
-            new AttachmentRepository(jdbc));
+            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
         return new FailingDealFixture(service, ticketId, accountActor);
     }
 

@@ -53,6 +53,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.SendFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
+import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.notification.NotificationService;
@@ -199,7 +200,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         NotificationService notificationService = mock(NotificationService.class);
         commissionService = new CommissionService(commissions, commissionAttachments, new CommissionCalculator(),
             new FileStorageService("/tmp/glr-commission-autocreate-test-invoices"), auditService, notificationService,
-            tickets, new AttachmentRepository(jdbc));
+            tickets, new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
 
         long salesRepId = createEmployee(employees, "พนักงานขาย สิบ", "sales-a2@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า สิบ", "import-a2@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
