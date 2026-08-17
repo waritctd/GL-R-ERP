@@ -57,7 +57,6 @@ import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequ
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
@@ -177,8 +176,7 @@ class ProcurementServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
-        PriceCalcService priceCalcMock = mock(PriceCalcService.class);
-        ticketService = new TicketService(tickets, notifications, priceCalcMock,
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         quotationRepository = new CustomerQuotationRepository(jdbc);

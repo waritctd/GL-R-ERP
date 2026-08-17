@@ -35,7 +35,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
@@ -212,31 +211,6 @@ public class PricingDecisionService {
         }
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
             "CEO แก้ไขราคาขายที่เสนอ");
-        return requireDecision(decisionId);
-    }
-
-    @Transactional
-    public PricingDecisionDto recalculate(long decisionId, RecalculatePricingDecisionRequest request, UserPrincipal actor) {
-        requireRole(actor, CEO_ROLES);
-        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
-        BigDecimal bulkMargin = request.defaultMarginPct();
-        if (bulkMargin != null) {
-            requireValidMargin(bulkMargin);
-            decisions.updateDefaultMargin(decisionId, bulkMargin);
-        }
-        List<ItemUpdate> updates = new ArrayList<>();
-        for (PricingDecisionItemDto item : decision.items()) {
-            BigDecimal margin = bulkMargin != null ? bulkMargin : item.proposedMarginPct();
-            if (margin == null) {
-                continue;
-            }
-            BigDecimal sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), margin,
-                decision.fxRateUsed(), decision.currency());
-            updates.add(new ItemUpdate(item.id(), margin, sellingPrice, null, null, null, false));
-        }
-        decisions.updateItems(decisionId, updates);
-        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
-            "CEO คำนวณราคาขายใหม่");
         return requireDecision(decisionId);
     }
 

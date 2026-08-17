@@ -171,8 +171,7 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         decisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         decisions = transactional(decisionService);
-        th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
-        TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock, objectMapper,
+        TicketService ticketService = new TicketService(tickets, notifications, objectMapper,
             customers, new QuotationRenderer(), pricingRequestService);
 
         long salesRepId = createEmployee(employees, "พนักงานขาย โอเวอร์ไรด์", "sales-override-validation@glr.co.th",

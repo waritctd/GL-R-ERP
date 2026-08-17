@@ -37,7 +37,6 @@ import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
@@ -89,9 +88,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage, factoryQuoteCarryForward());
 
         // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
-        // repository — PriceCalcService is mocked since none of the read paths under test
-        // (list/listPage/get/listPayments/quotation download) ever call it.
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        // repository.
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,

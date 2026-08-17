@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -23,7 +22,6 @@ import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
@@ -85,7 +83,6 @@ public class TicketService {
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
-    private final PriceCalcService priceCalcService;
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
@@ -95,12 +92,11 @@ public class TicketService {
     private final PricingRequestService pricingRequests;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
-                         PriceCalcService priceCalcService, ObjectMapper objectMapper,
+                         ObjectMapper objectMapper,
                          CustomerRepository customers, QuotationRenderer quotationRenderer,
                          PricingRequestService pricingRequests) {
         this.tickets           = tickets;
         this.notifications     = notifications;
-        this.priceCalcService  = priceCalcService;
         this.objectMapper      = objectMapper;
         this.customers         = customers;
         this.quotationRenderer = quotationRenderer;
@@ -2308,31 +2304,6 @@ public class TicketService {
             TicketEventKind.COMMENTED, null, null, request.message());
         return projectForRole(requireTicket(ticketId), actor.role());
     }
-
-    /**
-     * Deprecated: recalculated legacy {@code ticket_item} prices for the submit → pickup →
-     * propose-price → approve loop. CEO price computation now happens via
-     * {@link th.co.glr.hr.pricingcosting.PricingCostingService} /
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService}.
-     * Reachable only for legacy tickets stuck at {@code price_proposed}; no controller route
-     * exposes this anymore.
-     */
-    @Deprecated
-    @Transactional
-    public CalculatePricesResult calculatePrices(long ticketId, UserPrincipal actor) {
-        requireRole(actor, CEO_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireActive(s);
-        if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
-        }
-        TicketDto ticket = priceCalcService.calculateForTicket(ticketId);
-        List<PriceBreakdownItemDto> breakdown = priceCalcService.calculateBreakdown(ticketId);
-        return new CalculatePricesResult(ticket, breakdown);
-    }
-
-    public record CalculatePricesResult(TicketDto ticket, List<PriceBreakdownItemDto> breakdown) {}
 
     /**
      * Deprecated: manual price override for a legacy {@code ticket_item} row. Superseded by

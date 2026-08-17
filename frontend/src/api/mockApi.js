@@ -9475,26 +9475,8 @@ export const api = {
       return delay({ decision });
     },
 
-    async recalculatePricingDecision(id, payload = {}) {
-      hasRole('ceo');
-      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('ไม่พบมติราคานี้', 404);
-      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
-      if (payload.defaultMarginPct != null) decision.defaultMarginPct = payload.defaultMarginPct;
-      for (const item of decision.items) {
-        const margin = payload.defaultMarginPct != null ? payload.defaultMarginPct : item.proposedMarginPct;
-        if (margin == null) continue;
-        item.proposedMarginPct = margin;
-        item.proposedSellingPricePerRequestedUnit = item.frozenLandedCostPerRequestedUnitThb * (1 + Number(margin));
-        item.updatedAt = new Date().toISOString();
-      }
-      decision.updatedAt = new Date().toISOString();
-      return delay({ decision });
-    },
-
     // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
-    // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
-    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Refreshes the
+    // decision AND CEO_REVIEWING request. Refreshes the
     // bound costing items' COMPUTED provenance (fxRate/calculationConfigVersion), preserving every
     // override column, then re-derives each decision item's frozen cost from the resulting
     // EFFECTIVE cost — this is what can make an existing override STALE without destroying it.

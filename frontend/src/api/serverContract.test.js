@@ -542,7 +542,6 @@ const UNREACHABLE_FROM_UI = new Set([
   // auto-advance) and why that is a separate change from this one.
   'POST /api/pricing-costings/{}/recalculate',
   'POST /api/pricing-costings/{}/submit',
-  'POST /api/pricing-decisions/{}/recalculate',
   'POST /api/pricing-requests/{}/costings',
   // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
   // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is

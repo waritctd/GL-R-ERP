@@ -59,7 +59,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
@@ -163,7 +162,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         pricingDecisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-step2@glr.co.th", "SALES", "แผนกขาย");

@@ -31,7 +31,6 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 
@@ -39,7 +38,6 @@ class TicketServiceTest {
 
     private final TicketRepository ticketRepo = mock(TicketRepository.class);
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
-    private final PriceCalcService priceCalcService = mock(PriceCalcService.class);
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
     private final PricingRequestService pricingRequestService = mock(PricingRequestService.class);
@@ -75,7 +73,7 @@ class TicketServiceTest {
         when(ticketRepo.transitionStatus(anyLong(), any(), any())).thenReturn(1);
     }
     private final TicketService service = new TicketService(
-        ticketRepo, notifRepo, priceCalcService, new ObjectMapper(), customerRepo, quotationRenderer,
+        ticketRepo, notifRepo, new ObjectMapper(), customerRepo, quotationRenderer,
         pricingRequestService);
 
     private final UserPrincipal salesActor   = actor(1L, "sales");
@@ -2046,8 +2044,10 @@ class TicketServiceTest {
         // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
         // APPROVE/REJECT/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/GENERATE_QUOTATION must never be
         // advertised by actions() — TicketController no longer exposes the routes behind them
-        // (see TicketService.pickup/proposePrice/approve/reject/calculatePrices/
-        // overrideItemPrice/generateQuotation's own @Deprecated Javadoc). Exercised against
+        // (see TicketService.pickup/proposePrice/approve/reject/overrideItemPrice/
+        // generateQuotation's own @Deprecated Javadoc; calculatePrices itself was deleted as
+        // provably dead — no controller route, no caller, zero test coverage besides this
+        // verb-suppression check). Exercised against
         // the 3 real stranded pre-redesign statuses (submitted/in_review/price_proposed) —
         // the only statuses that could ever have surfaced these verbs — for both the role
         // that used to see them (import/ceo) and the deal owner (sales).
@@ -2399,32 +2399,6 @@ class TicketServiceTest {
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
     }
 
-    // ── calculatePrices ──────────────────────────────────────────────────
-
-    @Test
-    void calculatePrices_priceProposedByCeoDelegatesToPricingEngine() {
-        TicketDto calculated = stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-        when(priceCalcService.calculateForTicket(10L)).thenReturn(calculated);
-        when(priceCalcService.calculateBreakdown(10L)).thenReturn(List.of());
-
-        TicketService.CalculatePricesResult result = service.calculatePrices(10L, ceoActor);
-
-        assertThat(result.ticket()).isEqualTo(calculated);
-        verify(priceCalcService).calculateForTicket(10L);
-    }
-
-    @Test
-    void calculatePrices_rejectsSalesRole() {
-        assertForbidden(() -> service.calculatePrices(10L, salesActor));
-    }
-
-    @Test
-    void calculatePrices_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-
-        assertConflict(() -> service.calculatePrices(10L, ceoActor));
-    }
-
     // ── overrideItemPrice ────────────────────────────────────────────────
     // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
     // no audit trail at all.
@@ -2528,11 +2502,6 @@ class TicketServiceTest {
     @Test
     void approve_rejectsSalesManagerRole() {
         assertForbidden(() -> service.approve(10L, salesManagerActor));
-    }
-
-    @Test
-    void calculatePrices_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.calculatePrices(10L, salesManagerActor));
     }
 
     @Test

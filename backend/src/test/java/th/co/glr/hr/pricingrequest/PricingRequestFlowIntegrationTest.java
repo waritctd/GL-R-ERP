@@ -34,7 +34,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
@@ -63,12 +62,10 @@ import th.co.glr.hr.ticket.TicketStatus;
  * (deal/ticket vs pricing request) actually stay decoupled when driven through their
  * real service layer, not just through direct repository calls.
  *
- * <p>Collaborators that would be awkward to stand up for real — {@link PriceCalcService}
- * (pricing engine business logic, unrelated to this walk) — are mocked. Everything else
- * ({@link TicketRepository}, {@link PricingRequestRepository}, {@link PricingRequestService},
- * {@link NotificationRepository}, {@link EmployeeRepository}, {@link CustomerRepository},
- * {@link ProjectRepository}, {@link QuotationRenderer}) is real and backed by the same
- * {@code jdbc} the base class resets before every test.
+ * <p>Every collaborator ({@link TicketRepository}, {@link PricingRequestRepository},
+ * {@link PricingRequestService}, {@link NotificationRepository}, {@link EmployeeRepository},
+ * {@link CustomerRepository}, {@link ProjectRepository}, {@link QuotationRenderer}) is real and
+ * backed by the same {@code jdbc} the base class resets before every test.
  */
 class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
@@ -112,10 +109,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-pricing-flow-test-uploads"), factoryQuoteCarryForward());
-        // PriceCalcService is genuinely awkward business logic unrelated to this walk
-        // (no price is ever proposed/calculated here) — mocked, per the task brief.
-        // Every other collaborator is real and cheap to construct.
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย หนึ่ง", "sales1@glr.co.th", "SALES", "แผนกขาย");

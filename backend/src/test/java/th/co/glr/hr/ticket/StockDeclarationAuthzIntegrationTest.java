@@ -30,7 +30,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -106,15 +105,15 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // PriceCalcService/PricingRequestService are mocked exactly as in
-        // DealTrackingAndActivityIntegrationTest: reserveStock never calls either. The stub on
-        // cancelOpenForTicket exists only so Mockito's default null return cannot NPE if a future
-        // edit routes through markLost/cancel. The two things under test here — TicketService's
-        // gate and TicketRepository's UPDATE — are both real.
+        // PricingRequestService is mocked exactly as in DealTrackingAndActivityIntegrationTest:
+        // reserveStock never calls it. The stub on cancelOpenForTicket exists only so Mockito's
+        // default null return cannot NPE if a future edit routes through markLost/cancel. The
+        // two things under test here — TicketService's gate and TicketRepository's UPDATE — are
+        // both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests);
 
         EmployeeRepository employees = new EmployeeRepository(

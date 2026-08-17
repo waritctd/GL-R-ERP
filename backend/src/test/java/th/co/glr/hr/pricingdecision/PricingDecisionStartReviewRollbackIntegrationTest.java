@@ -152,8 +152,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
-        th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
-        TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย โรลแบ็ก", "sales-rollback@glr.co.th", "SALES", "แผนกขาย");

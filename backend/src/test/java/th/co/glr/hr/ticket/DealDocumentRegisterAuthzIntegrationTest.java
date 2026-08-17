@@ -44,7 +44,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
@@ -128,10 +127,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
-        // PriceCalcService prices item lines, unrelated to every gate under test here — mocked
-        // exactly as TicketIaAuthzMatrixIntegrationTest and CustomerQuotationIntegrationTest do.
-        PriceCalcService priceCalcUnused = mock(PriceCalcService.class);
-        ticketService = new TicketService(tickets, notifications, priceCalcUnused, objectMapper, customers,
+        ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), pricingRequestService);
 
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
