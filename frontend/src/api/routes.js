@@ -143,6 +143,25 @@ export const API_ROUTES = {
     noteTemplates: '/api/document-note-templates',
     remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
   },
+  // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
+  // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —
+  // see ImportRequestQueryRepository's Javadoc.
+  importRequests: {
+    brands: (ticketId) => `/api/tickets/${ticketId}/import-request/brands`,
+    pages: (ticketId, brand, requiredBy) => {
+      const p = new URLSearchParams();
+      if (brand) p.set('brand', brand);
+      if (requiredBy) p.set('requiredBy', requiredBy);
+      return `/api/tickets/${ticketId}/import-request/pages${p.toString() ? `?${p}` : ''}`;
+    },
+    file: (ticketId, brand, ref, requiredBy) => {
+      const p = new URLSearchParams();
+      if (brand) p.set('brand', brand);
+      if (ref) p.set('ref', ref);
+      if (requiredBy) p.set('requiredBy', requiredBy);
+      return `/api/tickets/${ticketId}/import-request${p.toString() ? `?${p}` : ''}`;
+    },
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {

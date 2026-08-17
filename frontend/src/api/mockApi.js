@@ -7807,6 +7807,42 @@ export const api = {
     },
   },
 
+  // Mirrors ImportRequestController — the ใบขอซื้อ (F-SM-001) generator.
+  //
+  // `brands` is faithful: it reads the deal's own item brands, which is exactly what
+  // ImportRequestQueryRepository.brandLinesForTicket does, and involves no computation to get wrong.
+  //
+  // `pages` and `download` DELIBERATELY DO NOT WORK. Per CLAUDE.md, "a 'not supported in mock mode'
+  // stub is the honest option" where a mock would otherwise have to reimplement backend behaviour:
+  //   - download would need PDFBox, the F-SM-001 template, and every measured coordinate. A mock
+  //     that returned some other PDF would be worse than one that refuses, because a click would
+  //     "succeed" and the tester would conclude the form works.
+  //   - pages is ImportRequestRenderer's block-wise pagination over a 26-row grid. Mirroring it is
+  //     the `computeDraftEtag` mistake — if the algorithm is wrong the same way on both sides, every
+  //     mock-driven test passes while telling you nothing.
+  // Both therefore fail with a message saying so. The download button surfaces it verbatim.
+  importRequests: {
+    brands(ticketId) {
+      hasRole('import', 'ceo');
+      const ticket = findTicketRaw(Number(ticketId));
+      requireActive(ticket);
+      const brands = [...new Set((ticket.items ?? [])
+        .map((it) => it.brand)
+        .filter((b) => b && String(b).trim()))];
+      return delay({ brands });
+    },
+    async pages(ticketId, brand, requiredBy) {
+      hasRole('import', 'ceo');
+      void ticketId; void brand; void requiredBy;
+      fail('นับจำนวนหน้าใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+    async download(ticketId, brand, ref, requiredBy) {
+      hasRole('import', 'ceo');
+      void ticketId; void brand; void ref; void requiredBy;
+      fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+  },
+
   // Mirrors CatalogController (catalog/) — product CRUD delegates to
   // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   // Both reads stay requireSession() — open to any logged-in user, matching the

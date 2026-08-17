@@ -106,6 +106,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       fxRates: {
         list: vi.fn(),
       },
+      // ใบขอซื้อ (F-SM-001). Mocked for the same reason as fxRates: DealFulfilmentPanel's IR block
+      // queries brands for every import/CEO viewer, and an undefined namespace would throw rather
+      // than render the block.
+      importRequests: {
+        brands: vi.fn(),
+        pages: vi.fn(),
+        download: vi.fn(),
+      },
     },
   };
 });
@@ -216,6 +224,10 @@ function renderTicketDetailPageAtRoute(initialEntries, user = ceoUser, showToast
 describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with
+    // brands would make the block appear in unrelated assertions.
+    api.importRequests.brands.mockResolvedValue({ brands: [] });
+    api.importRequests.pages.mockResolvedValue({ pageCount: 1 });
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.actions.mockResolvedValue({
       currentState: {
@@ -1971,6 +1983,61 @@ describe('TicketDetailPage', () => {
       } finally {
         Element.prototype.scrollIntoView = original;
       }
+    });
+
+    // ── ใบขอซื้อ (F-SM-001) download block ──────────────────────────────────────────────────
+    describe('the ใบขอซื้อ block', () => {
+      it('offers one form per brand on the deal', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana', 'LEA'] });
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        expect(await section.findByTestId('deal-fulfilment-ir-download-Padana')).toBeTruthy();
+        expect(section.getByTestId('deal-fulfilment-ir-download-LEA')).toBeTruthy();
+        expect(api.importRequests.brands).toHaveBeenCalledWith(701);
+      });
+
+      it('hands the typed ReF. No. and the chosen brand to the download', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        api.importRequests.download.mockResolvedValue(new Blob(['%PDF-']));
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        fireEvent.change(await section.findByTestId('deal-fulfilment-ir-ref'),
+          { target: { value: 'IR69068' } });
+        fireEvent.click(section.getByTestId('deal-fulfilment-ir-download-Padana'));
+
+        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form
+        // prints it blank. If this ever starts passing a value, the panel has begun filling in
+        // another department's field.
+        await waitFor(() => expect(api.importRequests.download)
+          .toHaveBeenCalledWith(701, 'Padana', 'IR69068', null));
+      });
+
+      it('flags a form that will run to a second sheet', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        api.importRequests.pages.mockResolvedValue({ pageCount: 2 });
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        expect(await section.findByText('2 แผ่น')).toBeTruthy();
+      });
+
+      /**
+       * ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a
+       * control that 403s. Sales DOES see the rest of this panel (read-only), which is why the gate
+       * has to be on the block rather than the tab.
+       */
+      it('is absent for sales, which may read this panel but not the document', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        renderTicketDetailPage(salesOwnerUser);
+        const section = await fulfilmentSection();
+
+        expect(section.queryByTestId('deal-fulfilment-import-request')).toBeNull();
+        // And the query is not even issued — a 403 in the console for every sales viewer of this
+        // tab would be noise, so `enabled` carries the same gate as the markup.
+        expect(api.importRequests.brands).not.toHaveBeenCalled();
+      });
     });
 
     it('import issues an Import Request via api.tickets.issueImportRequest', async () => {
