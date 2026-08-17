@@ -872,6 +872,11 @@ export const api = {
     createCustomerQuotationRevision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationRevisions(id), { method: 'POST', body: payload }),
     // Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationController.recordOutcome.
     recordCustomerQuotationOutcome: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationOutcome(id), { method: 'POST', body: payload }),
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+    // DiscountApprovalController.
+    listDiscountApprovalsForQuotation: (quotationId) => apiRequest(API_ROUTES.pricingRequests.discountApprovalsForQuotation(quotationId)),
+    approveDiscountApproval: (id) => apiRequest(API_ROUTES.pricingRequests.discountApprovalApprove(id), { method: 'POST' }),
+    rejectDiscountApproval: (id, payload) => apiRequest(API_ROUTES.pricingRequests.discountApprovalReject(id), { method: 'POST', body: payload }),
     // Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationController.
     confirmOrder: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.confirmOrder(id), { method: 'POST', body: payload }),
     createDepositNoticeFromQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.depositNoticeFromQuotation(id), { method: 'POST', body: payload }),

@@ -279,6 +279,19 @@ const SERVER_ONLY = {
   // to exempt. The two frontend tests asserting the multiplier must NOT come back stay where they
   // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
   // where the misreading happened.
+
+  // CEO discount-approval workflow, Phase 2 (V155). The task's actual UI requirement — a line
+  // shows sales it needs approval and why it was rejected; the CEO approves/rejects with a
+  // reason — is satisfied per-quotation, on the same PricingRequestDetailPage screen the CEO
+  // already reviews pricing on (listDiscountApprovalsForQuotation/approveDiscountApproval/
+  // rejectDiscountApproval, all called and reachable). This CROSS-quotation queue is a genuinely
+  // separate capability (a CEO dashboard listing every pending discount across every deal) that
+  // was not asked for and would be a new IA surface — built on the backend for when/if it is,
+  // not wired to any screen yet.
+  'GET /api/discount-approvals/pending':
+    'DiscountApprovalService.listPending — a CEO-wide queue across all quotations, not needed for '
+    + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
+    + 'built backend-first; wire it up if a cross-deal CEO queue view is ever requested.',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

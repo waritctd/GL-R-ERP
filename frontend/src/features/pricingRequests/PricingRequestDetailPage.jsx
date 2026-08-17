@@ -18,6 +18,7 @@ import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
+  discountApprovalStatusLabel,
   factoryQuoteStatusLabel,
   formatMoney,
   formatThaiDate,
@@ -34,6 +35,7 @@ import {
   canCreateCommercialOnlyRevision,
   canCreateCustomerQuotation,
   canCreateDepositNoticeFromQuotation,
+  canDecideDiscountApproval,
   canManageCustomerQuotation,
   canRecordCustomerQuotationOutcome,
   canSeePricingDecisionSalesView,
@@ -697,6 +699,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
+    // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
+    // family with the shared 'discountApprovals' prefix rather than needing the current
+    // quotation's id here too (this function is called from mutations that may have just
+    // superseded/replaced it).
+    queryClient.invalidateQueries({ queryKey: ['customerQuotations', 'discountApprovals'] });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
   }
 
@@ -941,6 +948,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
     (quotation) => api.pricingRequests.cancelCustomerQuotation(quotation.id, {}),
     'ยกเลิกร่างใบเสนอราคาแล้ว',
   );
+  // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Both route through
+  // the shared ConfirmDialog below (confirmAction type 'approveDiscount'/'rejectDiscount'),
+  // mirroring approveDecision/returnDecisionToImport's own pattern for a CEO pricing decision —
+  // approve gets a plain confirm, reject requires a reason.
+  const approveDiscount = useActionMutation(
+    (approval) => api.pricingRequests.approveDiscountApproval(approval.id),
+    'อนุมัติส่วนลดแล้ว',
+  );
+  const rejectDiscount = useActionMutation(
+    ({ approval, reason }) => api.pricingRequests.rejectDiscountApproval(approval.id, { reason }),
+    'ปฏิเสธส่วนลดแล้ว',
+  );
   const createQuotationRevision = useMutation({
     mutationFn: (quotation) => api.pricingRequests.createCustomerQuotationRevision(quotation.id, {
       clientRequestId: revisionClientRequestId,
@@ -1090,6 +1109,21 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const currentCustomerQuotation = useMemo(
     () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
     [customerQuotations],
+  );
+  // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
+  // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
+  // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
+  // would be the exact kind of duplicated-derivation drift this codebase has been bitten by
+  // before. Same view-access gate as customerQuotationsQuery itself (the backend delegates to the
+  // identical check), so nothing new is exposed by fetching it.
+  const discountApprovalsQuery = useQuery({
+    queryKey: queryKeys.discountApprovals(currentCustomerQuotation?.id),
+    queryFn: () => api.pricingRequests.listDiscountApprovalsForQuotation(currentCustomerQuotation.id).then((r) => r.items ?? []),
+    enabled: Boolean(currentCustomerQuotation?.id) && canViewCustomerQuotation(user, summary),
+  });
+  const discountApprovalByItemId = useMemo(
+    () => new Map((discountApprovalsQuery.data ?? []).map((a) => [a.quotationItemId, a])),
+    [discountApprovalsQuery.data],
   );
   // Mirrors PricingRequestService.createCustomerChangeRevision (:438-465). The status half used to
   // be a literal `!['DRAFT','CANCELLED','SUPERSEDED'].includes(status)` denylist — verbatim the
@@ -2057,6 +2091,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       const previewFinal = item.approvedUnitPrice - discount;
                       const belowMinimum = item.minimumSellingPricePerRequestedUnit != null
                         && previewFinal < item.minimumSellingPricePerRequestedUnit;
+                      // CEO discount-approval workflow, Phase 2 (V155): the SAVED line's own
+                      // status, keyed off the server-persisted final_unit_price — distinct from
+                      // `belowMinimum` above, which previews an UNSAVED draft edit still in the
+                      // input box. Only ever set when this item's current price is genuinely
+                      // below minimum (see DiscountApprovalRepository#findCurrentByQuotationId).
+                      const discountApproval = discountApprovalByItemId.get(item.id);
+                      const discountApprovalStatus = discountApproval
+                        ? discountApprovalStatusLabel(discountApproval.status) : null;
                       return (
                         <div key={item.id} className="rounded-md border border-border bg-surface p-3 text-sm">
                           {editable ? (
@@ -2093,9 +2135,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             <span>รวมรายการ: {formatCurrency(item.lineTotal, quotation.currency)}</span>
                           </div>
                           {belowMinimum ? (
-                            <p className="mt-1 text-xs font-medium text-danger">
-                              ⚠ ราคาต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ ({formatCurrency(item.minimumSellingPricePerRequestedUnit, quotation.currency)}) — บันทึกไม่ได้
+                            <p className="mt-1 text-xs font-medium text-warning-dark">
+                              ⚠ ราคาต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ ({formatCurrency(item.minimumSellingPricePerRequestedUnit, quotation.currency)})
+                              — บันทึกได้ แต่ต้องรอ CEO อนุมัติส่วนลดก่อนจึงจะออกใบเสนอราคาได้
                             </p>
+                          ) : null}
+                          {discountApproval ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <StatusBadge tone={discountApprovalStatus.tone}>{discountApprovalStatus.label}</StatusBadge>
+                              {discountApproval.status === 'REJECTED' && discountApproval.rejectionReason ? (
+                                <span className="text-xs text-danger">เหตุผล: {discountApproval.rejectionReason}</span>
+                              ) : null}
+                              {discountApproval.status === 'PENDING' && canDecideDiscountApproval(user) ? (
+                                <div className="flex gap-2">
+                                  <Button type="button" variant="success" size="sm" disabled={approveDiscount.isPending}
+                                    onClick={() => setConfirmAction({ type: 'approveDiscount', approval: discountApproval })}>
+                                    อนุมัติส่วนลด
+                                  </Button>
+                                  <Button type="button" variant="danger" size="sm" disabled={rejectDiscount.isPending}
+                                    onClick={() => setConfirmAction({ type: 'rejectDiscount', approval: discountApproval })}>
+                                    ปฏิเสธส่วนลด
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </div>
                           ) : null}
                           {editable ? (
                             <textarea
@@ -2293,6 +2356,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         title={confirmAction?.type === 'approveDecision' ? 'อนุมัติราคาขาย'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับให้ฝ่ายนำเข้าแก้ไขต้นทุน'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
+          : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
+          : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
           : 'ส่งอีเมลถึงโรงงาน'}
         message={confirmAction?.type === 'approveDecision'
           ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
@@ -2300,16 +2365,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
             : confirmAction?.type === 'issueQuotation'
               ? 'เมื่อออกใบเสนอราคาแล้ว จะแก้ไขไม่ได้ — การแก้ไขภายหลังต้องสร้างรอบแก้ไขใหม่'
-              : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+              : confirmAction?.type === 'approveDiscount'
+                ? `อนุมัติส่วนลดรายการที่ ${confirmAction?.approval?.quotationItemId} ที่ราคา ${formatCurrency(confirmAction?.approval?.requestedFinalUnitPrice, currentCustomerQuotation?.currency)} — เมื่ออนุมัติแล้ว ใบเสนอราคานี้จะออกได้ตราบใดที่ไม่มีการแก้ไขราคาอีก`
+                : confirmAction?.type === 'rejectDiscount'
+                  ? 'ระบุเหตุผลที่ปฏิเสธส่วนลดนี้ — ฝ่ายขายจะเห็นเหตุผลนี้และต้องแก้ไขราคาหรือถอนส่วนลดก่อนออกใบเสนอราคาได้'
+                  : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
         confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
+          : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
+          : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
           : 'ส่งอีเมล'}
-        tone={confirmAction?.type === 'returnDecision' ? 'danger' : 'default'}
-        requireReason={confirmAction?.type === 'returnDecision'}
-        reasonLabel="เหตุผลที่ตีกลับ"
-        busy={sendQuote.isPending || approveDecision.isPending
-          || returnDecisionToImport.isPending || issueQuotation.isPending}
+        tone={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount' ? 'danger' : 'default'}
+        requireReason={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount'}
+        reasonLabel={confirmAction?.type === 'rejectDiscount' ? 'เหตุผลที่ปฏิเสธส่วนลด' : 'เหตุผลที่ตีกลับ'}
+        busy={sendQuote.isPending || approveDecision.isPending || returnDecisionToImport.isPending
+          || issueQuotation.isPending || approveDiscount.isPending || rejectDiscount.isPending}
         onCancel={() => setConfirmAction(null)}
         onConfirm={(reason) => {
           const action = confirmAction;
@@ -2318,6 +2389,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           if (action?.type === 'approveDecision') approveDecision.mutate(action.decision);
           if (action?.type === 'returnDecision') returnDecisionToImport.mutate({ decision: action.decision, reason });
           if (action?.type === 'issueQuotation') issueQuotation.mutate(action.quotation);
+          if (action?.type === 'approveDiscount') approveDiscount.mutate(action.approval);
+          if (action?.type === 'rejectDiscount') rejectDiscount.mutate({ approval: action.approval, reason });
         }}
       />
 
