@@ -133,7 +133,7 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests,
             new th.co.glr.hr.pricingdecision.PricingDecisionRepository(jdbc), tickets, ticketService, customers,
-            new QuotationRenderer(), notifications);
+            new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets, notifications,
             new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers, quotationRepository);

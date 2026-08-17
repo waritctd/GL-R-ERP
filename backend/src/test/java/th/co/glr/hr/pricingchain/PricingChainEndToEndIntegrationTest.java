@@ -184,7 +184,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย เชน", "sales-chain@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เชน", "import-chain@glr.co.th", "PCIM", "ฝ่ายนำเข้า");

@@ -161,7 +161,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย สี่", "sales-step4@glr.co.th", "SALES", "แผนกขาย");
         otherSalesId = createEmployee(employees, "พนักงานขาย อื่นสี่", "sales-step4-other@glr.co.th", "SALES", "แผนกขาย");
@@ -357,27 +357,55 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Discount Policy B: never below the CEO-approved minimum
+    // Discount Policy B: never below the CEO-approved minimum WITHOUT approval — Phase 2
+    // (owner ruling 2026-08-16) turned the old hard 422-on-save into an approval gate at
+    // issue() instead. The full CEO approve/reject workflow (price-binding invariant, authz,
+    // rejection reasons, notifications) is exercised in DiscountApprovalIntegrationTest, which
+    // shares this class's fixtures/style; this test only re-confirms what changed AT THESE THREE
+    // SITES: save no longer throws, issue() still does.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void discountBelowMinimum_isRejectedWith422_noAutoEscalation() {
+    void discountBelowMinimum_isSavedButIssueRefusedUntilCeoApproves() {
         long pricingRequestId = approvedPricingRequest();
         CustomerQuotationDto draft = quotationService.create(pricingRequestId,
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         CustomerQuotationItemDto item = draft.items().get(0);
-        BigDecimal tooMuchDiscount = item.approvedUnitPrice().subtract(item.minimumSellingPricePerRequestedUnit())
+        // approvedPricingRequest() sets an EXPLICIT CEO minimum of ฿50.00 per item (well below
+        // its own approved price) — mirrors the original test's own "just past the floor" discount
+        // rather than assuming Phase 1 auto-population (that fixture is
+        // PricingDecisionMinimumPriceAutoPopulationIntegrationTest's, not this one).
+        BigDecimal discount = item.approvedUnitPrice().subtract(item.minimumSellingPricePerRequestedUnit())
             .add(new BigDecimal("1.00"));
+        BigDecimal belowMinimumPrice = item.approvedUnitPrice().subtract(discount);
+        assertThat(belowMinimumPrice).isLessThan(item.minimumSellingPricePerRequestedUnit());
 
-        assertThatThrownBy(() -> quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
+        // Site ~254 (applyItemUpdates): no longer throws.
+        CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
             null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, tooMuchDiscount))), salesActor))
+            List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, discount))), salesActor);
+        CustomerQuotationItemDto discountedItem = itemById(discounted, item.id());
+        assertThat(discountedItem.salesDiscount()).isEqualByComparingTo(discount);
+        assertThat(discountedItem.finalUnitPrice()).isEqualByComparingTo(belowMinimumPrice);
+
+        // A pending discount-approval request now exists for exactly this line, at exactly this
+        // price, and the CEO was notified.
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.quotation_item_discount_approval
+             WHERE quotation_item_id = :itemId AND status = 'PENDING' AND requested_final_unit_price = :price
+            """, Map.of("itemId", discountedItem.id(), "price", belowMinimumPrice), Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM hr.notification WHERE type = 'DISCOUNT_APPROVAL_REQUESTED'
+            """, Map.of(), Long.class)).isEqualTo(1L);
+
+        // Site ~306 (issue()'s own gate): STILL refuses — now because the line is below minimum
+        // AND not yet CEO-approved, rather than merely below minimum.
+        assertThatThrownBy(() -> quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
-        // Nothing was mutated — the item's discount stays at the pre-attempt value.
-        CustomerQuotationDto unchanged = quotationService.get(draft.id(), salesActor);
-        assertThat(itemById(unchanged, item.id()).salesDiscount()).isEqualByComparingTo(BigDecimal.ZERO);
+        // The document itself is untouched by the refused issue attempt.
+        assertThat(quotationService.get(discounted.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.DRAFT);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

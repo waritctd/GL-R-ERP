@@ -171,7 +171,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesActor = actor(createEmployee(employees, "พนักงานขาย รีอิชชู", "sales-reissue@glr.co.th", "SALES", "แผนกขาย"), "sales");
         importActor = actor(createEmployee(employees, "ฝ่ายนำเข้า รีอิชชู", "import-reissue@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
