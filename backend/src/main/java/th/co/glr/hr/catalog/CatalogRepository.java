@@ -18,15 +18,37 @@ public class CatalogRepository {
     }
 
     /**
-     * {@code price_catalog.product_prices.thickness_mm} for one catalog price row — used by
-     * {@code LandedCostCalculator#resolveThicknessMm} for V109's freight-band lookup. Returns
-     * empty (never a fallback value) when the row does not exist or its {@code thickness_mm} is
-     * NULL — the caller turns either case into a loud, item-naming failure rather than guessing.
+     * The RESOLVED thickness for one catalog price row — used by
+     * {@code LandedCostCalculator#resolveThicknessMm} for V109's freight-band lookup. Returns empty
+     * (never a fallback value) when nothing resolves — the caller turns that into a loud,
+     * item-naming failure rather than guessing.
+     *
+     * <p>Reads {@code price_catalog.v_priceable_product}, not {@code product_prices} directly. The
+     * view resolves V153's thickness chain: the row's own {@code thickness_mm} first, then the
+     * CEO-maintained {@code collection_thickness_default} most-specific-first
+     * ({@code (factory, collection, size_norm)} → {@code (factory, collection)} → {@code (factory)}).
+     *
+     * <p>Reading the base table skipped that chain entirely, which mattered: four of the nine
+     * factory workbooks (Vives, Padana, Equipe, Bode) carry no thickness column at all, so 9,411
+     * catalogue rows have a NULL {@code thickness_mm} that no parser can recover. Against the base
+     * table every one of them failed costing permanently, and the CEO had no way to fix it short of
+     * a migration. The defaults table is that way — but only if this reads through it.
+     *
+     * <p>"Never guessed, never defaulted" is UNCHANGED as a rule, and deliberately so: a wrong
+     * thickness selects a freight band that can differ by ฿50,000 per shipment. What changed is
+     * whose value counts. A CEO-entered collection default is supplied data, not a guess; the view
+     * still yields NULL when nothing is entered, and this still fails loudly then.
+     *
+     * <p>One behavioural narrowing comes with the view: it filters to the ACTIVE price-list version,
+     * so a {@code price_id} on an ARCHIVED or DRAFT version now returns empty rather than that
+     * version's stale thickness. Costing off a superseded price list was never intended —
+     * {@code PricingRequestService#submit}'s catalog gate already rejects a non-ACTIVE link — so
+     * this is defence in depth rather than a new restriction.
      */
     public Optional<BigDecimal> findThicknessMm(long priceId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject(
-                "SELECT thickness_mm FROM price_catalog.product_prices WHERE price_id = :priceId",
+                "SELECT thickness_mm FROM price_catalog.v_priceable_product WHERE price_id = :priceId",
                 new MapSqlParameterSource().addValue("priceId", priceId), BigDecimal.class));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
