@@ -111,6 +111,9 @@ export const queryKeys = {
   priceCalcConfigs: () => ['priceCalcConfigs'],
   // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
   pricingFormulaConfig: () => ['pricingFormulaConfig'],
+  // V153 thickness fallbacks. The gap list is derived from the catalogue, so it changes whenever a
+  // price list is re-imported — not only when the CEO saves.
+  catalogThicknessDefaults: () => ['catalogThicknessDefaults'],
   // Commit 6 (pricing-request-foundation)
   pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
   pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],

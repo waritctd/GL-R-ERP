@@ -162,6 +162,151 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
 }
 
 // ---------------------------------------------------------------------------
+// V153 thickness defaults.
+//
+// Four of the nine factory workbooks (Vives, Padana, Equipe, Bode) carry no thickness column at
+// all, so ~9,411 catalogue rows have a NULL thickness_mm no parser can recover. Thickness selects
+// the freight band, and a band can differ by ฿50,000 per shipment, so those rows are deliberately
+// unpriceable until a human supplies the number. This panel is where.
+//
+// ONE FORM, ONE SAVE — not a modal per row. 244 (factory, collection) pairs cover every gap; a
+// modal each would make one sitting 244 dialogs. The server returns the refreshed gap list from the
+// save, so this re-renders from server truth rather than patching local state.
+//
+// Rows arrive ordered by how many catalogue rows each would unblock (the repository's own
+// ORDER BY count(*) DESC) and that order is NOT re-sorted here: the CEO works top-down and the
+// biggest wins land first.
+function ThicknessDefaultsPanel({ showToast }) {
+  const queryClient = useQueryClient();
+  const [edits, setEdits] = useState({});
+
+  const { data, isLoading } = useQuery({
+    queryKey: queryKeys.catalogThicknessDefaults(),
+    queryFn: () => api.catalogThicknessDefaults.list(),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (payload) => api.catalogThicknessDefaults.save(payload),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.catalogThicknessDefaults(), result);
+      setEdits({});
+      showToast('success', `บันทึกความหนาแล้ว ${result.saved} รายการ`);
+    },
+    onError: (e) => showToast('error', e.message || 'บันทึกความหนาไม่สำเร็จ'),
+  });
+
+  const gaps = data?.gaps ?? [];
+  const rowKey = (gap) => `${gap.factoryId}|${gap.collection ?? ''}`;
+  // An edited blank is meaningful: it CLEARS the default rather than saving 0. A stored zero would
+  // silently pick the lowest freight band instead of refusing to price, so '' must survive all the
+  // way to the payload as null — never be coerced to a number here.
+  const valueFor = (gap) => {
+    const key = rowKey(gap);
+    if (key in edits) return edits[key];
+    return gap.currentDefaultMm == null ? '' : String(gap.currentDefaultMm);
+  };
+  const dirtyCount = Object.keys(edits).length;
+
+  function submit(event) {
+    event.preventDefault();
+    const entries = Object.entries(edits).map(([key, raw]) => {
+      const [factoryId, collection] = key.split('|');
+      return {
+        factoryId: Number(factoryId),
+        collection: collection === '' ? null : collection,
+        thicknessMm: raw.trim() === '' ? null : Number(raw),
+      };
+    });
+    if (entries.length > 0) saveMutation.mutate({ entries });
+  }
+
+  return (
+    <Panel
+      flush
+      title="ความหนาเริ่มต้นตามคอลเลกชัน (มม.)"
+      actions={dirtyCount > 0 ? (
+        <Button type="submit" form="thickness-defaults-form" variant="primary" disabled={saveMutation.isPending}>
+          {saveMutation.isPending ? 'กำลังบันทึก…' : `บันทึก ${dirtyCount} รายการ`}
+        </Button>
+      ) : null}
+    >
+      <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle">
+        โรงงานบางแห่งไม่ได้ระบุความหนามาในไฟล์ราคา — ระบบจึงคำนวณค่าขนส่งไม่ได้จนกว่าจะกรอกค่าที่นี่
+        {data ? (
+          <>
+            {' • '}
+            <strong className={data.rowsStillMissingThickness > 0 ? 'text-warning' : 'text-success'}>
+              เหลือ {data.rowsStillMissingThickness.toLocaleString('th-TH')} รายการ
+            </strong>
+            {' ที่ยังคำนวณราคาไม่ได้'}
+          </>
+        ) : null}
+      </div>
+
+      {isLoading ? (
+        <div className="px-[18px] py-4 text-text-muted text-sm">กำลังโหลด…</div>
+      ) : gaps.length === 0 ? (
+        <div className="px-[18px] py-4 text-text-muted text-sm">
+          ไม่มีคอลเลกชันที่ขาดความหนา — ทุกรายการในแคตตาล็อกคำนวณค่าขนส่งได้แล้ว
+        </div>
+      ) : (
+        <SafeForm id="thickness-defaults-form" onSubmit={submit} noValidate>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="bg-surface-muted">
+                  {['โรงงาน', 'คอลเลกชัน', 'รายการที่รอ', 'ความหนา (มม.)'].map((h) => (
+                    <th key={h} className="px-[14px] py-2 text-left font-semibold text-icon-muted border-b border-border whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {gaps.map((gap) => {
+                  const key = rowKey(gap);
+                  const inputId = `thickness-${key.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                  return (
+                    <tr key={key} className="border-b border-surface-subtle">
+                      <td className="px-[14px] py-2 font-semibold whitespace-nowrap">{gap.factoryName}</td>
+                      <td className="px-[14px] py-2">
+                        {gap.collection ?? <span className="text-text-muted italic">(ไม่ระบุคอลเลกชัน)</span>}
+                        {gap.hasSizeLevelOverride ? (
+                          <span
+                            className="ml-1.5 text-2xs text-text-muted"
+                            title="คอลเลกชันนี้มีค่าเฉพาะขนาดกำหนดไว้ด้วย — การบันทึกที่นี่ไม่ลบค่านั้น"
+                          >
+                            (มีค่าเฉพาะขนาด)
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-[14px] py-2 text-text-muted whitespace-nowrap">
+                        {gap.rowsMissingThickness.toLocaleString('th-TH')}
+                      </td>
+                      <td className="px-[14px] py-2">
+                        <input
+                          id={inputId}
+                          type="number" step="0.1" min="0"
+                          className="w-24"
+                          aria-label={`ความหนา ${gap.factoryName} ${gap.collection ?? ''}`}
+                          value={valueFor(gap)}
+                          onChange={(e) => setEdits((prev) => ({ ...prev, [key]: e.target.value }))}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="m-0 px-[18px] py-2 text-2xs text-text-muted border-t border-surface-subtle">
+            เว้นว่างไว้ = ลบค่าที่ตั้งไว้ (ไม่ใช่ 0) — รายการนั้นจะกลับไปเป็น &quot;คำนวณราคาไม่ได้&quot;
+          </p>
+        </SafeForm>
+      )}
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BRANCH 1 of the sales pricing-formula redesign: config storage + CEO editing UI only.
 // This section edits sales.pricing_formula_config + its 3 child tables (freight/duty/clearance)
 // via /api/pricing-formula-config. It does NOT calculate a selling price -- that is later
@@ -1097,6 +1242,8 @@ export function CeoSettingsPage({ showToast }) {
           </>
         )}
       </Panel>
+
+      <ThicknessDefaultsPanel showToast={showToast} />
 
       {/* The "ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)" panel stood here until 2026-08-10. It set a
           coarse display multiplier that the deal-create modal applied on top of the raw catalog

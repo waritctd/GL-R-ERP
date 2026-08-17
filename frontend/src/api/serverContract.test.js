@@ -297,19 +297,10 @@ const SERVER_ONLY = {
   // DealFulfilmentPanel's IR block now calls all three through api.importRequests, so they are
   // ordinary called endpoints and this test refuses to keep an exemption for them.
 
-  // Both are {ceo}-only, proven wrong-way-round against real Postgres by
-  // ThicknessDefaultIntegrationTest (every denied role rejected AND nothing written), and
-  // mutation-checked by removing requireCeoRole from the PUT. Deliberately not wired into
-  // hrApi.js yet: the CEO settings screen that will call them is a separate change.
-  'GET /api/catalog/thickness-defaults':
-    'Lists the (factory, collection) pairs whose catalogue rows carry no thickness, ordered by how '
-    + 'many rows each would unblock. Four of the nine factory workbooks have no thickness column at '
-    + 'all, so 9,411 rows cannot resolve a freight band and are unpriceable until a human supplies '
-    + 'the number — V153 added the table, this reads the gap list.',
-  'PUT /api/catalog/thickness-defaults':
-    'Bulk-saves those defaults. Bulk rather than row-at-a-time because 244 pairs cover every gap and '
-    + 'one sitting would otherwise be 244 round trips. A null thickness CLEARS an entry rather than '
-    + 'storing zero, which would silently select the lowest freight band instead of refusing to price.',
+  // GET/PUT /api/catalog/thickness-defaults stood here from #814 until the CEO settings panel
+  // landed. They are gone rather than re-worded: ThicknessDefaultsPanel now calls both through
+  // hrApi.js, so this test's own "is now called by hrApi — delete the entry" assertion fires if
+  // they come back. That assertion is what removed them.
 
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both

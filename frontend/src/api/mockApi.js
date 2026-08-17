@@ -506,6 +506,28 @@ const mockFxRates = [
   { id: 6, currency: 'USD', rateToThb: 33.6264, effectiveDate: '2026-07-10', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
 ];
 
+// V153 thickness gaps. Shaped like the real derivation (see the catalogThicknessDefaults namespace
+// for why these are seeds rather than a re-derived query): Vives ALTEA really is the biggest single
+// gap in prod, and one entry already has a default so the panel's "already set" state is drivable.
+const mockThicknessGaps = [
+  { factoryId: 8, factoryName: 'Vives',  collection: 'ALTEA',     rowsMissingThickness: 312, currentDefaultMm: null, hasSizeLevelOverride: false },
+  { factoryId: 3, factoryName: 'Padana', collection: 'UNICOLORE', rowsMissingThickness: 188, currentDefaultMm: null, hasSizeLevelOverride: true },
+  { factoryId: 7, factoryName: 'Equipe', collection: 'KENZAI',    rowsMissingThickness: 96,  currentDefaultMm: 8.5,  hasSizeLevelOverride: false },
+  { factoryId: 9, factoryName: 'Bode',   collection: 'Limestone', rowsMissingThickness: 24,  currentDefaultMm: null, hasSizeLevelOverride: false },
+];
+
+function mockThicknessGapsResponse() {
+  // Mirrors ThicknessDefaultRepository#listGaps's ORDER BY count(*) DESC — the panel is built
+  // around biggest-impact-first, so a differently-ordered mock would let a broken sort pass.
+  const gaps = [...mockThicknessGaps].sort((a, b) => b.rowsMissingThickness - a.rowsMissingThickness);
+  return {
+    gaps: structuredClone(gaps),
+    rowsStillMissingThickness: gaps
+      .filter((g) => g.currentDefaultMm == null)
+      .reduce((sum, g) => sum + g.rowsMissingThickness, 0),
+  };
+}
+
 const mockPriceCalcConfigs = [
   {
     configId: 1, version: 1, country: 'Italy',
@@ -8182,6 +8204,36 @@ export const api = {
       };
       mockPriceCalcConfigs.push(newCfg);
       return delay({ config: structuredClone(newCfg) });
+    },
+  },
+
+  // Mirrors ThicknessDefaultController + ThicknessDefaultRepository (catalog/).
+  //
+  // The real gap list is DERIVED from the catalogue: (factory, collection) pairs whose ACTIVE-version
+  // rows have a NULL thickness_mm, ordered by how many rows each would unblock. There is no
+  // catalogue in mock mode, so these are fixed seeds shaped like the real thing (Vives ALTEA is the
+  // real biggest gap) rather than a reimplementation of that query — mirroring the derivation would
+  // make any mock-driven test evidence about the mock, not the backend.
+  //
+  // Ordering IS mirrored (rowsMissingThickness DESC), because the panel's whole point is
+  // biggest-impact-first and a differently-ordered mock would let a broken sort pass.
+  catalogThicknessDefaults: {
+    async list() {
+      hasRole('ceo');
+      return delay(mockThicknessGapsResponse());
+    },
+    async save(payload) {
+      hasRole('ceo');
+      for (const entry of payload.entries ?? []) {
+        const gap = mockThicknessGaps.find(
+          (g) => g.factoryId === entry.factoryId && g.collection === entry.collection);
+        if (!gap) continue;
+        // null CLEARS rather than storing 0 — a stored zero would silently select the lowest
+        // freight band instead of refusing to price (ThicknessDefaultRepository#saveAll).
+        gap.currentDefaultMm = entry.thicknessMm == null || entry.thicknessMm === ''
+          ? null : Number(entry.thicknessMm);
+      }
+      return delay({ saved: (payload.entries ?? []).length, ...mockThicknessGapsResponse() });
     },
   },
 
