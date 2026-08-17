@@ -23,8 +23,24 @@ vi.mock('../../api/index.js', () => ({
       addFreightRate: vi.fn(),
       deleteFreightRate: vi.fn(),
     },
+    catalogThicknessDefaults: {
+      list: vi.fn(),
+      save: vi.fn(),
+    },
   },
 }));
+
+// V153 thickness gaps. Deliberately NOT in descending row order, so a panel that re-sorted or
+// re-ordered them would show ALTEA first and fail the ordering test below.
+function sampleThicknessGaps() {
+  return {
+    gaps: [
+      { factoryId: 8, factoryName: 'Vives', collection: 'ALTEA', rowsMissingThickness: 312, currentDefaultMm: null, hasSizeLevelOverride: false },
+      { factoryId: 7, factoryName: 'Equipe', collection: 'KENZAI', rowsMissingThickness: 96, currentDefaultMm: 8.5, hasSizeLevelOverride: false },
+    ],
+    rowsStillMissingThickness: 312,
+  };
+}
 
 // BRANCH 1 sample config, small enough to be readable: 1 country x 1 thickness band x 1 qty
 // band, so tests can pin exact matrix cell text without a 39-row fixture.
@@ -120,6 +136,66 @@ describe('CeoSettingsPage', () => {
     api.pricingFormulaConfig.addFreightRate.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
     api.pricingFormulaConfig.deleteFreightRate.mockResolvedValue({
       formulaConfig: { ...sampleFormulaConfig(), version: 2, freightRates: [] },
+    });
+    api.catalogThicknessDefaults.list.mockResolvedValue(sampleThicknessGaps());
+    api.catalogThicknessDefaults.save.mockResolvedValue({ saved: 1, ...sampleThicknessGaps() });
+  });
+
+  // V153 thickness defaults. These pin the two behaviours that would silently MIS-PRICE if wrong:
+  // a blank must clear rather than save 0 (a stored 0 selects the lowest freight band instead of
+  // refusing to price), and rows must stay in biggest-impact-first order.
+  describe('thickness defaults panel (V153)', () => {
+    async function findThicknessInput(name) {
+      return screen.findByLabelText(new RegExp(`ความหนา .*${name}`));
+    }
+
+    it('lists gaps biggest-impact-first and shows how many rows are still unpriceable', async () => {
+      renderCeoSettingsPage();
+
+      const altea = await screen.findByText('ALTEA');
+      const kenzai = screen.getByText('KENZAI');
+      // ALTEA (312 rows) must render before KENZAI (96) — the CEO works top-down.
+      expect(altea.compareDocumentPosition(kenzai) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByText(/เหลือ 312 รายการ/)).not.toBeNull();
+    });
+
+    it('prefills an already-set default and leaves an unset one blank', async () => {
+      renderCeoSettingsPage();
+
+      expect((await findThicknessInput('KENZAI')).value).toBe('8.5');
+      expect((await findThicknessInput('ALTEA')).value).toBe('');
+    });
+
+    it('sends a typed thickness as a number, and only the edited row', async () => {
+      renderCeoSettingsPage();
+
+      fireEvent.change(await findThicknessInput('ALTEA'), { target: { value: '9' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึก 1 รายการ/ }));
+
+      await waitFor(() => expect(api.catalogThicknessDefaults.save).toHaveBeenCalledWith({
+        entries: [{ factoryId: 8, collection: 'ALTEA', thicknessMm: 9 }],
+      }));
+    });
+
+    // The one that matters most: a stored 0 would silently pick the LOWEST freight band rather
+    // than refusing to price, so a cleared field must reach the API as null — never Number('') = 0.
+    it('sends a cleared thickness as null, never as zero', async () => {
+      renderCeoSettingsPage();
+
+      fireEvent.change(await findThicknessInput('KENZAI'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึก 1 รายการ/ }));
+
+      await waitFor(() => expect(api.catalogThicknessDefaults.save).toHaveBeenCalledWith({
+        entries: [{ factoryId: 7, collection: 'KENZAI', thicknessMm: null }],
+      }));
+    });
+
+    it('offers no save control until something is edited', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('ALTEA');
+
+      expect(screen.queryByRole('button', { name: /บันทึก \d+ รายการ/ })).toBeNull();
+      expect(api.catalogThicknessDefaults.save).not.toHaveBeenCalled();
     });
   });
 

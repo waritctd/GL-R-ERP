@@ -441,6 +441,13 @@ export const api = {
     addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
     deleteFreightRate: (freightRateId) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRate(freightRateId), { method: 'DELETE' }),
   },
+  // V153 thickness fallbacks — mirrors ThicknessDefaultController. save() sends the WHOLE edited
+  // set in one request and gets the refreshed gap list back, so the panel re-renders from server
+  // truth rather than patching local state.
+  catalogThicknessDefaults: {
+    list: () => apiRequest(API_ROUTES.catalog.thicknessDefaults),
+    save: (payload) => apiRequest(API_ROUTES.catalog.thicknessDefaults, { method: 'PUT', body: payload }),
+  },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
     upload: async (ticketId, file, attachType, quotationId) => {

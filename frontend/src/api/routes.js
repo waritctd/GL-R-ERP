@@ -173,6 +173,10 @@ export const API_ROUTES = {
     },
     pricesBase: '/api/catalog/prices',
     price: (priceId) => `/api/catalog/prices/${priceId}`,
+    // CEO-maintained thickness fallbacks (V153). Both mirror ThicknessDefaultController; PUT is a
+    // BULK save — 244 (factory, collection) pairs cover every gap, and one request per pair would
+    // make a single sitting 244 round trips.
+    thicknessDefaults: '/api/catalog/thickness-defaults',
   },
   factoryConfigs: {
     list: '/api/factory-configs',
