@@ -57,7 +57,7 @@ public class ImportRequestQueryRepository {
             SELECT t.ticket_id, t.code, t.customer_name, p.name AS project_name,
                    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''),
                             e.nickname, e.employee_code) AS rep_name,
-                   t.status, t.lifecycle,
+                   t.required_by_note, t.status, t.lifecycle,
                    (SELECT MIN(pr.received_at)::date
                       FROM sales.payment_receipt pr
                      WHERE pr.ticket_id = t.ticket_id AND pr.kind = 'DEPOSIT') AS deposit_date
@@ -73,11 +73,43 @@ public class ImportRequestQueryRepository {
                 return Optional.of(new TicketSnapshot(
                     rs.getLong("ticket_id"), rs.getString("code"), rs.getString("customer_name"),
                     rs.getString("project_name"), rs.getString("rep_name"),
-                    // Not persisted in this build — see the class Javadoc. The caller supplies it.
-                    null,
+                    // Now really persisted: V154 added sales.ticket.required_by_note, set by Sales
+                    // from ORDER_RECEIVED onward. Preview callers may still override it per request;
+                    // the STORED path snapshots this value at issue.
+                    rs.getString("required_by_note"),
                     d == null ? null : d.toLocalDate(),
                     rs.getString("status"), rs.getString("lifecycle")));
             });
+    }
+
+    /**
+     * Does {@code employeeId} own this deal? Expressed as {@code createdById}, the same way
+     * {@code TicketService.requireDealOwnership} and {@code isFulfilmentOrOwningRep} express it.
+     *
+     * <p>Used only by {@code setRequiredByNote} — the one write here that belongs to SALES rather than
+     * import, so it cannot lean on {@code IR_ROLES}.
+     */
+    public boolean isDealOwner(long ticketId, long employeeId) {
+        Boolean owns = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.ticket WHERE ticket_id = :id AND created_by = :emp)",
+            Map.of("id", ticketId, "emp", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(owns);
+    }
+
+    /**
+     * Has the deal reached ORDER_RECEIVED — the floor the owner set for Sales supplying
+     * "กำหนดวันที่ต้องการของ" ("when the order is already confirmed")?
+     *
+     * <p>Compared by POSITION in {@code DealStage.ORDER}, not by a hardcoded list of stage names, so
+     * inserting a stage (as V143 did with QUOTE_OWNER) cannot silently change which deals qualify.
+     * Fails closed on an unknown stage: {@code indexOf} returns -1, which is below the floor.
+     */
+    public boolean stageAtLeastOrderReceived(long ticketId) {
+        String stage = jdbc.queryForObject(
+            "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), String.class);
+        return th.co.glr.hr.ticket.DealStage.indexOf(stage)
+            >= th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED);
     }
 
     /**

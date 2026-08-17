@@ -68,6 +68,39 @@ final class ImportRequestFormAssembler {
             lines);
     }
 
+    /**
+     * The STORED path: prints a saved row from its OWN snapshot, not from the deal.
+     *
+     * <p>That is the whole point of storing it. Once a form is issued, editing the deal must not
+     * retroactively change what a signed controlled document says — the same discipline
+     * {@code sales.deposit_notice} applies to its customer snapshot. So nothing here reads the ticket;
+     * every value comes off the {@code sales.import_request} row.
+     *
+     * <p>"Request date" is the row's {@code issueDate}, which is null on a DRAFT — a draft preview
+     * correctly prints no date, because it has not been raised.
+     */
+    static ImportRequestFormData fromStored(ImportRequestDtos.ImportRequestDto row) {
+        return new ImportRequestFormData(
+            row.docNumber(),
+            row.brand(),
+            row.issueDate(),
+            row.projectName(),
+            row.customerName(),
+            row.requestedByName(),
+            row.requiredByNote(),
+            row.vesselEtaNote(),
+            row.checkedByName(),
+            row.checkedDate(),
+            row.approvedByName(),
+            row.approvedDate(),
+            row.issuedByName(),
+            row.depositReceivedDate(),
+            row.items().stream()
+                .map(it -> new ImportRequestFormData.Line(it.seq(), it.code(), it.size(), it.qty(),
+                                                          it.unit(), it.note()))
+                .toList());
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.strip();
     }

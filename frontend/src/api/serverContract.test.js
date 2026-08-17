@@ -254,6 +254,44 @@ const SERVER_ONLY = {
   // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
   // the leave page links; this endpoint is the server-side archive of record, not that reader.
 
+  // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
+  // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or
+  // accepting an override), revise, delete, read, and print from the stored snapshot. All gated
+  // {import, ceo} in ImportRequestService except required-by-note, which is SALES's field and carries
+  // its own gate; all proven wrong-way-round against real Postgres by
+  // StoredImportRequestIntegrationTest.
+  //
+  // Deliberately NOT wired into hrApi.js in the same change. This PR is a migration plus nine
+  // endpoints plus fourteen integration tests; bundling the UI would make it unreviewable, and the
+  // preview half of this feature shipped exactly this way (#812 backend, #816 UI) without trouble.
+  // The PREVIEW routes remain live and reachable, so the form is still obtainable meanwhile — what is
+  // missing is only the recorded, numbered version.
+  'POST /api/tickets/{}/import-requests':
+    'Raises one DRAFT per brand on the deal, skipping brands that already have a live form. The '
+    + 'entry point for the stored lifecycle.',
+  'GET /api/tickets/{}/import-requests':
+    'The deal\'s stored forms, all versions, with each one\'s printed sheet count.',
+  'GET /api/import-requests/{}':
+    'One stored form by its own id, with its items and printed sheet count — the read the edit and '
+    + 'issue screens will load before acting on a specific version.',
+  'PATCH /api/import-requests/{}':
+    'Edits a draft\'s body, or the import-owned footer of an issued form (those blocks are filled in '
+    + 'by hand AFTER issue). PATCH semantics — an absent field is left alone, never blanked.',
+  'POST /api/import-requests/{}/issue':
+    'DRAFT -> ISSUED: mints IR<yy><nnn> from sales.document_sequence, or accepts a caller override '
+    + 'without advancing the sequence, and supersedes the version it replaces.',
+  'POST /api/import-requests/{}/revise':
+    'Prepares a correction as a new DRAFT at the next version, copying the issued body. The previous '
+    + 'version stays ISSUED until the replacement issues.',
+  'DELETE /api/import-requests/{}':
+    'Deletes a DRAFT. An issued form is never deleted — it is superseded.',
+  'GET /api/import-requests/{}/file':
+    'Prints a stored form from ITS OWN snapshot, so an issued document keeps saying what it said '
+    + 'when it was signed even if the deal is later edited.',
+  'PUT /api/tickets/{}/required-by-note':
+    'Sets the deal-level "กำหนดวันที่ต้องการของ". The one route in this family that belongs to SALES '
+    + '(deal owner or CEO) rather than import, gated from DealStage.ORDER_RECEIVED onward.',
+
   // The three ใบขอซื้อ (F-SM-001) GETs were listed here between #812 and this change, as a
   // capability built backend-first whose UI had not landed. They are gone rather than re-worded:
   // DealFulfilmentPanel's IR block now calls all three through api.importRequests, so they are
