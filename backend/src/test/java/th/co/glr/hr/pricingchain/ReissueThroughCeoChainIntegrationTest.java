@@ -52,7 +52,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
@@ -108,9 +107,8 @@ import th.co.glr.hr.ticket.TicketService;
  * <p>Driven end to end through the real services against real Postgres, never hand-rolled SQL:
  * a mocked repository "passes" while the SQL does something else, and three of the four rules here
  * live in SQL (the compare-and-set supersede, the quote copy, the chain-scoped quotation retire).
- * The only mocks are the two collaborators every other test in this package already mocks —
- * {@link FactoryEmailService} (sends real email) and {@link PriceCalcService} (unrelated legacy
- * quotation math).
+ * The only mock is the collaborator every other test in this package already mocks —
+ * {@link FactoryEmailService} (sends real email).
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new}, {@code @Transactional} is inert,
@@ -170,7 +168,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             new th.co.glr.hr.pricingcosting.PricingCostingRepository(jdbc), tickets, fxRates, notifications,
             landedCosts, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
             decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);

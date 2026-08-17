@@ -32,7 +32,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -80,14 +79,14 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // Mocked exactly as DealTrackingAndActivityIntegrationTest mocks them, and for the same
-        // reason: none of the status transitions under test call PriceCalcService, and only
-        // cancel() reaches PricingRequestService.cancelOpenForTicket, whose real return value is
-        // irrelevant here but whose Mockito default (null) would NPE inside cancel().
+        // Mocked exactly as DealTrackingAndActivityIntegrationTest mocks it, and for the same
+        // reason: only cancel() reaches PricingRequestService.cancelOpenForTicket, whose real
+        // return value is irrelevant here but whose Mockito default (null) would NPE inside
+        // cancel().
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,

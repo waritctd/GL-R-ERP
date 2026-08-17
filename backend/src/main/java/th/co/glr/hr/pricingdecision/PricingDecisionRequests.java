@@ -36,12 +36,6 @@ public final class PricingDecisionRequests {
         BigDecimal minimumSellingPrice, String decisionNote,
         BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride) {}
 
-    /** {@code defaultMarginPct}, if present, is written onto the decision and reapplied to
-     * EVERY item's proposed margin (overwriting any prior per-item customization) — an explicit
-     * CEO bulk-reset action. If absent, every item's proposed selling price is simply
-     * recomputed from its current margin and the frozen cost (idempotent refresh). */
-    public record RecalculatePricingDecisionRequest(BigDecimal defaultMarginPct) {}
-
     /** No selling-price or margin field on purpose (design correction 7): approval always
      * freezes whatever proposedMarginPct each item currently holds into approvedMarginPct and
      * recomputes approvedSellingPricePerRequestedUnit server-side — the CEO edits margins via

@@ -24,7 +24,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
@@ -76,7 +75,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
         PricingRequestService pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         factoryQuotes = new FactoryQuoteRepository(jdbc);
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย การ์ด2", "sales-guard2@glr.co.th", "SALES", "แผนกขาย");

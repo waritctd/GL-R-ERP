@@ -851,7 +851,6 @@ export const api = {
     getPricingDecisionSalesView: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionSalesView(id)),
     getPricingDecision: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id)),
     updatePricingDecision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id), { method: 'PUT', body: payload }),
-    recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
     // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost

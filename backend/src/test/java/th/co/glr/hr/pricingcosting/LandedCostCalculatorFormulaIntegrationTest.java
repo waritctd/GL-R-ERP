@@ -131,8 +131,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
-        th.co.glr.hr.pricing.PriceCalcService priceCalcMock = mock(th.co.glr.hr.pricing.PriceCalcService.class);
-        TicketService ticketService = new TicketService(tickets, notifications, priceCalcMock,
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย V109", "sales-v109@glr.co.th", "SALES", "แผนกขาย");

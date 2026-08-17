@@ -246,15 +246,6 @@ public class PricingDecisionRepository {
         return total;
     }
 
-    public int updateDefaultMargin(long decisionId, BigDecimal defaultMarginPct) {
-        return jdbc.update("""
-            UPDATE sales.pricing_decision
-               SET default_margin_pct = :defaultMarginPct,
-                   updated_at = now()
-             WHERE pricing_decision_id = :id AND status = 'DRAFT'
-            """, new MapSqlParameterSource().addValue("id", decisionId).addValue("defaultMarginPct", defaultMarginPct));
-    }
-
     /**
      * {@code minimumSellingPrice} is written here unconditionally (never COALESCE'd against the
      * existing value) — the caller ({@link PricingDecisionService#approve}) has already resolved

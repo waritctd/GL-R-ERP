@@ -31,7 +31,6 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationDto;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -371,13 +370,13 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
 
     private TicketService newTicketService(TicketRepository ticketRepository,
                                            NotificationRepository notificationRepository) {
-        // PriceCalcService/PricingRequestService are mocked exactly as in
-        // StockDeclarationAuthzIntegrationTest: reserveStock calls neither. The stub exists only so
-        // a future edit routing through markLost/cancel cannot NPE on Mockito's default null.
+        // PricingRequestService is mocked exactly as in StockDeclarationAuthzIntegrationTest:
+        // reserveStock never calls it. The stub exists only so a future edit routing through
+        // markLost/cancel cannot NPE on Mockito's default null.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
-        return new TicketService(ticketRepository, notificationRepository, mock(PriceCalcService.class),
+        return new TicketService(ticketRepository, notificationRepository,
             new ObjectMapper(), new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequests);
     }
 

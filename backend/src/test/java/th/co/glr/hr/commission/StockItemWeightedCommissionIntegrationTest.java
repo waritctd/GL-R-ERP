@@ -31,7 +31,6 @@ import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
@@ -95,7 +94,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests);
         // tickets is the REAL repository (not mocked) — CommissionService's own
         // computeItemDerivedWeight needs it to read real ticket_item rows, exactly as it will in

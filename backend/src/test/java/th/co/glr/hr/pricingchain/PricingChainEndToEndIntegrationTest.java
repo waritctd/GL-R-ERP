@@ -51,7 +51,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
@@ -91,8 +90,8 @@ import th.co.glr.hr.ticket.TicketService;
 
 /**
  * Composition UAT for the ENTIRE sales pricing chain (Steps 1-4), driven end to end on a single
- * deal through the real services — no mocks except the collaborators the per-step tests
- * themselves already mock ({@link FactoryEmailService}, {@link PriceCalcService}). Every
+ * deal through the real services — no mocks except the collaborator the per-step tests
+ * themselves already mock ({@link FactoryEmailService}). Every
  * state transition below is produced by calling the real service that owns it; nothing is
  * hand-rolled via SQL to skip a step. The point of this file is NOT to re-prove any single
  * step's own business rules (unit-conversion math, idempotency, concurrency, etc. — all
@@ -180,11 +179,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
-        // PriceCalcService is unrelated legacy-quotation business logic that no step on this
-        // chain exercises (Step 4 deliberately never touches sales.ticket_item price columns) —
-        // mocked per the same precedent every per-step test already uses.
-        PriceCalcService priceCalcMock = mock(PriceCalcService.class);
-        ticketService = new TicketService(tickets, notifications, priceCalcMock,
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         quotationRepository = new CustomerQuotationRepository(jdbc);

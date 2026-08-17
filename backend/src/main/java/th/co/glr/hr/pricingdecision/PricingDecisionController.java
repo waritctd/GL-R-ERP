@@ -17,7 +17,6 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesView
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -69,16 +68,6 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("decision", decisions.update(decisionId, request, user));
-    }
-
-    @PostMapping("/pricing-decisions/{decisionId}/recalculate")
-    Map<String, PricingDecisionDto> recalculate(
-        @PathVariable long decisionId,
-        @RequestBody RecalculatePricingDecisionRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        return Map.of("decision", decisions.recalculate(decisionId, request, user));
     }
 
     @PostMapping("/pricing-decisions/{decisionId}/recalculate-cost")

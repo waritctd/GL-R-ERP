@@ -48,7 +48,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
@@ -111,9 +110,8 @@ import th.co.glr.hr.ticket.TicketService;
  * anything under test: the cutoff lives in a Java map but the cascade lives entirely in SQL
  * predicates, and a mocked repository "passes" while the {@code WHERE} clause does something else.
  * Even the terminal factory quote in the cascade test is produced the way production produces one
- * (a second {@code receive} supersedes the first), not inserted. The only mocks are the two
- * collaborators every other test in this package already mocks — {@link FactoryEmailService} (sends
- * real email) and {@link PriceCalcService} (unrelated legacy quotation math).
+ * (a second {@code receive} supersedes the first), not inserted. The only mock is the collaborator
+ * every other test in this package already mocks — {@link FactoryEmailService} (sends real email).
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new} and {@code @Transactional} is
@@ -171,7 +169,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         decisionService = new PricingDecisionService(decisions, pricingRequests,
             new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
             decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);
