@@ -389,6 +389,14 @@ export const API_ROUTES = {
     customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
     // Step 5: Customer Decision and Commercial Revisions.
     customerQuotationOutcome: (id) => `/api/customer-quotations/${id}/outcome`,
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+    // DiscountApprovalController — a distinct controller/id-space from customer-quotation ids
+    // above (a discount-approval id, not a quotation id), grouped here anyway since every other
+    // sub-resource of the quotation surface lives in this same JS namespace regardless of its
+    // actual REST path prefix (see customerQuotation vs customerQuotations just above).
+    discountApprovalsForQuotation: (quotationId) => `/api/customer-quotations/${quotationId}/discount-approvals`,
+    discountApprovalApprove: (id) => `/api/discount-approvals/${id}/approve`,
+    discountApprovalReject: (id) => `/api/discount-approvals/${id}/reject`,
     // Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationController.
     confirmOrder: (id) => `/api/pricing-requests/${id}/confirm-order`,
     depositNoticeFromQuotation: (id) => `/api/pricing-requests/${id}/deposit-notice`,

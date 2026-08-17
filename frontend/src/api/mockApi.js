@@ -946,6 +946,11 @@ let mockPricingDecisionItemSeq = 1;
 const mockCustomerQuotations = [];
 let mockCustomerQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
+// sales.quotation_item_discount_approval (V155). Starts empty every session like every other
+// array in this block; nothing in demoSales.js seeds it (a fresh table has no rows either).
+const mockDiscountApprovals = [];
+let mockDiscountApprovalSeq = 1;
 
 // Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
 // (mockPricingRequests through mockCustomerQuotations, plus mockDealActivities and
@@ -1376,6 +1381,69 @@ function mockCustomerQuotationEditAccess(id, user) {
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return quotation;
+}
+
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
+// CustomerQuotationService#raiseDiscountApprovalsIfNeeded / DiscountApprovalRepository#ensureRequested.
+// For every line currently below its CEO-approved minimum, opens (or silently reuses) a PENDING
+// request at EXACTLY that price. A repeat save at an unchanged price, or a price that reverts to
+// one already APPROVED, raises nothing new and notifies nobody again — the price-match check
+// below is what makes that idempotent, same as the real repository's EXISTS-based guard.
+function ensureMockDiscountApprovalsRaised(quotation, user) {
+  const newlyRequested = [];
+  for (const item of quotation.items) {
+    if (item.minimumSellingPricePerRequestedUnit == null) continue;
+    if (item.finalUnitPrice >= item.minimumSellingPricePerRequestedUnit) continue;
+    const covered = mockDiscountApprovals.some((a) => a.quotationItemId === item.id
+      && ((a.status === 'APPROVED' && Number(a.approvedFinalUnitPrice) === Number(item.finalUnitPrice))
+        || (a.status === 'PENDING' && Number(a.requestedFinalUnitPrice) === Number(item.finalUnitPrice))));
+    if (covered) continue;
+    const approval = {
+      id: mockDiscountApprovalSeq++,
+      quotationItemId: item.id,
+      quotationId: quotation.id,
+      pricingRequestId: quotation.pricingRequestId,
+      quotationNumber: quotation.number,
+      itemDescription: item.description,
+      status: 'PENDING',
+      requestedFinalUnitPrice: item.finalUnitPrice,
+      requestedBy: user.id,
+      requestedByName: user.name,
+      requestedAt: new Date().toISOString(),
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      approvedFinalUnitPrice: null,
+      rejectionReason: null,
+    };
+    mockDiscountApprovals.push(approval);
+    newlyRequested.push(item);
+  }
+  if (newlyRequested.length === 0) return;
+  const pr = findPricingRequestRaw(quotation.pricingRequestId);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  const itemList = newlyRequested.map((i) => i.id).join(', ');
+  const message = `ใบเสนอราคา ${quotation.number} มีส่วนลดรอการอนุมัติจาก CEO (รายการ ${itemList})`;
+  pushPricingRequestEvent(pr, user, 'DISCOUNT_APPROVAL_REQUESTED', null, null, message);
+  const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+  ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'DISCOUNT_APPROVAL_REQUESTED', message));
+}
+
+// The "current" per-line status a UI shows for one quotation — restricted to rows whose
+// requestedFinalUnitPrice equals the item's CURRENT finalUnitPrice (not simply "the latest row"),
+// mirroring DiscountApprovalRepository#findCurrentByQuotationId's own doc comment exactly: a line
+// that bounced back to an already-decided price shows THAT decision, and an abandoned PENDING ask
+// from a price the line has since moved off never shows.
+function mockCurrentDiscountApprovals(quotation) {
+  const byItem = new Map();
+  for (const item of quotation.items) {
+    const matches = mockDiscountApprovals
+      .filter((a) => a.quotationItemId === item.id
+        && Number(a.requestedFinalUnitPrice) === Number(item.finalUnitPrice))
+      .sort((a, b) => b.id - a.id);
+    if (matches.length > 0) byItem.set(item.id, matches[0]);
+  }
+  return quotation.items.map((item) => byItem.get(item.id)).filter(Boolean);
 }
 
 // Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/
@@ -9790,11 +9858,10 @@ export const api = {
         if (discount < 0) fail('ส่วนลดต้องไม่ติดลบ', 400);
         const finalUnitPrice = item.approvedUnitPrice - discount;
         if (finalUnitPrice < 0) fail('ส่วนลดต้องไม่เกินราคาที่อนุมัติ', 400);
-        // Discount Policy B (owner's decision): never below the CEO-approved minimum — hard
-        // 422, no auto-escalation.
-        if (item.minimumSellingPricePerRequestedUnit != null && finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
-          fail(`ราคาหลังหักส่วนลดของรายการ ${itemPayload.quotationItemId} ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ`, 422);
-        }
+        // Discount Policy B — Phase 2 (owner ruling 2026-08-16): a below-minimum price is NO
+        // LONGER refused here. Sales may save it; ensureMockDiscountApprovalsRaised (below) opens
+        // a CEO approval request for it, and issueCustomerQuotation's own gate is what still
+        // blocks the document.
         if (itemPayload.description != null) item.description = itemPayload.description;
         if (itemPayload.itemNotes != null) item.itemNotes = itemPayload.itemNotes;
         item.salesDiscount = discount;
@@ -9806,6 +9873,7 @@ export const api = {
       recalcMockCustomerQuotationTotals(quotation);
       pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_UPDATED',
         null, null, `แก้ไขใบเสนอราคาลูกค้า ${quotation.number}`);
+      ensureMockDiscountApprovalsRaised(quotation, user);
       return delay({ quotation });
     },
 
@@ -9830,9 +9898,16 @@ export const api = {
         if (preview.docStatus === 'ISSUED') fail('ใบเสนอราคานี้ออกไปแล้ว', 409);
         fail(`ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (${preview.docStatus})`, 409);
       }
+      // Discount-approval gate, Phase 2 (owner ruling 2026-08-16): a below-minimum line refuses
+      // only when it is ALSO not yet CEO-approved AT EXACTLY ITS CURRENT PRICE — mirrors
+      // CustomerQuotationService#issue's own discountApprovals.isApproved check.
       for (const item of preview.items) {
         if (item.minimumSellingPricePerRequestedUnit != null && item.finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
-          fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำ`, 422);
+          const approved = mockDiscountApprovals.some((a) => a.quotationItemId === item.id && a.status === 'APPROVED'
+            && Number(a.approvedFinalUnitPrice) === Number(item.finalUnitPrice));
+          if (!approved) {
+            fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำและยังไม่ได้รับอนุมัติส่วนลดจาก CEO`, 422);
+          }
         }
       }
       preview.docStatus = 'ISSUED';
@@ -9959,6 +10034,57 @@ export const api = {
         pr.status = 'QUOTATION_ACCEPTED';
       }
       return delay({ quotation });
+    },
+
+    // ── CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155) — mirrors
+    // DiscountApprovalController + DiscountApprovalService. Authorization is NOT authoritative
+    // (CLAUDE.md); verify against the real Java service.
+
+    async listDiscountApprovalsForQuotation(quotationId) {
+      // Reuses the SAME view-access check listCustomerQuotations/getCustomerQuotation use — one
+      // implementation of "who may view this quotation", mirroring DiscountApprovalService's own
+      // choice to delegate to CustomerQuotationService#get rather than a second copy.
+      const quotation = mockCustomerQuotationViewAccess(quotationId);
+      return delay({ items: mockCurrentDiscountApprovals(quotation) });
+    },
+
+    async approveDiscountApproval(id) {
+      const user = hasRole('ceo');
+      const approval = mockDiscountApprovals.find((a) => a.id === Number(id));
+      if (!approval) fail('ไม่พบคำขออนุมัติส่วนลดนี้', 404);
+      if (approval.status !== 'PENDING') fail(`คำขออนุมัติส่วนลดนี้ถูกตัดสินใจไปแล้ว (${approval.status})`, 409);
+      approval.status = 'APPROVED';
+      approval.decidedBy = user.id;
+      approval.decidedByName = user.name;
+      approval.decidedAt = new Date().toISOString();
+      // Price-binding invariant: copied from THIS row's own requestedFinalUnitPrice, never from
+      // any other input — there is no "counter-offer" concept.
+      approval.approvedFinalUnitPrice = approval.requestedFinalUnitPrice;
+      const pr = findPricingRequestRaw(approval.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const message = `CEO อนุมัติส่วนลดรายการที่ ${approval.quotationItemId} ในใบเสนอราคา ${approval.quotationNumber} ที่ราคา ${approval.approvedFinalUnitPrice}`;
+      pushPricingRequestEvent(pr, user, 'DISCOUNT_APPROVED', null, null, message);
+      addNotification(approval.requestedBy, pr.ticketId, ticket?.code, 'DISCOUNT_APPROVED', message);
+      return delay({ approval });
+    },
+
+    async rejectDiscountApproval(id, payload = {}) {
+      const user = hasRole('ceo');
+      if (!payload?.reason?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธส่วนลด', 400);
+      const approval = mockDiscountApprovals.find((a) => a.id === Number(id));
+      if (!approval) fail('ไม่พบคำขออนุมัติส่วนลดนี้', 404);
+      if (approval.status !== 'PENDING') fail(`คำขออนุมัติส่วนลดนี้ถูกตัดสินใจไปแล้ว (${approval.status})`, 409);
+      approval.status = 'REJECTED';
+      approval.decidedBy = user.id;
+      approval.decidedByName = user.name;
+      approval.decidedAt = new Date().toISOString();
+      approval.rejectionReason = payload.reason.trim();
+      const pr = findPricingRequestRaw(approval.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const message = `CEO ปฏิเสธส่วนลดรายการที่ ${approval.quotationItemId} ในใบเสนอราคา ${approval.quotationNumber}: ${approval.rejectionReason}`;
+      pushPricingRequestEvent(pr, user, 'DISCOUNT_REJECTED', null, null, message);
+      addNotification(approval.requestedBy, pr.ticketId, ticket?.code, 'DISCOUNT_REJECTED', message);
+      return delay({ approval });
     },
 
     // ── Step 6: Deposit, Payment, and Order Confirmation — mirrors

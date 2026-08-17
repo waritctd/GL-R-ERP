@@ -664,6 +664,17 @@ export function quotationStatusLabel(value) {
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }
 
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+// sales.quotation_item_discount_approval.status.
+export function discountApprovalStatusLabel(value) {
+  const map = {
+    PENDING: { label: 'รอ CEO อนุมัติส่วนลด', tone: 'warning' },
+    APPROVED: { label: 'CEO อนุมัติส่วนลดแล้ว', tone: 'success' },
+    REJECTED: { label: 'CEO ปฏิเสธส่วนลด', tone: 'danger' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
 // Payroll run status -> StatusBadge tone. Canonical source; do not
 // re-add a page-local `statusInfo`/map for payroll status elsewhere.
 export function payrollStatusLabel(status) {

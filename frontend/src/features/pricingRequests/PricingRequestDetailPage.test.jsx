@@ -64,6 +64,10 @@ vi.mock('../../api/index.js', () => ({
       downloadCustomerQuotationXlsx: vi.fn(),
       // Step 5: Customer Decision and Commercial Revisions.
       recordCustomerQuotationOutcome: vi.fn(),
+      // CEO discount-approval workflow, Phase 2 (V155).
+      listDiscountApprovalsForQuotation: vi.fn(),
+      approveDiscountApproval: vi.fn(),
+      rejectDiscountApproval: vi.fn(),
       // Step 6: Deposit, Payment, and Order Confirmation.
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
@@ -329,6 +333,29 @@ function buildCustomerQuotation(overrides = {}) {
   };
 }
 
+// CEO discount-approval workflow, Phase 2 (V155). Mirrors DiscountApprovalDtos.DiscountApprovalDto.
+function buildDiscountApproval(overrides = {}) {
+  return {
+    id: 3001,
+    quotationItemId: 9001,
+    quotationId: 5501,
+    pricingRequestId: 501,
+    quotationNumber: 'QT-2026-0001',
+    itemDescription: 'กระเบื้องพื้น SCG A1',
+    status: 'PENDING',
+    requestedFinalUnitPrice: 62,
+    requestedBy: 1,
+    requestedByName: 'พนักงานขาย',
+    requestedAt: '2026-08-17T00:00:00Z',
+    decidedBy: null,
+    decidedByName: null,
+    decidedAt: null,
+    approvedFinalUnitPrice: null,
+    rejectionReason: null,
+    ...overrides,
+  };
+}
+
 // Step 3 (CEO Selling Price Decision) fixtures. Mirrors PricingDecisionDtos.PricingDecisionDto /
 // PricingDecisionItemDto — never spread into the sales-facing view builder below, which mirrors
 // PricingDecisionSalesViewDto/PricingDecisionSalesItemDto instead (design correction 2).
@@ -414,6 +441,10 @@ function renderDetailPage({
   factoryQuotes = [],
   costings = [],
   attachments = [],
+  // CEO discount-approval workflow, Phase 2: defaults to empty like every other list query here
+  // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this
+  // feature never has to know it exists — only tests exercising it pass discountApprovals.
+  discountApprovals = [],
   showToast = vi.fn(),
   routeId = request?.summary?.id ?? 501,
 } = {}) {
@@ -427,6 +458,7 @@ function renderDetailPage({
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: factoryQuotes });
   api.pricingRequests.listCostings.mockResolvedValue({ items: costings });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: attachments });
+  api.pricingRequests.listDiscountApprovalsForQuotation.mockResolvedValue({ items: discountApprovals });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -1719,6 +1751,95 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       quotation.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+
+  // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155).
+  describe('CEO discount-approval workflow', () => {
+    it('shows Sales the pending status badge, with no approve/reject buttons', async () => {
+      const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      renderDetailPage({ user: salesOwner, request, discountApprovals: [approval] });
+      await waitForLoaded(request);
+      await screen.findByText(quotation.number);
+
+      expect(await screen.findByText('รอ CEO อนุมัติส่วนลด')).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'อนุมัติส่วนลด' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ปฏิเสธส่วนลด' })).toBeNull();
+    });
+
+    it('lets the CEO approve a pending discount request via the confirm dialog', async () => {
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      api.pricingRequests.approveDiscountApproval.mockResolvedValue({
+        approval: { ...approval, status: 'APPROVED', approvedFinalUnitPrice: 62 },
+      });
+      renderDetailPage({ user: ceoUser, discountApprovals: [approval] });
+      await waitForLoaded();
+      await screen.findByText(quotation.number);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติส่วนลด' }));
+      const dialog = await screen.findByRole('dialog', { name: 'อนุมัติส่วนลด' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติส่วนลด' }));
+
+      await waitFor(() => expect(api.pricingRequests.approveDiscountApproval).toHaveBeenCalledWith(approval.id));
+    });
+
+    it('lets the CEO reject a pending discount request only with a mandatory reason', async () => {
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      api.pricingRequests.rejectDiscountApproval.mockResolvedValue({
+        approval: { ...approval, status: 'REJECTED', rejectionReason: 'ส่วนลดสูงเกินไป' },
+      });
+      renderDetailPage({ user: ceoUser, discountApprovals: [approval] });
+      await waitForLoaded();
+      await screen.findByText(quotation.number);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'ปฏิเสธส่วนลด' }));
+      const dialog = await screen.findByRole('dialog', { name: 'ปฏิเสธส่วนลด' });
+      const confirmButton = within(dialog).getByRole('button', { name: 'ปฏิเสธส่วนลด' });
+      // Mandatory reason: the confirm button stays disabled until one is typed.
+      expect(confirmButton.disabled).toBe(true);
+
+      fireEvent.change(within(dialog).getByLabelText('เหตุผลที่ปฏิเสธส่วนลด'), { target: { value: 'ส่วนลดสูงเกินไป' } });
+      expect(confirmButton.disabled).toBe(false);
+      fireEvent.click(confirmButton);
+
+      await waitFor(() => expect(api.pricingRequests.rejectDiscountApproval).toHaveBeenCalledWith(
+        approval.id,
+        { reason: 'ส่วนลดสูงเกินไป' },
+      ));
+    });
+
+    it('shows Sales the CEO rejection reason once a discount request is rejected', async () => {
+      const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({
+        requestedFinalUnitPrice: 62,
+        status: 'REJECTED',
+        rejectionReason: 'ส่วนลดสูงเกินไปสำหรับลูกค้ารายนี้',
+        decidedBy: 4,
+        decidedByName: 'ซีอีโอ',
+        decidedAt: '2026-08-17T01:00:00Z',
+      });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      renderDetailPage({ user: salesOwner, request, discountApprovals: [approval] });
+      await waitForLoaded(request);
+      await screen.findByText(quotation.number);
+
+      expect(await screen.findByText('CEO ปฏิเสธส่วนลด')).not.toBeNull();
+      expect(screen.getByText(/ส่วนลดสูงเกินไปสำหรับลูกค้ารายนี้/)).not.toBeNull();
+      // A rejected (not pending) request never shows approve/reject buttons, even to the CEO.
+      expect(screen.queryByRole('button', { name: 'อนุมัติส่วนลด' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ปฏิเสธส่วนลด' })).toBeNull();
+    });
   });
 
   it('renders the CEO/Import view strictly read-only — no discount input, no save/issue/cancel controls — but Preview still works', async () => {

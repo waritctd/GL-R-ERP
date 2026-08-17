@@ -186,7 +186,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
 
         quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notificationRepository);
+            tickets, ticketService, customers, new QuotationRenderer(), notificationRepository, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         DepositNoticeRepository depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notificationRepository,

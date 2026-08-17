@@ -57,6 +57,23 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * handoff. Deliberately never reads or writes legacy {@code sales.ticket_item} price columns —
  * the spine of every price on a Step 4 quotation is
  * {@code pricing_decision_item.approved_selling_price_per_requested_unit}.
+ *
+ * <p><b>CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155).</b> Discount
+ * Policy B below (the class javadoc on the three below-minimum checks that used to hard-refuse
+ * every discount, since Phase 1/#805 auto-populates the minimum AS the approved price) is now an
+ * APPROVAL gate rather than an outright refusal:
+ * <ul>
+ *   <li>{@link #applyItemUpdates} and {@link #buildItem} (used by {@link #create}/{@link
+ *       #createRevision}) no longer THROW on a below-minimum price — Sales may save it.</li>
+ *   <li>{@link #issue} is the one site that still refuses — now "below minimum AND not
+ *       CEO-approved AT THIS EXACT PRICE", not merely "below minimum".</li>
+ *   <li>{@link #raiseDiscountApprovalsIfNeeded} is the shared helper all three writers call after
+ *       the item row(s) exist, to open (or silently reuse) a {@code
+ *       sales.quotation_item_discount_approval} request per line and notify the CEO once per
+ *       genuinely new ask.</li>
+ * </ul>
+ * See {@link DiscountApprovalRepository} for the price-binding mechanism and {@link
+ * DiscountApprovalService} for the CEO's own approve/reject actions.
  */
 @Service
 public class CustomerQuotationService {
@@ -79,11 +96,13 @@ public class CustomerQuotationService {
     private final CustomerRepository customers;
     private final QuotationRenderer renderer;
     private final NotificationRepository notifications;
+    private final DiscountApprovalRepository discountApprovals;
 
     public CustomerQuotationService(CustomerQuotationRepository quotations, PricingRequestRepository pricingRequests,
                                     PricingDecisionRepository decisions, TicketRepository tickets,
                                     TicketService ticketService, CustomerRepository customers,
-                                    QuotationRenderer renderer, NotificationRepository notifications) {
+                                    QuotationRenderer renderer, NotificationRepository notifications,
+                                    DiscountApprovalRepository discountApprovals) {
         this.quotations = quotations;
         this.pricingRequests = pricingRequests;
         this.decisions = decisions;
@@ -92,6 +111,7 @@ public class CustomerQuotationService {
         this.customers = customers;
         this.renderer = renderer;
         this.notifications = notifications;
+        this.discountApprovals = discountApprovals;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -141,7 +161,12 @@ public class CustomerQuotationService {
 
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED,
             "สร้างร่างใบเสนอราคาลูกค้า");
-        return requireQuotation(id);
+        CustomerQuotationDto created = requireQuotation(id);
+        // Currently inert: buildItem's only callers here and in createRevision() both pass a
+        // ZERO discount, so no line created this way is ever below minimum today. Wired anyway so
+        // the invariant holds regardless of entry point — see the class javadoc.
+        raiseDiscountApprovalsIfNeeded(summary, created, actor);
+        return created;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -195,7 +220,9 @@ public class CustomerQuotationService {
         PricingRequestSummaryDto summary = requirePricingRequest(quotation.pricingRequestId());
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_UPDATED,
             "แก้ไขใบเสนอราคาลูกค้า " + quotation.number());
-        return requireQuotation(quotationId);
+        CustomerQuotationDto fresh = requireQuotation(quotationId);
+        raiseDiscountApprovalsIfNeeded(summary, fresh, actor);
+        return fresh;
     }
 
     private void applyItemUpdates(CustomerQuotationDto quotation, List<UpdateCustomerQuotationItemRequest> requests) {
@@ -245,15 +272,12 @@ public class CustomerQuotationService {
             if (finalUnitPrice.compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่เกินราคาที่อนุมัติ");
             }
-            // Discount Policy B (controlled, owner's decision): Sales may discount down to, but
-            // never below, the CEO-approved minimum selling price. No auto-escalation in this
-            // step — a below-minimum request is a hard 422, full stop.
-            if (current.minimumSellingPricePerRequestedUnit() != null
-                    && finalUnitPrice.compareTo(current.minimumSellingPricePerRequestedUnit()) < 0) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "ราคาหลังหักส่วนลดของรายการ " + req.quotationItemId() + " ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ ("
-                        + current.minimumSellingPricePerRequestedUnit() + " " + "ต่อหน่วย)");
-            }
+            // Discount Policy B (owner's decision) — Phase 2 (2026-08-16): a below-minimum price
+            // is NO LONGER a hard refusal here. Sales may save it; raiseDiscountApprovalsIfNeeded
+            // (called by the public update() method once every item in this batch is written)
+            // opens a CEO approval request for it. issue() is the one site that still blocks the
+            // document, and only when the line is both below minimum AND not yet approved AT
+            // THIS EXACT PRICE — see that method and DiscountApprovalRepository.
             BigDecimal lineSubtotal = money2(finalUnitPrice.multiply(current.requestedQuantity()));
             BigDecimal vat = money2(lineSubtotal.multiply(VAT_RATE));
             BigDecimal lineTotal = lineSubtotal.add(vat);
@@ -299,11 +323,19 @@ public class CustomerQuotationService {
             }
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (" + quotation.docStatus() + ")");
         }
+        // Discount-approval gate, Phase 2 (owner ruling 2026-08-16): a below-minimum line no
+        // longer refuses unconditionally — it refuses only when it is ALSO not yet CEO-approved
+        // at exactly its current price. discountApprovals.isApproved is the price-binding check:
+        // an approval granted at a DIFFERENT price (e.g. before this line was edited again) does
+        // not count, so an edit after approval always lands back here. See
+        // DiscountApprovalRepository#isApproved's own doc for why that is the invariant, not
+        // merely a detail.
         for (CustomerQuotationItemDto item : quotation.items()) {
             if (item.minimumSellingPricePerRequestedUnit() != null
-                    && item.finalUnitPrice().compareTo(item.minimumSellingPricePerRequestedUnit()) < 0) {
+                    && item.finalUnitPrice().compareTo(item.minimumSellingPricePerRequestedUnit()) < 0
+                    && !discountApprovals.isApproved(item.id(), item.finalUnitPrice())) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "ไม่สามารถออกใบเสนอราคาได้ — รายการ " + item.id() + " ต่ำกว่าราคาขั้นต่ำ");
+                    "ไม่สามารถออกใบเสนอราคาได้ — รายการ " + item.id() + " ต่ำกว่าราคาขั้นต่ำและยังไม่ได้รับอนุมัติส่วนลดจาก CEO");
             }
         }
 
@@ -447,7 +479,12 @@ public class CustomerQuotationService {
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_REVISED,
             "สร้างใบเสนอราคาลูกค้า revision " + (source.quotationRevisionNo() + 1)
                 + (request.reason() != null && !request.reason().isBlank() ? " — " + request.reason().trim() : ""));
-        return requireQuotation(newId);
+        CustomerQuotationDto created = requireQuotation(newId);
+        // Currently inert here too (see create()'s identical comment) — every item on a revision
+        // is rebuilt at ZERO discount by design (the reissue-through-CEO-chain ruling above), so
+        // none can ever be below minimum. Wired for the same defense-in-depth reason.
+        raiseDiscountApprovalsIfNeeded(summary, created, actor);
+        return created;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -626,20 +663,17 @@ public class CustomerQuotationService {
         if (finalUnitPrice.compareTo(BigDecimal.ZERO) < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่เกินราคาที่อนุมัติ");
         }
-        // Discount Policy B, enforced at creation too (a client cannot pre-seed a
-        // below-minimum discount by any path — there is currently no create-time discount
-        // input, so this branch is unreachable today: buildItem's only two callers are create()
-        // and createRevision(), and BOTH now pass ZERO. It stays as defence in depth for any
-        // future caller that does supply one.
+        // Discount Policy B — Phase 2 (2026-08-16): a below-minimum price is no longer refused
+        // HERE either (see the identical change in applyItemUpdates). There is currently no
+        // create-time discount input, so this remains unreachable today: buildItem's only two
+        // callers, create() and createRevision(), both pass ZERO. Both callers run
+        // raiseDiscountApprovalsIfNeeded AFTER insertion (once the item rows — and their ids —
+        // exist), which is where a below-minimum line from any future caller would open a CEO
+        // request; nothing needs to happen in THIS method for that to work.
         //
         // NOTE for anyone editing this method: it is shared by create() and createRevision(), so
         // a change here alters FIRST-ISSUE behaviour too, not just revisions. (It is NOT shared
         // with issue(), which never calls it.)
-        if (item.minimumSellingPricePerRequestedUnit() != null
-                && finalUnitPrice.compareTo(item.minimumSellingPricePerRequestedUnit()) < 0) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ราคาหลังหักส่วนลดของรายการ " + item.pricingRequestItemId() + " ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ");
-        }
         // Unit basis (highest financial risk on this task): finalUnitPrice is per requested
         // unit, requestedQuantity is in the SAME requested-unit basis (both come straight off
         // pricing_decision_item, which is itself already normalized in Step 3) — never mixed
@@ -667,6 +701,48 @@ public class CustomerQuotationService {
 
     private BigDecimal sumOf(List<NewItem> items, java.util.function.Function<NewItem, BigDecimal> fn) {
         return items.stream().map(fn).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Discount-approval gate, Phase 2 (owner ruling 2026-08-16, V155)
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * For every line on {@code quotation} currently priced below its CEO-approved minimum,
+     * ensures a live discount-approval request exists at exactly that price ({@link
+     * DiscountApprovalRepository#ensureRequested} — idempotent per (item, exact price): a repeat
+     * save at an unchanged price, or a price that reverts to one already APPROVED, is a no-op and
+     * notifies nobody). Notifies the CEO exactly once per line for which this is a genuinely NEW
+     * ask, naming every such line in a single combined event/notification rather than one per
+     * line, so saving several discounted lines at once does not spam the CEO's inbox.
+     *
+     * <p>Called from every writer that can leave a line below minimum: {@link #applyItemUpdates}
+     * via {@link #update} (the only currently-reachable path — site "~254" in the task brief), and
+     * {@link #buildItem} via {@link #create}/{@link #createRevision} (site "~641" — currently
+     * inert, since both callers pass a ZERO discount into buildItem, but wired here too so the
+     * invariant holds regardless of entry point). Does not itself decide anything about issue() —
+     * that gate is {@link #issue}'s own {@code discountApprovals.isApproved} check, which asks the
+     * SAME question this method answers, independently, at issue time.
+     */
+    private void raiseDiscountApprovalsIfNeeded(PricingRequestSummaryDto summary, CustomerQuotationDto quotation,
+                                                UserPrincipal actor) {
+        List<CustomerQuotationItemDto> newlyRequested = new ArrayList<>();
+        for (CustomerQuotationItemDto item : quotation.items()) {
+            if (item.minimumSellingPricePerRequestedUnit() != null
+                    && item.finalUnitPrice().compareTo(item.minimumSellingPricePerRequestedUnit()) < 0
+                    && discountApprovals.ensureRequested(item.id(), item.finalUnitPrice(), actor.id())) {
+                newlyRequested.add(item);
+            }
+        }
+        if (newlyRequested.isEmpty()) {
+            return;
+        }
+        String itemList = newlyRequested.stream().map(i -> String.valueOf(i.id()))
+            .collect(java.util.stream.Collectors.joining(", "));
+        String message = "ใบเสนอราคา " + quotation.number() + " มีส่วนลดรอการอนุมัติจาก CEO (รายการ " + itemList + ")";
+        addPricingRequestEvent(summary, actor, PricingRequestEventKind.DISCOUNT_APPROVAL_REQUESTED, message);
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
+            PricingRequestEventKind.DISCOUNT_APPROVAL_REQUESTED, message);
     }
 
     private void requireRole(UserPrincipal actor, Set<String> allowed) {

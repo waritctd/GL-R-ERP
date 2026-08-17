@@ -161,6 +161,10 @@ public class NotificationRepository {
         Map.entry("CUSTOMER_QUOTATION_REJECTED", "ลูกค้าปฏิเสธใบเสนอราคา"),
         Map.entry("CUSTOMER_QUOTATION_REVISION_REQUESTED", "ลูกค้าขอแก้ไขใบเสนอราคา"),
         Map.entry("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"),
+        // CEO discount-approval workflow, Phase 2 (V155).
+        Map.entry("DISCOUNT_APPROVAL_REQUESTED", "รอ CEO อนุมัติส่วนลด"),
+        Map.entry("DISCOUNT_APPROVED", "CEO อนุมัติส่วนลดแล้ว"),
+        Map.entry("DISCOUNT_REJECTED", "CEO ปฏิเสธส่วนลด"),
         // Step 6: Deposit, Payment, and Order Confirmation.
         Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
         Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
