@@ -2078,11 +2078,17 @@ describe('TicketDetailPage', () => {
         // it would now assert a gate that intentionally does not exist. The
         // realistic case — account is offered nothing, so account sees nothing
         // — is asserted below instead.
+        // RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY left this list for the SAME reason
+        // RESERVE_STOCK did, one ruling later: stages 13-14 (ส่งมอบสินค้า) are Sales's as of
+        // 2026-08-17, TicketService.canWriteDelivery grants them to the deal owner as well as
+        // import/ceo, and actions() advertises both off that predicate. Their local `isFulfilment`
+        // check is therefore gone, so feeding account two actions the real service cannot produce
+        // for it would assert a gate that intentionally no longer exists. The realistic case —
+        // account is offered nothing, so account sees nothing — is what the assertions below check,
+        // and it is still real evidence: the panel renders those buttons purely from hasAction().
         availableActions: [
           { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
-          { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
-          { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
         ],
       });
 
@@ -2141,6 +2147,52 @@ describe('TicketDetailPage', () => {
       const section = await fulfilmentSection();
 
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
+    });
+
+    // ── Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17 ─────────────
+    //
+    // Same shape as the RESERVE_STOCK pair above, one ruling later. TicketService.canWriteDelivery
+    // is FULFILMENT_ROLES ∪ (sales ∧ deal owner) and actions() advertises
+    // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off it, so the panel's own `isFulfilment` check on
+    // those two is gone and the server's answer stands.
+    //
+    // ⚠️ RENDERING assertions over a mocked `api`: they pin that the frontend honours the server's
+    // answer, and say NOTHING about who the real service grants. That claim is
+    // DeliveryAuthzIntegrationTest's, against real Postgres — see CLAUDE.md.
+    it('shows the delivery buttons to the sales deal owner when the server advertises them', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', status: 'quotation_issued' },
+        availableActions: [
+          { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกการส่งสินค้า' },
+          { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
+        ],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByRole('button', { name: 'บันทึกการส่งสินค้า' })).not.toBeNull();
+      expect(section.getByRole('button', { name: 'ส่งมอบครบ' })).not.toBeNull();
+    });
+
+    // Wrong-way-round: dropping the local role check must not make the buttons unconditional.
+    it('hides the delivery buttons from a sales user the server did not offer them to', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
     });
 
     // ── Issue #730: a from-stock deal must not claim import milestones ────────

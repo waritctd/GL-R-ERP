@@ -1290,7 +1290,12 @@ class TicketServiceTest {
         RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))), null);
         assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
-        assertForbidden(() -> service.recordPartialDelivery(10L, over, salesActor));
+        // salesActor is id 1 and this deal's createdById is 1, so it OWNS the deal. Stages 13-14
+        // (ส่งมอบสินค้า) are Sales's as of 2026-08-17, so the owning rep gets past the gate and is
+        // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. This assertion
+        // flipping is the whole point of that change; `otherSales` below is the refusal that stays.
+        assertConflict(() -> service.recordPartialDelivery(10L, over, salesActor));
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, otherSales));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, salesManagerActor));
     }
