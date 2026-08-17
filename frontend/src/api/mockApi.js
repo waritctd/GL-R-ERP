@@ -1676,6 +1676,27 @@ function requireSession() {
   return sessionUser;
 }
 
+/**
+ * Mirrors TicketService.isFulfilmentOrOwningRep — import/CEO, or the `sales` rep who owns the deal.
+ *
+ * <p>Backs the ส่งมอบสินค้า writes (stages 13-14, owner ruling 2026-08-17). sales_manager is
+ * excluded deliberately: ROLE_PERMISSIONS records it as read+comment oversight only.
+ *
+ * <p>KNOWN DIVERGENCE, not fixed here: `reserveStock` in this file still gates on
+ * hasRole('import','ceo') although the real canDeclareStockCoverage has allowed the owning rep since
+ * PR #706. That mock is STRICTER than production, which is the safe direction (CLAUDE.md: a mock more
+ * permissive than production is the dangerous one), and it belongs to a different feature — flagged
+ * rather than widened under this branch.
+ */
+function requireFulfilmentOrOwningRep(ticket) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!['import', 'ceo'].includes(user.role) && !owns) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+  return user;
+}
+
 function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -4476,16 +4497,18 @@ export const api = {
     },
 
     async recordDelivery(id, payload) {
-      const user = hasRole('import', 'ceo');
+      // Stages 13-14 are Sales's (owner ruling 2026-08-17), additive to import/CEO — the gate is
+      // ownership-aware, so the ticket is loaded FIRST. Mirrors TicketService.canWriteDelivery.
       const ticket = findTicketRaw(Number(id));
+      const user = requireFulfilmentOrOwningRep(ticket);
       requireActive(ticket);
       recordDeliveryForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async completeDelivery(id, payload = {}) {
-      const user = hasRole('import', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      const user = requireFulfilmentOrOwningRep(ticket);
       requireActive(ticket);
       const remaining = (ticket.items ?? [])
         .map((item) => ({ itemId: item.id, qty: moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) }))

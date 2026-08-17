@@ -282,8 +282,16 @@ export function DealFulfilmentPanel({
     // here is what rots. The other six entries KEEP isFulfilment — their backend gates really are
     // FULFILMENT_ROLES-only, so dropping it there would offer buttons that 403.
     reserveStock:       hasAction('RESERVE_STOCK'),
-    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY') && isFulfilment,
-    completeDelivery:   hasAction('COMPLETE_DELIVERY') && isFulfilment,
+    // Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, additive to import/CEO.
+    // `isFulfilment` is GONE from these two for exactly the reason issue #732 records for
+    // reserveStock directly above: the backend gate is now ownership-aware
+    // (TicketService.canWriteDelivery = FULFILMENT_ROLES ∪ (sales ∧ owner)) and `actions()` advertises
+    // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off that same predicate. ANDing the server's answer
+    // with the old role set would mean the server offers the action and the frontend throws it away
+    // — the one role the change was made for could not use it, and the capability would be "live but
+    // invisible". hasAction() already carries the ownership rule, because the server computed it.
+    recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY'),
+    completeDelivery:   hasAction('COMPLETE_DELIVERY'),
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
     // above, this DOES keep a local role check alongside hasAction(), matching every other entry
     // in this object except reserveStock's own documented exception. The backend gate
