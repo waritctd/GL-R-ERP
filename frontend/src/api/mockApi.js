@@ -8065,9 +8065,15 @@ export const api = {
     },
   },
 
-  // Mirrors PriceCalcConfigController + PriceCalcService (pricing/).
+  // Mirrors PriceCalcConfigController (pricing/).
   // #388: list() mirrors PriceCalcConfigController.READ_ROLES = ceo/import — this
   // config IS the margin policy (marginPct/importDutyPct). update stays CEO-only.
+  //
+  // PriceCalcService was named here too until #817 deleted it: it resolved a factory's country
+  // from sales.factory_config, which only ever held demo rows whose names did not match
+  // price_catalog.factories ('Panaria SpA' vs 'Panaria'), so it could not price a real catalogue
+  // row. The CONFIG this namespace serves is still live and CEO-editable; only the calculator that
+  // once consumed it is gone. Landed cost now runs through PricingFormulaEngine (V152).
   priceCalcConfigs: {
     async list() {
       hasRole('ceo', 'import');
