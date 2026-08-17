@@ -134,6 +134,56 @@ export function DealFulfilmentPanel({
   // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
   const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
 
+  // ── ใบขอซื้อ (F-SM-001) ───────────────────────────────────────────────────────────────────
+  // One form per BRAND on the deal (owner ruling), generated on demand — nothing is stored, so the
+  // ReF. No. is typed here rather than minted. See ImportRequestQueryRepository's Javadoc for why
+  // the stored aggregate is a separate change.
+  const [irRef, setIrRef] = useState('');
+  const brandsQuery = useQuery({
+    queryKey: queryKeys.importRequestBrands(ticketId),
+    queryFn: () => api.importRequests.brands(ticketId).then((r) => r.brands ?? []),
+    // Import/CEO only — the same pair ImportRequestService.IR_ROLES enforces. Gating the QUERY, not
+    // just the markup, keeps a 403 out of the console for every sales viewer of this tab.
+    enabled: !!ticketId && isFulfilment,
+  });
+  const irBrands = brandsQuery.data ?? [];
+
+  // Sheet count per brand — advisory only, so failures are SWALLOWED rather than surfaced:
+  // F-SM-001 has no continuation variant, and a 2-sheet form is worth knowing about before you
+  // print. allSettled because mockApi refuses this deliberately (it will not reimplement the
+  // renderer's pagination), and a mock-mode tester should still see the brand list and the download
+  // button rather than an error where a hint belongs.
+  const irPagesQuery = useQuery({
+    queryKey: [...queryKeys.importRequestBrands(ticketId), 'pages', irBrands],
+    queryFn: async () => {
+      const results = await Promise.allSettled(
+        irBrands.map((brand) => api.importRequests.pages(ticketId, brand, null)));
+      return Object.fromEntries(irBrands.map((brand, i) => [
+        brand,
+        results[i].status === 'fulfilled' ? results[i].value?.pageCount ?? null : null,
+      ]));
+    },
+    enabled: !!ticketId && isFulfilment && irBrands.length > 0,
+  });
+  const irPages = irPagesQuery.data ?? {};
+
+  const downloadIrMutation = useMutation({
+    mutationFn: (brand) => api.importRequests.download(ticketId, brand, irRef.trim() || null, null),
+    onSuccess: (blob, brand) => {
+      // Hand the file over rather than navigating: the response is an authenticated GET, so an
+      // <a href> would issue a second unauthenticated request in some browsers.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `IR-${irRef.trim() || 'draft'}-${brand}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+    onError,
+  });
+
   const deliveriesQuery = useQuery({
     queryKey: queryKeys.ticketDeliveries(ticketId),
     queryFn: () => api.tickets.listDeliveries(ticketId).then((r) => r.items ?? []),
@@ -347,6 +397,72 @@ export function DealFulfilmentPanel({
             ) : null}
           </div>
         </div>
+
+        {/* ใบขอซื้อ (F-SM-001) — the document for step 1, not a step of its own, so no StepNumber.
+            Import/CEO only: ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for
+            sales would offer a control that 403s. */}
+        {isFulfilment ? (
+          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3"
+            data-testid="deal-fulfilment-import-request">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <strong className="text-sm">ใบขอซื้อ (F-SM-001)</strong>
+                <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
+              </div>
+              <label className="flex items-center gap-2 text-xs font-bold text-text-secondary">
+                เลขที่ (ReF. No.)
+                <input
+                  className="w-32"
+                  value={irRef}
+                  placeholder="IR69068"
+                  onChange={(event) => setIrRef(event.target.value)}
+                  data-testid="deal-fulfilment-ir-ref"
+                />
+              </label>
+            </div>
+
+            {/* กำหนดวันที่ต้องการของ is SALES's field (owner ruling) and there is nowhere to store it
+                yet — the deal-level column ships with the stored aggregate. Until then it prints
+                blank for handwriting, and this panel deliberately does NOT offer import an input
+                for it: filling in another department's field is worse than leaving it empty. */}
+            <p className="text-2xs text-text-muted">
+              หนึ่งใบต่อหนึ่งแบรนด์ · เว้นเลขที่ว่างไว้ได้ แล้วเขียนบนแบบฟอร์ม ·
+              ช่อง “กำหนดวันที่ต้องการของ” และช่องลงนามจะเว้นว่างไว้สำหรับเขียนและเซ็นด้วยมือ
+            </p>
+
+            {brandsQuery.isLoading ? (
+              <p className="text-xs text-text-muted">กำลังโหลดแบรนด์ในดีลนี้…</p>
+            ) : brandsQuery.isError ? (
+              <p className="text-xs text-danger">ไม่สามารถโหลดแบรนด์ในดีลนี้ได้</p>
+            ) : irBrands.length === 0 ? (
+              <p className="text-xs text-text-muted">
+                ยังไม่มีแบรนด์ในรายการสินค้า — ต้องระบุแบรนด์ก่อนจึงจะออกใบขอซื้อได้
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {irBrands.map((brand) => (
+                  <div key={brand}
+                    className="flex items-center justify-between gap-2 rounded border border-border-subtle px-2.5 py-1.5 text-xs">
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <strong className="min-w-0 truncate">{brand}</strong>
+                      {irPages[brand] > 1 ? (
+                        <span className="shrink-0 text-2xs text-text-muted">
+                          {irPages[brand]} แผ่น
+                        </span>
+                      ) : null}
+                    </span>
+                    <Button type="button" size="sm" variant="secondary"
+                      disabled={downloadIrMutation.isPending}
+                      onClick={() => downloadIrMutation.mutate(brand)}
+                      data-testid={`deal-fulfilment-ir-download-${brand}`}>
+                      ดาวน์โหลด PDF
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {/* Step 2: ส่งมอบสินค้า */}
         <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">

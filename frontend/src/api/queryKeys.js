@@ -98,6 +98,8 @@ export const queryKeys = {
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
+  // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.
+  importRequestBrands: (id) => ['tickets', 'import-request-brands', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   ticketActivities: (id) => ['tickets', 'activities', id],

@@ -381,6 +381,21 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
+  // Mirrors ImportRequestController. Import/CEO only, enforced in ImportRequestService — these
+  // methods carry no gate of their own and must not be read as one.
+  importRequests: {
+    brands: (ticketId) => apiRequest(API_ROUTES.importRequests.brands(ticketId)),
+    pages: (ticketId, brand, requiredBy) =>
+      apiRequest(API_ROUTES.importRequests.pages(ticketId, brand, requiredBy)),
+    // Binary, so it goes through fetch directly rather than apiRequest — same shape as
+    // tickets.downloadRemainingInvoice above, which is the other PDF this app hands over.
+    download: async (ticketId, brand, ref, requiredBy) => {
+      const res = await fetch(API_ROUTES.importRequests.file(ticketId, brand, ref, requiredBy),
+        { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+  },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
     prices: (q, factoryId, limit) => apiRequest(API_ROUTES.catalog.prices(q, factoryId, limit)),
