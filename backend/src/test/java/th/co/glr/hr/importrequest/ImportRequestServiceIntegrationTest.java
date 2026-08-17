@@ -40,7 +40,8 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
     @BeforeEach
     void wireRealCollaborators() {
         service = new ImportRequestService(new ImportRequestQueryRepository(jdbc),
-                                           new ImportRequestRenderer());
+                                           new ImportRequestRenderer(),
+                                           new ImportRequestRepository(jdbc));
 
         long employeeId = insertEmployee("IRSVC");
         importUser  = principal(employeeId, "import");
