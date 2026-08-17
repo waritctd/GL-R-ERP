@@ -126,6 +126,8 @@ export const queryKeys = {
   // Step 4: Customer Quotation Generation and Issuance.
   customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
+  // CEO discount-approval workflow, Phase 2 (V155): per-line approval status for one quotation.
+  discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
   // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the

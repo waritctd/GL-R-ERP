@@ -103,7 +103,11 @@ import th.co.glr.hr.ticket.TicketService;
  * stubs {@code PricingDecisionService} or {@code CustomerQuotationService} themselves).
  */
 class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractPostgresIntegrationTest {
-    private static final String BELOW_MINIMUM_ON_UPDATE_PREFIX = "ราคาหลังหักส่วนลดของรายการ";
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155): saving a
+    // below-minimum discount no longer throws at update() at all — see
+    // th.co.glr.hr.customerquotation.DiscountApprovalIntegrationTest for the full approval
+    // workflow. The below-minimum-at-ISSUE prefix stays in force: issue() is the one site that
+    // still refuses (now "below minimum AND unapproved", not merely "below minimum").
     private static final String BELOW_MINIMUM_ON_ISSUE = "ไม่สามารถออกใบเสนอราคาได้ — รายการ";
 
     private PricingRequestService pricingRequestService;
@@ -157,7 +161,7 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             customers, new QuotationRenderer(), pricingRequestService);
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         long salesRepId = createEmployee(employees, "พนักงานขาย ขั้นต่ำ", "sales-min-price-autopop@glr.co.th",
             "SALES", "แผนกขาย");
@@ -199,13 +203,13 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
      * refused with a 422 quoting the CEO-approved minimum.
      */
     @Test
-    void minimumSellingPrice_isNeverNull_evenWhenTheCeoNeverTypedOne_soTheFirstDiscountAttemptIs422ed() {
+    void minimumSellingPrice_isNeverNull_evenWhenTheCeoNeverTypedOne_soTheFirstDiscountNeedsCeoApprovalBeforeIssue() {
         PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
         PricingDecisionItemDto approvedItem = approved.items().get(0);
 
         // The auto-population itself, at the source: never null, always equal to the approved
-        // price (floor == price -> zero discount headroom, exactly today's "any discount refused"
-        // outcome per the task brief).
+        // price (floor == price -> zero discount headroom, exactly today's "any discount needs
+        // CEO approval" outcome per the task brief).
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit()).isNotNull();
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit())
             .isEqualByComparingTo(approvedItem.approvedSellingPricePerRequestedUnit());
@@ -215,17 +219,25 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
         CustomerQuotationItemDto item = draft.items().get(0);
         BigDecimal oneSatang = new BigDecimal("0.01");
 
-        assertThatThrownBy(() -> quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
+        // Phase 2 (2026-08-16): update() no longer throws — it saves, and opens a CEO approval
+        // request (wrong-way-round proof this file still cares about: the request exists at
+        // exactly one satang below the auto-populated minimum, the smallest possible breach).
+        CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
             null, null, null, null, null,
-            List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, oneSatang))), salesActor))
+            List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, oneSatang))), salesActor);
+        assertThat(discounted.items().get(0).salesDiscount()).isEqualByComparingTo(oneSatang);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.quotation_item_discount_approval
+             WHERE quotation_item_id = :itemId AND status = 'PENDING'
+            """, Map.of("itemId", discounted.items().get(0).id()), Long.class)).isEqualTo(1L);
+
+        // issue() is the site that still refuses this un-approved, below-minimum line.
+        assertThatThrownBy(() -> quotationService.issue(discounted.id(),
+            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).startsWith(BELOW_MINIMUM_ON_UPDATE_PREFIX);
+                assertThat(e.getMessage()).startsWith(BELOW_MINIMUM_ON_ISSUE);
             });
-
-        // Wrong-way-round: nothing was mutated by the refused attempt.
-        CustomerQuotationDto unchanged = quotationService.get(draft.id(), salesActor);
-        assertThat(unchanged.items().get(0).salesDiscount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     /** Same proof at the ISSUE gate — {@code CustomerQuotationService#issue}'s own independent
@@ -258,7 +270,7 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
      * itself equal to cost at 0 margin) — the auto-population does not depend on the price being
      * "large" or the margin being positive, only on the item having been approved at all. */
     @Test
-    void minimumSellingPrice_autoPopulated_evenAtZeroMargin_stillRefusesAnyDiscount() {
+    void minimumSellingPrice_autoPopulated_evenAtZeroMargin_stillNeedsApprovalBeforeIssue() {
         PricingDecisionDto approved = approveOneItemDecision(BigDecimal.ZERO);
         PricingDecisionItemDto approvedItem = approved.items().get(0);
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit())
@@ -268,10 +280,14 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         CustomerQuotationItemDto item = draft.items().get(0);
 
-        assertThatThrownBy(() -> quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
+        CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
             null, null, null, null, null,
             List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, new BigDecimal("0.01")))),
-            salesActor))
+            salesActor);
+        assertThat(discounted.items().get(0).salesDiscount()).isEqualByComparingTo(new BigDecimal("0.01"));
+
+        assertThatThrownBy(() -> quotationService.issue(discounted.id(),
+            new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }

@@ -246,6 +246,19 @@ export function isCustomerQuotationDiscountEditable(quotation) {
   return isCustomerQuotationEditable(quotation) && quotation?.parentQuotationId == null;
 }
 
+// ── CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+// DiscountApprovalService. ──────────────────────────────────────────────────────────────
+
+/**
+ * Mirrors DiscountApprovalService.CEO_ROLES: CEO only — explicitly NOT sales_manager. The
+ * owner's words were "must be approved by CEO"; unlike sales_manager's read-only oversight
+ * elsewhere on this chain, nothing grants it write access here. No status precondition beyond
+ * the request row itself being PENDING, which the backend enforces (a stale/decided row 409s).
+ */
+export function canDecideDiscountApproval(user) {
+  return user?.role === 'ceo';
+}
+
 // ── Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationService.recordOutcome. ──
 
 /** Mirrors CustomerQuotationService.recordOutcome's gate: sales (ticket owner) only, and only

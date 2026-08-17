@@ -181,7 +181,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customersRepo, new QuotationRenderer(), notifications);
+            tickets, ticketService, customersRepo, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,

@@ -163,7 +163,7 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
 
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         depositNoticeRepository = new DepositNoticeRepository(jdbc);
         depositNoticeService = new DepositNoticeService(depositNoticeRepository, tickets, notifications,

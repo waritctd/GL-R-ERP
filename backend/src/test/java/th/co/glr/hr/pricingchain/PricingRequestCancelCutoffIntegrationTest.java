@@ -172,7 +172,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesActor = actor(createEmployee(employees, "พนักงานขาย ยกเลิก", "sales-cancel@glr.co.th", "SALES", "แผนกขาย"), "sales");
         otherSalesActor = actor(createEmployee(employees, "พนักงานขาย อื่น", "sales-other-cancel@glr.co.th", "SALES", "แผนกขาย"), "sales");
