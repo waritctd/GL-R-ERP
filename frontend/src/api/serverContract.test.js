@@ -226,21 +226,18 @@ const SERVER_ONLY = {
     + '"ERP Documentation/" document the same call. The plaintext is shown exactly once, which is why there is no '
     + 'UI. Covered by AttendanceControllerTest. LIVE, not dead.',
 
-  // ── Deliberately dormant: the UI was built, shipped, then removed ─────────
-  // All eight ProcurementController mappings. PR #683 (ebaf6888, 2026-08-11) deleted the จัดซื้อ & นำเข้า
-  // page and every client layer together, and its commit body states the backend was kept on purpose:
-  // "left in place, dormant and with no frontend caller. Nothing is dropped". It even predicts this
-  // guard under Known risks: "a future contract-style sweep will flag them as unreachable. That is
-  // intended." 0 factory POs have ever existed in production. ProcurementService remains well covered
-  // by ProcurementServiceIntegrationTest; only the HTTP door has nobody behind it.
-  'GET /api/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'GET /api/factory-purchase-orders/{}': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/cancel': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/goods-received': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/proforma': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/shipping': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'GET /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
+  // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
+  // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
+  // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the
+  // backend "in place, dormant and with no frontend caller", and predicted this guard would flag
+  // them. Owner ruling 2026-08-18 closed that out the other way: the controller is deleted, so the
+  // eight endpoints no longer exist and need no exemption. There is nothing to re-add here — the
+  // stale-entry assertion below would fail on an entry naming an endpoint the backend does not serve.
+  //
+  // ONLY THE HTTP DOOR WENT. ProcurementService, ProcurementRepository, the DTOs and
+  // FactoryPurchaseOrderStatus all remain, still covered by ProcurementServiceIntegrationTest, and
+  // sales.factory_purchase_order is untouched — TicketRepository#purchaseOrderRollup still reads it
+  // to derive each deal's import-axis fulfilment status.
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
   // The four pricing entries that stood here (recalculate-cost, cost-override, and the two
