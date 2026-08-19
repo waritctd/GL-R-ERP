@@ -543,6 +543,7 @@ describe('TicketListPage', () => {
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(screen.queryByRole('button', { name: /พักไว้ชั่วคราว/ })).toBeNull();
       expect(screen.queryByRole('button', { name: /^เกินกำหนด/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /รอส่งมอบ/ })).toBeNull();
       expect(screen.queryByRole('button', { name: /ส่งมอบบางส่วน/ })).toBeNull();
     });
 
@@ -573,6 +574,51 @@ describe('TicketListPage', () => {
       expect(screen.getByLabelText('ตัวกรองที่ใช้')).not.toBeNull();
       expect(screen.getByText('สถานะงาน: พักไว้ชั่วคราว')).not.toBeNull();
       expect(screen.getByText('บริษัท พักไว้ จำกัด')).not.toBeNull();
+    });
+
+    // "รอส่งมอบ" (awaiting_delivery — stages 13-14 handoff to sales, owner ruling 2026-08-17): the
+    // chip's VISIBILITY-when-collapsed is covered above, but its actual filtering behaviour was
+    // never covered before this — no test clicked a FLAG chip and checked the resulting rows, for
+    // either flag. Self-contained fixture (mockResolvedValueOnce) rather than the shared 5-deal
+    // beforeEach list, so this doesn't disturb the "5 รายการ"/"กรองจาก 5" total-count assertions
+    // elsewhere in this file.
+    it('รอส่งมอบ filters to GOODS_RECEIVED/FROM_STOCK deals only — PARTIALLY_DELIVERED stays out (that is ส่งมอบบางส่วน\'s job)', async () => {
+      const goodsReceived = {
+        id: 701, code: 'PR-2026-0701', title: 'โครงการรอส่งมอบ', customerName: 'บริษัท รอส่งมอบ จำกัด',
+        status: 'quotation_issued', createdByName: 'สมชาย ใจดี', createdAt: '2026-07-10T09:00:00.000Z',
+        salesStage: 'DELIVERY_SCHEDULING', lifecycle: 'ACTIVE', lostReason: null, overdue: false,
+        fulfillmentStatus: 'GOODS_RECEIVED', stageUpdatedAt: '2026-07-10T09:00:00.000Z',
+      };
+      const fromStock = {
+        id: 702, code: 'PR-2026-0702', title: 'โครงการจากสต็อก', customerName: 'บริษัท จากสต็อก จำกัด',
+        status: 'quotation_issued', createdByName: 'สมชาย ใจดี', createdAt: '2026-07-11T09:00:00.000Z',
+        salesStage: 'DELIVERY_SCHEDULING', lifecycle: 'ACTIVE', lostReason: null, overdue: false,
+        fulfillmentStatus: 'FROM_STOCK', stageUpdatedAt: '2026-07-11T09:00:00.000Z',
+      };
+      const partiallyDelivered = {
+        id: 703, code: 'PR-2026-0703', title: 'โครงการส่งมอบบางส่วน', customerName: 'บริษัท ส่งมอบบางส่วน จำกัด',
+        status: 'quotation_issued', createdByName: 'สมชาย ใจดี', createdAt: '2026-07-12T09:00:00.000Z',
+        salesStage: 'DELIVERY_SCHEDULING', lifecycle: 'ACTIVE', lostReason: null, overdue: false,
+        fulfillmentStatus: 'PARTIALLY_DELIVERED', stageUpdatedAt: '2026-07-12T09:00:00.000Z',
+      };
+      api.tickets.list.mockResolvedValueOnce({ tickets: [goodsReceived, fromStock, partiallyDelivered] });
+
+      renderTicketListPage();
+      await screen.findByText('บริษัท รอส่งมอบ จำกัด');
+
+      fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
+      const flagChip = screen.getByRole('button', { name: /รอส่งมอบ/ });
+      expect(within(flagChip).getByText('2')).not.toBeNull();
+
+      fireEvent.click(flagChip);
+      expect(screen.getByText('บริษัท รอส่งมอบ จำกัด')).not.toBeNull();
+      expect(screen.getByText('บริษัท จากสต็อก จำกัด')).not.toBeNull();
+      expect(screen.queryByText('บริษัท ส่งมอบบางส่วน จำกัด')).toBeNull();
+
+      // Toggling the SAME chip again clears the filter (same on/off pattern the lifecycle chip
+      // test above uses) — the excluded deal reappears.
+      fireEvent.click(flagChip);
+      expect(screen.getByText('บริษัท ส่งมอบบางส่วน จำกัด')).not.toBeNull();
     });
 
     it('opens itself when a lifecycle filter arrives by deep link, so an applied filter is never hidden', async () => {

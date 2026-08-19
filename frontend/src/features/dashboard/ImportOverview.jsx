@@ -71,16 +71,27 @@ const PRICING_IN_FLIGHT_STATUSES = [
 // V77's header comment — those describe the factory PO's own sequence, not this column.
 const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING'];
 
-// The five mutually-exclusive fulfilment-stage buckets a deal can sit in
-// (pricing pickup is a 6th, computed separately since it comes from the
-// PricingRequest side, not fulfillmentStatus). Order matters: it is the
+// The four mutually-exclusive buckets a deal can sit in. They do NOT all come
+// from the same source, which is what the previous wording ("a 5th, computed
+// separately") was reaching for and got wrong in both directions: `pricing` is
+// counted off the PricingRequest side (PRICING_IN_FLIGHT_STATUSES, see
+// bucketCounts) while the other three come from fulfillmentStatus via
+// FULFILMENT_ACTION_TO_BUCKET. There is no fifth. Order matters: it is the
 // conveyor's left-to-right order and the worklist's tie-break sort.
+//
+// `delivery` (recordDelivery) used to be a fifth stage bucket here. Owner
+// ruling 2026-08-17 moved stage 13-14 (ส่งมอบสินค้า) PROMPTING to Sales — this
+// dashboard no longer counts or filters on it, though the underlying
+// capability is untouched (additive, #818; see nextImportAction's own
+// comment in importActions.js). nextFulfilmentActionCode can still return
+// 'recordDelivery'; FULFILMENT_ACTION_TO_BUCKET below simply has no entry
+// for that code any more, so bucketCounts silently skips it below rather
+// than tracking a bucket this page no longer shows.
 const STAGE_BUCKETS = [
   { key: 'pricing', label: 'ตั้งราคา', tone: 'amber' },
   { key: 'procurement', label: 'จัดซื้อ/นำเข้า', tone: 'blue' },
   { key: 'shipping', label: 'ขนส่ง', tone: 'blue' },
   { key: 'goodsReceived', label: 'รับเข้าคลัง', tone: 'teal' },
-  { key: 'delivery', label: 'ส่งมอบ', tone: 'indigo' },
 ];
 
 const FULFILMENT_ACTION_TO_BUCKET = {
@@ -88,7 +99,6 @@ const FULFILMENT_ACTION_TO_BUCKET = {
   markIrSent: 'procurement',
   markShipping: 'shipping',
   markGoodsReceived: 'goodsReceived',
-  recordDelivery: 'delivery',
 };
 
 /** Which conveyor bucket a worklist row belongs to (see nextImportAction). */
@@ -188,9 +198,12 @@ export function ImportOverview({ user, employee }) {
   // nextImportAction, not here, so both surfaces move together. This dashboard
   // stays the AT-A-GLANCE summary and deliberately grows no mutating buttons of
   // its own: duplicating the workspace is exactly what killed /procurement
-  // (ebaf6888). Division of labour: this page says what is happening (six
+  // (ebaf6888). Division of labour: this page says what is happening (five
   // buckets, both streams), /fulfilment does the next thing (four stages, one
-  // stream). ส่งมอบ rows still point at the deal — งานนำเข้า excludes delivery.
+  // stream). Delivery is no longer one of the "what is happening" buckets
+  // either (owner ruling 2026-08-17): nextImportAction now returns null for
+  // a delivery-ready deal, so it never produces a row here — Sales' own
+  // worklist (salesActions.js) is where that prompt lives now.
   const worklistRows = useMemo(() => {
     const rows = tickets
       .map((ticket) => ({ ticket, action: nextImportAction(ticket, prByTicket.get(ticket.id) ?? []) }))
@@ -209,7 +222,7 @@ export function ImportOverview({ user, employee }) {
   }, [tickets, prByTicket]);
 
   const bucketCounts = useMemo(() => {
-    const counts = { overdue: 0, pricing: 0, procurement: 0, shipping: 0, goodsReceived: 0, delivery: 0 };
+    const counts = { overdue: 0, pricing: 0, procurement: 0, shipping: 0, goodsReceived: 0 };
     counts.overdue = tickets.filter((t) => t.overdue).length;
     counts.pricing = pricingRequests.filter((pr) => PRICING_IN_FLIGHT_STATUSES.includes(pr.status)).length;
     tickets.forEach((ticket) => {
@@ -239,7 +252,7 @@ export function ImportOverview({ user, employee }) {
 
   return (
     <PageStack>
-      <PageHeader title={greeting} subtitle="ภาพรวมงานนำเข้า — จัดซื้อ ขนส่ง และส่งมอบ" />
+      <PageHeader title={greeting} subtitle="ภาพรวมงานนำเข้า — จัดซื้อและขนส่ง" />
 
       <Panel title="สถานะงานทั้งหมด" className="!p-4">
         <div className="flex flex-wrap gap-2 mobile-xs:flex-nowrap mobile-xs:overflow-x-auto mobile-xs:pb-1">

@@ -132,8 +132,26 @@ const LIFECYCLE_FILTERS = [
   { value: 'CANCELLED', label: dealLifecycleLabel('CANCELLED').label, tone: dealLifecycleLabel('CANCELLED').tone },
   { value: 'COMPLETED', label: dealLifecycleLabel('COMPLETED').label, tone: dealLifecycleLabel('COMPLETED').tone },
 ];
+// Statuses meaning "goods are in and delivery hasn't started" — deliberately a two-item SUBSET of
+// importActions.js's three-item delivery-ready list (DELIVERY_READY_FULFILMENT_STATUSES also
+// includes PARTIALLY_DELIVERED), not a reuse of that constant: PARTIALLY_DELIVERED already has its
+// own 'partial_delivery' flag below, and folding it into this one too would make the two filters
+// overlap instead of the crisp, non-overlapping pair this is meant to be. Not imported from
+// importActions.js either way — that list is module-private there, and this is a narrower,
+// page-local grouping for the list filter, not the fulfilment-chain decision itself.
+const AWAITING_DELIVERY_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK'];
 const FLAG_FILTERS = [
   { value: 'overdue', label: overdueBadgeLabel(true).label, tone: overdueBadgeLabel(true).tone },
+  {
+    value: 'awaiting_delivery',
+    // 'รอส่งมอบ' is a literal label, not fulfilmentStatusLabel(...).label — that helper labels ONE
+    // status ('สินค้าถึงโกดังแล้ว' / 'สินค้าจากสต็อก'), but this filter groups TWO statuses under one
+    // "awaiting delivery" flag, so no single call to it produces the right words. The TONE is still
+    // borrowed from it ('success', shared by both matched statuses) for consistency with how
+    // GOODS_RECEIVED/FROM_STOCK already read everywhere else on this page.
+    label: 'รอส่งมอบ',
+    tone: fulfilmentStatusLabel('GOODS_RECEIVED').tone,
+  },
   { value: 'partial_delivery', label: fulfilmentStatusLabel('PARTIALLY_DELIVERED').label, tone: fulfilmentStatusLabel('PARTIALLY_DELIVERED').tone },
 ];
 
@@ -656,6 +674,7 @@ export function TicketListPage({ user, showToast }) {
 
   const flagCounts = useMemo(() => ({
     overdue: allDeals.filter((deal) => deal.overdue).length,
+    awaiting_delivery: allDeals.filter((deal) => AWAITING_DELIVERY_STATUSES.includes(deal.fulfillmentStatus)).length,
     partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
   }), [allDeals]);
 
@@ -688,6 +707,7 @@ export function TicketListPage({ user, showToast }) {
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
       const flagOk = !flagFilter
         || (flagFilter === 'overdue' && deal.overdue)
+        || (flagFilter === 'awaiting_delivery' && AWAITING_DELIVERY_STATUSES.includes(deal.fulfillmentStatus))
         || (flagFilter === 'partial_delivery' && deal.fulfillmentStatus === 'PARTIALLY_DELIVERED');
       const inboxOk = !inboxOnly || dealInScope(user.role, deal, stageCatalog);
       const searchOk = matchesSearch(deal, searchText);
@@ -790,6 +810,7 @@ export function TicketListPage({ user, showToast }) {
         : 'ไม่มีดีลในเฟสที่เลือก';
     }
     if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
+    if (flagFilter === 'awaiting_delivery') return 'ไม่มีดีลที่รอส่งมอบ';
     if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
     if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
     if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
