@@ -1985,6 +1985,46 @@ describe('TicketDetailPage', () => {
       }
     });
 
+    // Same regression class, sales' side: RECORD_DELIVERY (stages 13-14 ส่งมอบสินค้า, owner ruling
+    // 2026-08-17) must ALSO land the sticky bar on this panel via an in-page scroll. Unlike
+    // nextImportAction/nextAccountAction, nextSalesAction never sets `.to` on the action object it
+    // returns, so the `to && to !== ... && !jumpId` branch above is never live for this key at all —
+    // this test is what proves IN_PAGE_JUMP_TARGET.record_delivery is the thing actually routing it,
+    // not an accidental fallthrough.
+    it('sales’ sticky CTA scrolls to the fulfilment panel for a delivery-ready deal it owns', async () => {
+      const scrolledIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledIds.push(this.id);
+      };
+      try {
+        // Zero pricing requests (api.pricingRequests.listForTicket keeps its beforeEach default,
+        // { items: [] }) + a non-null paymentStatus is the "priced outside the PCR chain" shape
+        // (salesActions.js bucket 1's own guard) — the same shape demoData.js tickets 13/14 already
+        // have, and the same shape salesActions.test.js / workState.test.js pin at the unit level.
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              status: 'quotation_issued', paymentStatus: 'AWAITING_FINAL_PAYMENT',
+              lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED',
+            },
+          }),
+        });
+
+        renderTicketDetailPage(salesOwnerUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+
+        const sticky = await screen.findByTestId('ticket-primary-action');
+        expect(sticky.getAttribute('data-action')).toBe('record_delivery');
+
+        fireEvent.click(sticky);
+
+        await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
     // ── ใบขอซื้อ (F-SM-001) download block ──────────────────────────────────────────────────
     describe('the ใบขอซื้อ block', () => {
       it('offers one form per brand on the deal', async () => {

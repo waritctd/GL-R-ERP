@@ -23,8 +23,11 @@ const user = { role: 'import', employeeId: 2, name: 'นำเข้า ทด�
 const employee = { nickName: 'นำเข้า' };
 
 // One ticket per fulfilment stage (issueImportRequest / markIrSent /
-// markShipping / markGoodsReceived / recordDelivery) plus a draft deal whose
-// only open item is an unpicked pricing request — covers every branch of
+// markShipping / markGoodsReceived) plus a draft deal whose only open item
+// is an unpicked pricing request, plus D-005 (GOODS_RECEIVED) proving the
+// delivery-ready stage produces NEITHER a worklist row NOR a pulse tile any
+// more (owner ruling 2026-08-17 moved that prompt to Sales — see
+// importActions.js's nextImportAction) — covers every branch of
 // nextImportAction/nextFulfilmentActionCode (importActions.js) the worklist
 // and conveyor pulse both read from.
 const TICKETS = [
@@ -86,7 +89,11 @@ describe('ImportOverview', () => {
     expect(pulseCount('จัดซื้อ/นำเข้า')).toBe('2'); // D-001 (issue) + D-002 (send)
     expect(pulseCount('ขนส่ง')).toBe('1'); // D-003 (markShipping pending)
     expect(pulseCount('รับเข้าคลัง')).toBe('1'); // D-004 (markGoodsReceived pending)
-    expect(pulseCount('ส่งมอบ')).toBe('1'); // D-005 (recordDelivery pending)
+    // Owner ruling 2026-08-17: stage 13-14 (ส่งมอบสินค้า) prompting moved to Sales — the ส่งมอบ tile
+    // is gone from this dashboard entirely (not merely re-counted to 0), and D-005 (GOODS_RECEIVED)
+    // contributes to no tile at all any more. MUTATION-CHECKED: reverting ImportOverview.jsx's
+    // STAGE_BUCKETS/FULFILMENT_ACTION_TO_BUCKET removal turns this assertion red.
+    expect(within(pulsePanel).queryByText('ส่งมอบ')).toBeNull();
   });
 
   // "กำลังขนส่ง" also renders D-003/D-004 by customer name (a separate,
@@ -103,7 +110,10 @@ describe('ImportOverview', () => {
     const panel = worklistPanel();
 
     const rows = within(panel).getAllByText(/^บริษัท /).map((el) => el.textContent);
-    expect(rows).toHaveLength(6);
+    // D-005 (GOODS_RECEIVED, "บริษัท E") no longer produces a row at all — nextImportAction now
+    // returns null for a delivery-ready deal (owner ruling 2026-08-17: that prompt is Sales' now).
+    // 5, not the former 6.
+    expect(rows).toHaveLength(5);
     // D-002 is the only overdue deal — it must lead the worklist regardless
     // of its fulfilment stage.
     expect(rows[0]).toBe('บริษัท B');
@@ -119,21 +129,24 @@ describe('ImportOverview', () => {
     expect(ctaFor('บริษัท B')).toBe('ส่งคำขอนำเข้าแล้ว');
     expect(ctaFor('บริษัท C')).toBe('บันทึกออกเดินทาง');
     expect(ctaFor('บริษัท D')).toBe('ยืนยันรับเข้าคลัง');
-    expect(ctaFor('บริษัท E')).toBe('บันทึกส่งมอบ');
     expect(ctaFor('บริษัท F')).toBe('รับงาน · ขอราคา');
+    // Wrong-way-round pin, the one that matters: D-005 must not merely be reordered or relabelled,
+    // it must be ABSENT — no row, no CTA, anywhere in this worklist panel.
+    expect(within(panel).queryByText('บริษัท E')).toBeNull();
   });
 
   it('filters the worklist when a conveyor bucket is clicked, and clears on ล้างตัวกรอง', async () => {
     renderOverview();
     await screen.findAllByText(/^บริษัท /);
 
-    expect(within(worklistPanel()).getAllByText(/^บริษัท /)).toHaveLength(6);
+    // 5, not the former 6 — D-005 (GOODS_RECEIVED) no longer produces a worklist row at all.
+    expect(within(worklistPanel()).getAllByText(/^บริษัท /)).toHaveLength(5);
 
     fireEvent.click(screen.getByText('รับเข้าคลัง').closest('button'));
     expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(1);
     expect(within(worklistPanel()).getByText('บริษัท D')).toBeTruthy();
 
     fireEvent.click(screen.getByText('ล้างตัวกรอง'));
-    expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(6);
+    expect(await within(worklistPanel()).findAllByText(/^บริษัท /)).toHaveLength(5);
   });
 });

@@ -57,14 +57,18 @@ describe('nextImportAction', () => {
     });
   });
 
-  // Wrong-way-round: delivery is OUT of งานนำเข้า's scope (moving to Sales), so
-  // its CTA must keep the deal deep link. Sending it to /fulfilment would land the
-  // user on a page with no delivery control and no row for their deal.
-  it('keeps recordDelivery on the deal page, never the fulfilment workspace', () => {
-    const ticket = { id: 9, status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' };
-    expect(nextImportAction(ticket)).toEqual({ code: 'recordDelivery', label: 'บันทึกส่งมอบ', to: '/tickets/9' });
-    expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' }).to).toBe('/tickets/9');
-    expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'PARTIALLY_DELIVERED' }).to).toBe('/tickets/9');
+  // Owner ruling 2026-08-17: stages 13-14 (ส่งมอบสินค้า) are Sales's now. This test used to pin an
+  // intermediate state — delivery out of งานนำเข้า's scope but still deep-linked from Import's own
+  // worklist CTA (a '/tickets/:id' route) — superseded by this case: nextFulfilmentActionCode
+  // (tested above) still IDENTIFIES a delivery-ready deal, but nextImportAction must no longer turn
+  // that into a worklist PROMPT for Import at all. Import keeps the write CAPABILITY (additive,
+  // #818) — DealFulfilmentPanel's own hasAction gate is untouched — it just stops being asked.
+  // salesActions.js's own RECORD_DELIVERY bucket is what now surfaces this, reusing
+  // nextFulfilmentActionCode directly rather than a second copy of the status list.
+  it('returns null for every delivery-ready fulfillmentStatus — Import is no longer prompted to record delivery', () => {
+    expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' })).toBeNull();
+    expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' })).toBeNull();
+    expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'PARTIALLY_DELIVERED' })).toBeNull();
   });
 
   it('returns null when there is nothing for Import to do', () => {

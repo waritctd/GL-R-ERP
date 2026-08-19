@@ -4692,7 +4692,14 @@ export const api = {
         if (['sales_manager', 'ceo'].includes(user.role)) {
           add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
         }
-        if (['import', 'ceo'].includes(user.role) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery -> isFulfilmentOrOwningRep
+        // (#818, stages 13-14 belong to Sales, ADDITIVE so import/ceo keep it): the advertisement
+        // and the mutation gate must come off the same predicate or the UI offers a button that
+        // instantly 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT
+        // `dealOwner`, which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales")
+        // and sales_manager is read+comment oversight only, so widening here would make the mock
+        // MORE permissive than production, the one direction CLAUDE.md calls dangerous.
+        if ((['import', 'ceo'].includes(user.role) || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
           add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
           add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
         }

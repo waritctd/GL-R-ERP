@@ -16,6 +16,16 @@
 // per-ticket `availableActions`, which list rows (api.tickets.list) don't
 // carry. This module only decides WHICH stage the deal is at, not WHO may
 // act on it right now — that permission check stays in the panel.
+//
+// nextFulfilmentActionCode (below) is now SHARED with Sales too:
+// salesActions.js's RECORD_DELIVERY bucket (stages 13-14 ส่งมอบสินค้า, owner
+// ruling 2026-08-17) imports and calls it directly rather than keeping a
+// second copy of the delivery-ready status list. nextImportAction itself
+// stays Import-only and is NOT shared — as of that same ruling it
+// deliberately returns null on a delivery-ready deal instead of a
+// recordDelivery CTA (see its own doc comment below): Import keeps the
+// write CAPABILITY (additive, #818), it just no longer gets PROMPTED by
+// this module. See that function's comment for the full reasoning.
 
 export const IMPORT_ACTION_LABELS = {
   pickupPricingRequest: 'รับงาน · ขอราคา',
@@ -63,8 +73,11 @@ export function nextFulfilmentActionCode(ticket) {
  * moves: the page would keep filtering one set while the CTA routed another.
  *
  * `recordDelivery` — the fifth code nextFulfilmentActionCode can return — is
- * deliberately absent. Delivery is being reassigned to Sales (owner ruling), so
- * the workspace excludes it and its CTA stays on the deal page.
+ * deliberately absent. Delivery is Sales's now (owner ruling 2026-08-17), so
+ * the workspace excludes it, same as nextImportAction's own worklist CTA does
+ * (see that function's doc comment below) — neither this workspace nor
+ * Import's dashboard prompts for it any more. salesActions.js is where its
+ * CTA lives now.
  */
 export const FULFILMENT_WORKSPACE_CODES = [
   'issueImportRequest', 'markIrSent', 'markShipping', 'markGoodsReceived',
@@ -89,12 +102,18 @@ export const FULFILMENT_WORKSPACE_CODES = [
  *
  *   pickupPricingRequest  -> '/pricing-requests'  (คิวขอราคา — the pickup button)
  *   the four import steps -> '/fulfilment'        (งานนำเข้า — acts in place)
- *   recordDelivery        -> '/tickets/:id'       (the deal's จัดซื้อ-ส่งมอบ tab)
  *
- * Delivery keeps the deal deep link because งานนำเข้า deliberately excludes it
- * (owner ruling: delivery is being reassigned to Sales), so the deal page really
- * is the only surface that can record one. Sending it to /fulfilment would land
- * the user on a page with no delivery control and no row for their deal.
+ * `recordDelivery` is deliberately ABSENT from that table, even though
+ * nextFulfilmentActionCode (above) still returns it for a delivery-ready
+ * deal: stages 13-14 (ส่งมอบสินค้า) are Sales's now (owner ruling
+ * 2026-08-17), so this resolver returns `null` on a delivery-ready deal
+ * instead of routing Import anywhere for it — no more prompt, not on this
+ * dashboard and not on the deal page's own sticky bar (both read this
+ * function; see workState.js). Import KEEPS the write capability (additive,
+ * #818): DealFulfilmentPanel's own `hasAction` gate is untouched and still
+ * shows the real button to import/CEO on the deal page. salesActions.js's
+ * nextSalesAction is what now calls nextFulfilmentActionCode directly to
+ * surface delivery as ITS OWN worklist CTA instead.
  */
 export function nextImportAction(ticket, pricingRequests = []) {
   const hasUnpickedRequest = pricingRequests.some((pr) => pr.status === 'SUBMITTED');
@@ -102,7 +121,11 @@ export function nextImportAction(ticket, pricingRequests = []) {
     return { code: 'pickupPricingRequest', label: IMPORT_ACTION_LABELS.pickupPricingRequest, to: '/pricing-requests' };
   }
   const code = nextFulfilmentActionCode(ticket);
-  if (!code) return null;
+  // recordDelivery is excluded here on purpose (see this function's own doc comment above) even
+  // though nextFulfilmentActionCode just returned it: delivery is Sales's worklist item now, not
+  // Import's. FULFILMENT_WORKSPACE_CODES already excludes it from the /fulfilment workspace for the
+  // same owner ruling — this is the second, worklist-CTA half of that same exclusion.
+  if (!code || code === 'recordDelivery') return null;
   const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/tickets/${ticket.id}`;
   return { code, label: IMPORT_ACTION_LABELS[code], to };
 }

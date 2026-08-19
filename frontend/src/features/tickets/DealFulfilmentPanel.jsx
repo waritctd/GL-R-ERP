@@ -477,7 +477,12 @@ export function DealFulfilmentPanel({
           <div className="flex items-center gap-2">
             <StepNumber no={2} />
             <strong className="text-sm">ส่งมอบสินค้า</strong>
-            <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
+            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17); import/ceo
+                remain because #818 was additive. Mirrors TicketService#canWriteDelivery, which is
+                what actually gates the controls below -- a rep arriving here from the new
+                RECORD_DELIVERY CTA must not find the step badged as someone else's work.
+                sales_manager is absent on purpose: read+comment oversight only. */}
+            <StepRoleTag owners={['sales', 'import', 'ceo']} viewerRole={role} />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

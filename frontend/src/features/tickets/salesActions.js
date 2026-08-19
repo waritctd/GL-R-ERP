@@ -11,7 +11,7 @@
 // (`pricingRequests`, as returned by api.pricingRequests.queue) — so this
 // never triggers a per-ticket detail fetch.
 //
-// The 5 CTA buckets below are a priority cascade, evaluated in pipeline
+// The 6 CTA buckets below are a priority cascade, evaluated in pipeline
 // order (earliest-unblocked-step wins): a deal with no live pricing request
 // normally needs "สร้างคำขอราคา" first, even if it also happens to be overdue
 // on follow-up — there is nothing to follow up ABOUT yet. Once a deal has a
@@ -21,13 +21,27 @@
 // engine) skips bucket 1 even with zero pricing requests — see bucket 1's own
 // comment below for why, and for why the guard is narrower than it first
 // looks.
+//
+// Bucket 4 (RECORD_DELIVERY — stages 13-14 ส่งมอบสินค้า handed to sales, owner
+// ruling 2026-08-17) is the newest addition and reuses importActions.js's
+// nextFulfilmentActionCode rather than keeping a second copy of the
+// delivery-ready status list — see that module's own header for the "shared
+// with sales" note. It sits AFTER bucket 1, not before: a delivery-ready deal
+// that also matches bucket 1's guard (zero pricing requests, no evidence a
+// price ever went out) still gets CREATE_PCR, because bucket 1's early
+// `return` fires first — same earliest-unblocked-step cascade principle as
+// everything else here, not a special case carved out for delivery. See
+// bucket 4's own comment below for why that interaction was checked, on
+// purpose, and left alone.
 
 import { bangkokTodayIso } from '../../utils/format.js';
+import { nextFulfilmentActionCode } from './importActions.js';
 
 export const SALES_ACTION = {
   CREATE_PCR: 'create_pcr',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
+  RECORD_DELIVERY: 'record_delivery',
   FOLLOW_UP: 'follow_up',
   LOG_ACTIVITY: 'log_activity',
 };
@@ -36,20 +50,28 @@ const ACTION_LABEL = {
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
   [SALES_ACTION.ISSUE_QUOTATION]: 'ออกใบเสนอราคา',
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
+  // Same wording IMPORT_ACTION_LABELS.recordDelivery (importActions.js) already uses for the
+  // identical real-world action. Deliberately NOT imported from there: the two labels live in two
+  // independent cascades (this module's SALES_ACTION vs. import's fulfilment codes), and this
+  // module has no other reason to depend on IMPORT_ACTION_LABELS — see nextFulfilmentActionCode's
+  // own import below for the one piece of import's module this file DOES intentionally share.
+  [SALES_ACTION.RECORD_DELIVERY]: 'บันทึกส่งมอบ',
   [SALES_ACTION.FOLLOW_UP]: 'ติดตามลูกค้า',
   [SALES_ACTION.LOG_ACTIVITY]: 'บันทึกกิจกรรม',
 };
 
-// Sort weight when two deals need DIFFERENT actions (lower = more urgent).
-// A pending confirm-order/issue-quotation is a task sitting entirely in the
-// rep's own hands with no external dependency, so it outranks a bare
-// follow-up/log-activity nudge — mirrors the cascade order above.
+// Sort weight when two deals need DIFFERENT actions (lower = more urgent). A
+// pending confirm-order/issue-quotation/record-delivery is a task sitting
+// entirely in the rep's own hands with no external dependency, so each
+// outranks a bare follow-up/log-activity nudge — mirrors the cascade order
+// above.
 const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
   [SALES_ACTION.CREATE_PCR]: 3,
-  [SALES_ACTION.FOLLOW_UP]: 4,
-  [SALES_ACTION.LOG_ACTIVITY]: 5,
+  [SALES_ACTION.RECORD_DELIVERY]: 4,
+  [SALES_ACTION.FOLLOW_UP]: 5,
+  [SALES_ACTION.LOG_ACTIVITY]: 6,
 };
 
 /**
@@ -97,7 +119,7 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 
 /**
  * The one next action `deal` needs from its owning sales rep right now, or
- * null if nothing in the 5-bucket cascade applies (e.g. the request is with
+ * null if nothing in the 6-bucket cascade applies (e.g. the request is with
  * import/CEO and the deal isn't due for a follow-up or stale).
  *
  * `pricingRequests` is the rep's OWN pricing-request queue (already scoped
@@ -168,13 +190,51 @@ export function nextSalesAction(deal, pricingRequests = []) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // 4. Follow-up due today or overdue.
+  // 4. The deal is delivery-ready (goods received / from stock / mid-
+  //    delivery) and nothing upstream of it (buckets 1-3) is still open.
+  //    Reuses nextFulfilmentActionCode (importActions.js) — the SAME
+  //    decision DealFulfilmentPanel's own `can.recordDelivery`/
+  //    `can.completeDelivery` gates and (formerly) ImportOverview's worklist
+  //    read — instead of keeping a second copy of the delivery-ready status
+  //    list here. See that module's own header comment for the "shared with
+  //    sales" note this bucket is the reason for.
+  //
+  //    Stages 13-14 (ส่งมอบสินค้า) are Sales's as of the 2026-08-17 owner
+  //    ruling, ADDITIVE to import/CEO — TicketService.canWriteDelivery =
+  //    FULFILMENT_ROLES ∪ (SALES_ROLES ∧ deal owner), not a transfer.
+  //    ImportOverview no longer PROMPTS for it (nextImportAction now returns
+  //    null on a delivery-ready deal — see that function's own comment for
+  //    why), but the underlying capability is untouched: import/CEO still
+  //    get the real button on DealFulfilmentPanel if they navigate there.
+  //
+  //    Interaction with bucket 1, checked deliberately rather than left to
+  //    accident: a delivery-ready deal that ALSO matches bucket 1's guard
+  //    (zero pricing requests AND no evidence a price ever went out — see
+  //    bucket 1's own comment above) still returns CREATE_PCR above, never
+  //    reaches here. That is correct, not a gap: the only realistic way to
+  //    reach a delivery-ready fulfillmentStatus with ZERO pricing evidence
+  //    at all is TicketService.reserveStock's FROM_STOCK auto-advance, which
+  //    bucket 1's own comment already documents as having "no pricing
+  //    precondition at all" — i.e. a deal that genuinely has never been
+  //    priced, exactly what bucket 1 exists to catch. The CREATE_PCR UAT-bug
+  //    guard was about a deal that already had price EVIDENCE and was
+  //    wrongly asked for a second pricing request, not about suppressing
+  //    CREATE_PCR on a deal that plausibly never had one. Changing bucket 1's
+  //    priority over this bucket is out of scope for this change; pinned
+  //    below (see the delivery-vs-bucket-1 case in salesActions.test.js) and
+  //    already exercised, before this bucket existed, by workState.test.js's
+  //    'still offers create_pcr after ... FROM_STOCK' case.
+  if (nextFulfilmentActionCode(deal) === 'recordDelivery') {
+    return { key: SALES_ACTION.RECORD_DELIVERY, label: ACTION_LABEL[SALES_ACTION.RECORD_DELIVERY] };
+  }
+
+  // 5. Follow-up due today or overdue.
   const followUp = followUpStatus(deal);
   if (followUp) {
     return { key: SALES_ACTION.FOLLOW_UP, label: ACTION_LABEL[SALES_ACTION.FOLLOW_UP], followUp };
   }
 
-  // 5. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is
+  // 6. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is
   //    already computed server/mock-side (mirrors TicketRepository.enrichSummary,
   //    see dealTrackingMeta.js's computeStale) and included on every
   //    api.tickets.list() row, so it is reused here rather than recomputed.
