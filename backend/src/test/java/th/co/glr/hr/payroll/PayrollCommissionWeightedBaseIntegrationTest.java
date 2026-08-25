@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,13 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     private static final BigDecimal FIRST_RECEIPT = new BigDecimal("3808589.56");
     private static final BigDecimal SECOND_RECEIPT = new BigDecimal("15107.93");
     private static final BigDecimal WEIGHTED_COMMISSION = new BigDecimal("67849.23");
+    // What payroll actually PAYS. Commission is rounded to whole baht at the payroll boundary
+    // (owner decision 2026-08-25, PayrollService#commissionWholeBaht -- the accountant's house
+    // convention, no statute behind it), so the payslip carries 67,849 where the commission
+    // module's own summary still reports 67,849.23. The two differing by up to 50 satang is the
+    // INTENDED consequence, not drift; the relationship is pinned in
+    // #payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary.
+    private static final BigDecimal WEIGHTED_COMMISSION_PAID = new BigDecimal("67849.00");
     // The bug this test guards against: summing commissionableBase unweighted (i.e. as if the
     // second receipt were never bumped to 2x) reproduces the OLD, wrong, lower figure instead.
     private static final BigDecimal UNWEIGHTED_COMMISSION = new BigDecimal("67390.34");
@@ -76,6 +84,7 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     // manual entries from the payroll figure entirely.
     private static final BigDecimal MANUAL_INCENTIVE_AMOUNT = new BigDecimal("15000.00");
     private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION = new BigDecimal("82849.23");
+    private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION_PAID = new BigDecimal("82849.00");
 
     private CommissionRepository commissions;
     private CommissionService commissionService;
@@ -142,16 +151,21 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
 
         PayrollLineDto line = previewLineFor(salesRepId);
 
-        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION);
+        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
+        // Still discriminates after rounding: the unweighted figure rounds to 67,390, not 67,849.
         assertThat(line.commissionPay()).isNotEqualByComparingTo(UNWEIGHTED_COMMISSION);
+        assertThat(line.commissionPay())
+            .isNotEqualByComparingTo(UNWEIGHTED_COMMISSION.setScale(0, RoundingMode.HALF_UP));
     }
 
     /**
-     * The two call paths must now agree: what payroll actually pays and what HR sees in the
-     * payroll-ready summary must be the identical number for the same rep/month.
+     * The two call paths must still agree to the baht: what payroll pays is exactly the whole-baht
+     * rounding of what HR sees in the payroll-ready summary, for the same rep/month. Before
+     * 2026-08-25 these were the identical number; commission rounding at the payroll boundary (2026-08-25) made
+     * payroll the rounded one, and this test now pins that as the only permitted difference.
      */
     @Test
-    void payrollCommissionPay_agreesWithPayrollReadySummary_forTheSameRepAndMonth() {
+    void payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary() {
         wireRealCollaborators();
         long salesRepId = createEmployee("เจนเนตร สรุปเพย์โรล", "jennet-summary-calcrefine@glr.co.th", "SA", "แผนกขาย");
         seedApprovedJennetScenario(salesRepId);
@@ -166,8 +180,13 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             .findFirst()
             .orElseThrow();
 
-        assertThat(line.commissionPay()).isEqualByComparingTo(repSummary.commissionAmount());
-        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION);
+        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
+        assertThat(repSummary.commissionAmount()).isEqualByComparingTo(WEIGHTED_COMMISSION);
+        // The two paths no longer produce the IDENTICAL number -- payroll rounds to whole baht and
+        // the commission module does not. Pin the RELATIONSHIP, so a future change on either side
+        // cannot widen the gap past that rounding without turning this red.
+        assertThat(line.commissionPay())
+            .isEqualByComparingTo(repSummary.commissionAmount().setScale(0, RoundingMode.HALF_UP));
     }
 
     /**
@@ -184,9 +203,11 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
         seedApprovedJennetScenario(salesRepId);
         PayrollLineDto after = previewLineFor(salesRepId);
 
-        assertThat(after.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION);
+        assertThat(after.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
+        // Gross moves by the ROUNDED commission -- the whole point of rounding at the boundary is
+        // that gross, the ป.96 limbs and net are all derived from the same single number.
         assertThat(after.grossEarnings())
-            .isEqualByComparingTo(beforeAnyCommission.grossEarnings().add(WEIGHTED_COMMISSION));
+            .isEqualByComparingTo(beforeAnyCommission.grossEarnings().add(WEIGHTED_COMMISSION_PAID));
     }
 
     /**
@@ -209,7 +230,7 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
 
         PayrollLineDto line = previewLineFor(salesRepId);
 
-        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_PLUS_MANUAL_COMMISSION);
+        assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_PLUS_MANUAL_COMMISSION_PAID);
 
         UserPrincipal hrActor = new UserPrincipal(999_004L, "hr-payroll-incentive-calcrefine@glr.co.th", "HR", "hr",
             999_004L, true, LocalDate.now(), false, null, false);
@@ -219,7 +240,9 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             .findFirst()
             .orElseThrow();
 
-        assertThat(line.commissionPay()).isEqualByComparingTo(repSummary.commissionAmount());
+        assertThat(repSummary.commissionAmount()).isEqualByComparingTo(WEIGHTED_PLUS_MANUAL_COMMISSION);
+        assertThat(line.commissionPay())
+            .isEqualByComparingTo(repSummary.commissionAmount().setScale(0, RoundingMode.HALF_UP));
         assertThat(repSummary.manualAdjustmentAmount()).isEqualByComparingTo(MANUAL_INCENTIVE_AMOUNT);
     }
 
