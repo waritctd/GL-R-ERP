@@ -263,11 +263,27 @@ lost — use the `retired-docs` skill to read any of them back out of git histor
     `validate-on-migrate` is pinned false. Adding a migration is an owner-approved operation with a
     rollback plan, never a routine merge. Note migrations QUEUE: five (V151–V155) sat on `main`
     unapplied for a day and then landed in one deploy.
-  - **A lower migration version merged after a higher one is only a problem once the higher one has
-    been APPLIED.** Out-of-order is unset (default false), so that case fails the whole migrate at
-    boot — but two unapplied migrations on `main` in any authoring order simply apply ascending.
-    Check the target's `hr.flyway_schema_history`, not `git`, and never renumber a migration that is
-    already on `main`.
+  - ⚠️ **A lower migration version merged after a higher one is SILENTLY SKIPPED on prod. It does
+    NOT fail the deploy.** This bullet used to read "out-of-order is unset (default false), so that
+    case fails the whole migrate at boot", and it was wrong in the direction that matters — a boot
+    failure would at least be *noticed*. Out-of-order is indeed unset, but `validate-on-migrate` is
+    **false** wherever the `prod` profile runs (`application-prod.yml` defaults it false and
+    `render.yaml` pins `APP_FLYWAY_VALIDATE_ON_MIGRATE: "false"` on top), so `migrate` never
+    validates and a pending version below the applied max is dropped with no error, no failed
+    deploy, and no log line anyone reads. `V67`'s own header states it: such a migration "would
+    deploy successfully and silently skip that branch's migration on merge". **Proof, not
+    inference:** `V11.1`/`V11.2` have sat unapplied below prod's max for months while every deploy
+    succeeded, most recently 2026-08-17. (Two *unapplied* migrations on `main` in any authoring
+    order do still simply apply ascending — that half was right.)
+  - **Before a backend deploy, diff the migration SET — never `max(version)`.** On 2026-08-25 prod
+    and `main` both read V155 while `V11.1`/`V11.2` were still unapplied, so the max agreed and the
+    sets did not. Use `SELECT string_agg(version, ',' ORDER BY version::numeric) FROM
+    hr.flyway_schema_history` and diff it against the repo filenames. Expect **six** versions
+    applied-but-not-in-repo: only `V11` is genuine drift (the unresolved V11-vs-V11.1/V11.2 split);
+    `V21`/`V32`/`V46`/`V91.1`/`V139` all live in `db/migration-demo`, which `render.yaml` pulls in
+    via `SPRING_FLYWAY_LOCATIONS`. Do not report those five as drift — they resolve fine. Check the
+    target's `hr.flyway_schema_history`, not `git`, and never renumber a migration that is already
+    on `main`.
   - **One thing still unreconciled:** `application-prod.yml`'s own comments describe "the real GL&R
     production deploy" and "the public gl-r-erp.onrender.com showcase" as two deployments sharing the
     `prod` profile, which does not sit cleanly with the ruling above. Do not assume either reading is
