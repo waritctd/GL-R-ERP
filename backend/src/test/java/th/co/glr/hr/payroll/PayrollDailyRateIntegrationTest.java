@@ -143,8 +143,9 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("SSO wage base must be the ฿11,250 gross (within the ฿1,650-17,500 band), not ฿450")
             .isEqualByComparingTo("11250.00");
         assertThat(reloaded.socialSecurity())
-            .as("5% of the corrected ฿11,250 base = ฿562.50, not 5% of ฿450 = ฿22.50")
-            .isEqualByComparingTo("562.50");
+            .as("SSO on the corrected ฿11,250 base is ฿562.50, rounded to ฿563 whole baht "
+                + "(มาตรา 46 วรรคท้าย) -- not the ฿22.50/฿23 the raw ฿450 day rate would give")
+            .isEqualByComparingTo("563.00");
     }
 
     /**

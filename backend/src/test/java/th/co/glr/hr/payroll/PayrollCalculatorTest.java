@@ -658,10 +658,44 @@ class PayrollCalculatorTest {
         ));
 
         // Wage (1,000) is below the 1,650 SSO minimum base, so SSO is computed on the floor:
-        // 1,650 x 5% = 82.50, not 1,000 x 5% = 50.00.
+        // 1,650 x 5% = 82.50, not 1,000 x 5% = 50.00. เงินสมทบ is then rounded to whole baht
+        // (มาตรา 46 วรรคท้าย), so 82.50 -> 83 -- the same figure SsoExporter has always filed.
         assertThat(result.ssoWageBase()).isEqualByComparingTo(new BigDecimal("1650.00"));
-        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("82.50"));
-        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("917.50"));
+        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("83.00"));
+        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("917.00"));
+    }
+
+    /**
+     * The real case that drove the change (พัฒวุฒิ, July 2026, prod period 1): a ฿11,250 wage puts
+     * 5% exactly on a half-satang boundary. เงินสมทบ is rounded to whole baht by
+     * มาตรา 46 วรรคท้าย, so the employee is deducted ฿563 and nets ฿10,687.00 -- the figure the
+     * accountant's workbook and {@code SsoExporter}'s สปส.1-10 filing both already carried, while
+     * the engine alone was storing ฿562.50 and netting ฿10,687.50.
+     *
+     * <p>HALF_UP, not ceiling: the two are indistinguishable on a .50 case like this one, so
+     * {@link #leaveDeductionRefundAddsBackPreTaxIncomeAndRecomputesSso} carries the discriminating
+     * case (533.3335 -> 533, which a ceiling would round to 534).
+     */
+    @Test
+    void ssoContributionRoundsToWholeBahtOnAHalfSatangWage() {
+        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
+            new BigDecimal("11250.00"),
+            List.of(),
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            BigDecimal.ZERO,
+            PayrollTaxAllowanceInput.empty(),
+            PayrollYearToDate.empty(),
+            12
+        ));
+
+        assertThat(result.ssoWageBase()).isEqualByComparingTo(new BigDecimal("11250.00"));
+        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("563.00"));
+        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("10687.00"));
     }
 
     @Test
@@ -1162,13 +1196,14 @@ class PayrollCalculatorTest {
         assertThat(withRefund.leaveDeductionRefund()).isEqualByComparingTo("666.67");
         assertThat(withRefund.grossTaxableIncome()).isEqualByComparingTo("10666.67");
         assertThat(withRefund.ssoWageBase()).isEqualByComparingTo("10666.67");
-        assertThat(withRefund.socialSecurity()).isEqualByComparingTo("533.33");
-        assertThat(withRefund.netPay()).isEqualByComparingTo("10133.34");
+        assertThat(withRefund.socialSecurity()).isEqualByComparingTo("533.00");
+        assertThat(withRefund.netPay()).isEqualByComparingTo("10133.67");
         // Net pay rises by LESS than the raw 666.67 refund, because SSO also grew on the restored
-        // income (500.00 -> 533.33, i.e. 33.33 more) -- proof the refund is genuinely taxed/SSO'd
-        // like real income, not just handed back flat.
+        // income (500.00 -> 533.00, i.e. 33.00 more -- 10,666.67 x 5% = 533.3335, rounded to whole
+        // baht per มาตรา 46 วรรคท้าย) -- proof the refund is genuinely taxed/SSO'd like real income,
+        // not just handed back flat.
         assertThat(withRefund.netPay().subtract(withoutRefund.netPay()))
-            .isEqualByComparingTo(new BigDecimal("633.34"));
+            .isEqualByComparingTo(new BigDecimal("633.67"));
     }
 
     /**
