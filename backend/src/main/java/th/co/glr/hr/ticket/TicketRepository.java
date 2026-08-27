@@ -261,9 +261,11 @@ public class TicketRepository {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
-                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note, entry_channel)
+                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
+                 next_follow_up_at)
             VALUES
-                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel)
+                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
+                 :nextFollowUpAt)
             """,
             new MapSqlParameterSource()
                 .addValue("code", code)
@@ -276,6 +278,9 @@ public class TicketRepository {
                 .addValue("projectId", request.projectId())
                 .addValue("contactId", request.contactId())
                 .addValue("note", request.note())
+                // Null stays legal (a draft may genuinely not have a date yet); it simply leaves
+                // the deal un-advanceable until one is set, which is the pre-existing behaviour.
+                .addValue("nextFollowUpAt", request.nextFollowUpAt())
                 // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
                 // Defaulting to a real route made every unattended row assert one, so a deliberate
                 // DESIGNER_LED was indistinguishable from silence — see EntryChannel's Javadoc and

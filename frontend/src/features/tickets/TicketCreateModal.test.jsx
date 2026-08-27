@@ -276,6 +276,10 @@ describe('TicketCreateModal validation', () => {
       note: null,
       entryChannel: 'DESIGNER_LED',
       priority: 'NORMAL',
+      // Defaulted to +14 days at mount, so the value moves with the clock — the shape is what this
+      // test pins. It is REQUIRED in the payload: without a next_follow_up_at the stage-advance
+      // readiness gate refuses every forward move, which is what made a UI-created deal unmovable.
+      nextFollowUpAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       items: [{
         brand: 'SCG',
         model: 'Stone',

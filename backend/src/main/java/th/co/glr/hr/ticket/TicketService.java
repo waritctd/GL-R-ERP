@@ -1,6 +1,7 @@
 package th.co.glr.hr.ticket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDate;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -207,6 +208,14 @@ public class TicketService {
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
+        // The readiness gate has TWO halves — next_follow_up_at (collected on the request now) and
+        // "at least one activity since the last stage change". A brand-new deal satisfied neither,
+        // so the rep's first forward move always 400'd and the message was the first they heard of
+        // it. Creating the deal IS the first recorded piece of work on it, so it is logged as one:
+        // OTHER rather than CALL/MEETING because nothing was claimed to have happened yet, only
+        // that the deal now exists. This does not weaken the gate — after the first stage change,
+        // a NEW activity is still required, exactly as before.
+        tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างดีล", actor.id());
         // A newly created deal is always the rep's private draft, whether or not
         // products were attached — import/CEO are notified only once a
         // PricingRequest is created and submitted against this ticket, never at

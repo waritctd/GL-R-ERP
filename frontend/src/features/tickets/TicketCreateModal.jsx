@@ -479,6 +479,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // tell that apart from a deliberate choice — so no backend default could rescue it. A restored
   // draft still pre-fills, because editing a draft is not the same as creating fresh.
   const [entryChannel, setEntryChannel] = useState(initialDraft?.entryChannel ?? null);
+  // Defaulted, not left blank, and this matters: the stage-advance readiness gate refuses EVERY
+  // forward move while next_follow_up_at is null, so a deal created without one could not be
+  // advanced at all — the rep met that refusal on their first action. A sensible default makes a
+  // new deal immediately workable, and the field below lets them change it.
+  // Lazy initialiser: reading the clock during render is impure (react-hooks/purity), and a
+  // default date only has to be computed once per mount anyway.
+  const [nextFollowUpAt, setNextFollowUpAt] = useState(
+    () => initialDraft?.nextFollowUpAt ?? new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10)
+  );
   // V50: a deal may start with NO items (lightweight lead-stage draft) — the
   // price-request flow begins later once items are added and submitted.
   const [items, setItems] = useState(() => (
@@ -839,7 +848,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   function handleSaveDraft() {
     saveDraft({
-      dealTitle, note: form.note, priority, entryChannel,
+      dealTitle, note: form.note, priority, entryChannel, nextFollowUpAt,
       customer: selectedCustomer, project: selectedProject, contact: selectedContact,
       items,
     });
@@ -876,6 +885,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         note: form.note.trim() || null,
         entryChannel,
         priority,
+        nextFollowUpAt: nextFollowUpAt || null,
         items: items.map((item) => ({
           brand: item.brand.trim(),
           model: item.model.trim(),
@@ -1619,6 +1629,18 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             })}
           </div>
         </div>
+
+        <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+          วันติดตามครั้งถัดไป <span className="font-semibold text-text-muted">(ตั้งไว้ล่วงหน้า 14 วัน — แก้ไขได้)</span>
+          <input
+            type="date"
+            value={nextFollowUpAt}
+            onChange={(e) => setNextFollowUpAt(e.target.value)}
+          />
+          <span className="text-xs font-semibold text-text-muted">
+            ต้องมีวันติดตาม ดีลจึงจะเลื่อนขั้นตอนได้
+          </span>
+        </label>
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           หมายเหตุ
