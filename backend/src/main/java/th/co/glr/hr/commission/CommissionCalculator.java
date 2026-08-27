@@ -209,6 +209,15 @@ public class CommissionCalculator {
      * {@code *3} that was actually sourced against an import request: not credited, because the
      * stock-sourced share of that line was zero.
      *
+     * <p><b>Validation status:</b> the multi-item, value-weighted blend above is unvalidated
+     * against real reconciled data. The owner's real commission workbook contains no multi-item
+     * weighted deal -- every weighted row in it has exactly one item, where per-item and
+     * record-level weighting are identical by construction, so only the single-item case is
+     * workbook-verified. {@code CommissionCalculatorTest}'s multi-item {@code itemDerivedWeight_*}
+     * tests are characterisation tests: they pin this method's current behaviour on synthetic
+     * multi-item deals so a future silent change to the allocation fails loudly -- they are not
+     * proof the allocation itself is correct.
+     *
      * <p><b>Algebraic simplification (division-free per item, exact until the single final
      * division).</b> Substituting {@code itemValue_i = qty_i * price_i} into {@code itemValue_i *
      * effectiveWeight_i} and cancelling {@code qty_i} gives, for {@code qty_i != 0}:

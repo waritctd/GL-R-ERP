@@ -70,8 +70,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class),
-            new CeoApproverRepository(jdbc));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
         managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย สรุปเดือน", "sm-monthlysummary@glr.co.th", "SA", "แผนกขาย");
         managerActor = principal(managerEmployeeId, "sales_manager");
         ceoEmployeeId = createEmployee("ผู้บริหาร สรุปเดือน", "ceo-monthlysummary@glr.co.th", "MD", "ผู้บริหาร");

@@ -106,21 +106,21 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
             mvc.perform(post("/api/pricing-formula-config/freight-rates")
                     .session(sessionFor(role))
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(newRowBody("Turkey", 3, 8, 1, 101, 70000)))
+                    .content(newRowBody("TR", 3, 8, 1, 101, 70000)))
                 .andExpect(status().isForbidden());
 
             // The 403 is worthless if the row landed anyway: no new version, no new row, and
             // Turkey must not exist anywhere in the table (not merely in the current version).
             assertThat(currentConfig().version()).as("version after %s attempted a write", role).isEqualTo(1);
             assertThat(totalFreightRowCount()).as("row count after %s attempted a write", role).isEqualTo(seededRowCount);
-            assertThat(countryRowCountAcrossAllVersions("Turkey")).as("Turkey rows after %s", role).isZero();
+            assertThat(countryRowCountAcrossAllVersions("TR")).as("Turkey rows after %s", role).isZero();
         }
     }
 
     @Test
     void nonCeoRolesCannotDeleteAFreightRowAndTheRowSurvives() throws Exception {
         int seededRowCount = totalFreightRowCount();
-        long targetId = topQuantityBandOf("Italy", "12", "17").freightRateId();
+        long targetId = topQuantityBandOf("IT", "12", "17").freightRateId();
 
         for (String role : DENIED_ROLES) {
             mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", targetId)
@@ -137,17 +137,17 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     @Test
     void anonymousCallerIsRejectedOnBothWriteEndpoints() throws Exception {
-        long targetId = topQuantityBandOf("Italy", "12", "17").freightRateId();
+        long targetId = topQuantityBandOf("IT", "12", "17").freightRateId();
 
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Turkey", 3, 8, 1, 101, 70000)))
+                .content(newRowBody("TR", 3, 8, 1, 101, 70000)))
             .andExpect(status().isUnauthorized());
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", targetId))
             .andExpect(status().isUnauthorized());
 
         assertThat(currentConfig().version()).isEqualTo(1);
-        assertThat(countryRowCountAcrossAllVersions("Turkey")).isZero();
+        assertThat(countryRowCountAcrossAllVersions("TR")).isZero();
     }
 
     // ============================================================================================
@@ -165,22 +165,22 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
     void ceoCanFillADeliberatelyBlankCellAndTheOrderBecomesPriceable() throws Exception {
         BigDecimal thickness = new BigDecimal("14");
         BigDecimal qty = new BigDecimal("900");
-        assertThat(matchingBands(currentConfig(), "Italy", thickness, qty))
+        assertThat(matchingBands(currentConfig(), "IT", thickness, qty))
             .as("the blank cell really is blank before the fix")
             .isZero();
 
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Italy", 12, 17, 801, null, 110000)))
+                .content(newRowBody("IT", 12, 17, 801, null, 110000)))
             .andExpect(status().isOk());
 
         PricingFormulaConfigDto after = currentConfig();
         assertThat(after.version()).isEqualTo(2);
         assertThat(after.freightRates()).hasSize(40);
-        assertThat(matchingBands(after, "Italy", thickness, qty)).isEqualTo(1);
+        assertThat(matchingBands(after, "IT", thickness, qty)).isEqualTo(1);
         assertThat(after.freightRates().stream()
-            .filter(rate -> "Italy".equals(rate.originCountry()))
+            .filter(rate -> "IT".equals(rate.originCountryCode()))
             .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal("801")) == 0)
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
             .findFirst().orElseThrow().amountThb()).isEqualByComparingTo("110000");
@@ -195,17 +195,17 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Turkey", 3, 8, 1, null, 45000)))
+                .content(newRowBody("TR", 3, 8, 1, null, 45000)))
             .andExpect(status().isOk());
 
         PricingFormulaConfigDto after = currentConfig();
         assertThat(after.version()).isEqualTo(2);
-        assertThat(matchingBands(after, "Turkey", new BigDecimal("5.5"), new BigDecimal("250.25"))).isEqualTo(1);
+        assertThat(matchingBands(after, "TR", new BigDecimal("5.5"), new BigDecimal("250.25"))).isEqualTo(1);
     }
 
     @Test
     void ceoCanDeleteAnEdgeBandAndThePreviousVersionIsRetained() throws Exception {
-        PricingFreightRateDto target = topQuantityBandOf("Italy", "12", "17");
+        PricingFreightRateDto target = topQuantityBandOf("IT", "12", "17");
 
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", target.freightRateId())
                 .session(sessionFor("ceo")))
@@ -215,12 +215,12 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(after.version()).isEqualTo(2);
         assertThat(after.freightRates()).hasSize(38);
         assertThat(after.freightRates())
-            .noneMatch(rate -> "Italy".equals(rate.originCountry())
+            .noneMatch(rate -> "IT".equals(rate.originCountryCode())
                 && rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0
                 && rate.qtyMinSqm().compareTo(target.qtyMinSqm()) == 0);
         // Trimming the top of a ladder is allowed, and the row below it still covers its own range
         // exactly once -- the delete narrowed coverage without disturbing what remains.
-        assertThat(matchingBands(after, "Italy", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
+        assertThat(matchingBands(after, "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
         assertThat(freightRowCountForVersion(1)).isEqualTo(39);
     }
 
@@ -234,7 +234,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Italy", 12, 17, 700, 900, 95000)))
+                .content(newRowBody("IT", 12, 17, 700, 900, 95000)))
             .andExpect(status().isBadRequest());
 
         assertThat(currentConfig().version()).isEqualTo(1);
@@ -247,7 +247,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Italy", 5, 10, 1, 101, 85000)))
+                .content(newRowBody("IT", 5, 10, 1, 101, 85000)))
             .andExpect(status().isBadRequest());
 
         assertThat(currentConfig().version()).isEqualTo(1);
@@ -258,7 +258,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Turkey", 12, 12, 1, 101, 70000)))
+                .content(newRowBody("TR", 12, 12, 1, 101, 70000)))
             .andExpect(status().isBadRequest());
 
         assertThat(currentConfig().version()).isEqualTo(1);
@@ -272,7 +272,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
     @Test
     void ceoCannotDeleteAMiddleQuantityBand() throws Exception {
         PricingFreightRateDto middle = currentConfig().freightRates().stream()
-            .filter(rate -> "Italy".equals(rate.originCountry()))
+            .filter(rate -> "IT".equals(rate.originCountryCode()))
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal("12")) == 0)
             .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal("101")) == 0)
             .findFirst().orElseThrow();
@@ -284,7 +284,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         assertThat(currentConfig().version()).isEqualTo(1);
         assertThat(currentConfig().freightRates()).anyMatch(rate -> rate.freightRateId() == middle.freightRateId());
         // Still exactly one band for a 300 sqm / 14 mm Italian order -- the hole was never opened.
-        assertThat(matchingBands(currentConfig(), "Italy", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
+        assertThat(matchingBands(currentConfig(), "IT", new BigDecimal("14"), new BigDecimal("300"))).isEqualTo(1);
     }
 
     /**
@@ -294,11 +294,11 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
      */
     @Test
     void ceoCannotEmptyAMiddleThicknessBand() throws Exception {
-        deleteAsCeoExpectingOk(quantityBandOf("Italy", "8", "12", "801").freightRateId());
-        deleteAsCeoExpectingOk(quantityBandOf("Italy", "8", "12", "451").freightRateId());
-        deleteAsCeoExpectingOk(quantityBandOf("Italy", "8", "12", "101").freightRateId());
+        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "801").freightRateId());
+        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "451").freightRateId());
+        deleteAsCeoExpectingOk(quantityBandOf("IT", "8", "12", "101").freightRateId());
 
-        PricingFreightRateDto last = quantityBandOf("Italy", "8", "12", "1");
+        PricingFreightRateDto last = quantityBandOf("IT", "8", "12", "1");
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", last.freightRateId())
                 .session(sessionFor("ceo")))
             .andExpect(status().isBadRequest());
@@ -309,7 +309,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
     /** A row id from a superseded version is a 404 -- old generations stay immutable audit records. */
     @Test
     void deletingARowIdFromASupersededVersionIsNotFound() throws Exception {
-        long staleId = topQuantityBandOf("Italy", "12", "17").freightRateId();
+        long staleId = topQuantityBandOf("IT", "12", "17").freightRateId();
         deleteAsCeoExpectingOk(staleId);
         assertThat(currentConfig().version()).isEqualTo(2);
 
@@ -341,9 +341,9 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(sessionFor("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(newRowBody("Italy", 12, 17, 801, null, 110000)))
+                .content(newRowBody("IT", 12, 17, 801, null, 110000)))
             .andExpect(status().isOk());
-        deleteAsCeoExpectingOk(quantityBandOf("China", "17", "21", "101").freightRateId());
+        deleteAsCeoExpectingOk(quantityBandOf("CN", "17", "21", "101").freightRateId());
 
         PricingFormulaConfigDto after = currentConfig();
         assertThat(after.version()).isEqualTo(3);
@@ -354,13 +354,13 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
                     continue;
                 }
                 long matches = after.freightRates().stream()
-                    .filter(other -> other.originCountry().equals(rate.originCountry()))
+                    .filter(other -> other.originCountryCode().equals(rate.originCountryCode()))
                     .filter(other -> other.thicknessMinMm().compareTo(rate.thicknessMinMm()) == 0)
                     .filter(other -> other.thicknessMaxMm().compareTo(rate.thicknessMaxMm()) == 0)
                     .filter(other -> covers(other, qty))
                     .count();
                 assertThat(matches)
-                    .as("bands matching %s sqm in %s [%s,%s)mm", qty, rate.originCountry(),
+                    .as("bands matching %s sqm in %s [%s,%s)mm", qty, rate.originCountryCode(),
                         rate.thicknessMinMm(), rate.thicknessMaxMm())
                     .isEqualTo(1);
             }
@@ -383,7 +383,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     private PricingFreightRateDto quantityBandOf(String country, String thicknessMin, String thicknessMax, String qtyMin) {
         return currentConfig().freightRates().stream()
-            .filter(rate -> rate.originCountry().equals(country))
+            .filter(rate -> rate.originCountryCode().equals(country))
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal(thicknessMin)) == 0)
             .filter(rate -> rate.thicknessMaxMm().compareTo(new BigDecimal(thicknessMax)) == 0)
             .filter(rate -> rate.qtyMinSqm().compareTo(new BigDecimal(qtyMin)) == 0)
@@ -392,7 +392,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     private PricingFreightRateDto topQuantityBandOf(String country, String thicknessMin, String thicknessMax) {
         return currentConfig().freightRates().stream()
-            .filter(rate -> rate.originCountry().equals(country))
+            .filter(rate -> rate.originCountryCode().equals(country))
             .filter(rate -> rate.thicknessMinMm().compareTo(new BigDecimal(thicknessMin)) == 0)
             .filter(rate -> rate.thicknessMaxMm().compareTo(new BigDecimal(thicknessMax)) == 0)
             .max((a, b) -> a.qtyMinSqm().compareTo(b.qtyMinSqm()))
@@ -407,7 +407,7 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     private long matchingBands(PricingFormulaConfigDto config, String country, BigDecimal thickness, BigDecimal qty) {
         return config.freightRates().stream()
-            .filter(rate -> rate.originCountry().equals(country))
+            .filter(rate -> rate.originCountryCode().equals(country))
             .filter(rate -> thickness.compareTo(rate.thicknessMinMm()) >= 0 && thickness.compareTo(rate.thicknessMaxMm()) < 0)
             .filter(rate -> covers(rate, qty))
             .count();
@@ -427,13 +427,13 @@ class PricingFormulaConfigFreightRowIntegrationTest extends AbstractPostgresInte
 
     private int countryRowCountAcrossAllVersions(String country) {
         return jdbc.queryForObject(
-            "SELECT COUNT(*) FROM sales.pricing_freight_rate WHERE origin_country = :country",
+            "SELECT COUNT(*) FROM sales.pricing_freight_rate WHERE origin_country_code = :country",
             Map.of("country", country), Integer.class);
     }
 
     private String newRowBody(String country, int thicknessMin, int thicknessMax, int qtyMin, Integer qtyMax, int amount) {
         return """
-            {"originCountry": "%s", "thicknessMinMm": %d, "thicknessMaxMm": %d,
+            {"originCountryCode": "%s", "thicknessMinMm": %d, "thicknessMaxMm": %d,
              "qtyMinSqm": %d, "qtyMaxSqm": %s, "amountThb": %d}
             """.formatted(country, thicknessMin, thicknessMax, qtyMin,
                 qtyMax == null ? "null" : String.valueOf(qtyMax), amount);

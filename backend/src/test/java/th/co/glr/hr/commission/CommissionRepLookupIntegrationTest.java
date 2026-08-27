@@ -82,8 +82,7 @@ class CommissionRepLookupIntegrationTest extends AbstractPostgresIntegrationTest
             mock(AuditService.class),
             mock(NotificationService.class),
             mock(TicketRepository.class),
-            mock(AttachmentRepository.class),
-            new CeoApproverRepository(jdbc));
+            mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
 
         long managerEmployeeId = createEmployee("ผู้จัดการฝ่ายขาย รายชื่อ", "reps-manager@glr.co.th", "SA", "แผนกขาย");
         long ceoEmployeeId = createEmployee("ผู้บริหาร รายชื่อ", "reps-ceo@glr.co.th", "MD", "ผู้บริหาร");

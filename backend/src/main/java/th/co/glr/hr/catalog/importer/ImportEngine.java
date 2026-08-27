@@ -3,6 +3,9 @@ package th.co.glr.hr.catalog.importer;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,6 +37,15 @@ public class ImportEngine {
         Map.entry("ml",      "per_linear_m"),
         Map.entry("lm",      "per_linear_m")
     );
+
+    /**
+     * Prefix marking a code this engine synthesised rather than read from the price list.
+     * Distinct from every real factory code, so a surrogate can never be mistaken for one.
+     */
+    static final String SURROGATE_PREFIX = "AUTO-";
+
+    /** 6 bytes → 12 hex chars. Collision odds stay negligible at catalogue scale. */
+    private static final int SURROGATE_HASH_BYTES = 6;
 
     private static final Pattern NUM_PATTERN =
         Pattern.compile("[\\d]+(?:[.,][\\d]+)?");
@@ -164,21 +176,25 @@ public class ImportEngine {
             return "ไม่มีราคา";
         }
 
+        // ── size ──────────────────────────────────────────────────────────────
+        // Resolved before product_code because the surrogate code below derives from it.
+        String sizeRaw = stringify(rec.get("size_raw"));
+        if (sizeRaw == null && prof.sizeFrom != null) {
+            sizeRaw = stringify(rec.get(prof.sizeFrom));
+        }
+        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat);
+
         // ── product_code ──────────────────────────────────────────────────────
         String code = blankToNull(stringify(rec.get("product_code")));
         if (code == null && !prof.allowMissingCode) {
             return "ไม่มีรหัสสินค้า";
         }
 
-        // split_column (Bode: 2 codes in one cell)
-        List<String> codes = splitCodes(code, prof.splitColumn.get("code"));
-
-        // ── size ──────────────────────────────────────────────────────────────
-        String sizeRaw = stringify(rec.get("size_raw"));
-        if (sizeRaw == null && prof.sizeFrom != null) {
-            sizeRaw = stringify(rec.get(prof.sizeFrom));
-        }
-        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat);
+        List<String> codes = code != null
+            // split_column (Bode: 2 codes in one cell)
+            ? splitCodes(code, prof.splitColumn.get("code"))
+            // no code column at all — synthesise a stable one (see surrogateCode)
+            : List.of(surrogateCode(sheetName, rec, sizeRaw));
 
         // ── unit ──────────────────────────────────────────────────────────────
         String unit = unitOverride != null
@@ -416,6 +432,52 @@ public class ImportEngine {
 
     private static BigDecimal toMm(double x) {
         return BigDecimal.valueOf(x < 300 ? x * 10 : x).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Deterministic surrogate product code for price-list sheets that carry no code column
+     * (REFIN {@code Trim-Tiles} and {@code Balneo-Project}, and any future factory whose list
+     * identifies products by description alone).
+     *
+     * <p>Without this the row is stored with {@code product_code}, {@code grade} and
+     * {@code surface} all NULL. Because {@code uq_price} is
+     * {@code UNIQUE NULLS NOT DISTINCT (version_id, product_code, grade, size_raw, surface)},
+     * NULL compares equal to NULL and the key degenerates to {@code (version_id, size_raw)} —
+     * so every product sharing a size silently overwrites the others. That collapsed REFIN's
+     * Trim-Tiles from 74 rows to 17 and Balneo-Project from 19 to 13, losing distinct products
+     * at distinct prices.
+     *
+     * <p>The code is a pure function of the row's identifying fields, so re-importing the same
+     * file always yields the same codes and the incremental-merge step in
+     * {@code PriceImportService} keeps matching old rows to new ones.
+     */
+    private static String surrogateCode(String sheetName, Map<String, Object> rec, String sizeRaw) {
+        String key = String.join("|",
+            normKeyPart(sheetName),
+            normKeyPart(stringify(rec.get("collection"))),
+            normKeyPart(stringify(rec.get("product_name"))),
+            normKeyPart(sizeRaw).replace(" ", ""),
+            normKeyPart(stringify(rec.get("surface")))
+        );
+        return SURROGATE_PREFIX + sha1Hex(key, SURROGATE_HASH_BYTES);
+    }
+
+    /** Case- and whitespace-insensitive, so cosmetic re-formatting does not change the code. */
+    private static String normKeyPart(String s) {
+        if (s == null) return "";
+        return s.strip().replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+    }
+
+    private static String sha1Hex(String s, int bytes) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-1")
+                .digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes * 2);
+            for (int i = 0; i < bytes; i++) sb.append(String.format("%02X", digest[i]));
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-1 is required but unavailable", e);
+        }
     }
 
     private static List<String> splitCodes(String code, String delimiter) {

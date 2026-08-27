@@ -17,10 +17,13 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateDto;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.FxResolver;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
@@ -31,7 +34,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository.ItemUpdate;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
-import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RecalculatePricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
@@ -81,11 +84,12 @@ public class PricingDecisionService {
     private final FxRateRepository fxRates;
     private final NotificationRepository notifications;
     private final LandedCostCalculator landedCost;
+    private final PricingFormulaEngine formulaEngine;
 
     public PricingDecisionService(PricingDecisionRepository decisions, PricingRequestRepository pricingRequests,
                                   PricingCostingRepository costings, TicketRepository tickets,
                                   FxRateRepository fxRates, NotificationRepository notifications,
-                                  LandedCostCalculator landedCost) {
+                                  LandedCostCalculator landedCost, PricingFormulaEngine formulaEngine) {
         this.decisions = decisions;
         this.pricingRequests = pricingRequests;
         this.costings = costings;
@@ -93,6 +97,7 @@ public class PricingDecisionService {
         this.fxRates = fxRates;
         this.notifications = notifications;
         this.landedCost = landedCost;
+        this.formulaEngine = formulaEngine;
     }
 
     @Transactional
@@ -209,31 +214,6 @@ public class PricingDecisionService {
         return requireDecision(decisionId);
     }
 
-    @Transactional
-    public PricingDecisionDto recalculate(long decisionId, RecalculatePricingDecisionRequest request, UserPrincipal actor) {
-        requireRole(actor, CEO_ROLES);
-        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
-        BigDecimal bulkMargin = request.defaultMarginPct();
-        if (bulkMargin != null) {
-            requireValidMargin(bulkMargin);
-            decisions.updateDefaultMargin(decisionId, bulkMargin);
-        }
-        List<ItemUpdate> updates = new ArrayList<>();
-        for (PricingDecisionItemDto item : decision.items()) {
-            BigDecimal margin = bulkMargin != null ? bulkMargin : item.proposedMarginPct();
-            if (margin == null) {
-                continue;
-            }
-            BigDecimal sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), margin,
-                decision.fxRateUsed(), decision.currency());
-            updates.add(new ItemUpdate(item.id(), margin, sellingPrice, null, null, null));
-        }
-        decisions.updateItems(decisionId, updates);
-        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
-            "CEO คำนวณราคาขายใหม่");
-        return requireDecision(decisionId);
-    }
-
     /**
      * V141 ("CEO owns costing"): recomputes the bound costing IN PLACE (same {@code
      * pricing_costing_id} — a new FX rate or a factory-quote change since {@code startReview}
@@ -247,31 +227,10 @@ public class PricingDecisionService {
     public PricingDecisionDto recalculateCost(long decisionId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
-        PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
-        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
-        costings.replaceItemsPreservingOverrides(decision.pricingCostingId(), calc.items());
-        PricingCostingDto refreshed = requireCosting(decision.pricingCostingId());
-        Map<Long, PricingCostingItemDto> costingItemsByRequestItem = refreshed.items().stream()
-            .collect(java.util.stream.Collectors.toMap(PricingCostingItemDto::pricingRequestItemId, i -> i));
-
-        List<FrozenCostUpdate> updates = new ArrayList<>();
-        for (PricingDecisionItemDto item : decision.items()) {
-            PricingCostingItemDto costingItem = costingItemsByRequestItem.get(item.pricingRequestItemId());
-            if (costingItem == null) {
-                continue;
-            }
-            BigDecimal frozenPerPiece = costingItem.effectiveLandedCostPerUnitThb();
-            BigDecimal frozenPerRequestedUnit = money4(
-                costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
-            BigDecimal sellingPrice = item.proposedMarginPct() != null
-                ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
-                : null;
-            updates.add(new FrozenCostUpdate(item.id(), frozenPerPiece, frozenPerRequestedUnit, sellingPrice));
-        }
-        decisions.updateFrozenCosts(decisionId, updates);
+        PricingDecisionDto recomputed = recomputeCostingInPlace(decision);
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
             "CEO คำนวณต้นทุนใหม่");
-        return requireDecision(decisionId);
+        return recomputed;
     }
 
     /**
@@ -378,29 +337,50 @@ public class PricingDecisionService {
                     + "— รายการที่ล้าสมัย: " + staleItemIds);
         }
 
-        List<Long> missingMargin = new ArrayList<>();
-        List<Long> missingMinimum = new ArrayList<>();
-        for (PricingDecisionItemDto item : decision.items()) {
-            if (item.proposedMarginPct() == null) {
-                missingMargin.add(item.id());
-            }
-            if (item.minimumSellingPricePerRequestedUnit() == null) {
-                missingMinimum.add(item.id());
-            }
-        }
-        if (!missingMargin.isEmpty() || !missingMinimum.isEmpty()) {
+        // Phase 1 UI simplification: an item with an active "ปรับราคาเอง" override needs no
+        // margin at all — its price is fixed directly, the formula (and therefore margin) never
+        // drives it. Only a NON-overridden item without a margin blocks approval now.
+        List<Long> missingMargin = decision.items().stream()
+            .filter(item -> item.proposedMarginPct() == null && item.manualSellingPricePerRequestedUnit() == null)
+            .map(PricingDecisionItemDto::id)
+            .toList();
+        if (!missingMargin.isEmpty()) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: "
-                    + missingMargin + ", รายการที่ยังไม่มีราคาขายขั้นต่ำ: " + missingMinimum);
+                "ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: " + missingMargin);
         }
 
         // Design correction 7: never trust a stored/client-supplied selling price at approval —
-        // always recompute fresh from the frozen cost and the margin being frozen in.
+        // always recompute fresh from the frozen cost and the margin being frozen in. The ONE
+        // deliberate exception is an active "ปรับราคาเอง" override (Phase 1 UI simplification):
+        // there the CEO's own fixed value freezes in verbatim and the formula is not consulted at
+        // all for that line, exactly as overrideItemCost already does for the cost side.
+        //
+        // ราคาขั้นต่ำ ("ราคาขั้นต่ำ") is no longer a CEO input in the UI (Phase 1 UI
+        // simplification, owner ruling 2026-08-16) — the per-item text field is gone. Left unset,
+        // minimum_selling_price_per_requested_unit would stay NULL forever, and
+        // CustomerQuotationService's three below-minimum 422 guards are each explicitly
+        // null-guarded (`item.minimumSellingPricePerRequestedUnit() != null && ...`), so a NULL
+        // minimum does not merely fail open on ONE check — it silently disarms all three,
+        // un-guarding every future discount on this request. Auto-populating it here with the
+        // approved selling price itself closes that hole by construction: the CEO types nothing,
+        // and — because floor == price — today's "any discount refused" outcome (Discount Policy
+        // B's zero-width case) holds for every new decision without any special-casing downstream.
+        // An explicitly-set LOWER floor is honoured, not overwritten, if one is already on the row
+        // (still settable through PUT /pricing-decisions/{id}, which is unchanged) — only a still-
+        // NULL minimum falls back to the approved price. See PricingDecisionCostOverrideValidation-
+        // IntegrationTest's sibling in PricingDecisionMinimumPriceAutoPopulationIntegrationTest for
+        // the wrong-way-round proof that a discounted quotation line is still refused.
         List<ApprovedItem> approvedItems = new ArrayList<>();
         for (PricingDecisionItemDto item : decision.items()) {
-            BigDecimal approvedSellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(),
-                item.proposedMarginPct(), decision.fxRateUsed(), decision.currency());
-            approvedItems.add(new ApprovedItem(item.id(), item.proposedMarginPct(), approvedSellingPrice));
+            BigDecimal approvedSellingPrice = item.manualSellingPricePerRequestedUnit() != null
+                ? item.manualSellingPricePerRequestedUnit()
+                : computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), item.proposedMarginPct(),
+                    decision.fxRateUsed(), decision.currency());
+            BigDecimal minimumSellingPrice = item.minimumSellingPricePerRequestedUnit() != null
+                ? item.minimumSellingPricePerRequestedUnit()
+                : approvedSellingPrice;
+            approvedItems.add(new ApprovedItem(item.id(), item.proposedMarginPct(), approvedSellingPrice,
+                minimumSellingPrice));
         }
         decisions.approveItems(decisionId, approvedItems);
 
@@ -499,6 +479,22 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "รายการที่ " + req.pricingDecisionItemId() + " ไม่ได้เป็นของมติราคานี้");
             }
+            // "ปรับราคาเอง" (Phase 1 UI simplification) — mirrors overrideItemCost's own check
+            // ORDER exactly: reason (mandatory in BOTH directions) before the negative-amount
+            // check, before anything else. Set and clear are mutually exclusive in one call.
+            if (req.sellingPriceOverride() != null && req.clearSellingPriceOverride()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้");
+            }
+            boolean touchesPriceOverride = req.sellingPriceOverride() != null || req.clearSellingPriceOverride();
+            if (touchesPriceOverride && (req.decisionNote() == null || req.decisionNote().isBlank())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม");
+            }
+            if (req.sellingPriceOverride() != null && req.sellingPriceOverride().compareTo(BigDecimal.ZERO) < 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาที่ปรับต้องไม่ติดลบ");
+            }
+
             BigDecimal marginPct = req.marginPct();
             BigDecimal sellingPrice = null;
             if (marginPct != null) {
@@ -506,16 +502,12 @@ public class PricingDecisionService {
                 sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), marginPct,
                     decision.fxRateUsed(), decision.currency());
             }
-            if (req.discountCeilingPct() != null
-                    && (req.discountCeilingPct().compareTo(BigDecimal.ZERO) < 0
-                        || req.discountCeilingPct().compareTo(BigDecimal.ONE) > 0)) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "discountCeilingPct ต้องอยู่ระหว่าง 0 ถึง 1");
-            }
             if (req.minimumSellingPrice() != null && req.minimumSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาขายขั้นต่ำต้องไม่ติดลบ");
             }
-            updates.add(new ItemUpdate(item.id(), marginPct, sellingPrice, req.discountCeilingPct(),
-                req.minimumSellingPrice(), req.decisionNote()));
+            updates.add(new ItemUpdate(item.id(), marginPct, sellingPrice,
+                req.minimumSellingPrice(), req.decisionNote(),
+                req.sellingPriceOverride(), req.clearSellingPriceOverride()));
         }
         int rows = decisions.updateItems(decision.id(), updates);
         if (rows != updates.size()) {
@@ -529,16 +521,105 @@ public class PricingDecisionService {
         }
     }
 
-    /** Selling price is always PER REQUESTED UNIT (design correction 1), computed fresh from the
+    /**
+     * Selling price is always PER REQUESTED UNIT (design correction 1), computed fresh from the
      * frozen per-requested-unit cost and a margin fraction, converted through the decision's
-     * pinned FX rate (design correction 6) — never taken verbatim from client input. */
+     * pinned FX rate (design correction 6) — never taken verbatim from client input.
+     *
+     * <p>V109 engine wiring (V152): the formula is {@code SP = RoundUp[cost x (1+margin) x
+     * selling_buffer, to nearest selling_price_round_up_to]} — see
+     * {@link PricingFormulaEngine#roundUpSellingPrice}. Previously this was a bare
+     * {@code cost x (1+margin)}, with no buffer and no round-up; {@code selling_buffer} is a
+     * deliberate COST BUFFER (not VAT — VAT stays untouched, added separately at quotation time).
+     * The round-up happens in THB (the round-up granularity, like every other absolute amount in
+     * {@code sales.pricing_formula_config}, is a THB figure — landed cost is always THB, V72's own
+     * comment), BEFORE any FX conversion to a non-THB decision currency.
+     */
     private BigDecimal computeSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct,
                                            BigDecimal fxRateUsed, String currency) {
-        BigDecimal sellingPriceThb = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct));
+        PricingFormulaConfigDto formulaConfig = formulaEngine.requireCurrentConfig();
+        BigDecimal sellingPriceThb = formulaEngine.roundUpSellingPrice(costPerRequestedUnitThb, marginPct,
+            formulaConfig.sellingBuffer(), formulaConfig.sellingPriceRoundUpTo());
         BigDecimal price = "THB".equals(currency)
             ? sellingPriceThb
             : sellingPriceThb.divide(fxRateUsed, 8, RoundingMode.HALF_UP);
         return money4(price);
+    }
+
+    /**
+     * V152 (V109 engine wiring), owner ruling 2026-08-16: {@code product_type} has no source in
+     * deal data today, so {@link LandedCostCalculator} defaults every item to TILE (30% duty). This
+     * is the CEO's per-item escape hatch — e.g. โมเสคแก้ว, which must be taxed at 10%, not TILE's
+     * 30% — reachable from the pricing-decision review screen (mirrors {@link #overrideItemCost}'s
+     * shape: CEO-only, DRAFT-decision-only, then immediately recomputes so the CEO sees the new
+     * duty applied without a separate manual "recalculate" click).
+     *
+     * <p>{@code productType == null} clears the override, reverting to the TILE default.
+     * Non-null must name a product_type the CURRENT pricing_formula_config actually prices — never
+     * silently accepted and then failing later at the freight/duty lookup.
+     */
+    @Transactional
+    public PricingDecisionDto overrideItemProductType(long decisionId, long itemId, ProductTypeOverrideRequest request,
+                                                       UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
+        PricingDecisionItemDto item = decision.items().stream()
+            .filter(i -> i.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "รายการที่ " + itemId + " ไม่ได้เป็นของมติราคานี้"));
+
+        String productType = request.productType() == null || request.productType().isBlank()
+            ? null : request.productType().trim();
+        if (productType != null) {
+            PricingFormulaConfigDto formulaConfig = formulaEngine.requireCurrentConfig();
+            boolean known = formulaConfig.dutyRates().stream()
+                .anyMatch(rate -> rate.productType().equals(productType));
+            if (!known) {
+                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "ไม่พบประเภทสินค้า '" + productType + "' ในสูตรคำนวณราคาปัจจุบัน");
+            }
+        }
+        pricingRequests.updateItemProductTypeOverride(item.pricingRequestItemId(), productType);
+
+        PricingDecisionDto recomputed = recomputeCostingInPlace(decision);
+        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
+            productType != null
+                ? "CEO ปรับประเภทสินค้ารายการที่ " + itemId + " เป็น " + productType + " (สำหรับคำนวณอากรขาเข้า)"
+                : "CEO ล้างการปรับประเภทสินค้ารายการที่ " + itemId + " (กลับไปใช้ค่าเริ่มต้น)");
+        return recomputed;
+    }
+
+    /**
+     * Shared by {@link #recalculateCost} and {@link #overrideItemProductType}: recomputes the
+     * bound costing IN PLACE (same {@code pricing_costing_id}, preserving any existing per-line
+     * cost override — {@link PricingCostingRepository#replaceItemsPreservingOverrides}) and
+     * re-derives every decision item's frozen cost + proposed selling price from the (possibly
+     * still-overridden) effective cost.
+     */
+    private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision) {
+        PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
+        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
+        costings.replaceItemsPreservingOverrides(decision.pricingCostingId(), calc.items());
+        PricingCostingDto refreshed = requireCosting(decision.pricingCostingId());
+        Map<Long, PricingCostingItemDto> costingItemsByRequestItem = refreshed.items().stream()
+            .collect(java.util.stream.Collectors.toMap(PricingCostingItemDto::pricingRequestItemId, i -> i));
+
+        List<FrozenCostUpdate> updates = new ArrayList<>();
+        for (PricingDecisionItemDto item : decision.items()) {
+            PricingCostingItemDto costingItem = costingItemsByRequestItem.get(item.pricingRequestItemId());
+            if (costingItem == null) {
+                continue;
+            }
+            BigDecimal frozenPerPiece = costingItem.effectiveLandedCostPerUnitThb();
+            BigDecimal frozenPerRequestedUnit = money4(
+                costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+            BigDecimal sellingPrice = item.proposedMarginPct() != null
+                ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
+                : null;
+            updates.add(new FrozenCostUpdate(item.id(), frozenPerPiece, frozenPerRequestedUnit, sellingPrice));
+        }
+        decisions.updateFrozenCosts(decision.id(), updates);
+        return requireDecision(decision.id());
     }
 
     private PricingCostingDto requireCosting(long costingId) {

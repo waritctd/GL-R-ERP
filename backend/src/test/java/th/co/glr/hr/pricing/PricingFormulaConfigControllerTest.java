@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.pricing.PricingFormulaConfigDtos.CountryDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
@@ -110,7 +111,7 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -134,9 +135,9 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000},
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 50, "qtyMaxSqm": 200, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -160,7 +161,7 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -185,7 +186,7 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -211,11 +212,11 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000},
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 101, "qtyMaxSqm": 450, "amountThb": 60000},
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 451, "qtyMaxSqm": null, "amountThb": 50000}
              ],
              "dutyRates": [
@@ -248,9 +249,9 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "Italy", "thicknessMinMm": 3, "thicknessMaxMm": 8,
+               {"originCountryCode": "IT", "thicknessMinMm": 3, "thicknessMaxMm": 8,
                 "qtyMinSqm": 1, "qtyMaxSqm": 101, "amountThb": 80000},
-               {"originCountry": "Italy", "thicknessMinMm": 5, "thicknessMaxMm": 10,
+               {"originCountryCode": "IT", "thicknessMinMm": 5, "thicknessMaxMm": 10,
                 "qtyMinSqm": 1, "qtyMaxSqm": 101, "amountThb": 85000}
              ],
              "dutyRates": [
@@ -282,13 +283,13 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "Italy", "thicknessMinMm": 3, "thicknessMaxMm": 8,
+               {"originCountryCode": "IT", "thicknessMinMm": 3, "thicknessMaxMm": 8,
                 "qtyMinSqm": 1, "qtyMaxSqm": 101, "amountThb": 80000},
-               {"originCountry": "Italy", "thicknessMinMm": 3, "thicknessMaxMm": 8,
+               {"originCountryCode": "IT", "thicknessMinMm": 3, "thicknessMaxMm": 8,
                 "qtyMinSqm": 101, "qtyMaxSqm": 451, "amountThb": 90000},
-               {"originCountry": "Italy", "thicknessMinMm": 8, "thicknessMaxMm": 12,
+               {"originCountryCode": "IT", "thicknessMinMm": 8, "thicknessMaxMm": 12,
                 "qtyMinSqm": 1, "qtyMaxSqm": 101, "amountThb": 50000},
-               {"originCountry": "Italy", "thicknessMinMm": 8, "thicknessMaxMm": 12,
+               {"originCountryCode": "IT", "thicknessMinMm": 8, "thicknessMaxMm": 12,
                 "qtyMinSqm": 101, "qtyMaxSqm": 451, "amountThb": 80000}
              ],
              "dutyRates": [
@@ -320,7 +321,7 @@ class PricingFormulaConfigControllerTest {
             mvc.perform(post("/api/pricing-formula-config/freight-rates")
                     .session(session(role))
                     .contentType(MediaType.APPLICATION_JSON)
-                    .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+                    .content(freightRowBody("TR", 3, 8, 1, "101", 70000)))
                 .andExpect(status().isForbidden());
             mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L).session(session(role)))
                 .andExpect(status().isForbidden());
@@ -331,7 +332,7 @@ class PricingFormulaConfigControllerTest {
     void addAndDeleteAreUnauthorizedWithoutASession() throws Exception {
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+                .content(freightRowBody("TR", 3, 8, 1, "101", 70000)))
             .andExpect(status().isUnauthorized());
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L))
             .andExpect(status().isUnauthorized());
@@ -344,7 +345,7 @@ class PricingFormulaConfigControllerTest {
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(session("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+                .content(freightRowBody("TR", 3, 8, 1, "101", 70000)))
             .andExpect(status().is2xxSuccessful());
     }
 
@@ -355,7 +356,7 @@ class PricingFormulaConfigControllerTest {
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(session("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(freightRowBody("Italy", 3, 8, 50, "200", 90000)))
+                .content(freightRowBody("IT", 3, 8, 50, "200", 90000)))
             .andExpect(status().isBadRequest());
     }
 
@@ -365,7 +366,7 @@ class PricingFormulaConfigControllerTest {
         mvc.perform(post("/api/pricing-formula-config/freight-rates")
                 .session(session("ceo"))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(freightRowBody("Turkey", 3, 8, 1, "101", 70000)))
+                .content(freightRowBody("TR", 3, 8, 1, "101", 70000)))
             .andExpect(status().isNotFound());
     }
 
@@ -380,7 +381,7 @@ class PricingFormulaConfigControllerTest {
     @Test
     void deleteRejectsRemovingTheLastRemainingFreightRow() throws Exception {
         when(formulaConfigs.findCurrent()).thenReturn(Optional.of(configWithFreightRates(
-            new PricingFreightRateDto(11L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+            new PricingFreightRateDto(11L, "IT", "อิตาลี", new BigDecimal("3"), new BigDecimal("8"),
                 new BigDecimal("1"), null, new BigDecimal("80000")))));
         mvc.perform(delete("/api/pricing-formula-config/freight-rates/{id}", 11L).session(session("ceo")))
             .andExpect(status().isBadRequest());
@@ -404,11 +405,11 @@ class PricingFormulaConfigControllerTest {
     /** Three contiguous [1,101)/[101,451)/[451,+inf) bands for Italy [3,8)mm, ids 11/12/13. */
     private PricingFormulaConfigDto configWithItalyLadder() {
         return configWithFreightRates(
-            new PricingFreightRateDto(11L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+            new PricingFreightRateDto(11L, "IT", "อิตาลี", new BigDecimal("3"), new BigDecimal("8"),
                 new BigDecimal("1"), new BigDecimal("101"), new BigDecimal("80000")),
-            new PricingFreightRateDto(12L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+            new PricingFreightRateDto(12L, "IT", "อิตาลี", new BigDecimal("3"), new BigDecimal("8"),
                 new BigDecimal("101"), new BigDecimal("451"), new BigDecimal("90000")),
-            new PricingFreightRateDto(13L, "Italy", new BigDecimal("3"), new BigDecimal("8"),
+            new PricingFreightRateDto(13L, "IT", "อิตาลี", new BigDecimal("3"), new BigDecimal("8"),
                 new BigDecimal("451"), null, new BigDecimal("100000")));
     }
 
@@ -420,12 +421,13 @@ class PricingFormulaConfigControllerTest {
             new BigDecimal("10"), true, LocalDate.of(2026, 1, 1), Instant.now(),
             List.of(freightRates),
             List.of(new PricingDutyRateDto(1L, "TILE", "กระเบื้อง", new BigDecimal("0.3"))),
-            List.of(new PricingClearanceFeeDto(1L, new BigDecimal("1"), null, new BigDecimal("8000"))));
+            List.of(new PricingClearanceFeeDto(1L, new BigDecimal("1"), null, new BigDecimal("8000"))),
+            List.of(new CountryDto("IT", "Italy", "อิตาลี"), new CountryDto("CN", "China", "จีน")));
     }
 
     private String freightRowBody(String country, int thicknessMin, int thicknessMax, int qtyMin, String qtyMax, int amount) {
         return """
-            {"originCountry": "%s", "thicknessMinMm": %d, "thicknessMaxMm": %d,
+            {"originCountryCode": "%s", "thicknessMinMm": %d, "thicknessMaxMm": %d,
              "qtyMinSqm": %d, "qtyMaxSqm": %s, "amountThb": %d}
             """.formatted(country, thicknessMin, thicknessMax, qtyMin, qtyMax, amount);
     }
@@ -436,7 +438,7 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": 0.2,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -454,7 +456,7 @@ class PricingFormulaConfigControllerTest {
              "costBuffer": 1.07, "sellingBuffer": 1.07, "defaultMarginPct": %s,
              "sellingPriceRoundUpTo": 10,
              "freightRates": [
-               {"originCountry": "China", "thicknessMinMm": 3, "thicknessMaxMm": 7,
+               {"originCountryCode": "CN", "thicknessMinMm": 3, "thicknessMaxMm": 7,
                 "qtyMinSqm": 1, "qtyMaxSqm": 100, "amountThb": 60000}
              ],
              "dutyRates": [
@@ -472,7 +474,7 @@ class PricingFormulaConfigControllerTest {
             new BigDecimal("1.15"), new BigDecimal("0.0045"), new BigDecimal("1.07"),
             new BigDecimal("1.07"), new BigDecimal("1.07"), new BigDecimal("0.2"),
             new BigDecimal("10"), true, LocalDate.of(2026, 1, 1), Instant.now(),
-            List.of(), List.of(), List.of());
+            List.of(), List.of(), List.of(), List.of());
     }
 
     private MockHttpSession session(String role) {

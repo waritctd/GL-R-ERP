@@ -279,9 +279,10 @@ export function buildDemoSalesSeed() {
         currency: 'THB', proposedMarginPct: marginPct, approvedMarginPct: approved ? marginPct : null,
         proposedSellingPricePerRequestedUnit: proposedSelling,
         approvedSellingPricePerRequestedUnit: approved ? proposedSelling : null,
-        discountCeilingPct: approved ? 0.05 : null,
         minimumSellingPricePerRequestedUnit: approved ? Math.round(perUnit * 1.1) : null,
         decisionNote: null, createdAt, updatedAt: createdAt,
+        // Phase 1 UI simplification ("ปรับราคาเอง") — no override in the demo seed by default.
+        manualSellingPricePerRequestedUnit: null,
       };
     });
     const decision = {
@@ -494,6 +495,344 @@ export function buildDemoSalesSeed() {
       ],
     },
   ];
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ฝ่ายบัญชี money-cycle deals (tickets 19-25)
+  //
+  // The account role's two screens — AccountOverview ("ภาพรวมการเงิน") and
+  // AccountFinancePage ("งานการเงิน") — bucket every deal through
+  // accountActions.js's five money steps. Before these rows the whole seed
+  // reached exactly two of them: ticket 6 (overdue credit customer) and
+  // ticket 13 (AWAITING_FINAL_PAYMENT). `DEPOSIT_NOTICE_ISSUED` — step 2,
+  // "ยืนยันรับมัดจำ", the half of ฝ่ายบัญชี's job that starts the money cycle —
+  // had ZERO rows anywhere, so the deposit-confirmation path could not be
+  // exercised in mock mode at all.
+  //
+  // One deal per bucket-and-branch, per the seed design rule (a state matrix,
+  // not bulk volume):
+  //
+  //   19  DEPOSIT_NOTICE_ISSUED, notice issued 6d ago   -> รอรับมัดจำ
+  //   20  DEPOSIT_NOTICE_ISSUED, larger + older         -> รอรับมัดจำ
+  //   21  AWAITING_FINAL_PAYMENT, deposit banked        -> รอชำระส่วนที่เหลือ
+  //   22  credit customer, no deposit, past due date    -> เกินกำหนด
+  //   23  AWAITING_FINAL_PAYMENT *and* past due date    -> เกินกำหนด (outranks
+  //                                                       its payment step —
+  //                                                       pins the priority
+  //                                                       order in
+  //                                                       nextAccountAction)
+  //   24  FULLY_PAID + FULLY_DELIVERED + invoice on file-> รอปิดงาน
+  //   25  CLOSED_PAID, close already confirmed,
+  //       no SALE commission yet                        -> ออกค่าคอม
+  //
+  // ⚠️ 24 and 25 are deliberately OUTSIDE the account role's own list scope.
+  // accountListScopeIncludes() (mockApi.js) returns only deals with a pending
+  // payment status or an overdue balance, and both of these have
+  // amountOutstanding = 0 — so "รอปิดงาน"/"ออกค่าคอม" still read 0 for the
+  // `account` persona. That scope is a reviewed authz decision, already
+  // documented as a known gap in AccountOverview.jsx's own doc comment, and
+  // widening it is explicitly out of scope for a seed change (CLAUDE.md).
+  // They are seeded anyway because they ARE reachable three other ways: the
+  // deal page itself (account may open /tickets/24 directly and gets the real
+  // "ยืนยันพร้อมปิดงาน" button), the ceo persona (unscoped), and the
+  // commission "Linked Deal" picker, which queries salesStage=CLOSED_PAID.
+  //
+  // Every deal below sets `salesStage` explicitly, which means mockApi.js's
+  // V50 backfill loop (`if (t.salesStage) continue`) skips them entirely — so
+  // each one must carry the fields that loop would otherwise have filled in:
+  // lifecycle / tenderRequirement / depositPolicy / depositPolicyReason /
+  // entryChannel, a pre-normalized `quotations` array plus its `quotation`
+  // alias, and per-item qtyDelivered / qtyFromStock / stockNote /
+  // weightMultiplier. The stage each one claims is the stage that backfill
+  // WOULD have derived from its payment/fulfilment pair, so the two agree.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Continue the hand-numbered id runs tickets 16-18 above use: items ended at
+  // 23, events at 96. Ticket-native quotations are their own id space (1-7 in
+  // demoData.js, plus the injected 101) — 201+ keeps a clear gap from both.
+  let moneyItemSeq = 23;
+  let moneyEventSeq = 96;
+  let moneyQuotationSeq = 200;
+
+  const ACCOUNT = { id: 11, name: 'คุณบัญชี การเงิน' };
+
+  /**
+   * A deal that has already sold and is somewhere in its money cycle.
+   *
+   * `timeline` is the event chain as [kind, isoTimestamp] pairs — every kind
+   * used below is one a real handler emits (TicketService/mockApi pushEvent),
+   * and `actor` follows who actually performs that step: the rep confirms the
+   * customer and issues the notice, ฝ่ายนำเข้า runs the fulfilment leg,
+   * ฝ่ายบัญชี banks the money and confirms the close.
+   */
+  function makeMoneyDeal({
+    id, title, customerName, owner = SALES1, priority = 'NORMAL',
+    paymentStatus, fulfillmentStatus = null, salesStage,
+    depositPolicy = 'REQUIRED', depositPolicyReason = null,
+    entryChannel = 'BUYER_DIRECT',
+    quotationTotal, quotationIssuedAt, quotationAcceptedAt = null,
+    quotationDocStatus = 'ACCEPTED',
+    items, allDelivered = false,
+    billingDate = null, dueDate = null, creditTermDays = null,
+    closeConfirmedAt = null, closeConfirmedByName = null,
+    createdAt, updatedAt, timeline,
+  }) {
+    moneyQuotationSeq += 1;
+    const quotation = {
+      id: moneyQuotationSeq,
+      ticketId: id,
+      number: `QT-2026-0${moneyQuotationSeq}`,
+      issuedById: owner.id,
+      issuedByName: owner.name,
+      issuedAt: quotationIssuedAt,
+      pdfPath: null,
+      totalAmount: quotationTotal,
+      currency: 'THB',
+      // Pre-normalized: normalizeQuotation() only runs inside the backfill loop
+      // this deal skips, so these defaults have to be written out here.
+      quotationVersion: 1,
+      docStatus: quotationDocStatus,
+      recipientType: 'OWNER',
+      recipientLabel: customerName,
+      paymentTerms: null,
+      leadTime: null,
+      deliveryTerms: null,
+      validityDate: null,
+      sentAt: quotationIssuedAt,
+      acceptedAt: quotationAcceptedAt,
+      rejectedAt: null,
+      parentQuotationId: null,
+    };
+    return {
+      id, code: `PR-2026-${String(id).padStart(4, '0')}`, type: 'PRICE_REQUEST',
+      title, status: 'quotation_issued', priority,
+      createdById: owner.id, createdByName: owner.name,
+      assignedToId: IMPORT1.id, assignedToName: IMPORT1.name,
+      customerName, note: null,
+      createdAt, updatedAt, closedAt: null,
+      salesStage, lostReason: null, lostAt: null,
+      stageUpdatedAt: timeline[timeline.length - 1][1],
+      lifecycle: 'ACTIVE', tenderRequirement: 'UNKNOWN',
+      depositPolicy, depositPolicyReason, entryChannel,
+      paymentStatus, fulfillmentStatus,
+      billingDate, dueDate, creditTermDays,
+      closeConfirmedAt, closeConfirmedByName,
+      quotations: [quotation], quotation,
+      items: items.map((it, idx) => {
+        moneyItemSeq += 1;
+        return {
+          id: moneyItemSeq, ticketId: id,
+          brand: it.brand, model: it.model, color: it.color,
+          texture: it.texture, size: it.size, factory: it.factory,
+          qty: it.qty, qtySqm: it.qtySqm ?? null,
+          rawPrice: it.rawPrice, rawCurrency: 'THB', rawUnit: 'piece',
+          proposedPrice: it.price, approvedPrice: it.price, currency: 'THB',
+          sortOrder: idx,
+          // Same reason as the quotation above — item normalization lives in
+          // the skipped backfill loop. weightMultiplier mirrors
+          // sales.ticket_item.weight_multiplier's own DEFAULT 1 (V148).
+          qtyDelivered: allDelivered ? it.qty : (it.qtyDelivered ?? 0),
+          qtyFromStock: it.qtyFromStock ?? 0,
+          stockNote: it.stockNote ?? null,
+          weightMultiplier: 1,
+        };
+      }),
+      events: timeline.map(([kind, at, actor = owner]) => {
+        moneyEventSeq += 1;
+        return {
+          id: moneyEventSeq, ticketId: id,
+          actorId: actor.id, actorName: actor.name,
+          kind, fromStatus: 'quotation_issued', toStatus: 'quotation_issued',
+          message: null, createdAt: at,
+        };
+      }),
+    };
+  }
+
+  // The pre-sale half of the chain is identical on every one of these deals —
+  // they all sold the same way — so it is generated rather than retyped seven
+  // times. Only the money/fulfilment tail below differs per deal.
+  const soldTimeline = (owner, { created, quoted, confirmed }) => [
+    ['CREATED', `${created}T09:00:00Z`, owner],
+    ['SUBMITTED', `${created}T09:30:00Z`, owner],
+    ['PICKED_UP', `${created}T14:00:00Z`, IMPORT1],
+    ['PRICE_PROPOSED', `${quoted}T10:00:00Z`, IMPORT1],
+    ['APPROVED', `${quoted}T15:00:00Z`, CEO],
+    ['QUOTATION_ISSUED', `${quoted}T16:00:00Z`, owner],
+    ['CUSTOMER_CONFIRMED', `${confirmed}T11:00:00Z`, owner],
+  ];
+
+  const moneyDeals = [
+    // 19 — รอรับมัดจำ. Notice issued, nothing banked yet: the step-2 row that
+    // did not exist anywhere in the seed before.
+    makeMoneyDeal({
+      id: 19, title: 'สยามพารากอน ดีเวลลอปเมนท์',
+      customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด',
+      priority: 'HIGH',
+      paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
+      salesStage: 'ORDER_RECEIVED',
+      quotationTotal: 486000,
+      quotationIssuedAt: '2026-07-27T16:00:00Z', quotationAcceptedAt: '2026-08-05T11:00:00Z',
+      items: [{ brand: 'Cotto', model: 'Marble Series', color: 'ขาว', texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry', qty: 600, qtySqm: 432, rawPrice: 620, price: 810 }],
+      createdAt: '2026-07-22', updatedAt: '2026-08-11',
+      timeline: [
+        ...soldTimeline(SALES1, { created: '2026-07-22', quoted: '2026-07-27', confirmed: '2026-08-05' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-08-11T10:00:00Z', SALES1],
+      ],
+    }),
+
+    // 20 — รอรับมัดจำ, larger and waiting longer. Two rows in this bucket is
+    // what makes the Overview's per-bucket ยอดรวม readable as a sum rather
+    // than as one deal's value.
+    makeMoneyDeal({
+      id: 20, title: 'ริชมอนด์ พร็อพเพอร์ตี้',
+      customerName: 'บริษัท ริชมอนด์ พร็อพเพอร์ตี้ จำกัด',
+      priority: 'HIGH',
+      paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
+      salesStage: 'ORDER_RECEIVED',
+      quotationTotal: 1240000,
+      quotationIssuedAt: '2026-07-14T16:00:00Z', quotationAcceptedAt: '2026-07-21T11:00:00Z',
+      items: [{ brand: 'SCG', model: 'Granite Beige', color: 'เบจ', texture: 'หยาบ', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 3100, qtySqm: 1116, rawPrice: 295, price: 400 }],
+      createdAt: '2026-07-08', updatedAt: '2026-07-24',
+      timeline: [
+        ...soldTimeline(SALES1, { created: '2026-07-08', quoted: '2026-07-14', confirmed: '2026-07-21' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-07-24T10:00:00Z', SALES1],
+      ],
+    }),
+
+    // 21 — รอชำระส่วนที่เหลือ. Deposit banked, goods landed, balance due.
+    makeMoneyDeal({
+      id: 21, title: 'โรงพยาบาลเวชธานี',
+      customerName: 'โรงพยาบาลเวชธานี', owner: SALES2,
+      paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: 'GOODS_RECEIVED',
+      salesStage: 'PROCUREMENT',
+      quotationTotal: 890000,
+      quotationIssuedAt: '2026-06-16T16:00:00Z', quotationAcceptedAt: '2026-06-22T11:00:00Z',
+      items: [{ brand: 'Duragres', model: 'Hygienic White', color: 'ขาว', texture: 'ด้าน', size: '30x60 ซม.', factory: 'Duragres Thailand', qty: 2000, qtySqm: 360, rawPrice: 330, price: 445 }],
+      createdAt: '2026-06-10', updatedAt: '2026-08-06',
+      timeline: [
+        ...soldTimeline(SALES2, { created: '2026-06-10', quoted: '2026-06-16', confirmed: '2026-06-22' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-06-25T10:00:00Z', SALES2],
+        ['DEPOSIT_PAID', '2026-06-30T14:00:00Z', ACCOUNT],
+        ['IR_ISSUED', '2026-07-03T09:00:00Z', IMPORT1],
+        ['IR_SENT', '2026-07-06T09:00:00Z', IMPORT1],
+        ['SHIPPING', '2026-07-15T08:00:00Z', IMPORT1],
+        ['GOODS_RECEIVED', '2026-08-03T14:00:00Z', IMPORT1],
+        ['AWAITING_FINAL_PAYMENT', '2026-08-06T09:00:00Z', IMPORT1],
+      ],
+    }),
+
+    // 22 — เกินกำหนด. A credit customer, so the deposit track is bypassed
+    // entirely (depositPolicy CREDIT_CUSTOMER + paymentStatus null is what
+    // depositBypassesNotice keys on) and the whole invoice is simply late.
+    makeMoneyDeal({
+      id: 22, title: 'ทวีทรัพย์ การช่าง',
+      customerName: 'หจก. ทวีทรัพย์ การช่าง',
+      paymentStatus: null, fulfillmentStatus: 'FROM_STOCK',
+      salesStage: 'PROCUREMENT',
+      depositPolicy: 'CREDIT_CUSTOMER',
+      depositPolicyReason: 'ลูกค้าเครดิต 30 วัน ตามข้อตกลงประจำปี',
+      entryChannel: 'BUYER_DIRECT',
+      quotationTotal: 275000,
+      quotationIssuedAt: '2026-06-26T16:00:00Z', quotationAcceptedAt: '2026-07-02T11:00:00Z',
+      items: [{ brand: 'SCG', model: 'Elegance Series', color: 'ขาวนวล', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 1100, qtySqm: 396, rawPrice: 185, price: 250, qtyFromStock: 1100, stockNote: 'จ่ายจากสต็อกคลังบางนา' }],
+      billingDate: '2026-07-05', dueDate: '2026-08-04', creditTermDays: 30,
+      createdAt: '2026-06-20', updatedAt: '2026-07-05',
+      timeline: [
+        ...soldTimeline(SALES1, { created: '2026-06-20', quoted: '2026-06-26', confirmed: '2026-07-02' }),
+        ['STOCK_RESERVED', '2026-07-03T09:00:00Z', IMPORT1],
+        ['BILLING_UPDATED', '2026-07-05T09:00:00Z', ACCOUNT],
+      ],
+    }),
+
+    // 23 — เกินกำหนด while ALSO awaiting the balance. Pins nextAccountAction's
+    // documented priority order: overdue is checked first, so this row must
+    // lead with "ติดตามชำระ" and not "รับชำระส่วนที่เหลือ". Without it, the
+    // two branches are never observed competing.
+    makeMoneyDeal({
+      id: 23, title: 'เดอะ ซีนเนอรี่ วิลล่า',
+      customerName: 'บริษัท เดอะ ซีนเนอรี่ วิลล่า จำกัด',
+      priority: 'HIGH',
+      paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: 'FULLY_DELIVERED',
+      salesStage: 'PROCUREMENT', allDelivered: true,
+      quotationTotal: 1560000,
+      quotationIssuedAt: '2026-05-28T16:00:00Z', quotationAcceptedAt: '2026-06-03T11:00:00Z',
+      items: [{ brand: 'Panaria', model: 'Trilogy', color: 'Ivory', texture: 'Lappato', size: '60x120 cm', factory: 'Panaria SpA', qty: 1200, qtySqm: 864, rawPrice: 980, price: 1300 }],
+      billingDate: '2026-06-28', dueDate: '2026-07-28', creditTermDays: 30,
+      createdAt: '2026-05-22', updatedAt: '2026-06-28',
+      timeline: [
+        ...soldTimeline(SALES1, { created: '2026-05-22', quoted: '2026-05-28', confirmed: '2026-06-03' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-06-05T10:00:00Z', SALES1],
+        ['DEPOSIT_PAID', '2026-06-09T14:00:00Z', ACCOUNT],
+        ['IR_ISSUED', '2026-06-11T09:00:00Z', IMPORT1],
+        ['IR_SENT', '2026-06-13T09:00:00Z', IMPORT1],
+        ['SHIPPING', '2026-06-18T08:00:00Z', IMPORT1],
+        ['GOODS_RECEIVED', '2026-06-24T14:00:00Z', IMPORT1],
+        ['DELIVERY_COMPLETED', '2026-06-26T15:00:00Z', IMPORT1],
+        ['AWAITING_FINAL_PAYMENT', '2026-06-27T09:00:00Z', IMPORT1],
+        ['BILLING_UPDATED', '2026-06-28T09:00:00Z', ACCOUNT],
+      ],
+    }),
+
+    // 24 — รอปิดงาน. Fully paid, fully delivered, tax invoice on file (added
+    // below), close not yet confirmed — the exact four-part predicate
+    // requireClosePrerequisites() enforces, so account's "ยืนยันพร้อมปิดงาน"
+    // button is live on this deal's page. Outside account's list scope; see
+    // the block comment above.
+    makeMoneyDeal({
+      id: 24, title: 'แลนด์มาร์ค เรสซิเดนซ์',
+      customerName: 'บริษัท แลนด์มาร์ค เรสซิเดนซ์ จำกัด',
+      paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED',
+      salesStage: 'CLOSED_PAID', allDelivered: true,
+      quotationTotal: 648000,
+      quotationIssuedAt: '2026-05-19T16:00:00Z', quotationAcceptedAt: '2026-05-25T11:00:00Z',
+      items: [{ brand: 'Cotto', model: 'Luxury Gold', color: 'ทอง', texture: 'มัน', size: '60x120 ซม.', factory: 'Cotto Industry', qty: 900, qtySqm: 648, rawPrice: 540, price: 720 }],
+      createdAt: '2026-05-13', updatedAt: '2026-08-08',
+      timeline: [
+        ...soldTimeline(SALES1, { created: '2026-05-13', quoted: '2026-05-19', confirmed: '2026-05-25' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-05-27T10:00:00Z', SALES1],
+        ['DEPOSIT_PAID', '2026-06-01T14:00:00Z', ACCOUNT],
+        ['IR_ISSUED', '2026-06-04T09:00:00Z', IMPORT1],
+        ['IR_SENT', '2026-06-06T09:00:00Z', IMPORT1],
+        ['SHIPPING', '2026-06-12T08:00:00Z', IMPORT1],
+        ['GOODS_RECEIVED', '2026-07-20T14:00:00Z', IMPORT1],
+        ['DELIVERY_COMPLETED', '2026-07-24T15:00:00Z', IMPORT1],
+        ['AWAITING_FINAL_PAYMENT', '2026-07-25T09:00:00Z', IMPORT1],
+        ['FULLY_PAID', '2026-08-08T10:00:00Z', ACCOUNT],
+      ],
+    }),
+
+    // 25 — ออกค่าคอม. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
+    // close, which is what takes it PAST the close-ready branch (closeReady()
+    // requires closeConfirmedAt == null) and into the commission step. No SALE
+    // commission row exists for this ticket in demoPayroll.js, so
+    // hasRecordedCommission() is false and the step stays outstanding.
+    makeMoneyDeal({
+      id: 25, title: 'ภูเก็ต เบย์ รีสอร์ท',
+      customerName: 'บริษัท ภูเก็ต เบย์ รีสอร์ท จำกัด',
+      priority: 'HIGH', owner: SALES2,
+      paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED',
+      salesStage: 'CLOSED_PAID', allDelivered: true,
+      quotationTotal: 792000,
+      quotationIssuedAt: '2026-05-12T16:00:00Z', quotationAcceptedAt: '2026-05-18T11:00:00Z',
+      items: [{ brand: 'SCG', model: 'Premium Matte', color: 'เทาอ่อน', texture: 'ด้าน', size: '60x60 ซม.', factory: 'SCG Ceramics', qty: 1500, qtySqm: 540, rawPrice: 395, price: 528 }],
+      closeConfirmedAt: '2026-08-12T09:30:00Z', closeConfirmedByName: ACCOUNT.name,
+      createdAt: '2026-05-06', updatedAt: '2026-08-12',
+      timeline: [
+        ...soldTimeline(SALES2, { created: '2026-05-06', quoted: '2026-05-12', confirmed: '2026-05-18' }),
+        ['DEPOSIT_NOTICE_ISSUED', '2026-05-20T10:00:00Z', SALES2],
+        ['DEPOSIT_PAID', '2026-05-25T14:00:00Z', ACCOUNT],
+        ['IR_ISSUED', '2026-05-28T09:00:00Z', IMPORT1],
+        ['IR_SENT', '2026-05-30T09:00:00Z', IMPORT1],
+        ['SHIPPING', '2026-06-05T08:00:00Z', IMPORT1],
+        ['GOODS_RECEIVED', '2026-07-11T14:00:00Z', IMPORT1],
+        ['DELIVERY_COMPLETED', '2026-07-16T15:00:00Z', IMPORT1],
+        ['AWAITING_FINAL_PAYMENT', '2026-07-17T09:00:00Z', IMPORT1],
+        ['FULLY_PAID', '2026-08-04T10:00:00Z', ACCOUNT],
+        ['CLOSE_CONFIRMED', '2026-08-12T09:30:00Z', ACCOUNT],
+      ],
+    }),
+  ];
+  tickets.push(...moneyDeals);
 
   // ══════════════════════════════════════════════════════════════════════
   // PricingRequest state matrix — hosted mostly on the existing 15 tickets,
@@ -968,6 +1307,39 @@ export function buildDemoSalesSeed() {
   addAttachment(6, { fileName: 'tax-invoice-QT-2026-0001.pdf', attachType: 'INVOICE', uploadedBy: SALES1, at: daysAgoIso(30) });
   addAttachment(12, { fileName: 'purchase-order-terminal21.pdf', attachType: 'PO', uploadedBy: IMPORT1, at: daysAgoIso(25) });
   addAttachment(18, { fileName: 'site-photos-fashion-island.zip', attachType: 'OTHER', mimeType: 'application/zip', fileSize: 2048000, uploadedBy: SALES1, at: daysAgoIso(5) });
+  // Tickets 24/25 (ฝ่ายบัญชี money cycle): the INVOICE attachment is not
+  // decoration — hasInvoiceAttachment() IS the invoiceOnFile half of
+  // requireClosePrerequisites, so without these two rows neither deal is
+  // close-ready and both fall out of their intended bucket. Uploaded by the
+  // rep because canManageDocuments deliberately excludes `account` (see
+  // mockApi.js's AttachmentController comment) — ฝ่ายบัญชี's own INVOICE write
+  // path is CommissionService.createFromDeal, which is precisely the step
+  // ticket 25 still has outstanding.
+  addAttachment(24, { fileName: 'tax-invoice-landmark-residence.pdf', attachType: 'INVOICE', uploadedBy: SALES1, at: '2026-08-08T11:00:00Z' });
+  addAttachment(25, { fileName: 'tax-invoice-phuket-bay-resort.pdf', attachType: 'INVOICE', uploadedBy: SALES2, at: '2026-08-04T11:00:00Z' });
+
+  // ── Deposit notices for the two รอรับมัดจำ deals ─────────────────────────
+  // depositNotices.issue() is the ONLY thing that sets paymentStatus =
+  // DEPOSIT_NOTICE_ISSUED, so a deal claiming that status without an ISSUED
+  // notice is a state the handlers could not have produced — and step 2 of
+  // DealDepositPanel would render "ยังไม่ได้ออกใบแจ้งยอด" while the deal page
+  // simultaneously offered account the "รับมัดจำ" button.
+  //
+  // Both ticket and quotation are duck-typed to just the fields
+  // makeDepositNotice reads, the same way ticket 18's DRAFT notice above is
+  // built: these two deals are ticket-native (they carry a `quotations` array,
+  // not a PricingRequest -> CustomerQuotation chain), so there is no real
+  // CustomerQuotation row to hand it.
+  makeDepositNotice(
+    { id: 19, customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด' },
+    { number: 'QT-2026-0201', items: [{ description: 'Cotto Marble Series ขาว มัน 60x120 ซม.', requestedQuantity: 600, requestedUnitBasis: 'PER_PIECE', approvedUnitPrice: 810, salesDiscount: 0, finalUnitPrice: 810 }] },
+    { status: 'ISSUED', createdAt: '2026-08-10T09:00:00Z', issueDate: '2026-08-11', version: 1 },
+  );
+  makeDepositNotice(
+    { id: 20, customerName: 'บริษัท ริชมอนด์ พร็อพเพอร์ตี้ จำกัด' },
+    { number: 'QT-2026-0202', items: [{ description: 'SCG Granite Beige เบจ หยาบ 60x60 ซม.', requestedQuantity: 3100, requestedUnitBasis: 'PER_PIECE', approvedUnitPrice: 400, salesDiscount: 0, finalUnitPrice: 400 }] },
+    { status: 'ISSUED', createdAt: '2026-07-23T09:00:00Z', issueDate: '2026-07-24', version: 1 },
+  );
 
   return {
     tickets,

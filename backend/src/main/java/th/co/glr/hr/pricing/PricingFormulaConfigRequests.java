@@ -6,6 +6,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -31,7 +32,10 @@ public final class PricingFormulaConfigRequests {
     ) {}
 
     public record FreightRateRequest(
-        @NotBlank String originCountry,
+        // ISO 3166-1 alpha-2, must exist in price_catalog.country -- the FK rejects anything else,
+        // which is the point: a free-text country is what made the freight lookup never match.
+        @NotBlank @Pattern(regexp = "^[A-Z]{2}$", message = "ต้องเป็นรหัสประเทศ 2 ตัวอักษร")
+        String originCountryCode,
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal thicknessMinMm,
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal thicknessMaxMm,
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal qtyMinSqm,

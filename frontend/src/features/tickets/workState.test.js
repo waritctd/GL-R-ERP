@@ -37,6 +37,20 @@ describe('resolveWorkState', () => {
     expect(result.action).toMatchObject({ key: 'create_pcr' });
   });
 
+  // Stages 13-14 (ส่งมอบสินค้า) handoff to sales, owner ruling 2026-08-17: proves the new
+  // RECORD_DELIVERY bucket reaches the sticky bar through the SAME resolveWorkState -> nextSalesAction
+  // path this whole describe block exercises, not just in salesActions.test.js's own isolated unit
+  // tests. Zero pricing requests + a non-null paymentStatus is the "priced outside the PCR chain"
+  // shape (bucket 1's own guard) — the same shape demoData.js tickets 13/14 already have.
+  it('sales viewer on a delivery-ready deal falls through to nextSalesAction (RECORD_DELIVERY)', () => {
+    const deal = baseDeal({
+      status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT',
+    });
+    const result = resolveWorkState({ role: 'sales' }, deal, [], catalog);
+    expect(result.waitingRoleLabel).toBeNull();
+    expect(result.action).toMatchObject({ key: 'record_delivery' });
+  });
+
   it('sales viewer on an import-gated stage with genuinely nothing pending (a live, in-review PR; no stale/follow-up) falls through to the stage-gate banner — รอฝ่ายนำเข้า', () => {
     // FIX 1 rewrite: resolveWorkState now calls nextSalesAction FIRST,
     // unconditionally — it no longer skips the resolver just because the

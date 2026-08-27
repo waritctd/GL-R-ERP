@@ -45,6 +45,7 @@ import th.co.glr.hr.ticket.TicketRepository;
  * hand-computed expectation.
  */
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.notification.CeoApproverRepository;
 
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 

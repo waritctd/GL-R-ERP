@@ -55,6 +55,7 @@ const ROUTES = [
   '/tickets/1/deposit',
   '/pricing-requests',
   '/pricing-requests/1',
+  '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
   '/commissions',
   '/finance',
   '/price-import',

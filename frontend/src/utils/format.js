@@ -249,19 +249,29 @@ const FACTORY_QUOTE_STATUS_LABELS = {
     REQUESTED: { label: 'ส่งขอราคาแล้ว', tone: 'warning' },
     RESPONSE_RECEIVED: { label: 'ได้รับราคาโรงงานแล้ว', tone: 'info' },
     NEGOTIATING: { label: 'กำลังเจรจา', tone: 'warning' },
-    // "ส่งให้ CEO แล้ว", not "พร้อมคำนวณต้นทุน". The constant's NAME is a fossil: V141 severed the
-    // costing aggregate (PricingCostingService's writes all throw 409 COSTING_MOVED_TO_CEO) and the
-    // cost is now computed by the CEO at startReview, so there is no costing step for a quote to be
-    // "ready for" any more. The label advertised a stage of the workflow that no longer exists, and
-    // Import read it as the request being stuck.
+    // Relabelled again 2026-08-16 (owner ruling, factory-price-import-ui redesign): "รอ CEO
+    // อนุมัติราคา", not "ส่งให้ CEO แล้ว". The constant's NAME is still a fossil for the same reason
+    // as before — V141 severed the costing aggregate (PricingCostingService's writes all throw 409
+    // COSTING_MOVED_TO_CEO) and the cost is now computed by the CEO at startReview, so there is no
+    // costing step for a quote to be "ready for" any more.
     //
-    // Deliberately NOT "รอ CEO อนุมัติราคา". This badge is on ONE FACTORY QUOTE, not on the request.
-    // A request does not advance to READY_FOR_CEO_REVIEW until EVERY current quote is marked ready
-    // (FactoryQuoteService#markReadyForCosting, guarded by landedCosts.isFullyResolvable), so with
-    // two factories one quote can sit here while another is still being negotiated. "Waiting for the
-    // CEO" would be false in that window; "sent to the CEO" is true either way, because it describes
-    // what Import did rather than what the request is now doing.
-    READY_FOR_COSTING: { label: 'ส่งให้ CEO แล้ว', tone: 'success' },
+    // The PREVIOUS label here ("ส่งให้ CEO แล้ว") was itself a deliberate 2026-08-15 correction of
+    // an even older fossil ("พร้อมคำนวณต้นทุน") and reasoned explicitly against "รอ CEO อนุมัติราคา":
+    // this badge sits on ONE FACTORY QUOTE, not on the request, and a request does not advance to
+    // READY_FOR_CEO_REVIEW until EVERY current quote is marked ready (FactoryQuoteService#
+    // markReadyForCosting, guarded by landedCosts.isFullyResolvable) — so with two factories, one
+    // quote can sit here while another is still being negotiated, and "waiting for the CEO" would be
+    // false for the REQUEST in that window even though it is true for THIS quote either way.
+    //
+    // The owner has now ruled the other way, explicitly requesting exactly one wording for this
+    // state across the app (previously it read "ส่งให้ CEO แล้ว" on this badge but "รอ CEO อนุมัติราคา"
+    // nowhere — there was no actual second wording to unify, just a badge whose copy didn't match
+    // the mental model Import and the CEO both already used talking about it out loud). The
+    // multi-factory caveat above is still true of the mechanism; it is no longer true of the label
+    // the owner wants shown. See docs/api/status-catalog.json / StatusCatalogContractTest — that
+    // guard pins the backend's STATUS KEYS only, never label TEXT (see statusCatalog.test.js's own
+    // header comment), so this text-only rename needed no digest regeneration.
+    READY_FOR_COSTING: { label: 'รอ CEO อนุมัติราคา', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
     // Both added 2026-08-16, found by statusCatalog.test.js on its first run — the guard's own
     // KNOWN_UNLABELLED list named them, and that list is self-cleaning, so adding these here is
@@ -650,6 +660,17 @@ export function quotationStatusLabel(value) {
     EXPIRED: { label: 'หมดอายุ', tone: 'warning' },
     CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
     SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+// sales.quotation_item_discount_approval.status.
+export function discountApprovalStatusLabel(value) {
+  const map = {
+    PENDING: { label: 'รอ CEO อนุมัติส่วนลด', tone: 'warning' },
+    APPROVED: { label: 'CEO อนุมัติส่วนลดแล้ว', tone: 'success' },
+    REJECTED: { label: 'CEO ปฏิเสธส่วนลด', tone: 'danger' },
   };
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }

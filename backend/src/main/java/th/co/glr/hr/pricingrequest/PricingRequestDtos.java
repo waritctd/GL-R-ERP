@@ -82,7 +82,13 @@ public final class PricingRequestDtos {
         String catalogProductCode,
         String catalogBrand,
         String catalogCollection,
-        String catalogModel
+        String catalogModel,
+        // V152 (V109 engine wiring): CEO override of the duty product_type used at costing time
+        // (sales.pricing_duty_rate.product_type). NULL = no override — LandedCostCalculator
+        // defaults to PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE"). See
+        // PricingDecisionService#overrideItemProductType for who may set this and why it lives
+        // here rather than on pricing_decision_item.
+        String productTypeOverride
     ) {}
 
     public record PricingRequestEventDto(

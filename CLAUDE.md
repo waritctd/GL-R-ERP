@@ -231,7 +231,63 @@ lost — use the `retired-docs` skill to read any of them back out of git histor
 - **Backend:** session auth via `SessionSecurityFilter`. `SecurityConfig` is **default-deny** — `anyRequest().authenticated()`, with only four anonymous exceptions (OPTIONS preflight, `POST /api/auth/login`, `POST /api/attendance/punch`, `GET /actuator/health`). Read the file (39 lines) rather than assuming — this bullet claimed `permitAll` and "no Actuator/OpenAPI" until 2026-08-08, and both were wrong. **Role checks live in the controllers, not the filter chain**, so "authenticated" is the only guarantee `SecurityConfig` gives you.
 - **CSRF is enforced, but not by Spring Security.** `SecurityConfig` calls `.csrf(disable)` because the app rolls its own: `CsrfCookieFilter` (`@Order(0)`) issues a non-HttpOnly `XSRF-TOKEN` cookie and rejects unsafe `/api/` methods with 403 unless `X-XSRF-TOKEN` matches it. Do **not** "fix" the disabled Spring CSRF — you would double up on an already-working guard.
 - Integration tests resolve Postgres via `TEST_DB_URL` **or** Testcontainers when Docker is available (`support/PostgresTestSupport#isAvailable`) — so they usually *do* run on a local `mvnw verify`. **With neither, they ERROR rather than skip.** This line previously claimed they skip; that was false and is worth knowing why, because the mistake is easy to repeat: JUnit's `@EnabledIf` is **not `@Inherited`**, so the annotation on `AbstractPostgresIntegrationTest` disables nothing in its ~130 subclasses. Verified against junit-jupiter-api 5.12.2's own `RuntimeVisibleAnnotations`, and observed by forcing `isAvailable()` false and watching a subclass error ten times rather than skip (PR #770). **Do not annotate a base class and assume subclasses inherit the gate** — annotate each class, or gate in code.
-- **The Render demo is a showcase, not real production.**
+- ⚠️ **`main` IS production, but the two halves deploy DIFFERENTLY — and getting this wrong is the
+  live trap.** Owner ruling 2026-08-17. Real GL&R production is the **Render backend + Vercel
+  frontend** pipeline: `vercel.json` rewrites `/api/*` to `https://gl-r-erp.onrender.com`. There is
+  **no deploy job** in `.github/workflows/`.
+
+  | | Deploys from `main`? | What it takes |
+  |---|---|---|
+  | **Frontend (Vercel)** | **YES** | merge — it is live |
+  | **Backend (Render)** | **NO** | build+push a tagged image → bump `render.yaml`'s `image.url` → deploy from the dashboard |
+
+  `render.yaml` sets **`autoDeploy: false`** and runs a **pre-built image** from ghcr, because the
+  licensed Thai fonts are gitignored and an image Render builds itself could never contain them
+  (#666). So a merged backend change is **not live and its migrations are not applied** until someone
+  does those three steps.
+
+  - **The asymmetry is what bites.** Merge a feature whose frontend and backend are separate PRs and
+    the UI ships alone, calling endpoints the running image does not have. That happened on
+    2026-08-17: `/fulfilment` rendered "งานนำเข้าทั้งหมดดำเนินการครบแล้ว" — the exact lie its backend
+    fix removed — and the ใบขอซื้อ block 404'd, for hours, while everything looked merged and green.
+    **Before reasoning about what production is running, read `render.yaml`'s pinned tag and when that
+    image was built. Not the git log.** `./scripts/build-push-backend-image.sh <tag>` builds it; verify
+    by copying `app.jar` OUT of the pushed image and reading it, because `v2026-08-17` shipped stale
+    code with a completely clean build log.
+  - **This bullet used to read "The Render demo is a showcase, not real production", and that was
+    wrong.** It is corrected rather than deleted because the mistake has a consequence worth naming:
+    anyone who believes it will treat a merge to `main` as safe. It is not. In particular **Flyway runs
+    at boot**, so a migration reaches the production Supabase database on the next backend *deploy*
+    with no further step — see `application-prod.yml`, which documents six checksum mismatches and an
+    unresolved `V11`-vs-`V11.1`/`V11.2` split in real prod's own history, and is why
+    `validate-on-migrate` is pinned false. Adding a migration is an owner-approved operation with a
+    rollback plan, never a routine merge. Note migrations QUEUE: five (V151–V155) sat on `main`
+    unapplied for a day and then landed in one deploy.
+  - ⚠️ **A lower migration version merged after a higher one is SILENTLY SKIPPED on prod. It does
+    NOT fail the deploy.** This bullet used to read "out-of-order is unset (default false), so that
+    case fails the whole migrate at boot", and it was wrong in the direction that matters — a boot
+    failure would at least be *noticed*. Out-of-order is indeed unset, but `validate-on-migrate` is
+    **false** wherever the `prod` profile runs (`application-prod.yml` defaults it false and
+    `render.yaml` pins `APP_FLYWAY_VALIDATE_ON_MIGRATE: "false"` on top), so `migrate` never
+    validates and a pending version below the applied max is dropped with no error, no failed
+    deploy, and no log line anyone reads. `V67`'s own header states it: such a migration "would
+    deploy successfully and silently skip that branch's migration on merge". **Proof, not
+    inference:** `V11.1`/`V11.2` have sat unapplied below prod's max for months while every deploy
+    succeeded, most recently 2026-08-17. (Two *unapplied* migrations on `main` in any authoring
+    order do still simply apply ascending — that half was right.)
+  - **Before a backend deploy, diff the migration SET — never `max(version)`.** On 2026-08-25 prod
+    and `main` both read V155 while `V11.1`/`V11.2` were still unapplied, so the max agreed and the
+    sets did not. Use `SELECT string_agg(version, ',' ORDER BY version::numeric) FROM
+    hr.flyway_schema_history` and diff it against the repo filenames. Expect **six** versions
+    applied-but-not-in-repo: only `V11` is genuine drift (the unresolved V11-vs-V11.1/V11.2 split);
+    `V21`/`V32`/`V46`/`V91.1`/`V139` all live in `db/migration-demo`, which `render.yaml` pulls in
+    via `SPRING_FLYWAY_LOCATIONS`. Do not report those five as drift — they resolve fine. Check the
+    target's `hr.flyway_schema_history`, not `git`, and never renumber a migration that is already
+    on `main`.
+  - **One thing still unreconciled:** `application-prod.yml`'s own comments describe "the real GL&R
+    production deploy" and "the public gl-r-erp.onrender.com showcase" as two deployments sharing the
+    `prod` profile, which does not sit cleanly with the ruling above. Do not assume either reading is
+    complete — ask the owner before acting on the distinction.
 
 ## Commit / PR conventions
 - Conventional-commit style prefixes (`feat:`, `fix:`, `chore:`, `refactor:`, `security:`, `docs:`, `test:`).

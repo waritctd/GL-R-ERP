@@ -23,8 +23,24 @@ vi.mock('../../api/index.js', () => ({
       addFreightRate: vi.fn(),
       deleteFreightRate: vi.fn(),
     },
+    catalogThicknessDefaults: {
+      list: vi.fn(),
+      save: vi.fn(),
+    },
   },
 }));
+
+// V153 thickness gaps. Deliberately NOT in descending row order, so a panel that re-sorted or
+// re-ordered them would show ALTEA first and fail the ordering test below.
+function sampleThicknessGaps() {
+  return {
+    gaps: [
+      { factoryId: 8, factoryName: 'Vives', collection: 'ALTEA', rowsMissingThickness: 312, currentDefaultMm: null, hasSizeLevelOverride: false },
+      { factoryId: 7, factoryName: 'Equipe', collection: 'KENZAI', rowsMissingThickness: 96, currentDefaultMm: 8.5, hasSizeLevelOverride: false },
+    ],
+    rowsStillMissingThickness: 312,
+  };
+}
 
 // BRANCH 1 sample config, small enough to be readable: 1 country x 1 thickness band x 1 qty
 // band, so tests can pin exact matrix cell text without a 39-row fixture.
@@ -44,13 +60,21 @@ function sampleFormulaConfig() {
     defaultMarginPct: 0.24,
     sellingPriceRoundUpTo: 10,
     freightRates: [
-      { freightRateId: 1, originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
+      { freightRateId: 1, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
     ],
     dutyRates: [
       { dutyRateId: 1, productType: 'TILE', productLabel: 'กระเบื้อง', dutyPct: 0.3 },
     ],
     clearanceFees: [
       { clearanceFeeId: 1, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 8000 },
+    ],
+    // V151: the freight editor's country <select> is populated from this, not from the countries
+    // already present in freightRates -- otherwise a new supplier country could never be added.
+    // 'ES' is here but absent from freightRates above, which is exactly the case that matters.
+    availableCountries: [
+      { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
+      { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
+      { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
     ],
   };
 }
@@ -66,8 +90,8 @@ function sampleFormulaConfigWithBlankCell() {
     ...base,
     freightRates: [
       ...base.freightRates,
-      { freightRateId: 2, originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
-      { freightRateId: 3, originCountry: 'China', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
+      { freightRateId: 2, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 100, qtyMaxSqm: null, amountThb: 70000 },
+      { freightRateId: 3, originCountryCode: 'CN', originCountryName: 'จีน', thicknessMinMm: 7, thicknessMaxMm: 12, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 65000 },
       // China [7,12) x [100, null) is DELIBERATELY missing -- the blank cell under test.
     ],
   };
@@ -112,6 +136,66 @@ describe('CeoSettingsPage', () => {
     api.pricingFormulaConfig.addFreightRate.mockResolvedValue({ formulaConfig: { ...sampleFormulaConfig(), version: 2 } });
     api.pricingFormulaConfig.deleteFreightRate.mockResolvedValue({
       formulaConfig: { ...sampleFormulaConfig(), version: 2, freightRates: [] },
+    });
+    api.catalogThicknessDefaults.list.mockResolvedValue(sampleThicknessGaps());
+    api.catalogThicknessDefaults.save.mockResolvedValue({ saved: 1, ...sampleThicknessGaps() });
+  });
+
+  // V153 thickness defaults. These pin the two behaviours that would silently MIS-PRICE if wrong:
+  // a blank must clear rather than save 0 (a stored 0 selects the lowest freight band instead of
+  // refusing to price), and rows must stay in biggest-impact-first order.
+  describe('thickness defaults panel (V153)', () => {
+    async function findThicknessInput(name) {
+      return screen.findByLabelText(new RegExp(`ความหนา .*${name}`));
+    }
+
+    it('lists gaps biggest-impact-first and shows how many rows are still unpriceable', async () => {
+      renderCeoSettingsPage();
+
+      const altea = await screen.findByText('ALTEA');
+      const kenzai = screen.getByText('KENZAI');
+      // ALTEA (312 rows) must render before KENZAI (96) — the CEO works top-down.
+      expect(altea.compareDocumentPosition(kenzai) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByText(/เหลือ 312 รายการ/)).not.toBeNull();
+    });
+
+    it('prefills an already-set default and leaves an unset one blank', async () => {
+      renderCeoSettingsPage();
+
+      expect((await findThicknessInput('KENZAI')).value).toBe('8.5');
+      expect((await findThicknessInput('ALTEA')).value).toBe('');
+    });
+
+    it('sends a typed thickness as a number, and only the edited row', async () => {
+      renderCeoSettingsPage();
+
+      fireEvent.change(await findThicknessInput('ALTEA'), { target: { value: '9' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึก 1 รายการ/ }));
+
+      await waitFor(() => expect(api.catalogThicknessDefaults.save).toHaveBeenCalledWith({
+        entries: [{ factoryId: 8, collection: 'ALTEA', thicknessMm: 9 }],
+      }));
+    });
+
+    // The one that matters most: a stored 0 would silently pick the LOWEST freight band rather
+    // than refusing to price, so a cleared field must reach the API as null — never Number('') = 0.
+    it('sends a cleared thickness as null, never as zero', async () => {
+      renderCeoSettingsPage();
+
+      fireEvent.change(await findThicknessInput('KENZAI'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /บันทึก 1 รายการ/ }));
+
+      await waitFor(() => expect(api.catalogThicknessDefaults.save).toHaveBeenCalledWith({
+        entries: [{ factoryId: 7, collection: 'KENZAI', thicknessMm: null }],
+      }));
+    });
+
+    it('offers no save control until something is edited', async () => {
+      renderCeoSettingsPage();
+      await screen.findByText('ALTEA');
+
+      expect(screen.queryByRole('button', { name: /บันทึก \d+ รายการ/ })).toBeNull();
+      expect(api.catalogThicknessDefaults.save).not.toHaveBeenCalled();
     });
   });
 
@@ -305,7 +389,8 @@ describe('CeoSettingsPage', () => {
         defaultMarginPct: 0.24,
         sellingPriceRoundUpTo: 10,
         freightRates: [
-          { originCountry: 'China', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
+          // Code only: originCountryName is display data resolved server-side, never sent back.
+          { originCountryCode: 'CN', thicknessMinMm: 3, thicknessMaxMm: 7, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 60000 },
         ],
         dutyRates: [
           { productType: 'TILE', productLabel: 'กระเบื้อง', dutyPct: 0.3 },
@@ -327,12 +412,12 @@ describe('CeoSettingsPage', () => {
       await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
       const addCellButton = await screen.findByRole(
         'button',
-        { name: 'เพิ่มค่าขนส่ง China หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
+        { name: 'เพิ่มค่าขนส่ง จีน หนา 7 – <12 มม. ช่วง ≥100 ตร.ม.' },
       );
       fireEvent.click(addCellButton);
 
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('China');
+      expect(within(dialog).getByLabelText('ประเทศต้นทาง').value).toBe('CN');
       expect(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)').value).toBe('7');
       expect(within(dialog).getByLabelText('ถึง (<) (มม.)').value).toBe('12');
       expect(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)').value).toBe('100');
@@ -348,7 +433,7 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
 
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'Spain' } });
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'ES' } });
       fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '21' } });
       fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '25' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
@@ -357,7 +442,7 @@ describe('CeoSettingsPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
 
       await waitFor(() => expect(api.pricingFormulaConfig.addFreightRate).toHaveBeenCalledWith({
-        originCountry: 'Spain',
+        originCountryCode: 'ES',
         thicknessMinMm: 21,
         thicknessMaxMm: 25,
         qtyMinSqm: 1,
@@ -374,7 +459,7 @@ describe('CeoSettingsPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
       fireEvent.click(within(dialog).getByRole('button', { name: 'เพิ่มค่าขนส่ง' }));
 
-      expect(await within(dialog).findByText('กรุณากรอกประเทศต้นทาง')).not.toBeNull();
+      expect(await within(dialog).findByText('กรุณาเลือกประเทศต้นทาง')).not.toBeNull();
       expect(api.pricingFormulaConfig.addFreightRate).not.toHaveBeenCalled();
     });
 
@@ -388,7 +473,7 @@ describe('CeoSettingsPage', () => {
 
       fireEvent.click(screen.getByRole('button', { name: '+ เพิ่มค่าขนส่ง' }));
       const dialog = await screen.findByRole('dialog', { name: 'เพิ่มค่าขนส่ง' });
-      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'China' } });
+      fireEvent.change(within(dialog).getByLabelText('ประเทศต้นทาง'), { target: { value: 'CN' } });
       fireEvent.change(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)'), { target: { value: '3' } });
       fireEvent.change(within(dialog).getByLabelText('ถึง (<) (มม.)'), { target: { value: '7' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)'), { target: { value: '1' } });
@@ -406,7 +491,7 @@ describe('CeoSettingsPage', () => {
   // cannot make these tests pass or fail for the wrong reason.
   describe('freight-row delete (issue #436)', () => {
     async function openDeleteConfirm() {
-      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง China/ });
+      const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง จีน/ });
       fireEvent.click(deleteButton);
       return screen.findByRole('dialog', { name: 'ยืนยันการลบค่าขนส่ง' });
     }
@@ -416,7 +501,7 @@ describe('CeoSettingsPage', () => {
       await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
 
       const dialog = await openDeleteConfirm();
-      expect(within(dialog).getByText(/China/)).not.toBeNull();
+      expect(within(dialog).getByText(/จีน/)).not.toBeNull();
       expect(within(dialog).getByText(/60,000\.00 บาท/)).not.toBeNull();
     });
 

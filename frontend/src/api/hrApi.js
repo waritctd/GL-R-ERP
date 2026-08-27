@@ -381,6 +381,21 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
+  // Mirrors ImportRequestController. Import/CEO only, enforced in ImportRequestService — these
+  // methods carry no gate of their own and must not be read as one.
+  importRequests: {
+    brands: (ticketId) => apiRequest(API_ROUTES.importRequests.brands(ticketId)),
+    pages: (ticketId, brand, requiredBy) =>
+      apiRequest(API_ROUTES.importRequests.pages(ticketId, brand, requiredBy)),
+    // Binary, so it goes through fetch directly rather than apiRequest — same shape as
+    // tickets.downloadRemainingInvoice above, which is the other PDF this app hands over.
+    download: async (ticketId, brand, ref, requiredBy) => {
+      const res = await fetch(API_ROUTES.importRequests.file(ticketId, brand, ref, requiredBy),
+        { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+  },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
     prices: (q, factoryId, limit) => apiRequest(API_ROUTES.catalog.prices(q, factoryId, limit)),
@@ -425,6 +440,13 @@ export const api = {
     update: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.update, { method: 'POST', body: payload }),
     addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
     deleteFreightRate: (freightRateId) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRate(freightRateId), { method: 'DELETE' }),
+  },
+  // V153 thickness fallbacks — mirrors ThicknessDefaultController. save() sends the WHOLE edited
+  // set in one request and gets the refreshed gap list back, so the panel re-renders from server
+  // truth rather than patching local state.
+  catalogThicknessDefaults: {
+    list: () => apiRequest(API_ROUTES.catalog.thicknessDefaults),
+    save: (payload) => apiRequest(API_ROUTES.catalog.thicknessDefaults, { method: 'PUT', body: payload }),
   },
   attachments: {
     list: (ticketId) => apiRequest(API_ROUTES.attachments.list(ticketId)),
@@ -836,7 +858,6 @@ export const api = {
     getPricingDecisionSalesView: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionSalesView(id)),
     getPricingDecision: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id)),
     updatePricingDecision: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecision(id), { method: 'PUT', body: payload }),
-    recalculatePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculate(id), { method: 'POST', body: payload }),
     approvePricingDecision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionApprove(id), { method: 'POST', body: payload }),
     returnPricingDecisionToImport: (id, payload) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionReturnToImport(id), { method: 'POST', body: payload }),
     // V141 "CEO owns costing" (PR #702). No request body — PricingDecisionController.recalculateCost
@@ -844,6 +865,9 @@ export const api = {
     recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
     overridePricingDecisionItemCost: (decisionId, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemCostOverride(decisionId, itemId), { method: 'PUT', body: payload }),
+    // V152 (V109 engine wiring). No request body arity beyond { productType } — null clears it.
+    overridePricingDecisionItemProductType: (decisionId, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemProductTypeOverride(decisionId, itemId), { method: 'PUT', body: payload }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),
@@ -855,6 +879,11 @@ export const api = {
     createCustomerQuotationRevision: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationRevisions(id), { method: 'POST', body: payload }),
     // Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationController.recordOutcome.
     recordCustomerQuotationOutcome: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotationOutcome(id), { method: 'POST', body: payload }),
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+    // DiscountApprovalController.
+    listDiscountApprovalsForQuotation: (quotationId) => apiRequest(API_ROUTES.pricingRequests.discountApprovalsForQuotation(quotationId)),
+    approveDiscountApproval: (id) => apiRequest(API_ROUTES.pricingRequests.discountApprovalApprove(id), { method: 'POST' }),
+    rejectDiscountApproval: (id, payload) => apiRequest(API_ROUTES.pricingRequests.discountApprovalReject(id), { method: 'POST', body: payload }),
     // Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationController.
     confirmOrder: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.confirmOrder(id), { method: 'POST', body: payload }),
     createDepositNoticeFromQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.depositNoticeFromQuotation(id), { method: 'POST', body: payload }),

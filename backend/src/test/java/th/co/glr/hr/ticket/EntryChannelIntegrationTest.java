@@ -25,7 +25,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -61,11 +60,10 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireRealCollaborators() {
         tickets = new TicketRepository(jdbc);
         CustomerRepository customers = new CustomerRepository(jdbc);
-        // PriceCalcService/PricingRequestService are never reached by create() or
-        // setEntryChannel(); they exist only to satisfy the constructor.
+        // PricingRequestService is never reached by create() or setEntryChannel(); it exists
+        // only to satisfy the constructor.
         ticketService = new TicketService(tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            mock(PriceCalcService.class), new ObjectMapper(), customers, new QuotationRenderer(),
-            mock(PricingRequestService.class));
+            new ObjectMapper(), customers, new QuotationRenderer(), mock(PricingRequestService.class));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

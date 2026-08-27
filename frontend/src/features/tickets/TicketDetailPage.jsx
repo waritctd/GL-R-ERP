@@ -49,8 +49,9 @@ import { resolveWorkState } from './workState.js';
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
 // "Action bar (sticky)"): where the sticky primary button sends the viewer
 // when workState.js hands back an action this page has no dedicated `can.*`
-// button for (FOLLOW_UP/LOG_ACTIVITY for sales; the fulfilment chain for
-// import; the deposit/final-payment/close-ready steps for account) — an
+// button for (FOLLOW_UP/LOG_ACTIVITY/RECORD_DELIVERY for sales; the
+// fulfilment chain for import; the deposit/final-payment/close-ready steps
+// for account) — an
 // in-page anchor id when the real control already lives further down THIS
 // page, so the button scrolls to it instead of duplicating its logic (never
 // a second copy of a mutation the real panel already owns and gates).
@@ -65,6 +66,14 @@ const IN_PAGE_JUMP_TARGET = {
   // salesActions.js SALES_ACTION keys
   follow_up: 'deal-tracking-panel',
   log_activity: 'deal-tracking-panel',
+  // Stages 13-14 (ส่งมอบสินค้า) belong to Sales too now (owner ruling 2026-08-17, additive to
+  // import/CEO) — salesActions.js's RECORD_DELIVERY bucket reuses importActions.js's
+  // nextFulfilmentActionCode (not nextImportAction) to decide this, so it needs its own entry
+  // here. Import's camelCase `recordDelivery` below is now UNREACHABLE -- nextImportAction
+  // stopped emitting it when ImportOverview handed delivery PROMPTING to Sales -- but it is
+  // kept rather than deleted: it maps to this same panel, so it is already correct if import
+  // is ever re-prompted, and the underlying capability was never removed (#818 was additive).
+  record_delivery: 'deal-fulfilment-panel',
   // importActions.js codes
   issueImportRequest: 'deal-fulfilment-panel',
   markIrSent: 'deal-fulfilment-panel',
@@ -947,7 +956,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // unchanged — those are already stable, already covered by e2e specs,
     // and are a different kind of primary (server-gated, not
     // resolver-derived), so they are not folded into this generic id.
-    if (to && to !== `/tickets/${ticketId}`) {
+    // `!jumpId` is load-bearing: an action that has an in-page target on THIS page must scroll to
+    // it, never navigate away, even when its resolver supplies a `to`.
+    //
+    // Before the /fulfilment workspace existed, nextImportAction returned `/tickets/:id` for the
+    // four fulfilment codes, so this condition was false for them and the cascade fell through to
+    // the `else if (jumpId)` branch below — the sticky button scrolled down to
+    // DealFulfilmentPanel, where the real server-gated control lives. Pointing those codes at
+    // /fulfilment made this branch fire instead, so an import user standing ON the deal, one
+    // scroll away from the button they wanted, was ejected to a list page to find the same deal
+    // again. That is a longer round trip than the one the workspace exists to remove, and it
+    // silently disabled four IN_PAGE_JUMP_TARGET entries while recordDelivery — which kept a
+    // `/tickets/:id` `to` — went on scrolling, so one bar had two behaviours.
+    //
+    // Deciding it here rather than in nextImportAction is deliberate: the resolver serves the
+    // dashboard and the workspace too, and for THOSE callers /fulfilment is the correct
+    // destination. Only this page knows it already contains the target.
+    if (to && to !== `/tickets/${ticketId}` && !jumpId) {
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
           {workStateAction.label}

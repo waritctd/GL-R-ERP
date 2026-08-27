@@ -85,7 +85,7 @@ class FactoryQuoteCarryForwardTest {
         PricingRequestItemDto child = new PricingRequestItemDto(11L, 99L, null, 777L, null, "SCG",
             "Tile B", "SCG Tile B", null, null, "60x60", "Factory X", new BigDecimal("10"),
             new BigDecimal("10"), "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null,
-            0, null, null, null, null, null, null, null, null, null, null, null);
+            0, null, null, null, null, null, null, null, null, null, null, null, null);
 
         assertThat(FactoryQuoteCarryForward.equivalentItemMapping(List.of(parent), List.of(child))).isNull();
     }
@@ -113,6 +113,6 @@ class FactoryQuoteCarryForwardTest {
         return new PricingRequestItemDto(id, 99L, null, 555L, null, "SCG", "Tile A", "SCG Tile A",
             null, null, "60x60", "Factory X", new BigDecimal(qty), new BigDecimal(qty), "piece",
             UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null, 0, null, null, null, null,
-            null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
     }
 }

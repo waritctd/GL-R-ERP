@@ -522,13 +522,33 @@ public class PricingRequestRepository {
                    target_delivery_date, delivery_location, special_requirement, sort_order,
                    price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
                    catalog_effective_date, resolved_factory_id, resolved_factory_name,
-                   catalog_product_code, catalog_brand, catalog_collection, catalog_model
+                   catalog_product_code, catalog_brand, catalog_collection, catalog_model,
+                   product_type_override
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
             """,
             Map.of("id", pricingRequestId),
             (rs, rowNum) -> mapItem(rs));
+    }
+
+    /**
+     * V152 (V109 engine wiring): the CEO's per-item duty product_type override. {@code
+     * productType == null} clears the override (back to LandedCostCalculator's TILE default) —
+     * mirrors {@code PricingCostingRepository#applyOverride}/{@code clearOverride}'s own
+     * null-means-clear convention for the sibling cost override. Caller
+     * ({@code PricingDecisionService#overrideItemProductType}) validates the value against the
+     * CURRENT pricing_formula_config's duty rates before calling; this method trusts it.
+     */
+    public int updateItemProductTypeOverride(long pricingRequestItemId, String productType) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET product_type_override = :productType
+             WHERE pricing_request_item_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("productType", productType));
     }
 
     public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {
@@ -1054,7 +1074,8 @@ public class PricingRequestRepository {
             rs.getString("catalog_product_code"),
             rs.getString("catalog_brand"),
             rs.getString("catalog_collection"),
-            rs.getString("catalog_model")
+            rs.getString("catalog_model"),
+            rs.getString("product_type_override")
         );
     }
 

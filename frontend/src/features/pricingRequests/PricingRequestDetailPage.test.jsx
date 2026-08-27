@@ -64,6 +64,10 @@ vi.mock('../../api/index.js', () => ({
       downloadCustomerQuotationXlsx: vi.fn(),
       // Step 5: Customer Decision and Commercial Revisions.
       recordCustomerQuotationOutcome: vi.fn(),
+      // CEO discount-approval workflow, Phase 2 (V155).
+      listDiscountApprovalsForQuotation: vi.fn(),
+      approveDiscountApproval: vi.fn(),
+      rejectDiscountApproval: vi.fn(),
       // Step 6: Deposit, Payment, and Order Confirmation.
       confirmOrder: vi.fn(),
       createDepositNoticeFromQuotation: vi.fn(),
@@ -329,6 +333,29 @@ function buildCustomerQuotation(overrides = {}) {
   };
 }
 
+// CEO discount-approval workflow, Phase 2 (V155). Mirrors DiscountApprovalDtos.DiscountApprovalDto.
+function buildDiscountApproval(overrides = {}) {
+  return {
+    id: 3001,
+    quotationItemId: 9001,
+    quotationId: 5501,
+    pricingRequestId: 501,
+    quotationNumber: 'QT-2026-0001',
+    itemDescription: 'กระเบื้องพื้น SCG A1',
+    status: 'PENDING',
+    requestedFinalUnitPrice: 62,
+    requestedBy: 1,
+    requestedByName: 'พนักงานขาย',
+    requestedAt: '2026-08-17T00:00:00Z',
+    decidedBy: null,
+    decidedByName: null,
+    decidedAt: null,
+    approvedFinalUnitPrice: null,
+    rejectionReason: null,
+    ...overrides,
+  };
+}
+
 // Step 3 (CEO Selling Price Decision) fixtures. Mirrors PricingDecisionDtos.PricingDecisionDto /
 // PricingDecisionItemDto — never spread into the sales-facing view builder below, which mirrors
 // PricingDecisionSalesViewDto/PricingDecisionSalesItemDto instead (design correction 2).
@@ -352,9 +379,10 @@ function buildDecisionItem(overrides = {}) {
     approvedMarginPct: null,
     proposedSellingPricePerRequestedUnit: 72,
     approvedSellingPricePerRequestedUnit: null,
-    discountCeilingPct: 0.1,
     minimumSellingPricePerRequestedUnit: 65,
     decisionNote: null,
+    // Phase 1 UI simplification ("ปรับราคาเอง") — no override by default.
+    manualSellingPricePerRequestedUnit: null,
     ...overrides,
   };
 }
@@ -398,7 +426,6 @@ function buildSalesView(overrides = {}) {
         requestedUnitBasis: 'PER_PIECE',
         requestedQuantity: 20,
         approvedSellingPricePerRequestedUnit: 72,
-        discountCeilingPct: 0.1,
         minimumSellingPricePerRequestedUnit: 65,
       },
     ],
@@ -414,6 +441,10 @@ function renderDetailPage({
   factoryQuotes = [],
   costings = [],
   attachments = [],
+  // CEO discount-approval workflow, Phase 2: defaults to empty like every other list query here
+  // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this
+  // feature never has to know it exists — only tests exercising it pass discountApprovals.
+  discountApprovals = [],
   showToast = vi.fn(),
   routeId = request?.summary?.id ?? 501,
 } = {}) {
@@ -427,6 +458,7 @@ function renderDetailPage({
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: factoryQuotes });
   api.pricingRequests.listCostings.mockResolvedValue({ items: costings });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: attachments });
+  api.pricingRequests.listDiscountApprovalsForQuotation.mockResolvedValue({ items: discountApprovals });
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -555,10 +587,11 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     await waitForLoaded();
 
     // Raw data IS visible to CEO.
-    // By role, not text: "ราคาโรงงาน" now also names a column in the
-    // response-entry grid, so a bare text query can match more than one node.
-    // The assertion here is that the SECTION is present.
-    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
+    // By role and a prefix regex, not exact text: the section header is now
+    // "รายการสินค้า (N รายการ)" (owner-supplied mockup, factory-price-import-ui redesign) with a
+    // dynamic count, so a bare/exact text query can never match it. The assertion here is that the
+    // SECTION is present.
+    expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
     expect(screen.getByText('ต้นทุนนำเข้า')).not.toBeNull();
     expect(screen.getByText('SCG Ceramics')).not.toBeNull();
     expect(screen.getByText('COST-2026-0001')).not.toBeNull();
@@ -574,12 +607,19 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.queryByRole('button', { name: 'เจรจา' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'คำนวณใหม่' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
+    // The two new per-factory-group actions (factory-price-import-ui redesign) are Import-only too.
+    expect(screen.queryByRole('button', { name: 'ร่างอีเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
     // No editable email-draft or response-entry form fields either. Queried by
     // accessible name, not placeholder: these fields carry real labels now, so
     // a placeholder query would report "absent" for a field that is present and
     // simply has no placeholder — an assertion that passes for the wrong reason.
     expect(screen.queryByLabelText('อีเมลโรงงาน')).toBeNull();
-    expect(screen.queryByLabelText(/^ราคาโรงงาน/)).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
+    // The per-factory currency/unit controls are read-only text for CEO, not a live select.
+    expect(screen.queryByLabelText('สกุลเงิน')).toBeNull();
+    expect(screen.queryByLabelText('หน่วยราคา')).toBeNull();
   });
 });
 
@@ -590,9 +630,14 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const toInput = screen.getByLabelText('อีเมลโรงงาน');
-    const subjectInput = screen.getByLabelText('หัวข้ออีเมล');
-    const bodyInput = screen.getByLabelText('เนื้อหาอีเมล');
+    // The To/Subject/Body composer moved into a modal behind the factory group's own "ร่างอีเมล"
+    // button (factory-price-import-ui redesign) — open it before looking for the fields.
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
+
+    const toInput = within(dialog).getByLabelText('อีเมลโรงงาน');
+    const subjectInput = within(dialog).getByLabelText('หัวข้ออีเมล');
+    const bodyInput = within(dialog).getByLabelText('เนื้อหาอีเมล');
 
     fireEvent.change(toInput, { target: { value: 'purchasing@scg-factory.example' } });
     fireEvent.change(subjectInput, { target: { value: 'ขอราคาใหม่ SCG A1' } });
@@ -627,20 +672,32 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // (One of them, costingClientRequestId, went away with #747; this baseline absorbed that.)
     const callsBeforeAnySend = uuidSpy.mock.calls.length;
 
+    // The To/Subject/Body composer + ส่งแล้ว now live behind the factory group's ร่างอีเมล modal.
+    // Requesting send closes THAT modal before opening the shared ConfirmDialog (one focus-trapped
+    // dialog at a time — see FactoryEmailDraftModal's own doc comment), so each attempt below
+    // reopens ร่างอีเมล first. "ยกเลิก" alone would now also match this quote's own (unrelated)
+    // discard-edits button in the item-price grid, so the ConfirmDialog's is scoped with `within`.
+
     // First open: mints and caches a clientRequestId for this quote.
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
+    const firstConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
+    expect(firstConfirmDialog).not.toBeNull();
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
 
-    // Cancel without confirming, then reopen: must reuse the cached id, not mint a new one.
-    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+    // Cancel without confirming, reopen ร่างอีเมล, request send again: must reuse the cached id.
+    fireEvent.click(within(firstConfirmDialog).getByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    expect(await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).not.toBeNull();
+    const secondConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
+    expect(secondConfirmDialog).not.toBeNull();
     // Still no new call — reused the cached id, not regenerated.
     expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งอีเมล' }));
+    fireEvent.click(within(secondConfirmDialog).getByRole('button', { name: 'ส่งอีเมล' }));
 
     await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledTimes(1));
     const [, payload] = api.pricingRequests.sendFactoryQuote.mock.calls[0];
@@ -656,10 +713,13 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // Import types ONE thing: the price. เลขอ้างอิงใบเสนอราคา / เงื่อนไขการชำระเงิน /
     // ระยะเวลาผลิต-ส่งมอบ were removed from this form (owner ruling 2026-08-11) — all three are
     // optional in ReceiveFactoryQuoteRequest, so the payload simply carries null for them.
-    const priceInput = screen.getByLabelText(/^ราคาโรงงาน/);
+    const priceInput = screen.getByLabelText(/^ราคาที่เสนอ/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces บันทึกคำตอบ/รอบแก้ไข: a REQUESTED
+    // quote has no response on file yet, so confirming calls receiveFactoryQuote (this assertion)
+    // and then markFactoryQuoteReady — see confirmFactoryQuote's own doc comment.
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -669,6 +729,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
         items: [expect.objectContaining({ pricingRequestItemId: 1, rawUnitPrice: 55.5 })],
       }),
     ));
+    // ...then marks the (in-place-updated, same-id) quote ready for the CEO — one click, both
+    // calls, ending at READY_FOR_COSTING as the task brief specifies.
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
     // The removed fields must not be resurrected as inputs.
     expect(screen.queryByLabelText('เลขอ้างอิงใบเสนอราคา')).toBeNull();
     expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
@@ -715,8 +778,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '55.5' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '55.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -735,14 +798,16 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
+    // หน่วยราคา (factory-price-import-ui redesign): one select per FACTORY GROUP now, not per line
+    // — every line in the group shares it — but still built from the same backend catalog.
     const unitSelect = await screen.findByLabelText(/^หน่วย/);
     expect(within(unitSelect).getAllByRole('option').map((option) => option.value)).toEqual([
       'PER_PIECE', 'PER_SQM', 'PER_BOX', 'PER_LINEAR_M',
     ]);
 
     fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '10' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -777,8 +842,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
 
     const sqmInput = screen.getByLabelText(/^ตร\.ม\.\/หน่วย/);
     fireEvent.change(sqmInput, { target: { value: '0.36' } });
-    fireEvent.change(screen.getByLabelText(/^ราคาโรงงาน/), { target: { value: '120' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกคำตอบ/รอบแก้ไข' }));
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
@@ -813,9 +878,15 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    fireEvent.click(screen.getByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' }));
+    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces ส่งให้ CEO อนุมัติราคา. A response is
+    // already on file (RESPONSE_RECEIVED) and nothing was edited this session, so confirmFactoryQuote
+    // must skip receiveFactoryQuote entirely — see its own doc comment for why an unconditional
+    // receive() call here would be wrong, not merely redundant (it would spuriously bump the
+    // revision and notify the CEO of a "revision" that never happened).
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
+    expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
     expect(api.pricingRequests.createCosting).not.toHaveBeenCalled();
     expect(api.pricingRequests.recalculateCosting).not.toHaveBeenCalled();
     expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
@@ -824,13 +895,47 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
   // The regression the bug report called out as "clicking again is worse": on the old code a quote
   // already at READY_FOR_COSTING re-rendered the button, skipped step 1, and fired a pure 409.
   // markFactoryQuoteReady is not idempotent — markReady's UPDATE matches zero rows on an
-  // already-ready quote and the service 409s — so the action must not be offered there at all.
-  it('does not offer ส่งให้ CEO อนุมัติราคา on a quote that is already READY_FOR_COSTING', async () => {
+  // already-ready quote and the service 409s — so the action must not be offered there at all
+  // while nothing has been edited (an edit re-opens it — see the next test).
+  it('does not offer ยืนยันราคาเสนอ on an untouched quote that is already READY_FOR_COSTING', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByRole('button', { name: 'ส่งให้ CEO อนุมัติราคา' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+  });
+
+  // An edit on an already-READY_FOR_COSTING quote (Import revising an already-sent price) DOES
+  // re-offer ยืนยันราคาเสนอ — confirming it must go through receiveFactoryQuote again (a genuine
+  // revision, matching FactoryQuoteService.receive's own supersede-and-create-new-row branch for
+  // this exact status) before re-marking ready.
+  it('re-offers ยืนยันราคาเสนอ once Import edits an already-READY_FOR_COSTING quote, and revises through receiveFactoryQuote', async () => {
+    const quote = buildFactoryQuote({
+      status: 'READY_FOR_COSTING',
+      items: [{
+        id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+        quotedQuantity: 20, quotedUnit: 'PER_PIECE', unitBasis: 'PER_PIECE', rawUnitPrice: 50, currency: 'THB', sqmPerUnit: null,
+      }],
+    });
+    api.pricingRequests.receiveFactoryQuote.mockResolvedValue({ factoryQuote: { ...quote, id: 92, revisionNo: 2 } });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '48' } });
+    expect(await screen.findByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ rawUnitPrice: 48 })] }),
+    ));
+    // markReady is called on the NEW revision id receiveFactoryQuote resolved to, not the
+    // now-superseded original — the exact bug the old two-button flow could not hit (it never
+    // chained these two calls together at all).
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(92));
   });
 
   // Wrong-way-round: the point is that these surfaces are ABSENT for Import, not merely different.
@@ -873,6 +978,9 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
+    // ส่งแล้ว lives inside the factory group's ร่างอีเมล modal now (factory-price-import-ui redesign).
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
@@ -1042,6 +1150,28 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
 });
 
 describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level only — see file header)', () => {
+  // Phase 1 UI simplification (owner ruling 2026-08-16): the cost breakdown, the formula
+  // derivation, ปรับต้นทุนเอง, and ปรับราคาเอง all live inside a per-item "วิธีคำนวณราคานี้"
+  // CollapsibleSection, collapsed by default (CollapsibleSection unmounts its body rather than
+  // CSS-hiding it — see that component's own doc comment) — every test below that needs to reach
+  // one of those controls must open it first.
+  function expandDerivation() {
+    fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
+  }
+
+  // "ต้นทุนโรงงาน (ฐาน): <code>฿60.00</code>" splits its label and value across an element
+  // boundary (the <code> wraps the figure, matching every other computed-money display in this
+  // panel) — the default getByText text matcher does not read across that boundary (it is a
+  // known testing-library limitation, not a markup defect: the "ราคาขาย" line right next to it
+  // has no such boundary and matches a plain regex fine). A function matcher reading the whole
+  // element's combined textContent, restricted to the leaf that owns it, is the documented fix.
+  function byCombinedText(regex) {
+    return (_content, element) => {
+      if (!regex.test(element.textContent)) return false;
+      return Array.from(element.children).every((child) => !regex.test(child.textContent));
+    };
+  }
+
   it('lets the CEO start a review from READY_FOR_CEO_REVIEW, calling startPricingDecision', async () => {
     const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
     renderDetailPage({ user: ceoUser, request });
@@ -1072,23 +1202,24 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(api.pricingRequests.listPricingDecisions).not.toHaveBeenCalled();
   });
 
-  it('lets the CEO edit an item margin/minimum price and save via updatePricingDecision', async () => {
+  it('shows the read-only base cost and the automatically computed selling price, asking for nothing, with no per-item input anywhere', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
     renderDetailPage({ user: ceoUser, request });
     await waitForLoaded(request);
     await screen.findByText('PCD-2026-0001');
 
-    const marginInput = screen.getByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%');
-    fireEvent.change(marginInput, { target: { value: '0.35' } });
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }));
-
-    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
-      7001,
-      expect.objectContaining({
-        items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.35, minimumSellingPrice: 65 })],
-      }),
-    ));
+    expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
+    expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
+    // The old per-item margin/minimum/ceiling grid is gone entirely.
+    expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
+    expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
+    expect(screen.queryByPlaceholderText('ส่วนลดสูงสุด เช่น 0.10 = 10%')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' })).toBeNull();
+    // The only two actions left — asserted by role name so a stray extra button would show up as
+    // "found 2" against getByRole's own strictness, not silently pass.
+    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
   });
 
   // V141 ("CEO owns costing", PR #702, commit 1).
@@ -1152,6 +1283,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       // ต้นทุนคำนวณ/ชิ้น (computed, info) — never destroyed by the override.
       expect(screen.getByText('฿55.00')).not.toBeNull();
@@ -1159,16 +1291,17 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByText('฿75.00')).not.toBeNull();
       expect(screen.getByText('ปรับเอง')).not.toBeNull();
       expect(screen.getByText('(ราคาต้นทุนจริงจากใบขนสินค้า)')).not.toBeNull();
-      // The per-requested-unit basis (a different number, 60) still renders, labelled distinctly
-      // ("ต้นทุน/หน่วยที่ขอ", not wrapped in its own <code> like the per-piece figures above, so
-      // this is a substring match against the combined "label: value" text of that line).
-      expect(screen.getByText(/ต้นทุน\/หน่วยที่ขอ.*฿60\.00/)).not.toBeNull();
+      // The per-requested-unit basis (a different number, 60) still renders in the main
+      // (collapsed) view under its Phase-1-simplification label — a substring match against the
+      // combined "label: value" text of that line.
+      expect(screen.getByText(byCombinedText(/ต้นทุนโรงงาน.*฿60\.00/))).not.toBeNull();
     });
 
     it('refuses to SAVE an override with a blank reason, client-side, without calling the API', async () => {
       renderWithCostingItem();
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
@@ -1185,6 +1318,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
@@ -1198,6 +1332,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem();
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' });
@@ -1214,6 +1349,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
       await screen.findByText('PCD-2026-0001');
+      expandDerivation();
 
       fireEvent.click(screen.getByTestId('pcr-ceo-cost-override-8001'));
       const dialog = await screen.findByRole('dialog', { name: 'แก้ไขต้นทุนที่ปรับ' });
@@ -1225,7 +1361,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    it('renders the stale-override warning badge and disables approval when a fixture has overrideStale: true', async () => {
+    // The stale-override badge is deliberately in the MAIN (collapsed) header row, not inside the
+    // derivation disclosure — a CEO must see it without expanding anything.
+    it('renders the stale-override warning badge (uncollapsed) and disables approval when a fixture has overrideStale: true', async () => {
       renderWithCostingItem({
         manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม',
         overrideFxRate: 1, overrideCalcConfigVersion: 1, calculationConfigVersion: 2, overrideStale: true,
@@ -1247,10 +1385,165 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  it('disables approval until every item has a margin and a minimum selling price (mirrors the server 422 gate)', async () => {
+  // Phase 1 UI simplification ("ปรับราคาเอง", owner ruling 2026-08-16) — a REAL behaviour change:
+  // overrides the SELLING PRICE directly (not the cost), and the formula stops driving that line
+  // entirely. Reuses PUT /pricing-decisions/{id} (updatePricingDecision) rather than a new
+  // endpoint — see PricingDecisionRequests.UpdatePricingDecisionItemRequest's own doc comment for
+  // why sellingPriceOverride/clearSellingPriceOverride need a tri-state that plain COALESCE can't
+  // express, and PriceOverrideModal / the overrideSellingPrice mutation in the page itself.
+  describe('CEO per-line selling-price override ("ปรับราคาเอง")', () => {
+    it('shows the automatically computed price by default, opens the derivation, and offers ปรับราคาเอง', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByText('ราคาปรับเอง')).toBeNull();
+      expandDerivation();
+      expect(screen.getByRole('button', { name: 'ปรับราคาเอง' })).not.toBeNull();
+    });
+
+    it('refuses to SAVE a price override with a blank reason, client-side, without calling the API', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับราคาเอง' });
+      fireEvent.change(within(dialog).getByLabelText(/^ราคาที่ปรับ/), { target: { value: '90' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกราคาที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับราคาขาย')).not.toBeNull();
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('refuses to CLEAR a price override with a blank reason, client-side, without calling the API', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขราคาที่ปรับ' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      expect(await within(dialog).findByText('กรุณาระบุเหตุผลในการปรับราคาขาย')).not.toBeNull();
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('saves a new price override — happy path SET, calling updatePricingDecision with a single-item payload', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'ปรับราคาเอง' });
+      fireEvent.change(within(dialog).getByLabelText(/^ราคาที่ปรับ/), { target: { value: '90' } });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'ลูกค้าต่อรองราคาสุดท้าย' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกราคาที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            sellingPriceOverride: 90,
+            clearSellingPriceOverride: false,
+            decisionNote: 'ลูกค้าต่อรองราคาสุดท้าย',
+          }],
+        },
+      ));
+    });
+
+    it('clears an existing price override — happy path CLEAR', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expandDerivation();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-override-8001'));
+      const dialog = await screen.findByRole('dialog', { name: 'แก้ไขราคาที่ปรับ' });
+      fireEvent.change(within(dialog).getByLabelText(/^เหตุผล/), { target: { value: 'กลับไปใช้ราคาอัตโนมัติ' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ล้างค่าที่ปรับ' }));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            sellingPriceOverride: null,
+            clearSellingPriceOverride: true,
+            decisionNote: 'กลับไปใช้ราคาอัตโนมัติ',
+          }],
+        },
+      ));
+    });
+
+    // Uncollapsed, same as the stale-override badge — a CEO must see AT A GLANCE that a price was
+    // fixed manually, without expanding anything.
+    it('shows a "ราคาปรับเอง" indicator in the main (collapsed) view and the overridden price, once active', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [buildDecisionItem({ manualSellingPricePerRequestedUnit: 90 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByText('ราคาปรับเอง')).not.toBeNull();
+      expect(screen.getByText(/ราคาขาย.*฿90\.00/)).not.toBeNull();
+      // The formula's own output (72) is superseded, not deleted — never shown as THE price.
+      expect(screen.queryByText(/ราคาขาย.*฿72\.00/)).toBeNull();
+    });
+
+    // Mirrors PricingDecisionService#approve's own missingMargin exemption for an overridden
+    // item: a "ปรับราคาเอง" line needs no margin at all to approve.
+    it('does not require a margin on an overridden line to enable approval', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          items: [buildDecisionItem({ proposedMarginPct: null, manualSellingPricePerRequestedUnit: 90 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(false);
+    });
+
+    it('shows Import no price-override button anywhere', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+
+      expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
+    });
+  });
+
+  // ราคาขั้นต่ำ is no longer a CEO input (auto-populated server-side at approve() — see
+  // PricingDecisionService#approve), so only a missing MARGIN can block approval now, and only on
+  // a line with no active "ปรับราคาเอง" override.
+  it('disables approval until every item has a margin (mirrors the server 422 gate)', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({
-      items: [buildDecision({ items: [buildDecisionItem({ minimumSellingPricePerRequestedUnit: null })] })],
+      items: [buildDecision({ items: [buildDecisionItem({ proposedMarginPct: null })] })],
     });
     renderDetailPage({ user: ceoUser, request });
     await waitForLoaded(request);
@@ -1303,7 +1596,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     await waitForLoaded(request);
 
     expect(screen.queryByText('PCD-2026-0001')).toBeNull();
-    expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'วิธีคำนวณราคานี้' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'อนุมัติราคาขาย' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
   });
@@ -1368,13 +1661,14 @@ describe('PricingRequestDetailPage mobile layout', () => {
     expect(screen.getByText('รายการสินค้าและราคาตั้งต้น')).not.toBeNull();
     // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
     // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
-    // getAllByText, not getByText: the ราคาโรงงาน response row now echoes the same product name
-    // back as read-only context ("ที่ Sales ขอ: …"), so this string legitimately appears twice.
+    // getAllByText, not getByText: the grouped-by-factory item row (ยี่ห้อ/รุ่น column) now echoes
+    // the same product name back, alongside "รายการสินค้าและราคาตั้งต้น" above it, so this string
+    // legitimately appears twice.
     expect(screen.getAllByText('SCG A1').length).toBeGreaterThan(0);
-    // By role, not text: "ราคาโรงงาน" now also names a column in the
-    // response-entry grid, so a bare text query can match more than one node.
-    // The assertion here is that the SECTION is present.
-    expect(await screen.findByRole('heading', { name: 'ราคาโรงงาน' })).not.toBeNull();
+    // By role and a prefix regex, not exact text: the section header is "รายการสินค้า (N รายการ)"
+    // with a dynamic count (factory-price-import-ui redesign). The assertion here is that the
+    // SECTION is present.
+    expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
     // ต้นทุนนำเข้า is deliberately absent for Import — see the hiding test above.
   });
 });
@@ -1457,6 +1751,95 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       quotation.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+
+  // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155).
+  describe('CEO discount-approval workflow', () => {
+    it('shows Sales the pending status badge, with no approve/reject buttons', async () => {
+      const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      renderDetailPage({ user: salesOwner, request, discountApprovals: [approval] });
+      await waitForLoaded(request);
+      await screen.findByText(quotation.number);
+
+      expect(await screen.findByText('รอ CEO อนุมัติส่วนลด')).not.toBeNull();
+      expect(screen.queryByRole('button', { name: 'อนุมัติส่วนลด' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ปฏิเสธส่วนลด' })).toBeNull();
+    });
+
+    it('lets the CEO approve a pending discount request via the confirm dialog', async () => {
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      api.pricingRequests.approveDiscountApproval.mockResolvedValue({
+        approval: { ...approval, status: 'APPROVED', approvedFinalUnitPrice: 62 },
+      });
+      renderDetailPage({ user: ceoUser, discountApprovals: [approval] });
+      await waitForLoaded();
+      await screen.findByText(quotation.number);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติส่วนลด' }));
+      const dialog = await screen.findByRole('dialog', { name: 'อนุมัติส่วนลด' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติส่วนลด' }));
+
+      await waitFor(() => expect(api.pricingRequests.approveDiscountApproval).toHaveBeenCalledWith(approval.id));
+    });
+
+    it('lets the CEO reject a pending discount request only with a mandatory reason', async () => {
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({ requestedFinalUnitPrice: 62 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      api.pricingRequests.rejectDiscountApproval.mockResolvedValue({
+        approval: { ...approval, status: 'REJECTED', rejectionReason: 'ส่วนลดสูงเกินไป' },
+      });
+      renderDetailPage({ user: ceoUser, discountApprovals: [approval] });
+      await waitForLoaded();
+      await screen.findByText(quotation.number);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'ปฏิเสธส่วนลด' }));
+      const dialog = await screen.findByRole('dialog', { name: 'ปฏิเสธส่วนลด' });
+      const confirmButton = within(dialog).getByRole('button', { name: 'ปฏิเสธส่วนลด' });
+      // Mandatory reason: the confirm button stays disabled until one is typed.
+      expect(confirmButton.disabled).toBe(true);
+
+      fireEvent.change(within(dialog).getByLabelText('เหตุผลที่ปฏิเสธส่วนลด'), { target: { value: 'ส่วนลดสูงเกินไป' } });
+      expect(confirmButton.disabled).toBe(false);
+      fireEvent.click(confirmButton);
+
+      await waitFor(() => expect(api.pricingRequests.rejectDiscountApproval).toHaveBeenCalledWith(
+        approval.id,
+        { reason: 'ส่วนลดสูงเกินไป' },
+      ));
+    });
+
+    it('shows Sales the CEO rejection reason once a discount request is rejected', async () => {
+      const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+      const item = buildCustomerQuotationItem({ salesDiscount: 10, finalUnitPrice: 62 });
+      const quotation = buildCustomerQuotation({ items: [item] });
+      const approval = buildDiscountApproval({
+        requestedFinalUnitPrice: 62,
+        status: 'REJECTED',
+        rejectionReason: 'ส่วนลดสูงเกินไปสำหรับลูกค้ารายนี้',
+        decidedBy: 4,
+        decidedByName: 'ซีอีโอ',
+        decidedAt: '2026-08-17T01:00:00Z',
+      });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [quotation] });
+      renderDetailPage({ user: salesOwner, request, discountApprovals: [approval] });
+      await waitForLoaded(request);
+      await screen.findByText(quotation.number);
+
+      expect(await screen.findByText('CEO ปฏิเสธส่วนลด')).not.toBeNull();
+      expect(screen.getByText(/ส่วนลดสูงเกินไปสำหรับลูกค้ารายนี้/)).not.toBeNull();
+      // A rejected (not pending) request never shows approve/reject buttons, even to the CEO.
+      expect(screen.queryByRole('button', { name: 'อนุมัติส่วนลด' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ปฏิเสธส่วนลด' })).toBeNull();
+    });
   });
 
   it('renders the CEO/Import view strictly read-only — no discount input, no save/issue/cancel controls — but Preview still works', async () => {
