@@ -1829,17 +1829,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
                             {hasPriceOverride ? <span className="font-bold text-override">ราคาปรับเอง</span> : null}
                             {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
+                            {/* V156: the freight table could not be looked up for this line (the
+                                Price Catalog row has no thickness or no origin country), so it
+                                arrives with NO cost instead of blocking the whole costing. The CEO
+                                must supply one with "ปรับต้นทุน" before the decision can be
+                                approved — approve() refuses otherwise. */}
+                            {costingItem?.uncostableReason ? (
+                              <StatusBadge tone="warning">ต้องระบุต้นทุนเอง</StatusBadge>
+                            ) : null}
                           </div>
                           {/* The two numbers, read-only, asking for nothing. */}
                           <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">
                             <span className="text-xs text-text-muted">
                               ต้นทุนโรงงาน (ฐาน):{' '}
-                              <code>{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code>
+                              {costingItem?.uncostableReason ? (
+                                <span className="font-bold text-warning">คำนวณอัตโนมัติไม่ได้</span>
+                              ) : (
+                                <code>{formatCurrency(item.frozenLandedCostPerRequestedUnitThb, 'THB')}</code>
+                              )}
                             </span>
                             <span className="text-[length:var(--text-base)] font-bold text-text">
                               ราคาขาย: {formatCurrency(effectivePrice, decision.currency)}
                             </span>
                           </div>
+                          {costingItem?.uncostableReason ? (
+                            <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
+                          ) : null}
                           {!editable ? (
                             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                               <span>อัตรากำไร: {effectiveMargin ?? '-'}</span>

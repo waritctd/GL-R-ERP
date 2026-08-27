@@ -168,9 +168,14 @@ public class PricingDecisionService {
             // price = cost x margin exactly like the computed figure would have (see
             // PricingCostingItemDto.effectiveLandedCostPerUnitThb/effectiveTotalLandedCostThb).
             BigDecimal frozenPerPiece = item.effectiveLandedCostPerUnitThb();
-            BigDecimal frozenPerRequestedUnit = money4(
-                item.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
-            BigDecimal proposedSellingPrice = defaultMarginPct != null
+            // V156: an UNCOSTABLE line has no effective cost at all (no freight lookup was
+            // possible and no override exists yet), so it freezes as null and carries no proposed
+            // price. It still becomes a decision item — that is the whole point: the CEO has to
+            // see the line to resolve it, and approve() refuses while it stays this way.
+            BigDecimal frozenPerRequestedUnit = item.effectiveTotalLandedCostThb() == null
+                ? null
+                : money4(item.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+            BigDecimal proposedSellingPrice = defaultMarginPct != null && frozenPerRequestedUnit != null
                 ? computeSellingPrice(frozenPerRequestedUnit, defaultMarginPct, fx.rateToThb(), currency)
                 : null;
             writeItems.add(new WriteItem(item.pricingRequestItemId(), item.id(), item.requestedUnitBasis(),
@@ -277,9 +282,17 @@ public class PricingDecisionService {
         // so re-deriving the effective figures from the ALREADY-fetched costingItem (rather than
         // re-querying) is safe and matches PricingCostingRepository#mapItem's own formula exactly.
         BigDecimal effectivePerPiece = roundedManualCost != null ? roundedManualCost : costingItem.landedCostPerUnitThb();
-        BigDecimal effectiveTotal = money4(effectivePerPiece.multiply(costingItem.normalizedQuantityPieces()));
-        BigDecimal frozenPerRequestedUnit = money4(effectiveTotal.divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
-        BigDecimal sellingPrice = item.proposedMarginPct() != null
+        // V156: CLEARING an override on an UNCOSTABLE line returns it to having no cost at all —
+        // landedCostPerUnitThb is null there (the freight table could not be looked up), so the
+        // derivation below must not run. The line goes back to needing the CEO's input, and
+        // approve() blocks on it again, which is the correct end state rather than an NPE.
+        BigDecimal effectiveTotal = effectivePerPiece == null
+            ? null
+            : money4(effectivePerPiece.multiply(costingItem.normalizedQuantityPieces()));
+        BigDecimal frozenPerRequestedUnit = effectiveTotal == null
+            ? null
+            : money4(effectiveTotal.divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+        BigDecimal sellingPrice = frozenPerRequestedUnit != null && item.proposedMarginPct() != null
             ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
             : null;
         decisions.updateFrozenCosts(decisionId, List.of(
@@ -335,6 +348,25 @@ public class PricingDecisionService {
                 "ไม่สามารถอนุมัติได้ เนื่องจากมีรายการที่ปรับต้นทุนเองล้าสมัย "
                     + "(อัตราแลกเปลี่ยนหรือค่าคำนวณเปลี่ยนไปหลังปรับ) กรุณาคำนวณต้นทุนใหม่หรือยืนยันค่าที่ปรับอีกครั้งก่อนอนุมัติ "
                     + "— รายการที่ล้าสมัย: " + staleItemIds);
+        }
+
+        // V156: a line whose freight could not be computed (no thickness or no origin country on
+        // the catalogue row) now REACHES this screen with a null frozen cost, instead of aborting
+        // costing at startReview. Here is where it must be resolved: the CEO either supplies the
+        // landed cost (overrideItemCost) or fixes the price outright ("ปรับราคาเอง"). Approving
+        // with neither would issue a quotation whose freight was silently omitted — the single
+        // outcome the whole uncostable path exists to prevent. Checked BEFORE the margin gate
+        // because a line with no cost has nothing for a margin to apply to.
+        List<Long> uncosted = decision.items().stream()
+            .filter(item -> item.frozenLandedCostPerRequestedUnitThb() == null
+                && item.manualSellingPricePerRequestedUnit() == null)
+            .map(PricingDecisionItemDto::id)
+            .toList();
+        if (!uncosted.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "ทุกรายการต้องมีต้นทุนก่อนอนุมัติ — คำนวณค่าขนส่งอัตโนมัติไม่ได้เพราะ Price Catalog "
+                    + "ไม่มีความหนาหรือประเทศต้นทาง กรุณาระบุต้นทุนเอง หรือปรับราคาเอง — รายการที่ยังไม่มีต้นทุน: "
+                    + uncosted);
         }
 
         // Phase 1 UI simplification: an item with an active "ปรับราคาเอง" override needs no
@@ -499,8 +531,15 @@ public class PricingDecisionService {
             BigDecimal sellingPrice = null;
             if (marginPct != null) {
                 requireValidMargin(marginPct);
-                sellingPrice = computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), marginPct,
-                    decision.fxRateUsed(), decision.currency());
+                // V156: a margin on an UNCOSTABLE line has nothing to apply to — the frozen cost
+                // is null until the CEO supplies one. The margin is still stored (it becomes
+                // meaningful the moment a cost override lands, which recomputes the price via
+                // overrideItemCost); only the derived price stays null, and approve() blocks
+                // until the cost exists.
+                sellingPrice = item.frozenLandedCostPerRequestedUnitThb() == null
+                    ? null
+                    : computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), marginPct,
+                        decision.fxRateUsed(), decision.currency());
             }
             if (req.minimumSellingPrice() != null && req.minimumSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาขายขั้นต่ำต้องไม่ติดลบ");
@@ -611,9 +650,12 @@ public class PricingDecisionService {
                 continue;
             }
             BigDecimal frozenPerPiece = costingItem.effectiveLandedCostPerUnitThb();
-            BigDecimal frozenPerRequestedUnit = money4(
-                costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
-            BigDecimal sellingPrice = item.proposedMarginPct() != null
+            // V156: same as startReview — a recalculation that leaves a line uncostable refreezes
+            // it as null rather than dividing by nothing.
+            BigDecimal frozenPerRequestedUnit = costingItem.effectiveTotalLandedCostThb() == null
+                ? null
+                : money4(costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
+            BigDecimal sellingPrice = item.proposedMarginPct() != null && frozenPerRequestedUnit != null
                 ? computeSellingPrice(frozenPerRequestedUnit, item.proposedMarginPct(), decision.fxRateUsed(), decision.currency())
                 : null;
             updates.add(new FrozenCostUpdate(item.id(), frozenPerPiece, frozenPerRequestedUnit, sellingPrice));

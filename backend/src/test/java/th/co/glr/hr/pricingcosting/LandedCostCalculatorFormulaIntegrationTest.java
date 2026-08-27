@@ -335,7 +335,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void missingThickness_refusesToPriceAndNamesTheItem() {
+    void missingThickness_reachesTheCeoScreen_butApproveRefusesUntilACostIsSupplied() {
         // A catalog product with NULL thickness_mm (the 7-arg overload with an explicit null) —
         // a legitimate real-world state (owner ruling 2026-08-11: a free-text/unmatched line may
         // be submitted with no catalog snapshot).
@@ -350,12 +350,35 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
 
-        assertThatThrownBy(() -> decisionService.startReview(pricingRequestId,
-                new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor))
+        // V156 — the behaviour CHANGED here, deliberately. startReview used to throw 422, which
+        // aborted before any costing row was written and therefore before the CEO could reach the
+        // one screen that owns the manual cost override that resolves this. Costing now SUCCEEDS
+        // with the line marked uncostable.
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+
+        assertThat(decision.items()).hasSize(1);
+        assertThat(decision.items().get(0).frozenLandedCostPerRequestedUnitThb())
+            .as("an uncostable line reaches the CEO with NO cost, rather than a guessed one")
+            .isNull();
+
+        String reason = jdbc.queryForObject(
+            "SELECT uncostable_reason FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
+            Map.of("id", decision.pricingCostingId()), String.class);
+        assertThat(reason)
+            .as("the row states WHY it could not be costed, naming the item")
+            .contains("ความหนา")
+            .containsPattern("รายการที่ \\d+");
+
+        // ...and the guarantee did not weaken, it MOVED: approve() must refuse while the line
+        // still has neither a computed cost nor a CEO-supplied one. Written wrong-way-round on
+        // purpose — this is the assertion that would go red if the uncostable path ever started
+        // silently pricing freight at zero.
+        assertThatThrownBy(() -> decisionService.approve(decision.id(),
+                new ApprovePricingDecisionRequest(null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).contains("ความหนา");
-                assertThat(e.getMessage()).containsPattern("รายการที่ \\d+");
+                assertThat(e.getMessage()).contains("ต้นทุน");
             });
     }
 

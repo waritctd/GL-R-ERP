@@ -125,7 +125,7 @@ public class PricingCostingRepository {
                  calculation_config_id, calculation_config_version, goods_cost_thb, freight_cost_thb,
                  insurance_cost_thb, import_duty_thb, inland_transport_cost_thb, other_cost_thb,
                  cif_cost_thb, landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb,
-                 product_type, calculated_at, calculation_snapshot)
+                 product_type, calculated_at, calculation_snapshot, uncostable_reason)
             VALUES
                 (:costingId, :pricingRequestItemId, :factoryQuoteId, :factoryQuoteItemId,
                  :factoryQuoteRevisionNo, :factoryId, :factoryName, :supplierQuoteRef, :rawUnitPrice,
@@ -135,7 +135,7 @@ public class PricingCostingRepository {
                  :calculationConfigId, :calculationConfigVersion, :goodsCostThb, :freightCostThb,
                  :insuranceCostThb, :importDutyThb, :inlandTransportCostThb, :otherCostThb,
                  :cifCostThb, :landedCostPerUnitThb, :totalLandedCostThb, :clearanceFeeThb,
-                 :productType, now(), CAST(:calculationSnapshot AS jsonb))
+                 :productType, now(), CAST(:calculationSnapshot AS jsonb), :uncostableReason)
             ON CONFLICT (pricing_costing_id, pricing_request_item_id) DO UPDATE SET
                  factory_quote_id = EXCLUDED.factory_quote_id,
                  factory_quote_item_id = EXCLUDED.factory_quote_item_id,
@@ -172,7 +172,8 @@ public class PricingCostingRepository {
                  clearance_fee_thb = EXCLUDED.clearance_fee_thb,
                  product_type = EXCLUDED.product_type,
                  calculated_at = EXCLUDED.calculated_at,
-                 calculation_snapshot = EXCLUDED.calculation_snapshot
+                 calculation_snapshot = EXCLUDED.calculation_snapshot,
+                 uncostable_reason = EXCLUDED.uncostable_reason
             """, batch);
 
         // Drop any line the recalculation no longer produces (the pricing request lost an item
@@ -279,7 +280,7 @@ public class PricingCostingRepository {
                    landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb, product_type,
                    calculated_at, calculation_snapshot::text AS calculation_snapshot,
                    manual_landed_cost_per_unit_thb, override_reason, overridden_by, overridden_at,
-                   override_fx_rate, override_calc_config_version
+                   override_fx_rate, override_calc_config_version, uncostable_reason
               FROM sales.pricing_costing_item
              WHERE pricing_costing_id = :costingId
              ORDER BY pricing_costing_item_id
@@ -333,7 +334,10 @@ public class PricingCostingRepository {
         // precision for what is meant to be the same "per-line total" concept.
         BigDecimal effectiveLandedCostPerUnitThb = manualLandedCostPerUnitThb != null
             ? manualLandedCostPerUnitThb : landedCostPerUnitThb;
+        // V156: effectiveLandedCostPerUnitThb is null on an UNCOSTABLE row with no override yet —
+        // there is no cost to scale up, so the effective total is null too rather than an NPE.
         BigDecimal effectiveTotalLandedCostThb = normalizedQuantityPieces == null
+                || effectiveLandedCostPerUnitThb == null
             ? null : effectiveLandedCostPerUnitThb.multiply(normalizedQuantityPieces).setScale(4, RoundingMode.HALF_UP);
         // Defensive on a missing provenance value too (the migration's CHECK constraint should
         // never allow that combination, but a comparison that cannot evaluate is treated as
@@ -391,7 +395,8 @@ public class PricingCostingRepository {
             overrideCalcConfigVersion,
             effectiveLandedCostPerUnitThb,
             effectiveTotalLandedCostThb,
-            overrideStale
+            overrideStale,
+            rs.getString("uncostable_reason")
         );
     }
 
@@ -441,7 +446,10 @@ public class PricingCostingRepository {
         BigDecimal totalLandedCostThb,
         BigDecimal clearanceFeeThb,
         String productType,
-        String calculationSnapshot
+        String calculationSnapshot,
+        /** V156: non-null when the freight table could not be looked up; every shipment-derived
+         *  cost above is then null. Enforced as an XOR by chk_pricing_costing_item_uncostable_xor. */
+        String uncostableReason
     ) {
         MapSqlParameterSource toParams(long costingId) {
             return new MapSqlParameterSource()
@@ -481,7 +489,8 @@ public class PricingCostingRepository {
                 .addValue("totalLandedCostThb", totalLandedCostThb)
                 .addValue("clearanceFeeThb", clearanceFeeThb)
                 .addValue("productType", productType)
-                .addValue("calculationSnapshot", calculationSnapshot == null ? "{}" : calculationSnapshot);
+                .addValue("calculationSnapshot", calculationSnapshot == null ? "{}" : calculationSnapshot)
+                .addValue("uncostableReason", uncostableReason);
         }
     }
 }
