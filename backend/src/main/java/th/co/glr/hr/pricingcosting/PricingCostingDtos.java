@@ -97,6 +97,10 @@ public final class PricingCostingDtos {
         // describe — PricingCostingRepository#mapItem recomputes them on every read) ───────────
         BigDecimal effectiveLandedCostPerUnitThb,
         BigDecimal effectiveTotalLandedCostThb,
-        boolean overrideStale
+        boolean overrideStale,
+        /** V156: non-null when the freight table could not be looked up for this line (no
+         *  thickness_mm or no origin country on the catalogue row), in which case every
+         *  shipment-derived cost above is null and the CEO must supply one before approval. */
+        String uncostableReason
     ) {}
 }

@@ -118,9 +118,15 @@ public class LandedCostCalculator {
             writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt));
         }
 
+        // V156: an uncostable line contributes NOTHING to the costing total — it has no computed
+        // cost to contribute. The total therefore covers only the lines that could be costed, and
+        // is knowingly incomplete until the CEO supplies the missing ones; approve() is what
+        // refuses to let an incomplete costing become an approved price.
         BigDecimal total = ZERO;
         for (PricingCostingWriteItem item : writeItems) {
-            total = total.add(item.totalLandedCostThb());
+            if (item.totalLandedCostThb() != null) {
+                total = total.add(item.totalLandedCostThb());
+            }
         }
         return new CalculationResult(writeItems, money4(total));
     }
@@ -140,9 +146,36 @@ public class LandedCostCalculator {
                 "ไม่พบ factory config สำหรับโรงงาน: " + factoryName));
         String shipmentLabel = "ใบเสนอราคาโรงงาน " + factoryName + " (" + quote.quoteCode() + ")";
 
-        List<ItemPhysicals> items = new ArrayList<>();
+        List<ItemPhysicals> allItems = new ArrayList<>();
         for (ResolvedSource source : shipment) {
-            items.add(resolveItemPhysicals(source, formulaConfig));
+            allItems.add(resolveItemPhysicals(source, formulaConfig));
+        }
+
+        // V156: an item whose catalogue row carries no freight-lookup key (thickness or origin
+        // country) cannot be costed at all. It is set ASIDE here rather than aborting the whole
+        // shipment, and is written below with NULL costs and a stated reason.
+        //
+        // Excluding it from BOTH the freight grouping and the clearance allocation is deliberate.
+        // It has no freight band to join, and letting it dilute the clearance denominator would
+        // push part of a real, already-incurred cost onto a line nobody can price — the cost would
+        // simply vanish from the quotation. The costable lines therefore absorb the entire
+        // clearance fee, which OVER-allocates to them. That is the safe direction: it over-costs
+        // rather than under-costs, and it is corrected the moment the CEO supplies the missing
+        // line's own cost and the costing is recalculated.
+        List<ItemPhysicals> items = new ArrayList<>();
+        List<ItemPhysicals> uncostable = new ArrayList<>();
+        for (ItemPhysicals item : allItems) {
+            (uncostableReason(item) == null ? items : uncostable).add(item);
+        }
+        if (items.isEmpty()) {
+            // Every line in this shipment is uncostable — there is no freight band and no
+            // clearance denominator to compute at all. Emit the placeholders and stop, rather
+            // than dividing by a zero shipment quantity.
+            List<PricingCostingWriteItem> onlyUncostable = new ArrayList<>();
+            for (ItemPhysicals item : uncostable) {
+                onlyUncostable.add(uncostableWriteItem(item, formulaConfig));
+            }
+            return onlyUncostable;
         }
 
         // F: grouped by (origin country, thickness) within the shipment (see class Javadoc) —
@@ -254,10 +287,69 @@ public class LandedCostCalculator {
                 lineTotal,
                 clearancePerPiece,
                 item.productType(),
-                snapshot
+                snapshot,
+                null            // uncostable_reason — this line costed cleanly
             ));
         }
+        for (ItemPhysicals item : uncostable) {
+            writeItems.add(uncostableWriteItem(item, formulaConfig));
+        }
         return writeItems;
+    }
+
+    /**
+     * A costing row for an item that cannot be costed (V156): every freight-dependent figure is
+     * NULL and {@code uncostableReason} says why, enforced as an XOR by
+     * {@code chk_pricing_costing_item_uncostable_xor}.
+     *
+     * <p>The non-freight facts are still recorded — goods cost, insurance, FX snapshot, quantities,
+     * the catalogue link. They are computable without a thickness, and keeping them means the CEO
+     * sees a real line with a real supplier price to judge the missing cost against, rather than an
+     * empty placeholder.
+     */
+    private PricingCostingWriteItem uncostableWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig) {
+        ResolvedSource source = item.source();
+        BigDecimal insurancePerPiece = money4(
+            item.insuranceThb().divide(item.qtyPieces(), 8, RoundingMode.HALF_UP));
+        return new PricingCostingWriteItem(
+            source.requestItem().id(),
+            source.quote().id(),
+            source.quoteItem().id(),
+            source.quote().revisionNo(),
+            source.quote().factoryId(),
+            source.quote().factoryName(),
+            source.quote().supplierQuoteRef(),
+            source.quoteItem().rawUnitPrice(),
+            source.quoteItem().currency(),
+            source.quoteItem().quotedUnit(),
+            source.quoteItem().unitBasis(),
+            source.requestItem().requestedQty(),
+            source.requestItem().requestedUnit(),
+            source.requestItem().requestedUnitBasis(),
+            item.qtyPieces(),
+            source.quoteItem().linearMPerUnit(),
+            item.sqmPerPiece(),
+            source.quoteItem().piecesPerBox(),
+            item.fx().rate(),
+            item.fx().source(),
+            item.fx().effectiveDate(),
+            item.fx().fetchedAt(),
+            formulaConfig.formulaConfigId(),
+            formulaConfig.version(),
+            item.goodsCostPerPiece(),
+            null,               // freight_cost_thb — the freight table cannot be looked up
+            insurancePerPiece,
+            null,               // import_duty_thb — duty applies to CIF, which needs freight
+            ZERO,
+            ZERO,
+            null,               // cif_cost_thb
+            null,               // landed_cost_per_unit_thb
+            null,               // total_landed_cost_thb
+            null,               // clearance_fee_thb — allocated across costable lines only
+            item.productType(),
+            null,               // calculation_snapshot — no calculation happened
+            uncostableReason(item)
+        );
     }
 
     private ItemPhysicals resolveItemPhysicals(ResolvedSource source, PricingFormulaConfigDto formulaConfig) {
@@ -293,19 +385,21 @@ public class LandedCostCalculator {
      * never guessed, never defaulted. An item with no resolvable catalog link at all is a
      * legitimate case (Import may submit a free-text line with no catalog match, owner ruling
      * 2026-08-11 — {@code PricingRequestService#submit}'s own comment), and a matched catalog row
-     * can still have a NULL {@code thickness_mm}. Either way this fails costing LOUDLY here,
-     * naming the item, so Import can fix the data — it never silently prices as if thickness did
-     * not matter (V109's freight table cannot be looked up at all without one).
+     * can still have a NULL {@code thickness_mm} — 41.7% of the production catalogue does, and for
+     * some products (Bode's whole range, REFIN's OUT2.0) NO source carries it, so it cannot be
+     * fixed by better data alone.
+     *
+     * <p><b>Returns null rather than throwing (V156).</b> It used to throw 422 here, which aborted
+     * {@code PricingDecisionService#startReview} before a single costing row was written — and
+     * therefore before the CEO could reach the very screen that owns the manual cost override
+     * ({@code manual_landed_cost_per_unit_thb}, V141) that resolves this. The capability existed
+     * and the route to it was blocked. A null now marks the item UNCOSTABLE, it persists with a
+     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. Nothing
+     * is ever priced on a guessed thickness — the guarantee moved, it did not weaken.
      */
     private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem) {
         Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
-        BigDecimal thicknessMm = priceId == null ? null : catalog.findThicknessMm(priceId).orElse(null);
-        if (thicknessMm == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                itemLabel(requestItem) + " ไม่มีความหนา (thickness_mm) จาก Price Catalog "
-                    + "— ไม่สามารถคำนวณค่าขนส่งได้ กรุณาเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่มีความหนาระบุไว้");
-        }
-        return thicknessMm;
+        return priceId == null ? null : catalog.findThicknessMm(priceId).orElse(null);
     }
 
     /**
@@ -320,13 +414,26 @@ public class LandedCostCalculator {
      */
     private String resolveOriginCountryCode(PricingRequestItemDto requestItem) {
         Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
-        String countryCode = priceId == null ? null : catalog.findOriginCountryCode(priceId).orElse(null);
-        if (countryCode == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                itemLabel(requestItem) + " ไม่มีประเทศต้นทาง (origin country) จาก Price Catalog "
-                    + "— ไม่สามารถคำนวณค่าขนส่งได้ กรุณาเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่ระบุโรงงานและประเทศต้นทางไว้");
+        return priceId == null ? null : catalog.findOriginCountryCode(priceId).orElse(null);
+    }
+
+    /**
+     * Why this item cannot be costed, in the CEO's own language, or null when it can. Both inputs
+     * are freight-table lookup keys ({@code sales.pricing_freight_rate}), so missing either one
+     * makes the lookup impossible rather than merely inaccurate — see V156.
+     */
+    private String uncostableReason(ItemPhysicals item) {
+        boolean noThickness = item.thicknessMm() == null;
+        boolean noCountry = item.originCountryCode() == null;
+        if (!noThickness && !noCountry) {
+            return null;
         }
-        return countryCode;
+        String missing = noThickness && noCountry ? "ความหนา (thickness_mm) และประเทศต้นทาง"
+            : noThickness ? "ความหนา (thickness_mm)"
+            : "ประเทศต้นทาง (origin country)";
+        return itemLabel(item.source().requestItem()) + " ไม่มี" + missing + " จาก Price Catalog "
+            + "— คำนวณค่าขนส่งอัตโนมัติไม่ได้ กรุณาระบุต้นทุนเอง หรือเชื่อมรายการนี้กับสินค้าใน Price Catalog "
+            + "ที่มีข้อมูลครบ";
     }
 
     /** Owner ruling 2026-08-16: {@code product_type} has no source in deal data today, so every
