@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -47,10 +48,10 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -109,9 +110,8 @@ import th.co.glr.hr.ticket.TicketService;
  * anything under test: the cutoff lives in a Java map but the cascade lives entirely in SQL
  * predicates, and a mocked repository "passes" while the {@code WHERE} clause does something else.
  * Even the terminal factory quote in the cascade test is produced the way production produces one
- * (a second {@code receive} supersedes the first), not inserted. The only mocks are the two
- * collaborators every other test in this package already mocks — {@link FactoryEmailService} (sends
- * real email) and {@link PriceCalcService} (unrelated legacy quotation math).
+ * (a second {@code receive} supersedes the first), not inserted. The only mock is the collaborator
+ * every other test in this package already mocks — {@link FactoryEmailService} (sends real email).
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new} and {@code @Transactional} is
@@ -158,20 +158,21 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
             .thenReturn(UUID.randomUUID().toString());
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, new AppProperties(),
             landedCosts);
 
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisions, pricingRequests,
-            new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts);
+            new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesActor = actor(createEmployee(employees, "พนักงานขาย ยกเลิก", "sales-cancel@glr.co.th", "SALES", "แผนกขาย"), "sales");
         otherSalesActor = actor(createEmployee(employees, "พนักงานขาย อื่น", "sales-other-cancel@glr.co.th", "SALES", "แผนกขาย"), "sales");
@@ -180,11 +181,11 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
 
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-cancel@example.com', 'THB', 'piece', 'Thailand')
+            VALUES (:factory, 'factory-cancel@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", FACTORY));
-        catalogProductId = insertCatalogProduct(FACTORY, "TH", "TEST-CANCEL-001",
+        catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-CANCEL-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(
@@ -503,7 +504,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);

@@ -352,8 +352,7 @@ class CommissionInvoiceSentinelRollbackIntegrationTest extends AbstractPostgresI
             failingAudit,
             mock(NotificationService.class),
             realTickets,
-            new AttachmentRepository(jdbc),
-            new CeoApproverRepository(jdbc));
+            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
         return new FailingDealFixture(service, ticketId, accountActor);
     }
 

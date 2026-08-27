@@ -106,6 +106,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       fxRates: {
         list: vi.fn(),
       },
+      // ใบขอซื้อ (F-SM-001). Mocked for the same reason as fxRates: DealFulfilmentPanel's IR block
+      // queries brands for every import/CEO viewer, and an undefined namespace would throw rather
+      // than render the block.
+      importRequests: {
+        brands: vi.fn(),
+        pages: vi.fn(),
+        download: vi.fn(),
+      },
     },
   };
 });
@@ -216,6 +224,10 @@ function renderTicketDetailPageAtRoute(initialEntries, user = ceoUser, showToast
 describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with
+    // brands would make the block appear in unrelated assertions.
+    api.importRequests.brands.mockResolvedValue({ brands: [] });
+    api.importRequests.pages.mockResolvedValue({ pageCount: 1 });
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.actions.mockResolvedValue({
       currentState: {
@@ -1924,6 +1936,150 @@ describe('TicketDetailPage', () => {
       return within(heading.closest('section'));
     }
 
+    // Regression: the /fulfilment workspace gave the four fulfilment codes a `to` of
+    // '/fulfilment', which made TicketDetailPage's sticky bar navigate away instead of scrolling
+    // to the panel already on this page — ejecting an import user from the deal they were standing
+    // on to go find it again in a list. The in-page target must win whenever the page has one.
+    it('import’s sticky CTA scrolls to the fulfilment panel instead of navigating to /fulfilment', async () => {
+      // Records WHICH element was scrolled, not merely that something was. A bare
+      // vi.fn() on the prototype passes with the fix reverted — other things on this page
+      // scroll on mount, so "scrollIntoView was called" is satisfied by them and the test
+      // proves nothing. Verified by mutation-check: with `&& !jumpId` removed, the id
+      // assertion below goes red and the bare-call assertion did not.
+      const scrolledIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledIds.push(this.id);
+      };
+      try {
+        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the
+        // sticky bar would never render and this test would pass vacuously.
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID',
+              lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', fulfillmentStatus: null,
+            },
+          }),
+        });
+        api.tickets.actions.mockResolvedValue({
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
+          availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' }],
+        });
+
+        renderTicketDetailPage(importUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+
+        const sticky = await screen.findByTestId('ticket-primary-action');
+        expect(sticky.getAttribute('data-action')).toBe('issueImportRequest');
+
+        fireEvent.click(sticky);
+
+        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the
+        // scroll target rather than "did not navigate" because a MemoryRouter with no /fulfilment
+        // route renders blank either way, so a negative navigation assertion would itself be
+        // vacuous.
+        await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    // Same regression class, sales' side: RECORD_DELIVERY (stages 13-14 ส่งมอบสินค้า, owner ruling
+    // 2026-08-17) must ALSO land the sticky bar on this panel via an in-page scroll. Unlike
+    // nextImportAction/nextAccountAction, nextSalesAction never sets `.to` on the action object it
+    // returns, so the `to && to !== ... && !jumpId` branch above is never live for this key at all —
+    // this test is what proves IN_PAGE_JUMP_TARGET.record_delivery is the thing actually routing it,
+    // not an accidental fallthrough.
+    it('sales’ sticky CTA scrolls to the fulfilment panel for a delivery-ready deal it owns', async () => {
+      const scrolledIds = [];
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
+        scrolledIds.push(this.id);
+      };
+      try {
+        // Zero pricing requests (api.pricingRequests.listForTicket keeps its beforeEach default,
+        // { items: [] }) + a non-null paymentStatus is the "priced outside the PCR chain" shape
+        // (salesActions.js bucket 1's own guard) — the same shape demoData.js tickets 13/14 already
+        // have, and the same shape salesActions.test.js / workState.test.js pin at the unit level.
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              status: 'quotation_issued', paymentStatus: 'AWAITING_FINAL_PAYMENT',
+              lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED',
+            },
+          }),
+        });
+
+        renderTicketDetailPage(salesOwnerUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+
+        const sticky = await screen.findByTestId('ticket-primary-action');
+        expect(sticky.getAttribute('data-action')).toBe('record_delivery');
+
+        fireEvent.click(sticky);
+
+        await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
+      } finally {
+        Element.prototype.scrollIntoView = original;
+      }
+    });
+
+    // ── ใบขอซื้อ (F-SM-001) download block ──────────────────────────────────────────────────
+    describe('the ใบขอซื้อ block', () => {
+      it('offers one form per brand on the deal', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana', 'LEA'] });
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        expect(await section.findByTestId('deal-fulfilment-ir-download-Padana')).toBeTruthy();
+        expect(section.getByTestId('deal-fulfilment-ir-download-LEA')).toBeTruthy();
+        expect(api.importRequests.brands).toHaveBeenCalledWith(701);
+      });
+
+      it('hands the typed ReF. No. and the chosen brand to the download', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        api.importRequests.download.mockResolvedValue(new Blob(['%PDF-']));
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        fireEvent.change(await section.findByTestId('deal-fulfilment-ir-ref'),
+          { target: { value: 'IR69068' } });
+        fireEvent.click(section.getByTestId('deal-fulfilment-ir-download-Padana'));
+
+        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form
+        // prints it blank. If this ever starts passing a value, the panel has begun filling in
+        // another department's field.
+        await waitFor(() => expect(api.importRequests.download)
+          .toHaveBeenCalledWith(701, 'Padana', 'IR69068', null));
+      });
+
+      it('flags a form that will run to a second sheet', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        api.importRequests.pages.mockResolvedValue({ pageCount: 2 });
+        renderTicketDetailPage(importUser);
+        const section = await fulfilmentSection();
+
+        expect(await section.findByText('2 แผ่น')).toBeTruthy();
+      });
+
+      /**
+       * ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a
+       * control that 403s. Sales DOES see the rest of this panel (read-only), which is why the gate
+       * has to be on the block rather than the tab.
+       */
+      it('is absent for sales, which may read this panel but not the document', async () => {
+        api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
+        renderTicketDetailPage(salesOwnerUser);
+        const section = await fulfilmentSection();
+
+        expect(section.queryByTestId('deal-fulfilment-import-request')).toBeNull();
+        // And the query is not even issued — a 403 in the console for every sales viewer of this
+        // tab would be noise, so `enabled` carries the same gate as the markup.
+        expect(api.importRequests.brands).not.toHaveBeenCalled();
+      });
+    });
+
     it('import issues an Import Request via api.tickets.issueImportRequest', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }),
@@ -1962,11 +2118,17 @@ describe('TicketDetailPage', () => {
         // it would now assert a gate that intentionally does not exist. The
         // realistic case — account is offered nothing, so account sees nothing
         // — is asserted below instead.
+        // RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY left this list for the SAME reason
+        // RESERVE_STOCK did, one ruling later: stages 13-14 (ส่งมอบสินค้า) are Sales's as of
+        // 2026-08-17, TicketService.canWriteDelivery grants them to the deal owner as well as
+        // import/ceo, and actions() advertises both off that predicate. Their local `isFulfilment`
+        // check is therefore gone, so feeding account two actions the real service cannot produce
+        // for it would assert a gate that intentionally no longer exists. The realistic case —
+        // account is offered nothing, so account sees nothing — is what the assertions below check,
+        // and it is still real evidence: the panel renders those buttons purely from hasAction().
         availableActions: [
           { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
-          { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกส่งมอบ' },
-          { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
         ],
       });
 
@@ -2025,6 +2187,52 @@ describe('TicketDetailPage', () => {
       const section = await fulfilmentSection();
 
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
+    });
+
+    // ── Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17 ─────────────
+    //
+    // Same shape as the RESERVE_STOCK pair above, one ruling later. TicketService.canWriteDelivery
+    // is FULFILMENT_ROLES ∪ (sales ∧ deal owner) and actions() advertises
+    // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off it, so the panel's own `isFulfilment` check on
+    // those two is gone and the server's answer stands.
+    //
+    // ⚠️ RENDERING assertions over a mocked `api`: they pin that the frontend honours the server's
+    // answer, and say NOTHING about who the real service grants. That claim is
+    // DeliveryAuthzIntegrationTest's, against real Postgres — see CLAUDE.md.
+    it('shows the delivery buttons to the sales deal owner when the server advertises them', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', status: 'quotation_issued' },
+        availableActions: [
+          { action: 'RECORD_PARTIAL_DELIVERY', kind: 'fulfillment', label: 'บันทึกการส่งสินค้า' },
+          { action: 'COMPLETE_DELIVERY', kind: 'fulfillment', label: 'ส่งมอบครบ' },
+        ],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(await section.findByRole('button', { name: 'บันทึกการส่งสินค้า' })).not.toBeNull();
+      expect(section.getByRole('button', { name: 'ส่งมอบครบ' })).not.toBeNull();
+    });
+
+    // Wrong-way-round: dropping the local role check must not make the buttons unconditional.
+    it('hides the delivery buttons from a sales user the server did not offer them to', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', status: 'quotation_issued' },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      const section = await fulfilmentSection();
+
+      expect(section.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
+      expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
     });
 
     // ── Issue #730: a from-stock deal must not claim import milestones ────────

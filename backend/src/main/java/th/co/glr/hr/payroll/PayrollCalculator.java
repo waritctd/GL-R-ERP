@@ -227,7 +227,9 @@ public class PayrollCalculator {
         // recomputes on the restored income too; ssoWageBase(...)'s existing [MIN,MAX] clamp already
         // protects against a refund pushing the base past the 17,500 ceiling.
         BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction).add(leaveDeductionRefund));
-        BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
+        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not
+        // just in SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
+        BigDecimal monthlySso = wholeBaht(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
 
@@ -634,7 +636,9 @@ public class PayrollCalculator {
             ssoWageBaseRaw = ssoWageBaseRaw.add(componentAmount);
         }
         BigDecimal ssoWageBase = ssoWageBase(ssoWageBaseRaw);
-        BigDecimal monthlySso = money(ssoWageBase.multiply(SSO_RATE));
+        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not
+        // just in SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
+        BigDecimal monthlySso = wholeBaht(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
 
@@ -1193,6 +1197,22 @@ public class PayrollCalculator {
 
     private BigDecimal money(BigDecimal value) {
         return (value == null ? ZERO : value).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Rounds to whole baht, {@link RoundingMode#HALF_UP}, then restores the money scale so callers
+     * and the NUMERIC(12,2) columns keep a stable scale (0 -> 2 never rounds).
+     *
+     * <p>Used for เงินสมทบ only. มาตรา 46 วรรคท้าย makes the whole-baht rounding of an SSO
+     * contribution explicit in the statute, and {@code SsoExporter#wholeBaht} has always applied it
+     * when writing the สปส.1-10 filing. Until 2026-08-25 the ENGINE did not, so a wage whose 5% has
+     * satang (the only July 2026 case: ฿11,250 -> ฿562.50) was stored, shown on the payslip and
+     * deducted from net pay at ฿562.50 while the filing declared ฿563 — the payslip and the return
+     * disagreed by design. Rounding here instead of only at the exporter makes the deduction the
+     * employee actually sees the same number the SSO office receives.
+     */
+    private BigDecimal wholeBaht(BigDecimal value) {
+        return (value == null ? ZERO : value).setScale(0, RoundingMode.HALF_UP).setScale(MONEY_SCALE);
     }
 
     private BigDecimal quantity(BigDecimal value) {

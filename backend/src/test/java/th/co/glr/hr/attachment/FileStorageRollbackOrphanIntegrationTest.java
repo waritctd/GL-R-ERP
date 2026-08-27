@@ -293,8 +293,7 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
             audit,
             mock(NotificationService.class),
             tickets,
-            new AttachmentRepository(jdbc),
-            new CeoApproverRepository(jdbc));
+            new AttachmentRepository(jdbc), new CeoApproverRepository(jdbc));
     }
 
     private PricingRequestService pricingRequestService(PricingRequestRepository requests) {

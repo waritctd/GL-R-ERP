@@ -132,6 +132,21 @@ db.paymentReceipts = db.paymentReceipts || [
   { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
   { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
   { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
+  // Tickets 19-25 (ฝ่ายบัญชี money-cycle deals, demoSales.js). These rows are
+  // what put each deal in its intended bucket: derivePaymentFields derives
+  // amountOutstanding as payable - sum(receipts), and both `overdue` and
+  // closeReady() gate on that number, not on paymentStatus. So a half-paid
+  // deal needs exactly one DEPOSIT row and a closed one needs DEPOSIT+BALANCE
+  // summing to the quotation total, or the bucket silently changes.
+  //
+  // Deliberately absent: 19, 20 (notice issued, nothing banked yet) and 22
+  // (credit customer, whole invoice outstanding and overdue).
+  { receiptId: 5, ticketId: 21, kind: 'DEPOSIT', amount: 445000, currency: 'THB', receivedAt: '2026-06-30T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50% ตามใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-21-DEP', createdAt: '2026-06-30T08:00:00Z' },
+  { receiptId: 6, ticketId: 23, kind: 'DEPOSIT', amount: 780000, currency: 'THB', receivedAt: '2026-06-09T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-23-DEP', createdAt: '2026-06-09T08:00:00Z' },
+  { receiptId: 7, ticketId: 24, kind: 'DEPOSIT', amount: 324000, currency: 'THB', receivedAt: '2026-06-01T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-24-DEP', createdAt: '2026-06-01T08:00:00Z' },
+  { receiptId: 8, ticketId: 24, kind: 'BALANCE', amount: 324000, currency: 'THB', receivedAt: '2026-08-08T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ โอนผ่านธนาคารกสิกรไทย', depositNoticeId: null, receiptRef: 'MOCK-24-BAL', createdAt: '2026-08-08T08:00:00Z' },
+  { receiptId: 9, ticketId: 25, kind: 'DEPOSIT', amount: 396000, currency: 'THB', receivedAt: '2026-05-25T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-25-DEP', createdAt: '2026-05-25T08:00:00Z' },
+  { receiptId: 10, ticketId: 25, kind: 'BALANCE', amount: 396000, currency: 'THB', receivedAt: '2026-08-04T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-25-BAL', createdAt: '2026-08-04T08:00:00Z' },
 ];
 const partialDeliveryDemo = db.tickets.find((t) => t.id === 13);
 if (partialDeliveryDemo?.items?.[0]) {
@@ -491,6 +506,28 @@ const mockFxRates = [
   { id: 6, currency: 'USD', rateToThb: 33.6264, effectiveDate: '2026-07-10', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
 ];
 
+// V153 thickness gaps. Shaped like the real derivation (see the catalogThicknessDefaults namespace
+// for why these are seeds rather than a re-derived query): Vives ALTEA really is the biggest single
+// gap in prod, and one entry already has a default so the panel's "already set" state is drivable.
+const mockThicknessGaps = [
+  { factoryId: 8, factoryName: 'Vives',  collection: 'ALTEA',     rowsMissingThickness: 312, currentDefaultMm: null, hasSizeLevelOverride: false },
+  { factoryId: 3, factoryName: 'Padana', collection: 'UNICOLORE', rowsMissingThickness: 188, currentDefaultMm: null, hasSizeLevelOverride: true },
+  { factoryId: 7, factoryName: 'Equipe', collection: 'KENZAI',    rowsMissingThickness: 96,  currentDefaultMm: 8.5,  hasSizeLevelOverride: false },
+  { factoryId: 9, factoryName: 'Bode',   collection: 'Limestone', rowsMissingThickness: 24,  currentDefaultMm: null, hasSizeLevelOverride: false },
+];
+
+function mockThicknessGapsResponse() {
+  // Mirrors ThicknessDefaultRepository#listGaps's ORDER BY count(*) DESC — the panel is built
+  // around biggest-impact-first, so a differently-ordered mock would let a broken sort pass.
+  const gaps = [...mockThicknessGaps].sort((a, b) => b.rowsMissingThickness - a.rowsMissingThickness);
+  return {
+    gaps: structuredClone(gaps),
+    rowsStillMissingThickness: gaps
+      .filter((g) => g.currentDefaultMm == null)
+      .reduce((sum, g) => sum + g.rowsMissingThickness, 0),
+  };
+}
+
 const mockPriceCalcConfigs = [
   {
     configId: 1, version: 1, country: 'Italy',
@@ -524,8 +561,22 @@ let mockFormulaDutyRateSeq = 1;
 let mockFormulaClearanceFeeSeq = 1;
 let mockFormulaConfigSeq = 1;
 
-function formulaFreightRow(originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
-  return { freightRateId: mockFormulaFreightRateSeq++, originCountry, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb };
+// Mirrors price_catalog.country (V151). The real API returns this on the formula config so the
+// freight editor can offer a select; a new supplier country is a row here, not free text.
+const MOCK_COUNTRIES = [
+  { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
+  { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
+  { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
+  { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+];
+
+function formulaFreightRow(originCountryCode, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
+  // originCountryName is display only — PricingFormulaConfigRepository resolves it by joining
+  // price_catalog.country, so it is never independently editable and cannot drift from the code.
+  const originCountryName =
+    MOCK_COUNTRIES.find((c) => c.countryCode === originCountryCode)?.nameTh ?? originCountryCode;
+  return { freightRateId: mockFormulaFreightRateSeq++, originCountryCode, originCountryName,
+    thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb };
 }
 function formulaDutyRow(productType, productLabel, dutyPct) {
   return { dutyRateId: mockFormulaDutyRateSeq++, productType, productLabel, dutyPct };
@@ -550,54 +601,54 @@ function buildSeedFormulaConfig() {
     updatedAt: new Date().toISOString(),
     freightRates: [
       // Italy: thickness [3,8) mm
-      formulaFreightRow('Italy', 3, 8, 1, 101, 80000),
-      formulaFreightRow('Italy', 3, 8, 101, 451, 90000),
-      formulaFreightRow('Italy', 3, 8, 451, 801, 100000),
-      formulaFreightRow('Italy', 3, 8, 801, null, 100000),
+      formulaFreightRow('IT', 3, 8, 1, 101, 80000),
+      formulaFreightRow('IT', 3, 8, 101, 451, 90000),
+      formulaFreightRow('IT', 3, 8, 451, 801, 100000),
+      formulaFreightRow('IT', 3, 8, 801, null, 100000),
       // Italy: thickness [8,12) mm
-      formulaFreightRow('Italy', 8, 12, 1, 101, 50000),
-      formulaFreightRow('Italy', 8, 12, 101, 451, 80000),
-      formulaFreightRow('Italy', 8, 12, 451, 801, 90000),
-      formulaFreightRow('Italy', 8, 12, 801, null, 100000),
+      formulaFreightRow('IT', 8, 12, 1, 101, 50000),
+      formulaFreightRow('IT', 8, 12, 101, 451, 80000),
+      formulaFreightRow('IT', 8, 12, 451, 801, 90000),
+      formulaFreightRow('IT', 8, 12, 801, null, 100000),
       // Italy: thickness [12,17) mm (band4 blank in sheet -- no row)
-      formulaFreightRow('Italy', 12, 17, 1, 101, 50000),
-      formulaFreightRow('Italy', 12, 17, 101, 451, 90000),
-      formulaFreightRow('Italy', 12, 17, 451, 801, 100000),
+      formulaFreightRow('IT', 12, 17, 1, 101, 50000),
+      formulaFreightRow('IT', 12, 17, 101, 451, 90000),
+      formulaFreightRow('IT', 12, 17, 451, 801, 100000),
       // Italy: thickness [17,21) mm (band3/band4 blank in sheet -- no rows)
-      formulaFreightRow('Italy', 17, 21, 1, 101, 60000),
-      formulaFreightRow('Italy', 17, 21, 101, 451, 100000),
+      formulaFreightRow('IT', 17, 21, 1, 101, 60000),
+      formulaFreightRow('IT', 17, 21, 101, 451, 100000),
 
       // Spain: identical values to Italy (the sheet groups them; separate rows let the CEO
       // diverge them later without a schema change).
-      formulaFreightRow('Spain', 3, 8, 1, 101, 80000),
-      formulaFreightRow('Spain', 3, 8, 101, 451, 90000),
-      formulaFreightRow('Spain', 3, 8, 451, 801, 100000),
-      formulaFreightRow('Spain', 3, 8, 801, null, 100000),
-      formulaFreightRow('Spain', 8, 12, 1, 101, 50000),
-      formulaFreightRow('Spain', 8, 12, 101, 451, 80000),
-      formulaFreightRow('Spain', 8, 12, 451, 801, 90000),
-      formulaFreightRow('Spain', 8, 12, 801, null, 100000),
-      formulaFreightRow('Spain', 12, 17, 1, 101, 50000),
-      formulaFreightRow('Spain', 12, 17, 101, 451, 90000),
-      formulaFreightRow('Spain', 12, 17, 451, 801, 100000),
-      formulaFreightRow('Spain', 17, 21, 1, 101, 60000),
-      formulaFreightRow('Spain', 17, 21, 101, 451, 100000),
+      formulaFreightRow('ES', 3, 8, 1, 101, 80000),
+      formulaFreightRow('ES', 3, 8, 101, 451, 90000),
+      formulaFreightRow('ES', 3, 8, 451, 801, 100000),
+      formulaFreightRow('ES', 3, 8, 801, null, 100000),
+      formulaFreightRow('ES', 8, 12, 1, 101, 50000),
+      formulaFreightRow('ES', 8, 12, 101, 451, 80000),
+      formulaFreightRow('ES', 8, 12, 451, 801, 90000),
+      formulaFreightRow('ES', 8, 12, 801, null, 100000),
+      formulaFreightRow('ES', 12, 17, 1, 101, 50000),
+      formulaFreightRow('ES', 12, 17, 101, 451, 90000),
+      formulaFreightRow('ES', 12, 17, 451, 801, 100000),
+      formulaFreightRow('ES', 17, 21, 1, 101, 60000),
+      formulaFreightRow('ES', 17, 21, 101, 451, 100000),
 
       // China
-      formulaFreightRow('China', 3, 8, 1, 101, 60000),
-      formulaFreightRow('China', 3, 8, 101, 451, 60000),
-      formulaFreightRow('China', 3, 8, 451, 801, 50000),
-      formulaFreightRow('China', 3, 8, 801, null, 50000),
-      formulaFreightRow('China', 8, 12, 1, 101, 30000),
-      formulaFreightRow('China', 8, 12, 101, 451, 50000),
-      formulaFreightRow('China', 8, 12, 451, 801, 70000),
-      formulaFreightRow('China', 8, 12, 801, null, 50000),
-      formulaFreightRow('China', 12, 17, 1, 101, 30000),
-      formulaFreightRow('China', 12, 17, 101, 451, 50000),
-      formulaFreightRow('China', 12, 17, 451, 801, 70000),
+      formulaFreightRow('CN', 3, 8, 1, 101, 60000),
+      formulaFreightRow('CN', 3, 8, 101, 451, 60000),
+      formulaFreightRow('CN', 3, 8, 451, 801, 50000),
+      formulaFreightRow('CN', 3, 8, 801, null, 50000),
+      formulaFreightRow('CN', 8, 12, 1, 101, 30000),
+      formulaFreightRow('CN', 8, 12, 101, 451, 50000),
+      formulaFreightRow('CN', 8, 12, 451, 801, 70000),
+      formulaFreightRow('CN', 8, 12, 801, null, 50000),
+      formulaFreightRow('CN', 12, 17, 1, 101, 30000),
+      formulaFreightRow('CN', 12, 17, 101, 451, 50000),
+      formulaFreightRow('CN', 12, 17, 451, 801, 70000),
       // China 12-17 band4 (801+) is blank in the sheet -- no row.
-      formulaFreightRow('China', 17, 21, 1, 101, 40000),
-      formulaFreightRow('China', 17, 21, 101, 451, 50000),
+      formulaFreightRow('CN', 17, 21, 1, 101, 40000),
+      formulaFreightRow('CN', 17, 21, 101, 451, 50000),
       // China 17-21 band3/band4 are blank in the sheet -- no rows.
     ],
     dutyRates: [
@@ -629,8 +680,9 @@ function currentFormulaConfig() {
 function sortedFormulaConfig(config) {
   return {
     ...config,
+    availableCountries: MOCK_COUNTRIES,
     freightRates: [...config.freightRates].sort((a, b) =>
-      a.originCountry.localeCompare(b.originCountry)
+      a.originCountryCode.localeCompare(b.originCountryCode)
       || a.thicknessMinMm - b.thicknessMinMm
       || a.qtyMinSqm - b.qtyMinSqm),
     dutyRates: [...config.dutyRates].sort((a, b) => a.productType.localeCompare(b.productType)),
@@ -670,7 +722,7 @@ function createNewFormulaConfigVersion(current, freightRows) {
     effectiveFrom: current.effectiveFrom,
     updatedAt: new Date().toISOString(),
     freightRates: freightRows.map((r) => formulaFreightRow(
-      r.originCountry, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
+      r.originCountryCode, r.thicknessMinMm, r.thicknessMaxMm, r.qtyMinSqm, r.qtyMaxSqm, r.amountThb)),
     dutyRates: current.dutyRates.map((d) => formulaDutyRow(d.productType, d.productLabel, d.dutyPct)),
     clearanceFees: current.clearanceFees.map((c) => formulaClearanceRow(c.qtyMinSqm, c.qtyMaxSqm, c.amountThb)),
   };
@@ -694,16 +746,16 @@ function freightBandsOverlap(aMin, aMax, bMin, bMax) {
 function validateFreightRates(rows) {
   for (const row of rows) {
     if (row.thicknessMinMm >= row.thicknessMaxMm) {
-      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+      fail(`ช่วงความหนาไม่ถูกต้อง: ${row.originCountryCode} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
     }
     if (row.qtyMaxSqm != null && row.qtyMinSqm >= row.qtyMaxSqm) {
-      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountry} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
+      fail(`ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: ${row.originCountryCode} ${row.thicknessMinMm}-${row.thicknessMaxMm}`, 400);
     }
   }
   const byCountry = new Map();
   for (const row of rows) {
-    if (!byCountry.has(row.originCountry)) byCountry.set(row.originCountry, []);
-    byCountry.get(row.originCountry).push(row);
+    if (!byCountry.has(row.originCountryCode)) byCountry.set(row.originCountryCode, []);
+    byCountry.get(row.originCountryCode).push(row);
   }
   for (const [country, group] of byCountry) {
     for (let i = 0; i < group.length; i += 1) {
@@ -734,7 +786,7 @@ function validateFreightRates(rows) {
  */
 function validateFreightRemovalLeavesNoInteriorGap(all, target) {
   const sameThicknessBand = all
-    .filter((r) => r.originCountry === target.originCountry
+    .filter((r) => r.originCountryCode === target.originCountryCode
       && r.thicknessMinMm === target.thicknessMinMm && r.thicknessMaxMm === target.thicknessMaxMm)
     .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
 
@@ -745,7 +797,7 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
     const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
     if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
       fail(
-        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountry} `
+        `ลบไม่ได้: จะทำให้ช่วงจำนวน (ตร.ม.) ขาดตอนตรงกลาง — ${target.originCountryName} `
         + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ช่วง `
         + `${target.qtyMinSqm}-${target.qtyMaxSqm ?? 'ไม่จำกัด'} ตร.ม. ลบได้เฉพาะช่วงบนสุดหรือล่างสุด`,
         400,
@@ -757,13 +809,13 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
   // The row is the last one in its thickness band, so removing it empties that band. Apply the
   // same edge-only rule one level up, across the country's thickness ladder.
   const thicknessMins = [...new Set(
-    all.filter((r) => r.originCountry === target.originCountry).map((r) => r.thicknessMinMm),
+    all.filter((r) => r.originCountryCode === target.originCountryCode).map((r) => r.thicknessMinMm),
   )].sort((a, b) => a - b);
   if (thicknessMins.length > 1
     && thicknessMins[0] !== target.thicknessMinMm
     && thicknessMins[thicknessMins.length - 1] !== target.thicknessMinMm) {
     fail(
-      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountry} `
+      `ลบไม่ได้: จะทำให้ช่วงความหนาขาดตอนตรงกลาง — ${target.originCountryName} `
       + `หนา ${target.thicknessMinMm}-${target.thicknessMaxMm} มม. ลบได้เฉพาะช่วงความหนาบนสุดหรือล่างสุด`,
       400,
     );
@@ -931,6 +983,11 @@ let mockPricingDecisionItemSeq = 1;
 const mockCustomerQuotations = [];
 let mockCustomerQuotationSeq = 1;
 let mockCustomerQuotationItemSeq = 1;
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
+// sales.quotation_item_discount_approval (V155). Starts empty every session like every other
+// array in this block; nothing in demoSales.js seeds it (a fresh table has no rows either).
+const mockDiscountApprovals = [];
+let mockDiscountApprovalSeq = 1;
 
 // Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
 // (mockPricingRequests through mockCustomerQuotations, plus mockDealActivities and
@@ -1363,6 +1420,69 @@ function mockCustomerQuotationEditAccess(id, user) {
   return quotation;
 }
 
+// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
+// CustomerQuotationService#raiseDiscountApprovalsIfNeeded / DiscountApprovalRepository#ensureRequested.
+// For every line currently below its CEO-approved minimum, opens (or silently reuses) a PENDING
+// request at EXACTLY that price. A repeat save at an unchanged price, or a price that reverts to
+// one already APPROVED, raises nothing new and notifies nobody again — the price-match check
+// below is what makes that idempotent, same as the real repository's EXISTS-based guard.
+function ensureMockDiscountApprovalsRaised(quotation, user) {
+  const newlyRequested = [];
+  for (const item of quotation.items) {
+    if (item.minimumSellingPricePerRequestedUnit == null) continue;
+    if (item.finalUnitPrice >= item.minimumSellingPricePerRequestedUnit) continue;
+    const covered = mockDiscountApprovals.some((a) => a.quotationItemId === item.id
+      && ((a.status === 'APPROVED' && Number(a.approvedFinalUnitPrice) === Number(item.finalUnitPrice))
+        || (a.status === 'PENDING' && Number(a.requestedFinalUnitPrice) === Number(item.finalUnitPrice))));
+    if (covered) continue;
+    const approval = {
+      id: mockDiscountApprovalSeq++,
+      quotationItemId: item.id,
+      quotationId: quotation.id,
+      pricingRequestId: quotation.pricingRequestId,
+      quotationNumber: quotation.number,
+      itemDescription: item.description,
+      status: 'PENDING',
+      requestedFinalUnitPrice: item.finalUnitPrice,
+      requestedBy: user.id,
+      requestedByName: user.name,
+      requestedAt: new Date().toISOString(),
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      approvedFinalUnitPrice: null,
+      rejectionReason: null,
+    };
+    mockDiscountApprovals.push(approval);
+    newlyRequested.push(item);
+  }
+  if (newlyRequested.length === 0) return;
+  const pr = findPricingRequestRaw(quotation.pricingRequestId);
+  const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+  const itemList = newlyRequested.map((i) => i.id).join(', ');
+  const message = `ใบเสนอราคา ${quotation.number} มีส่วนลดรอการอนุมัติจาก CEO (รายการ ${itemList})`;
+  pushPricingRequestEvent(pr, user, 'DISCOUNT_APPROVAL_REQUESTED', null, null, message);
+  const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+  ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'DISCOUNT_APPROVAL_REQUESTED', message));
+}
+
+// The "current" per-line status a UI shows for one quotation — restricted to rows whose
+// requestedFinalUnitPrice equals the item's CURRENT finalUnitPrice (not simply "the latest row"),
+// mirroring DiscountApprovalRepository#findCurrentByQuotationId's own doc comment exactly: a line
+// that bounced back to an already-decided price shows THAT decision, and an abandoned PENDING ask
+// from a price the line has since moved off never shows.
+function mockCurrentDiscountApprovals(quotation) {
+  const byItem = new Map();
+  for (const item of quotation.items) {
+    const matches = mockDiscountApprovals
+      .filter((a) => a.quotationItemId === item.id
+        && Number(a.requestedFinalUnitPrice) === Number(item.finalUnitPrice))
+      .sort((a, b) => b.id - a.id);
+    if (matches.length > 0) byItem.set(item.id, matches[0]);
+  }
+  return quotation.items.map((item) => byItem.get(item.id)).filter(Boolean);
+}
+
 // Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/
 // buildMockQuotationHtml's own placeholder pattern (same styling/colors, same "real file comes
 // from the server template" banner) rather than inventing a second preview style.
@@ -1659,6 +1779,27 @@ function publicUser(user) {
 function requireSession() {
   if (!sessionUser) fail('กรุณาเข้าสู่ระบบก่อนใช้งาน', 401);
   return sessionUser;
+}
+
+/**
+ * Mirrors TicketService.isFulfilmentOrOwningRep — import/CEO, or the `sales` rep who owns the deal.
+ *
+ * <p>Backs the ส่งมอบสินค้า writes (stages 13-14, owner ruling 2026-08-17). sales_manager is
+ * excluded deliberately: ROLE_PERMISSIONS records it as read+comment oversight only.
+ *
+ * <p>KNOWN DIVERGENCE, not fixed here: `reserveStock` in this file still gates on
+ * hasRole('import','ceo') although the real canDeclareStockCoverage has allowed the owning rep since
+ * PR #706. That mock is STRICTER than production, which is the safe direction (CLAUDE.md: a mock more
+ * permissive than production is the dangerous one), and it belongs to a different feature — flagged
+ * rather than widened under this branch.
+ */
+function requireFulfilmentOrOwningRep(ticket) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!['import', 'ceo'].includes(user.role) && !owns) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+  return user;
 }
 
 function hasRole(...roles) {
@@ -4461,16 +4602,18 @@ export const api = {
     },
 
     async recordDelivery(id, payload) {
-      const user = hasRole('import', 'ceo');
+      // Stages 13-14 are Sales's (owner ruling 2026-08-17), additive to import/CEO — the gate is
+      // ownership-aware, so the ticket is loaded FIRST. Mirrors TicketService.canWriteDelivery.
       const ticket = findTicketRaw(Number(id));
+      const user = requireFulfilmentOrOwningRep(ticket);
       requireActive(ticket);
       recordDeliveryForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
     async completeDelivery(id, payload = {}) {
-      const user = hasRole('import', 'ceo');
       const ticket = findTicketRaw(Number(id));
+      const user = requireFulfilmentOrOwningRep(ticket);
       requireActive(ticket);
       const remaining = (ticket.items ?? [])
         .map((item) => ({ itemId: item.id, qty: moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) }))
@@ -4549,7 +4692,14 @@ export const api = {
         if (['sales_manager', 'ceo'].includes(user.role)) {
           add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
         }
-        if (['import', 'ceo'].includes(user.role) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery -> isFulfilmentOrOwningRep
+        // (#818, stages 13-14 belong to Sales, ADDITIVE so import/ceo keep it): the advertisement
+        // and the mutation gate must come off the same predicate or the UI offers a button that
+        // instantly 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT
+        // `dealOwner`, which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales")
+        // and sales_manager is read+comment oversight only, so widening here would make the mock
+        // MORE permissive than production, the one direction CLAUDE.md calls dangerous.
+        if ((['import', 'ceo'].includes(user.role) || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
           add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
           add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
         }
@@ -7799,6 +7949,42 @@ export const api = {
     },
   },
 
+  // Mirrors ImportRequestController — the ใบขอซื้อ (F-SM-001) generator.
+  //
+  // `brands` is faithful: it reads the deal's own item brands, which is exactly what
+  // ImportRequestQueryRepository.brandLinesForTicket does, and involves no computation to get wrong.
+  //
+  // `pages` and `download` DELIBERATELY DO NOT WORK. Per CLAUDE.md, "a 'not supported in mock mode'
+  // stub is the honest option" where a mock would otherwise have to reimplement backend behaviour:
+  //   - download would need PDFBox, the F-SM-001 template, and every measured coordinate. A mock
+  //     that returned some other PDF would be worse than one that refuses, because a click would
+  //     "succeed" and the tester would conclude the form works.
+  //   - pages is ImportRequestRenderer's block-wise pagination over a 26-row grid. Mirroring it is
+  //     the `computeDraftEtag` mistake — if the algorithm is wrong the same way on both sides, every
+  //     mock-driven test passes while telling you nothing.
+  // Both therefore fail with a message saying so. The download button surfaces it verbatim.
+  importRequests: {
+    brands(ticketId) {
+      hasRole('import', 'ceo');
+      const ticket = findTicketRaw(Number(ticketId));
+      requireActive(ticket);
+      const brands = [...new Set((ticket.items ?? [])
+        .map((it) => it.brand)
+        .filter((b) => b && String(b).trim()))];
+      return delay({ brands });
+    },
+    async pages(ticketId, brand, requiredBy) {
+      hasRole('import', 'ceo');
+      void ticketId; void brand; void requiredBy;
+      fail('นับจำนวนหน้าใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+    async download(ticketId, brand, ref, requiredBy) {
+      hasRole('import', 'ceo');
+      void ticketId; void brand; void ref; void requiredBy;
+      fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+  },
+
   // Mirrors CatalogController (catalog/) — product CRUD delegates to
   // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   // Both reads stay requireSession() — open to any logged-in user, matching the
@@ -7998,9 +8184,15 @@ export const api = {
     },
   },
 
-  // Mirrors PriceCalcConfigController + PriceCalcService (pricing/).
+  // Mirrors PriceCalcConfigController (pricing/).
   // #388: list() mirrors PriceCalcConfigController.READ_ROLES = ceo/import — this
   // config IS the margin policy (marginPct/importDutyPct). update stays CEO-only.
+  //
+  // PriceCalcService was named here too until #817 deleted it: it resolved a factory's country
+  // from sales.factory_config, which only ever held demo rows whose names did not match
+  // price_catalog.factories ('Panaria SpA' vs 'Panaria'), so it could not price a real catalogue
+  // row. The CONFIG this namespace serves is still live and CEO-editable; only the calculator that
+  // once consumed it is gone. Landed cost now runs through PricingFormulaEngine (V152).
   priceCalcConfigs: {
     async list() {
       hasRole('ceo', 'import');
@@ -8029,6 +8221,36 @@ export const api = {
     },
   },
 
+  // Mirrors ThicknessDefaultController + ThicknessDefaultRepository (catalog/).
+  //
+  // The real gap list is DERIVED from the catalogue: (factory, collection) pairs whose ACTIVE-version
+  // rows have a NULL thickness_mm, ordered by how many rows each would unblock. There is no
+  // catalogue in mock mode, so these are fixed seeds shaped like the real thing (Vives ALTEA is the
+  // real biggest gap) rather than a reimplementation of that query — mirroring the derivation would
+  // make any mock-driven test evidence about the mock, not the backend.
+  //
+  // Ordering IS mirrored (rowsMissingThickness DESC), because the panel's whole point is
+  // biggest-impact-first and a differently-ordered mock would let a broken sort pass.
+  catalogThicknessDefaults: {
+    async list() {
+      hasRole('ceo');
+      return delay(mockThicknessGapsResponse());
+    },
+    async save(payload) {
+      hasRole('ceo');
+      for (const entry of payload.entries ?? []) {
+        const gap = mockThicknessGaps.find(
+          (g) => g.factoryId === entry.factoryId && g.collection === entry.collection);
+        if (!gap) continue;
+        // null CLEARS rather than storing 0 — a stored zero would silently select the lowest
+        // freight band instead of refusing to price (ThicknessDefaultRepository#saveAll).
+        gap.currentDefaultMm = entry.thicknessMm == null || entry.thicknessMm === ''
+          ? null : Number(entry.thicknessMm);
+      }
+      return delay({ saved: (payload.entries ?? []).length, ...mockThicknessGapsResponse() });
+    },
+  },
+
   // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
   // Mirrors PricingFormulaConfigController + PricingFormulaConfigRepository (pricing/) -- a NEW
   // endpoint, distinct from priceCalcConfigs above (which keeps serving the separate catalog
@@ -8052,7 +8274,7 @@ export const api = {
       const current = currentFormulaConfig();
       if (!current) fail('ไม่พบสูตรคำนวณราคาขาย', 404);
       const newRow = {
-        originCountry: payload.originCountry,
+        originCountryCode: payload.originCountryCode,
         thicknessMinMm: Number(payload.thicknessMinMm),
         thicknessMaxMm: Number(payload.thicknessMaxMm),
         qtyMinSqm: Number(payload.qtyMinSqm),
@@ -8093,7 +8315,7 @@ export const api = {
         effectiveFrom: payload.effectiveFrom ?? new Date().toISOString().slice(0, 10),
         updatedAt: new Date().toISOString(),
         freightRates: (payload.freightRates ?? []).map((r) => formulaFreightRow(
-          r.originCountry, Number(r.thicknessMinMm), Number(r.thicknessMaxMm),
+          r.originCountryCode, Number(r.thicknessMinMm), Number(r.thicknessMaxMm),
           Number(r.qtyMinSqm), r.qtyMaxSqm == null ? null : Number(r.qtyMaxSqm), Number(r.amountThb))),
         dutyRates: (payload.dutyRates ?? []).map((r) => formulaDutyRow(r.productType, r.productLabel, Number(r.dutyPct))),
         clearanceFees: (payload.clearanceFees ?? []).map((r) => formulaClearanceRow(
@@ -9327,11 +9549,15 @@ export const api = {
             approvedMarginPct: null,
             proposedSellingPricePerRequestedUnit,
             approvedSellingPricePerRequestedUnit: null,
-            discountCeilingPct: null,
             minimumSellingPricePerRequestedUnit: null,
             decisionNote: null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            // Phase 1 UI simplification ("ปรับราคาเอง") — mirrors
+            // PricingDecisionRepository#mapItem's manualSellingPricePerRequestedUnit /
+            // effectiveSellingPricePerRequestedUnit pair. NULL = no override, the formula drives
+            // this line's price.
+            manualSellingPricePerRequestedUnit: null,
           };
         }),
       };
@@ -9371,7 +9597,6 @@ export const api = {
             requestedUnitBasis: item.requestedUnitBasis,
             requestedQuantity: item.requestedQuantity,
             approvedSellingPricePerRequestedUnit: item.approvedSellingPricePerRequestedUnit,
-            discountCeilingPct: item.discountCeilingPct,
             minimumSellingPricePerRequestedUnit: item.minimumSellingPricePerRequestedUnit,
           })),
         },
@@ -9385,6 +9610,12 @@ export const api = {
       return delay({ decision });
     },
 
+    // Phase 1 UI simplification ("ปรับราคาเอง"): sellingPriceOverride/clearSellingPriceOverride
+    // mirror PricingDecisionService#applyItemUpdates's own validation ORDER exactly — item
+    // belongs to decision -> set+clear mutually exclusive -> reason mandatory in BOTH directions
+    // -> non-negative -> apply. discountCeilingPct is gone (retired system-wide, owner ruling
+    // 2026-08-16) — any payload still carrying it is silently ignored, same as any other field
+    // the real backend's DTO no longer declares.
     async updatePricingDecision(id, payload) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -9394,13 +9625,27 @@ export const api = {
       for (const itemPayload of payload.items ?? []) {
         const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
         if (!item) fail(`รายการที่ ${itemPayload.pricingDecisionItemId} ไม่ได้เป็นของมติราคานี้`, 400);
+        const touchesPriceOverride = itemPayload.sellingPriceOverride != null || itemPayload.clearSellingPriceOverride;
+        if (itemPayload.sellingPriceOverride != null && itemPayload.clearSellingPriceOverride) {
+          fail('ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้', 400);
+        }
+        if (touchesPriceOverride && !itemPayload.decisionNote?.trim()) {
+          fail('ต้องระบุเหตุผลในการปรับราคาขาย ไม่ว่าจะปรับหรือยกเลิกการปรับก็ตาม', 400);
+        }
+        if (itemPayload.sellingPriceOverride != null && Number(itemPayload.sellingPriceOverride) < 0) {
+          fail('ราคาที่ปรับต้องไม่ติดลบ', 400);
+        }
         if (itemPayload.marginPct != null) {
           item.proposedMarginPct = itemPayload.marginPct;
           item.proposedSellingPricePerRequestedUnit =
             item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
         }
-        if (itemPayload.discountCeilingPct != null) item.discountCeilingPct = itemPayload.discountCeilingPct;
         if (itemPayload.minimumSellingPrice != null) item.minimumSellingPricePerRequestedUnit = itemPayload.minimumSellingPrice;
+        if (itemPayload.clearSellingPriceOverride) {
+          item.manualSellingPricePerRequestedUnit = null;
+        } else if (itemPayload.sellingPriceOverride != null) {
+          item.manualSellingPricePerRequestedUnit = Number(itemPayload.sellingPriceOverride);
+        }
         if (itemPayload.decisionNote != null) item.decisionNote = itemPayload.decisionNote;
         item.updatedAt = new Date().toISOString();
       }
@@ -9408,26 +9653,8 @@ export const api = {
       return delay({ decision });
     },
 
-    async recalculatePricingDecision(id, payload = {}) {
-      hasRole('ceo');
-      const decision = mockPricingDecisions.find((d) => d.id === Number(id));
-      if (!decision) fail('ไม่พบมติราคานี้', 404);
-      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
-      if (payload.defaultMarginPct != null) decision.defaultMarginPct = payload.defaultMarginPct;
-      for (const item of decision.items) {
-        const margin = payload.defaultMarginPct != null ? payload.defaultMarginPct : item.proposedMarginPct;
-        if (margin == null) continue;
-        item.proposedMarginPct = margin;
-        item.proposedSellingPricePerRequestedUnit = item.frozenLandedCostPerRequestedUnitThb * (1 + Number(margin));
-        item.updatedAt = new Date().toISOString();
-      }
-      decision.updatedAt = new Date().toISOString();
-      return delay({ decision });
-    },
-
     // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
-    // decision AND CEO_REVIEWING request (recalculatePricingDecision above only checks DRAFT —
-    // that is a real gap in the OLDER sibling method, not a pattern to copy here). Refreshes the
+    // decision AND CEO_REVIEWING request. Refreshes the
     // bound costing items' COMPUTED provenance (fxRate/calculationConfigVersion), preserving every
     // override column, then re-derives each decision item's frozen cost from the resulting
     // EFFECTIVE cost — this is what can make an existing override STALE without destroying it.
@@ -9518,6 +9745,34 @@ export const api = {
       return delay({ decision });
     },
 
+    // V152 (V109 engine wiring). Mirrors PricingDecisionService.overrideItemProductType's shape
+    // (role -> decision open-for-mutation -> item-belongs-to-decision), but does NOT recompute
+    // duty/cost from a formula: this mock has no freight/duty/clearance band engine at all (V109
+    // is real backend-only money math — CLAUDE.md's own guidance is not to reimplement that
+    // here). It only updates the displayed productType and stamps updatedAt, so mock-mode
+    // verification can exercise the UI plumbing (the control renders, calls this endpoint, the
+    // label updates) but is NOT evidence the resulting duty/price is correct — that is proven by
+    // the real Java tests only (LandedCostCalculatorFormulaIntegrationTest).
+    async overridePricingDecisionItemProductType(decisionId, itemId, payload = {}) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      costingItem.productType = payload.productType || 'TILE';
+      costingItem.calculatedAt = new Date().toISOString();
+      item.updatedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
@@ -9546,16 +9801,34 @@ export const api = {
           409,
         );
       }
-      const missingMargin = decision.items.filter((i) => i.proposedMarginPct == null).map((i) => i.id);
-      const missingMinimum = decision.items.filter((i) => i.minimumSellingPricePerRequestedUnit == null).map((i) => i.id);
-      if (missingMargin.length || missingMinimum.length) {
-        fail(`ทุกรายการต้องระบุ margin และราคาขายขั้นต่ำก่อนอนุมัติ — รายการที่ยังไม่มี margin: [${missingMargin}], รายการที่ยังไม่มีราคาขายขั้นต่ำ: [${missingMinimum}]`, 422);
+      // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be
+      // "missing" any more (see the auto-population below) — and an item with an active
+      // "ปรับราคาเอง" override needs no margin at all, mirroring
+      // PricingDecisionService#approve's own missingMargin exemption for an overridden item.
+      const missingMargin = decision.items
+        .filter((i) => i.proposedMarginPct == null && i.manualSellingPricePerRequestedUnit == null)
+        .map((i) => i.id);
+      if (missingMargin.length) {
+        fail(`ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: [${missingMargin}]`, 422);
       }
-      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin.
+      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin,
+      // UNLESS an explicit "ปรับราคาเอง" override is active, in which case that value freezes in
+      // verbatim and the formula never runs for this line at all (mirrors
+      // PricingDecisionService#approve's own override-vs-formula precedence).
       for (const item of decision.items) {
+        const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
+        item.approvedSellingPricePerRequestedUnit = hasPriceOverride
+          ? item.manualSellingPricePerRequestedUnit
+          : item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
         item.approvedMarginPct = item.proposedMarginPct;
-        item.approvedSellingPricePerRequestedUnit =
-          item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        // Money hole this closes (Phase 1 UI simplification, owner ruling 2026-08-16):
+        // CustomerQuotationService's three below-minimum 422 guards are each null-guarded, so a
+        // NULL minimum silently disarms every one of them. Auto-populate with the approved price
+        // itself (today's "any discount refused" outcome) whenever the CEO has not explicitly set
+        // a lower floor — mirrors PricingDecisionService#approve exactly.
+        if (item.minimumSellingPricePerRequestedUnit == null) {
+          item.minimumSellingPricePerRequestedUnit = item.approvedSellingPricePerRequestedUnit;
+        }
         item.updatedAt = new Date().toISOString();
       }
       decision.status = 'APPROVED';
@@ -9666,11 +9939,10 @@ export const api = {
         if (discount < 0) fail('ส่วนลดต้องไม่ติดลบ', 400);
         const finalUnitPrice = item.approvedUnitPrice - discount;
         if (finalUnitPrice < 0) fail('ส่วนลดต้องไม่เกินราคาที่อนุมัติ', 400);
-        // Discount Policy B (owner's decision): never below the CEO-approved minimum — hard
-        // 422, no auto-escalation.
-        if (item.minimumSellingPricePerRequestedUnit != null && finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
-          fail(`ราคาหลังหักส่วนลดของรายการ ${itemPayload.quotationItemId} ต่ำกว่าราคาขั้นต่ำที่ CEO อนุมัติ`, 422);
-        }
+        // Discount Policy B — Phase 2 (owner ruling 2026-08-16): a below-minimum price is NO
+        // LONGER refused here. Sales may save it; ensureMockDiscountApprovalsRaised (below) opens
+        // a CEO approval request for it, and issueCustomerQuotation's own gate is what still
+        // blocks the document.
         if (itemPayload.description != null) item.description = itemPayload.description;
         if (itemPayload.itemNotes != null) item.itemNotes = itemPayload.itemNotes;
         item.salesDiscount = discount;
@@ -9682,6 +9954,7 @@ export const api = {
       recalcMockCustomerQuotationTotals(quotation);
       pushPricingRequestEvent(findPricingRequestRaw(quotation.pricingRequestId), user, 'CUSTOMER_QUOTATION_UPDATED',
         null, null, `แก้ไขใบเสนอราคาลูกค้า ${quotation.number}`);
+      ensureMockDiscountApprovalsRaised(quotation, user);
       return delay({ quotation });
     },
 
@@ -9706,9 +9979,16 @@ export const api = {
         if (preview.docStatus === 'ISSUED') fail('ใบเสนอราคานี้ออกไปแล้ว', 409);
         fail(`ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (${preview.docStatus})`, 409);
       }
+      // Discount-approval gate, Phase 2 (owner ruling 2026-08-16): a below-minimum line refuses
+      // only when it is ALSO not yet CEO-approved AT EXACTLY ITS CURRENT PRICE — mirrors
+      // CustomerQuotationService#issue's own discountApprovals.isApproved check.
       for (const item of preview.items) {
         if (item.minimumSellingPricePerRequestedUnit != null && item.finalUnitPrice < item.minimumSellingPricePerRequestedUnit) {
-          fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำ`, 422);
+          const approved = mockDiscountApprovals.some((a) => a.quotationItemId === item.id && a.status === 'APPROVED'
+            && Number(a.approvedFinalUnitPrice) === Number(item.finalUnitPrice));
+          if (!approved) {
+            fail(`ไม่สามารถออกใบเสนอราคาได้ — รายการ ${item.id} ต่ำกว่าราคาขั้นต่ำและยังไม่ได้รับอนุมัติส่วนลดจาก CEO`, 422);
+          }
         }
       }
       preview.docStatus = 'ISSUED';
@@ -9835,6 +10115,57 @@ export const api = {
         pr.status = 'QUOTATION_ACCEPTED';
       }
       return delay({ quotation });
+    },
+
+    // ── CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155) — mirrors
+    // DiscountApprovalController + DiscountApprovalService. Authorization is NOT authoritative
+    // (CLAUDE.md); verify against the real Java service.
+
+    async listDiscountApprovalsForQuotation(quotationId) {
+      // Reuses the SAME view-access check listCustomerQuotations/getCustomerQuotation use — one
+      // implementation of "who may view this quotation", mirroring DiscountApprovalService's own
+      // choice to delegate to CustomerQuotationService#get rather than a second copy.
+      const quotation = mockCustomerQuotationViewAccess(quotationId);
+      return delay({ items: mockCurrentDiscountApprovals(quotation) });
+    },
+
+    async approveDiscountApproval(id) {
+      const user = hasRole('ceo');
+      const approval = mockDiscountApprovals.find((a) => a.id === Number(id));
+      if (!approval) fail('ไม่พบคำขออนุมัติส่วนลดนี้', 404);
+      if (approval.status !== 'PENDING') fail(`คำขออนุมัติส่วนลดนี้ถูกตัดสินใจไปแล้ว (${approval.status})`, 409);
+      approval.status = 'APPROVED';
+      approval.decidedBy = user.id;
+      approval.decidedByName = user.name;
+      approval.decidedAt = new Date().toISOString();
+      // Price-binding invariant: copied from THIS row's own requestedFinalUnitPrice, never from
+      // any other input — there is no "counter-offer" concept.
+      approval.approvedFinalUnitPrice = approval.requestedFinalUnitPrice;
+      const pr = findPricingRequestRaw(approval.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const message = `CEO อนุมัติส่วนลดรายการที่ ${approval.quotationItemId} ในใบเสนอราคา ${approval.quotationNumber} ที่ราคา ${approval.approvedFinalUnitPrice}`;
+      pushPricingRequestEvent(pr, user, 'DISCOUNT_APPROVED', null, null, message);
+      addNotification(approval.requestedBy, pr.ticketId, ticket?.code, 'DISCOUNT_APPROVED', message);
+      return delay({ approval });
+    },
+
+    async rejectDiscountApproval(id, payload = {}) {
+      const user = hasRole('ceo');
+      if (!payload?.reason?.trim()) fail('ต้องระบุเหตุผลในการปฏิเสธส่วนลด', 400);
+      const approval = mockDiscountApprovals.find((a) => a.id === Number(id));
+      if (!approval) fail('ไม่พบคำขออนุมัติส่วนลดนี้', 404);
+      if (approval.status !== 'PENDING') fail(`คำขออนุมัติส่วนลดนี้ถูกตัดสินใจไปแล้ว (${approval.status})`, 409);
+      approval.status = 'REJECTED';
+      approval.decidedBy = user.id;
+      approval.decidedByName = user.name;
+      approval.decidedAt = new Date().toISOString();
+      approval.rejectionReason = payload.reason.trim();
+      const pr = findPricingRequestRaw(approval.pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      const message = `CEO ปฏิเสธส่วนลดรายการที่ ${approval.quotationItemId} ในใบเสนอราคา ${approval.quotationNumber}: ${approval.rejectionReason}`;
+      pushPricingRequestEvent(pr, user, 'DISCOUNT_REJECTED', null, null, message);
+      addNotification(approval.requestedBy, pr.ticketId, ticket?.code, 'DISCOUNT_REJECTED', message);
+      return delay({ approval });
     },
 
     // ── Step 6: Deposit, Payment, and Order Confirmation — mirrors

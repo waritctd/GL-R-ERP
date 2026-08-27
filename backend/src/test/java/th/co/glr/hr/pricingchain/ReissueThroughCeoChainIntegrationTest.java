@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -51,9 +52,9 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
@@ -106,9 +107,8 @@ import th.co.glr.hr.ticket.TicketService;
  * <p>Driven end to end through the real services against real Postgres, never hand-rolled SQL:
  * a mocked repository "passes" while the SQL does something else, and three of the four rules here
  * live in SQL (the compare-and-set supersede, the quote copy, the chain-scoped quotation retire).
- * The only mocks are the two collaborators every other test in this package already mocks —
- * {@link FactoryEmailService} (sends real email) and {@link PriceCalcService} (unrelated legacy
- * quotation math).
+ * The only mock is the collaborator every other test in this package already mocks —
+ * {@link FactoryEmailService} (sends real email).
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new}, {@code @Transactional} is inert,
@@ -156,8 +156,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .thenReturn(UUID.randomUUID().toString());
         AppProperties dispatchProperties = new AppProperties();
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCosts);
@@ -165,12 +166,12 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisions, pricingRequests,
             new th.co.glr.hr.pricingcosting.PricingCostingRepository(jdbc), tickets, fxRates, notifications,
-            landedCosts);
+            landedCosts, formulaEngine);
 
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
-            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesActor = actor(createEmployee(employees, "พนักงานขาย รีอิชชู", "sales-reissue@glr.co.th", "SALES", "แผนกขาย"), "sales");
         importActor = actor(createEmployee(employees, "ฝ่ายนำเข้า รีอิชชู", "import-reissue@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
@@ -181,11 +182,11 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         // carry-forward's own gate is LandedCostCalculator.isFullyResolvable.
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-reissue@example.com', 'THB', 'piece', 'Thailand')
+            VALUES (:factory, 'factory-reissue@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factory", FACTORY));
-        catalogProductId = insertCatalogProduct(FACTORY, "TH", "TEST-REISSUE-001",
+        catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-REISSUE-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(
@@ -637,7 +638,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             // A deliberately low floor: several tests here discount a FIRST quotation by 5.0000 to
             // prove Policy B still works, and a realistic floor would 422 that instead.
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);

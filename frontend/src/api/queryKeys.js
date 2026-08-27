@@ -98,6 +98,8 @@ export const queryKeys = {
   ticketActions: (id) => ['tickets', 'actions', id],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
+  // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.
+  importRequestBrands: (id) => ['tickets', 'import-request-brands', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   ticketActivities: (id) => ['tickets', 'activities', id],
@@ -109,6 +111,9 @@ export const queryKeys = {
   priceCalcConfigs: () => ['priceCalcConfigs'],
   // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
   pricingFormulaConfig: () => ['pricingFormulaConfig'],
+  // V153 thickness fallbacks. The gap list is derived from the catalogue, so it changes whenever a
+  // price list is re-imported — not only when the CEO saves.
+  catalogThicknessDefaults: () => ['catalogThicknessDefaults'],
   // Commit 6 (pricing-request-foundation)
   pricingRequestsByTicket: (ticketId) => ['pricingRequests', 'byTicket', ticketId],
   pricingRequestQueue: (filters = {}) => ['pricingRequests', 'queue', filters.status ?? '', filters.assignedImportId ?? '', filters.activeOnly ?? true],
@@ -124,6 +129,8 @@ export const queryKeys = {
   // Step 4: Customer Quotation Generation and Issuance.
   customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
+  // CEO discount-approval workflow, Phase 2 (V155): per-line approval status for one quotation.
+  discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
   // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the

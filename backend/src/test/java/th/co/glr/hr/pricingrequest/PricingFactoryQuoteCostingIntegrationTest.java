@@ -32,6 +32,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -58,13 +59,13 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
@@ -147,10 +148,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
+        // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview/recalculateCost.
         landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
-            new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications,
             new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
@@ -159,8 +161,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         pricingDecisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
-            costingRepository, tickets, fxRates, notifications, landedCostCalculator);
-        TicketService ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+            costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
+        TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย ทดสอบ", "sales-step2@glr.co.th", "SALES", "แผนกขาย");
@@ -175,42 +177,39 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         ceoActor = actor(ceoUserId, "ceo");
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
+        // V152 (V109 engine wiring): factory country must be one of V109's seeded origin
+        // countries (Italy/Spain/China) or LandedCostCalculator's freight lookup 422s ("ไม่พบ
+        // อัตราค่าขนส่ง") — 'Thailand'/'TestLand' (pre-V109) are no longer costable. Every
+        // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
+        // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
+        // open-ended, so ANY quantity resolves — see that helper's own comment).
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                ('Factory A', 'factory-a@example.com', 'THB', 'piece', 'Thailand'),
-                ('Factory B', 'factory-b@example.com', 'THB', 'piece', 'Thailand')
+                ('Factory A', 'factory-a@example.com', 'THB', 'piece', 'Italy'),
+                ('Factory B', 'factory-b@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email,
                 currency = EXCLUDED.currency,
                 unit = EXCLUDED.unit,
                 country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryA = insertCatalogProduct("Factory A", "TH", "TEST-A-001",
+        catalogProductIdFactoryA = insertCatalogProduct("Factory A", "IT", "TEST-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct("Factory B", "TH", "TEST-B-001",
+        catalogProductIdFactoryB = insertCatalogProduct("Factory B", "IT", "TEST-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C', 'factory-c@example.com', 'THB', 'piece', 'TestLand')
+            VALUES ('Factory C', 'factory-c@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email,
                 currency = EXCLUDED.currency,
                 unit = EXCLUDED.unit,
                 country = EXCLUDED.country
             """, Map.of());
-        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "XX", "TEST-C-001",
+        catalogProductIdFactoryC = insertCatalogProduct("Factory C", "IT", "TEST-C-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        // All-zero config: freight/insurance/inland/duty all 0, so goodsCostThb ==
-        // landedCostPerUnitThb exactly for every line costed against "Factory C" — see the
-        // catalogProductIdFactoryC field javadoc above.
-        jdbc.update("""
-            INSERT INTO sales.price_calc_config
-                (version, country, freight_per_sqm, insurance_per_sqm, inland_factory_to_port_per_sqm,
-                 inland_port_to_warehouse_per_sqm, import_duty_pct, margin_pct, is_current)
-            VALUES (1, 'TestLand', 0, 0, 0, 0, 0, 0, TRUE)
-            """, Map.of());
 
         CustomerDto customer = customers.create(
             "บริษัท Step 2 จำกัด", "0100000000001", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0001");
@@ -1549,7 +1548,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void submitCatalogGate_rejectsItemPointingAtNonActivePriceListVersion() {
-        long archivedProductId = insertCatalogProduct("Factory Archived", "TH", "ARCHIVED-001",
+        long archivedProductId = insertCatalogProduct("Factory Archived", "IT", "ARCHIVED-001",
             new BigDecimal("50.00"), "THB", "per_piece", "ARCHIVED");
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(
@@ -1655,7 +1654,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
+        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
+        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
+        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
+        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
+        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
+        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
+        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
     @Test
@@ -1667,7 +1674,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200");
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
+        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
+        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
+        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
+        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
+        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
+        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
+        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
     @Test
@@ -1679,7 +1694,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
+        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
+        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
+        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
+        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
+        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
+        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
+        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
     @Test
@@ -1691,7 +1714,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200");
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
+        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
+        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
+        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
+        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
+        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
+        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
+        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
     @Test
@@ -1703,7 +1734,15 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(line.goodsCostThb()).isEqualByComparingTo("50.0000");
         assertThat(line.normalizedQuantityPieces()).isEqualByComparingTo("200.000000");
-        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("10000.0000");
+        // V152 (V109 engine wiring): 200 pieces / 100 sqm total at Italy [8,12)mm — hand-verified
+        // (see PricingFormulaEngineTest and LandedCostCalculatorFormulaIntegrationTest for the
+        // full step-by-step derivation): C=10000, i=55.3725, F=50000 (qty band [1,101)),
+        // cif=60055.3725, duty(TILE 30%)=18016.6118, (cif+duty)*1.07=83537.0232,
+        // +clearance(qty band [1,101))=8000 => TC=91537.0232, rounding through the per-piece
+        // column back to 91537.0200 total. goodsCostThb (per piece, "50.0000" above) is
+        // UNCHANGED by the V109 buffers — it never was affected by freight/insurance/duty/
+        // clearance, only totalLandedCostThb (which now includes all of them) moved.
+        assertThat(line.totalLandedCostThb()).isEqualByComparingTo("91537.0200");
     }
 
     // The gap the review specifically called out: FactoryQuoteService.receive()'s own

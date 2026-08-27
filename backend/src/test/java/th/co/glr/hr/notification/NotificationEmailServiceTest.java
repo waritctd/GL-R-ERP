@@ -1,9 +1,11 @@
 package th.co.glr.hr.notification;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -13,10 +15,17 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.Mailer;
 
-// Locks in the app.mail.override-to / app.mail.subject-suffix behavior used to redirect every
-// notification email to one real inbox on a test/UAT deployment (verifies the email pipeline works
-// without needing real per-employee mailboxes). Both are blank by default so every other deployment
-// keeps sending to the real employee address unchanged - see NotificationServiceTest for that path.
+// Issue #782 narrowed what this class is responsible for: recipient redirection (app.mail.override-to)
+// now lives entirely in th.co.glr.hr.mail.OverrideRedirectingMailer, which wraps the Mailer bean this
+// class is handed - see that class, and NotificationEmailService's own overrideConfigured Javadoc.
+// `mailer` below is a bare Mockito mock, NOT wrapped in the real decorator, so nothing in THIS file can
+// observe an address actually being swapped any more - that assertion moved to
+// OverrideRedirectingMailerTest / MailOverrideContainmentTest (both in th.co.glr.hr.mail), which drive
+// this exact class through a REAL decorator. What stays here, and is still exactly this class's job:
+//   - the send-or-skip decision when `to` is blank (an override rescues it; nothing else does)
+//   - `to` reaching the Mailer completely unchanged either way (proves this class no longer swaps it)
+//   - subject-suffix (an unrelated, still-local feature - #782 is only about the recipient)
+//   - the HTML/text template itself: escaping, line breaks, CTA, the inline logo
 //
 // Every send() now routes through Mailer.sendHtml(to, subject, html, text, inlineImages): assertions
 // check both text alternatives (so a regression in either builder is caught) plus that the GL&R logo
@@ -41,11 +50,11 @@ class NotificationEmailServiceTest {
             && images.get(0).bytes().length > 0;
     }
 
-    // UAT ARTIFACT #3 (redirectNote): must not render when app.mail.override-to is blank. Asserted
-    // wrong-way-round on purpose - the presence assertions in this test only prove the normal
-    // content renders; they say nothing about what ELSE might also be in the body. A ternary read
-    // as "should be null when overrideTo is blank" is not evidence the string never appears -
-    // asserting its ABSENCE here is.
+    // This class never emits its own "Redirected for testing" note any more (see the class comment
+    // above) - so the absence assertions here hold unconditionally now, not just when overrideTo is
+    // blank. Kept anyway (rather than deleted) because a blank-override deployment is still the
+    // baseline every OTHER test in this file implicitly relies on, and this is where that baseline
+    // gets its own explicit pin.
     @Test
     void sendsToRealAddressWhenNoOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -78,52 +87,69 @@ class NotificationEmailServiceTest {
         verifyNoInteractions(mailer);
     }
 
-    // MUTATION-CHECK (verified live, not just by reasoning): temporarily changed send() back to
-    // `subjectSuffix + "[GL&R HR] " + subject` (the old prefix order) -- exactly this one test went
-    // red, nothing else. Separately, reverted redirectNote to its old bracketed
-    // "[Redirected for testing - ...]" shape -- again exactly this one test (the !contains("[Redirected")
-    // assertion) went red. Both reverted to an empty diff.
+    // Formerly "redirectsToOverrideAddressAndSuffixesSubjectWhenConfigured": before #782's fix this
+    // asserted mailer.sendHtml received the OVERRIDE address ("tester@example.com"), because this
+    // class used to compute that swap itself. It no longer does - see the class comment - so `to`
+    // below is asserted UNCHANGED even with an override configured, which is now the whole point of
+    // this test: proving this class stopped implementing that half of the rule. The subject-suffix
+    // assertion is the one part of the old test that is still this class's own behaviour.
+    //
+    // MUTATION-CHECK (verified live, not just by reasoning, pre-#782): temporarily changed send() back
+    // to `subjectSuffix + "[GL&R HR] " + subject` (the old prefix order) -- exactly this one test went
+    // red, nothing else.
     @Test
-    void redirectsToOverrideAddressAndSuffixesSubjectWhenConfigured() {
+    void passesRecipientThroughUnchangedAndAppliesSubjectSuffixEvenWithOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", " (UAT)",
             "https://portal.example/");
 
         service.send(7L, "employee@glr.co.th", "สมชาย", "Leave submitted", "body text", "/leave/1");
 
         verify(mailer).sendHtml(
-            eq("tester@example.com"),
+            eq("employee@glr.co.th"), // NOT swapped to "tester@example.com" - see OverrideRedirectingMailerTest for that
             eq("[GL&R HR] Leave submitted (UAT)"),
             argThat(html -> html.contains("body text")
                 && html.contains("https://portal.example/leave/1")
-                && html.contains("Redirected for testing")
-                && html.contains("employee@glr.co.th")
-                // The redirect note used to be wrapped in a literal "[...]" - the same
-                // classic-filter-trigger shape as the old subject prefix. It is dropped from the
-                // body too now, not just the subject.
+                && !html.contains("Redirected for testing")
                 && !html.contains("[Redirected")),
             argThat(text -> text.contains("body text")
                 && text.contains("ดูรายละเอียดในระบบ: https://portal.example/leave/1")
-                && text.contains("Redirected for testing")
-                && text.contains("employee@glr.co.th")
+                && !text.contains("Redirected for testing")
                 && !text.contains("[Redirected")),
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
 
+    // Formerly "redirectsToOverrideEvenWhenEmployeeHasNoEmailOnFile", which also asserted the HTML/text
+    // contained "no email on file" - that phrase was always part of the OLD redirect note this class
+    // used to generate (" (no email on file)." in the pre-#782 source), never part of the base
+    // template, so it is gone from this class's output entirely now, not just when overrideTo is
+    // blank; asserting its absence here would be as vacuous as asserting its presence used to be
+    // informative. What THIS test still needs to prove, and does: an addressless employee is NOT
+    // skipped when an override is configured (see overrideConfigured's Javadoc) - `to` reaches the
+    // Mailer as null, the generic greeting is used (recipientName was also null), and no CTA renders
+    // (link was also null) - the same content a no-override, no-link, no-name send would produce,
+    // MINUS being skipped. The regression this guards - NotificationService used to gate on the
+    // address before this class ever ran, so an addressless employee was silently dropped even with an
+    // override configured (see NotificationServiceTest's equivalent test) - is unchanged by #782; only
+    // WHERE the eventual redirect address comes from moved. See
+    // MailOverrideContainmentTest#notificationEmailServiceStillRedirectsWhenTheEmployeeHasNoAddressOnFile
+    // for the real-decorator version of this exact scenario, which is where that address is actually
+    // pinned end-to-end.
     @Test
-    void redirectsToOverrideEvenWhenEmployeeHasNoEmailOnFile() {
+    void attemptsTheSendWhenEmployeeHasNoEmailOnFileButOverrideIsConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", " (UAT)",
             "https://portal.example");
 
         service.send(7L, null, null, "Leave submitted", "body text", null);
 
         verify(mailer).sendHtml(
-            eq("tester@example.com"),
-            anyString(),
+            isNull(),
+            eq("[GL&R HR] Leave submitted (UAT)"),
             argThat(html -> html.contains("เรียน ท่านผู้ใช้งาน,")
-                && html.contains("no email on file")
-                && !html.contains("ดูรายละเอียดในระบบ")),
+                && html.contains("body text")
+                && !html.contains("ดูรายละเอียดในระบบ")
+                && !html.contains("Redirected for testing")),
             argThat(text -> text.contains("เรียน ท่านผู้ใช้งาน,")
-                && text.contains("no email on file")
+                && text.contains("body text")
                 && !text.contains("ดูรายละเอียดในระบบ:")),
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
@@ -207,40 +233,32 @@ class NotificationEmailServiceTest {
                 && images.get(0).bytes().length > 0));
     }
 
-    // sendWithAttachment (payslips - real attachments to real employees) had the SAME bracketed
-    // "[Redirected for testing - ...]" shape send() used to have, just not caught in the first pass
-    // since this method has no test coverage of its override branch at all until now. Same defect
-    // class as the subject/body fix above, on a path that arguably matters more (a payslip has a
-    // real attachment). No pre-existing test asserted the old bracketed text, so there is nothing to
-    // update elsewhere - this is net-new coverage.
-    //
-    // MUTATION-CHECK (verified live, not just by reasoning): temporarily reverted the body back to
-    // `"\n\n[Redirected for testing - originally addressed to " + ... + "]"` -- exactly this test
-    // went red (the !contains("[Redirected") assertion), nothing else in this class. Reverted to an
-    // empty diff.
+    // Formerly "sendWithAttachmentDropsTheBracketedRedirectShapeWhenOverrideConfigured". Before #782's
+    // fix this asserted mailer.sendWithAttachment received the OVERRIDE address and a body carrying a
+    // redirect note, because this method used to compute both itself. Neither happens here any more -
+    // `to` and `body` are asserted UNCHANGED even with an override configured. See
+    // OverrideRedirectingMailerTest / MailOverrideContainmentTest for where the redirect + note
+    // coverage on this exact Mailer method now lives.
     @Test
-    void sendWithAttachmentDropsTheBracketedRedirectShapeWhenOverrideConfigured() {
+    void sendWithAttachmentPassesRecipientAndBodyThroughUnchangedEvenWithOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(),
             "tester@example.com", " (UAT)", "https://portal.example");
 
         service.sendWithAttachment("employee@glr.co.th", "Payslip", "Attached", "payslip.pdf", "%PDF".getBytes());
 
         verify(mailer).sendWithAttachment(
-            eq("tester@example.com"),
+            eq("employee@glr.co.th"),
             eq("Payslip (UAT)"),
             argThat(body -> body.contains("Attached")
-                && body.contains("Redirected for testing")
-                && body.contains("employee@glr.co.th")
+                && !body.contains("Redirected for testing")
                 && !body.contains("[Redirected")),
             eq("payslip.pdf"),
             aryEq("%PDF".getBytes()));
     }
 
-    // UAT ARTIFACT #3 (redirectNote), sendWithAttachment path: must not render when
-    // app.mail.override-to is blank - the counterpart to sendsToRealAddressWhenNoOverrideConfigured
-    // above, on the payslip-attachment path rather than send(). PayslipDistributionService is a real
-    // consumer of this exact method, so a stray "Redirected for testing" string here would land in a
-    // real employee's payslip email.
+    // The no-override baseline this class has always had, still true after #782 - kept alongside the
+    // with-override test above (rather than merged) to show the invariant ("no note, recipient
+    // unchanged") holds in EITHER configuration, not only the blank one.
     @Test
     void sendWithAttachmentOmitsTheRedirectNoteWhenNoOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -254,6 +272,31 @@ class NotificationEmailServiceTest {
                 && !body.contains("Redirected for testing")
                 && !body.contains("[Redirected")),
             eq("payslip.pdf"),
+            aryEq("%PDF".getBytes()));
+    }
+
+    @Test
+    void sendWithAttachmentThrowsWhenNoRecipientAndNoOverrideConfigured() {
+        NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
+
+        assertThatThrownBy(() -> service.sendWithAttachment(null, "Payslip", "Attached", "payslip.pdf", "%PDF".getBytes()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Email recipient is required");
+        verifyNoInteractions(mailer);
+    }
+
+    // New coverage (no prior test drove this method's blank-to branch at all): parity with
+    // attemptsTheSendWhenEmployeeHasNoEmailOnFileButOverrideIsConfigured above - the same "attempt
+    // anyway, let the Mailer redirect it" rescue applies to the attachment path too, not only the
+    // async notification path.
+    @Test
+    void sendWithAttachmentAttemptsTheSendWhenNoRecipientButOverrideIsConfigured() {
+        NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", "",
+            "https://portal.example");
+
+        service.sendWithAttachment(null, "Payslip", "Attached", "payslip.pdf", "%PDF".getBytes());
+
+        verify(mailer).sendWithAttachment(isNull(), eq("Payslip"), eq("Attached"), eq("payslip.pdf"),
             aryEq("%PDF".getBytes()));
     }
 }

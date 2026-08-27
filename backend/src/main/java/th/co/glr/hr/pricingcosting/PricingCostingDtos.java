@@ -67,6 +67,13 @@ public final class PricingCostingDtos {
         BigDecimal cifCostThb,
         BigDecimal landedCostPerUnitThb,
         BigDecimal totalLandedCostThb,
+        // ── V109 engine (V152) ────────────────────────────────────────────────────────────────
+        // clearanceFeeThb: the item's own allocated share of its factory shipment's flat customs
+        // clearance fee (S). productType: the resolved product_type (override, or TILE default)
+        // actually used for THIS row's duty lookup. Both NULL/0 on pre-V109 (V26-computed) rows —
+        // see V152's migration header.
+        BigDecimal clearanceFeeThb,
+        String productType,
         Instant calculatedAt,
         String calculationSnapshot,
         // ── CEO cost override (V141, "CEO owns costing") ─────────────────────────────────────

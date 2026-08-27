@@ -66,10 +66,32 @@ public class TicketRepository {
     //
     // import: an active (non-terminal, non-DRAFT-only... DRAFT counts as non-terminal
     // here — see PricingRequestStatus) pricing request exists for the deal, OR the deal
-    // has reached PROCUREMENT or later in the 14-stage pipeline. A closed/lost/cancelled
+    // has reached ORDER_RECEIVED or later in the pipeline. A closed/lost/cancelled
     // deal is never in scope, even at a late stage (mirrors dealInScope's `closed` guard).
+    //
+    // ── Why ORDER_RECEIVED and not PROCUREMENT ────────────────────────────────
+    // This started at PROCUREMENT, which made the scope self-defeating: a deal is only ever
+    // written to PROCUREMENT by TicketService.issueImportRequest itself, so import could not see
+    // the deal until after it had done the very thing it needed the deal in order to do.
+    //
+    // Both disjuncts were false in exactly the state that matters. A deal awaiting its IR sits at
+    // ORDER_RECEIVED (confirmOrder) or DEPOSIT_RECEIVED (payment reconciliation), both BELOW
+    // PROCUREMENT; and by then the customer has accepted, so its pricing request is
+    // QUOTATION_ACCEPTED — one of the three terminal values below. Import's list came back empty
+    // and its worklist rendered "all import work complete" while IRs were outstanding.
+    //
+    // ORDER_RECEIVED is the correct floor, not DEPOSIT_RECEIVED: issueImportRequest accepts
+    // DEPOSIT_NOTICE_ISSUED and the deposit-bypass policy's CUSTOMER_CONFIRMED as well as
+    // DEPOSIT_PAID, and a deal in either of those payment states is still standing at
+    // ORDER_RECEIVED — the stage only advances to DEPOSIT_RECEIVED once money actually lands.
+    // Starting at DEPOSIT_RECEIVED would leave the same hole open for every bypass-policy deal.
+    //
+    // This WIDENS what the import role may read, by two stages. That is an authorization change:
+    // see TicketScopeIntegrationTest#importSeesADealAwaitingItsImportRequest, which builds the
+    // real pre-IR state against real Postgres through the real service, and its sibling refusals
+    // which prove the widening did not become "import sees everything".
     private static final List<String> IMPORT_STAGE_SCOPE =
-        DealStage.ORDER.subList(DealStage.indexOf(DealStage.PROCUREMENT), DealStage.ORDER.size());
+        DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size());
     // Mirrors th.co.glr.hr.pricingrequest.PricingRequestStatus's three terminal values.
     // Not imported directly to avoid a new ticket-package -> pricingrequest-package
     // repository dependency for three literals; keep in sync if that enum changes.

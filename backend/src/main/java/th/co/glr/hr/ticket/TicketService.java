@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import th.co.glr.hr.pricing.PriceBreakdownItemDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -23,7 +22,6 @@ import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
@@ -85,7 +83,6 @@ public class TicketService {
 
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
-    private final PriceCalcService priceCalcService;
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
@@ -95,12 +92,11 @@ public class TicketService {
     private final PricingRequestService pricingRequests;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
-                         PriceCalcService priceCalcService, ObjectMapper objectMapper,
+                         ObjectMapper objectMapper,
                          CustomerRepository customers, QuotationRenderer quotationRenderer,
                          PricingRequestService pricingRequests) {
         this.tickets           = tickets;
         this.notifications     = notifications;
-        this.priceCalcService  = priceCalcService;
         this.objectMapper      = objectMapper;
         this.customers         = customers;
         this.quotationRenderer = quotationRenderer;
@@ -1174,15 +1170,18 @@ public class TicketService {
 
     @Transactional
     public TicketDto recordPartialDelivery(long ticketId, RecordDeliveryRequest request, UserPrincipal actor) {
-        requireRole(actor, FULFILMENT_ROLES);
         TicketDto ticket = requireTicket(ticketId);
+        // Ownership-aware, so the ticket must be loaded BEFORE the gate — unlike a plain role check.
+        // See canWriteDelivery: stages 13-14 are Sales's, and the owning rep is identified by the
+        // deal's own createdById.
+        requireDeliveryAccess(ticket.summary(), actor);
         return recordDeliveryInternal(ticket, request, actor, false);
     }
 
     @Transactional
     public TicketDto completeDelivery(long ticketId, CompleteDeliveryRequest request, UserPrincipal actor) {
-        requireRole(actor, FULFILMENT_ROLES);
         TicketDto ticket = requireTicket(ticketId);
+        requireDeliveryAccess(ticket.summary(), actor);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
         List<RecordDeliveryRequest.Line> remaining = ticket.items().stream()
@@ -2310,31 +2309,6 @@ public class TicketService {
     }
 
     /**
-     * Deprecated: recalculated legacy {@code ticket_item} prices for the submit → pickup →
-     * propose-price → approve loop. CEO price computation now happens via
-     * {@link th.co.glr.hr.pricingcosting.PricingCostingService} /
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService}.
-     * Reachable only for legacy tickets stuck at {@code price_proposed}; no controller route
-     * exposes this anymore.
-     */
-    @Deprecated
-    @Transactional
-    public CalculatePricesResult calculatePrices(long ticketId, UserPrincipal actor) {
-        requireRole(actor, CEO_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireActive(s);
-        if (!TicketStatus.PRICE_PROPOSED.equals(s.status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "คำนวณราคาได้เฉพาะ ticket ที่มีสถานะ price_proposed");
-        }
-        TicketDto ticket = priceCalcService.calculateForTicket(ticketId);
-        List<PriceBreakdownItemDto> breakdown = priceCalcService.calculateBreakdown(ticketId);
-        return new CalculatePricesResult(ticket, breakdown);
-    }
-
-    public record CalculatePricesResult(TicketDto ticket, List<PriceBreakdownItemDto> breakdown) {}
-
-    /**
      * Deprecated: manual price override for a legacy {@code ticket_item} row. Superseded by
      * editing sale price on the PricingDecision aggregate — see
      * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#update}. Reachable only for
@@ -2594,8 +2568,58 @@ public class TicketService {
      * #FULFILMENT_ROLES}, not through ownership.
      */
     private boolean canDeclareStockCoverage(TicketSummaryDto s, UserPrincipal actor) {
+        return isFulfilmentOrOwningRep(s, actor);
+    }
+
+    /**
+     * "Import and the CEO, or the {@code sales} rep who owns this deal."
+     *
+     * <p>ONE definition, because two separate owner rulings landed on exactly this set and two copies
+     * of an authorization expression is how they drift: {@link #canDeclareStockCoverage} (stock
+     * declaration) and {@link #canWriteDelivery} (stages 13–14, ส่งมอบสินค้า). Both call this; neither
+     * restates it.
+     *
+     * <p><strong>{@code sales_manager} is deliberately absent</strong>, and for a stated rule rather
+     * than an analogy: {@code ROLE_PERMISSIONS} in {@code frontend/src/api/routes.js} records that
+     * sales_manager "is read+comment oversight ONLY (a project-manager-style follow-up role for the
+     * sales team) — it must never be added to" the write permissions. Recording a delivery is a
+     * write. Note the asymmetry this creates on purpose: {@code requireStageWriteAccess} DOES let
+     * sales_manager set {@code DELIVERY_SCHEDULING}/{@code DELIVERED} by hand, because that is the
+     * manual stage-correction fallback, not the operational act. Oversight may correct the pipeline;
+     * it may not record that goods went out.
+     *
+     * <p>Ownership is expressed exactly as {@link #requireDealOwnership}, {@link #canManageQuotation}
+     * and {@link #canConfirmCustomer} express it: a {@code sales} role that created this deal. CEO
+     * keeps access through {@link #FULFILMENT_ROLES}, not through ownership.
+     */
+    private boolean isFulfilmentOrOwningRep(TicketSummaryDto s, UserPrincipal actor) {
         return FULFILMENT_ROLES.contains(actor.role())
             || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
+    }
+
+    /**
+     * Stages 13–14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, the counterpart to
+     * stage 12 (PROCUREMENT) belonging to Import.
+     *
+     * <p><strong>Additive, not a transfer.</strong> Import and the CEO KEEP delivery access; the
+     * owning rep gains it. Narrowing would have been the tidier reading of the ruling, but it would
+     * remove a live capability the moment it deployed, and no evidence was available that nobody in
+     * import records deliveries today. Widening cannot break anyone. Whether import should later
+     * lose it is a separate, deliberate decision — see this branch's PR body.
+     *
+     * <p>The single source of truth for BOTH {@code recordPartialDelivery}/{@code completeDelivery}'s
+     * gate AND whether {@link #actions} advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY, so the
+     * two cannot drift into offering an action that immediately 403s — the discipline
+     * {@link #canDeclareStockCoverage} already documents.
+     */
+    private boolean canWriteDelivery(TicketSummaryDto s, UserPrincipal actor) {
+        return isFulfilmentOrOwningRep(s, actor);
+    }
+
+    private void requireDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {
+        if (!canWriteDelivery(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /**
@@ -2640,7 +2664,7 @@ public class TicketService {
     }
 
     private boolean canRecordDelivery(TicketDto ticket, UserPrincipal actor) {
-        if (!FULFILMENT_ROLES.contains(actor.role()) || !hasRemainingDelivery(ticket)) {
+        if (!canWriteDelivery(ticket.summary(), actor) || !hasRemainingDelivery(ticket)) {
             return false;
         }
         TicketSummaryDto s = ticket.summary();

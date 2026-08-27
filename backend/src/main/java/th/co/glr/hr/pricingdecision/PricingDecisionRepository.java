@@ -144,11 +144,19 @@ public class PricingDecisionRepository {
     }
 
     public record ItemUpdate(
-        long itemId, BigDecimal marginPct, BigDecimal sellingPrice, BigDecimal discountCeilingPct,
-        BigDecimal minimumSellingPrice, String decisionNote) {}
+        long itemId, BigDecimal marginPct, BigDecimal sellingPrice,
+        BigDecimal minimumSellingPrice, String decisionNote,
+        BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride) {}
 
     /** Returns the number of rows actually touched — the caller compares this against the
-     * requested item count to detect an itemId that does not belong to this decision. */
+     * requested item count to detect an itemId that does not belong to this decision.
+     *
+     * <p>{@code manual_selling_price_per_requested_unit} cannot use the same plain
+     * {@code COALESCE(:param, column)} shape every other column here uses, because "omit" and
+     * "explicitly clear to NULL" both look like a null parameter to COALESCE — the CASE
+     * expression is what gives {@link ItemUpdate#clearSellingPriceOverride()} a real clear path
+     * distinct from "this call did not touch the override at all" (see
+     * {@link PricingDecisionRequests.UpdatePricingDecisionItemRequest}'s own Javadoc for why). */
     public int updateItems(long decisionId, List<ItemUpdate> updates) {
         if (updates.isEmpty()) {
             return 0;
@@ -161,19 +169,23 @@ public class PricingDecisionRepository {
                 .addValue("itemId", u.itemId())
                 .addValue("marginPct", u.marginPct())
                 .addValue("sellingPrice", u.sellingPrice())
-                .addValue("discountCeilingPct", u.discountCeilingPct())
                 .addValue("minimumSellingPrice", u.minimumSellingPrice())
-                .addValue("decisionNote", u.decisionNote());
+                .addValue("decisionNote", u.decisionNote())
+                .addValue("sellingPriceOverride", u.sellingPriceOverride())
+                .addValue("clearOverride", u.clearSellingPriceOverride());
         }
         int[] counts = jdbc.batchUpdate("""
             UPDATE sales.pricing_decision_item
                SET proposed_margin_pct = COALESCE(:marginPct, proposed_margin_pct),
                    proposed_selling_price_per_requested_unit =
                        COALESCE(:sellingPrice, proposed_selling_price_per_requested_unit),
-                   discount_ceiling_pct = COALESCE(:discountCeilingPct, discount_ceiling_pct),
                    minimum_selling_price_per_requested_unit =
                        COALESCE(:minimumSellingPrice, minimum_selling_price_per_requested_unit),
                    decision_note = COALESCE(:decisionNote, decision_note),
+                   manual_selling_price_per_requested_unit = CASE
+                       WHEN :clearOverride THEN NULL
+                       ELSE COALESCE(:sellingPriceOverride, manual_selling_price_per_requested_unit)
+                   END,
                    updated_at = now()
              WHERE pricing_decision_item_id = :itemId
                AND pricing_decision_id = :decisionId
@@ -234,16 +246,20 @@ public class PricingDecisionRepository {
         return total;
     }
 
-    public int updateDefaultMargin(long decisionId, BigDecimal defaultMarginPct) {
-        return jdbc.update("""
-            UPDATE sales.pricing_decision
-               SET default_margin_pct = :defaultMarginPct,
-                   updated_at = now()
-             WHERE pricing_decision_id = :id AND status = 'DRAFT'
-            """, new MapSqlParameterSource().addValue("id", decisionId).addValue("defaultMarginPct", defaultMarginPct));
-    }
-
-    public record ApprovedItem(long itemId, BigDecimal approvedMarginPct, BigDecimal approvedSellingPrice) {}
+    /**
+     * {@code minimumSellingPrice} is written here unconditionally (never COALESCE'd against the
+     * existing value) — the caller ({@link PricingDecisionService#approve}) has already resolved
+     * it to either the CEO's explicitly-set floor (still settable via {@link #updateItems}, kept
+     * for compatibility) or a fallback equal to {@code approvedSellingPrice} itself, so by the
+     * time this method runs there is always exactly one correct value to write, not two to merge.
+     * Phase 1 UI simplification: this is what keeps
+     * {@code CustomerQuotationService}'s three null-guarded minimum-price checks load-bearing now
+     * that ราคาขั้นต่ำ is no longer a CEO input — see {@code PricingDecisionService#approve}'s own
+     * doc comment for the full reasoning.
+     */
+    public record ApprovedItem(
+        long itemId, BigDecimal approvedMarginPct, BigDecimal approvedSellingPrice,
+        BigDecimal minimumSellingPrice) {}
 
     public void approveItems(long decisionId, List<ApprovedItem> items) {
         if (items.isEmpty()) {
@@ -256,12 +272,14 @@ public class PricingDecisionRepository {
                 .addValue("decisionId", decisionId)
                 .addValue("itemId", item.itemId())
                 .addValue("approvedMarginPct", item.approvedMarginPct())
-                .addValue("approvedSellingPrice", item.approvedSellingPrice());
+                .addValue("approvedSellingPrice", item.approvedSellingPrice())
+                .addValue("minimumSellingPrice", item.minimumSellingPrice());
         }
         jdbc.batchUpdate("""
             UPDATE sales.pricing_decision_item
                SET approved_margin_pct = :approvedMarginPct,
                    approved_selling_price_per_requested_unit = :approvedSellingPrice,
+                   minimum_selling_price_per_requested_unit = :minimumSellingPrice,
                    updated_at = now()
              WHERE pricing_decision_item_id = :itemId AND pricing_decision_id = :decisionId
             """, batch);
@@ -369,9 +387,9 @@ public class PricingDecisionRepository {
                    pdi.normalized_quantity_pieces, pdi.frozen_landed_cost_per_piece_thb,
                    pdi.frozen_landed_cost_per_requested_unit_thb, pdi.currency, pdi.proposed_margin_pct,
                    pdi.approved_margin_pct, pdi.proposed_selling_price_per_requested_unit,
-                   pdi.approved_selling_price_per_requested_unit, pdi.discount_ceiling_pct,
+                   pdi.approved_selling_price_per_requested_unit,
                    pdi.minimum_selling_price_per_requested_unit, pdi.decision_note,
-                   pdi.created_at, pdi.updated_at
+                   pdi.created_at, pdi.updated_at, pdi.manual_selling_price_per_requested_unit
               FROM sales.pricing_decision_item pdi
               JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = pdi.pricing_request_item_id
               JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
@@ -393,7 +411,7 @@ public class PricingDecisionRepository {
             List<PricingDecisionSalesItemDto> items = jdbc.query("""
                 SELECT pdi.pricing_decision_item_id, pdi.pricing_request_item_id, pri.brand, pri.model,
                        pri.product_description, pdi.requested_unit_basis, pdi.requested_quantity,
-                       pdi.approved_selling_price_per_requested_unit, pdi.discount_ceiling_pct,
+                       pdi.approved_selling_price_per_requested_unit,
                        pdi.minimum_selling_price_per_requested_unit
                   FROM sales.pricing_decision_item pdi
                   JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = pdi.pricing_request_item_id
@@ -405,7 +423,7 @@ public class PricingDecisionRepository {
                     rs.getString("brand"), rs.getString("model"),
                     rs.getString("product_description"), rs.getString("requested_unit_basis"),
                     rs.getBigDecimal("requested_quantity"), rs.getBigDecimal("approved_selling_price_per_requested_unit"),
-                    rs.getBigDecimal("discount_ceiling_pct"), rs.getBigDecimal("minimum_selling_price_per_requested_unit")));
+                    rs.getBigDecimal("minimum_selling_price_per_requested_unit")));
             return Optional.of(new PricingDecisionSalesViewDto(
                 header.pricingRequestId(), header.pricingDecisionId(), header.currency(), header.approvedAt(), items));
         } catch (EmptyResultDataAccessException e) {
@@ -449,6 +467,12 @@ public class PricingDecisionRepository {
     }
 
     private PricingDecisionItemDto mapItem(ResultSet rs) throws SQLException {
+        BigDecimal proposedSellingPrice = rs.getBigDecimal("proposed_selling_price_per_requested_unit");
+        BigDecimal manualSellingPrice = rs.getBigDecimal("manual_selling_price_per_requested_unit");
+        // Mirrors PricingCostingRepository#mapItem's effectiveLandedCostPerUnitThb exactly: a
+        // straight passthrough of whichever of the two is active, recomputed on every read so it
+        // can never drift out of sync with the row it describes.
+        BigDecimal effectiveSellingPrice = manualSellingPrice != null ? manualSellingPrice : proposedSellingPrice;
         return new PricingDecisionItemDto(
             rs.getLong("pricing_decision_item_id"),
             rs.getLong("pricing_decision_id"),
@@ -466,13 +490,14 @@ public class PricingDecisionRepository {
             rs.getString("currency"),
             rs.getBigDecimal("proposed_margin_pct"),
             rs.getBigDecimal("approved_margin_pct"),
-            rs.getBigDecimal("proposed_selling_price_per_requested_unit"),
+            proposedSellingPrice,
             rs.getBigDecimal("approved_selling_price_per_requested_unit"),
-            rs.getBigDecimal("discount_ceiling_pct"),
             rs.getBigDecimal("minimum_selling_price_per_requested_unit"),
             rs.getString("decision_note"),
             rs.getTimestamp("created_at").toInstant(),
-            rs.getTimestamp("updated_at").toInstant()
+            rs.getTimestamp("updated_at").toInstant(),
+            manualSellingPrice,
+            effectiveSellingPrice
         );
     }
 

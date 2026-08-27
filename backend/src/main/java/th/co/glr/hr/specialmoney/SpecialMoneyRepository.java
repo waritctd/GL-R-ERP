@@ -21,7 +21,6 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.notification.CeoApproverRule;
 
 /**
  * Modelled closely on {@code th.co.glr.hr.overtime.OvertimeRepository} -- same idioms
@@ -522,18 +521,6 @@ public class SpecialMoneyRepository {
             SELECT province_name_th FROM hr.special_money_excluded_province
             """, Map.of(), (rs, rowNum) -> rs.getString("province_name_th"));
         return new HashSet<>(provinces);
-    }
-
-    /** Mirrors {@code OvertimeRepository.findCeoApproverEmployeeIds} -- notification recipients only. */
-    public List<Long> findCeoApproverEmployeeIds() {
-        return jdbc.query("""
-            SELECT e.employee_id
-              FROM hr.employee e
-              LEFT JOIN hr.position p ON p.position_id = e.position_id
-             WHERE e.is_active = TRUE
-               AND %s
-             ORDER BY e.employee_id
-            """.formatted(CeoApproverRule.SQL_PREDICATE), Map.of(), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
     public boolean payrollMonthProcessed(LocalDate payrollMonth) {

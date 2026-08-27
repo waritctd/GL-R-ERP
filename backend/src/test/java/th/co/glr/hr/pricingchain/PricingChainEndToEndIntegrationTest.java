@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
@@ -50,13 +51,13 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
@@ -89,8 +90,8 @@ import th.co.glr.hr.ticket.TicketService;
 
 /**
  * Composition UAT for the ENTIRE sales pricing chain (Steps 1-4), driven end to end on a single
- * deal through the real services — no mocks except the collaborators the per-step tests
- * themselves already mock ({@link FactoryEmailService}, {@link PriceCalcService}). Every
+ * deal through the real services — no mocks except the collaborator the per-step tests
+ * themselves already mock ({@link FactoryEmailService}). Every
  * state transition below is produced by calling the real service that owns it; nothing is
  * hand-rolled via SQL to skip a step. The point of this file is NOT to re-prove any single
  * step's own business rules (unit-conversion math, idempotency, concurrency, etc. — all
@@ -160,10 +161,11 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
         dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
         // auto-advance check and PricingDecisionService's startReview/recalculateCost.
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
-            fxRates, new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+            fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
             landedCostCalculator);
@@ -175,18 +177,14 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator);
+            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
-        // PriceCalcService is unrelated legacy-quotation business logic that no step on this
-        // chain exercises (Step 4 deliberately never touches sales.ticket_item price columns) —
-        // mocked per the same precedent every per-step test already uses.
-        PriceCalcService priceCalcMock = mock(PriceCalcService.class);
-        ticketService = new TicketService(tickets, notifications, priceCalcMock,
+        ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService);
 
         quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
-            tickets, ticketService, customers, new QuotationRenderer(), notifications);
+            tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย เชน", "sales-chain@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า เชน", "import-chain@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
@@ -206,14 +204,14 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         jdbc.update("""
             INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
             VALUES
-                (:factoryA, 'factory-a-chain@example.com', 'THB', 'piece', 'Thailand'),
-                (:factoryB, 'factory-b-chain@example.com', 'THB', 'piece', 'Thailand')
+                (:factoryA, 'factory-a-chain@example.com', 'THB', 'piece', 'Italy'),
+                (:factoryB, 'factory-b-chain@example.com', 'THB', 'piece', 'Italy')
             ON CONFLICT (factory_name) DO UPDATE
             SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
             """, Map.of("factoryA", FACTORY_A, "factoryB", FACTORY_B));
-        catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "TH", "TEST-CHAIN-A-001",
+        catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "IT", "TEST-CHAIN-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "TH", "TEST-CHAIN-B-001",
+        catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-CHAIN-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
         CustomerDto customer = customers.create(
@@ -336,10 +334,10 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         // CEO changes item A's margin, sets minimum selling prices on both (required at approval).
         PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             "ปรับ margin item A", List.of(
-                new UpdatePricingDecisionItemRequest(rawItemA.id(), new BigDecimal("0.35"), null,
-                    new BigDecimal("10.00"), null),
-                new UpdatePricingDecisionItemRequest(rawItemB.id(), null, null,
-                    new BigDecimal("10.00"), null))),
+                new UpdatePricingDecisionItemRequest(rawItemA.id(), new BigDecimal("0.35"),
+                    new BigDecimal("10.00"), null, null, false),
+                new UpdatePricingDecisionItemRequest(rawItemB.id(), null,
+                    new BigDecimal("10.00"), null, null, false))),
             ceoActor);
         PricingDecisionItemDto updatedItemA = decisionItemFor(updated, itemAId);
         assertThat(updatedItemA.proposedMarginPct()).isEqualByComparingTo("0.35");
@@ -352,10 +350,13 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         PricingDecisionItemDto approvedItemA = decisionItemFor(approved, itemAId);
         PricingDecisionItemDto approvedItemB = decisionItemFor(approved, itemBId);
-        BigDecimal expectedApprovedA = approvedItemA.frozenLandedCostPerRequestedUnitThb()
-            .multiply(BigDecimal.ONE.add(approvedItemA.approvedMarginPct())).setScale(4, RoundingMode.HALF_UP);
-        BigDecimal expectedApprovedB = approvedItemB.frozenLandedCostPerRequestedUnitThb()
-            .multiply(BigDecimal.ONE.add(approvedItemB.approvedMarginPct())).setScale(4, RoundingMode.HALF_UP);
+        // V152 (V109 engine wiring): selling price is now RoundUp[cost x (1+margin) x
+        // selling_buffer, nearest ฿10] — see formulaSellingPrice's own javadoc — not the old bare
+        // cost x (1+margin).
+        BigDecimal expectedApprovedA = formulaSellingPrice(
+            approvedItemA.frozenLandedCostPerRequestedUnitThb(), approvedItemA.approvedMarginPct());
+        BigDecimal expectedApprovedB = formulaSellingPrice(
+            approvedItemB.frozenLandedCostPerRequestedUnitThb(), approvedItemB.approvedMarginPct());
         assertThat(approvedItemA.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(expectedApprovedA);
         assertThat(approvedItemB.approvedSellingPricePerRequestedUnit()).isEqualByComparingTo(expectedApprovedB);
         assertThat(approvedItemA.approvedMarginPct()).isEqualByComparingTo("0.35");
@@ -524,7 +525,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(decisionV2.pricingCostingId()).isNotEqualTo(decisionV1.pricingCostingId());
         for (PricingDecisionItemDto item : decisionV2.items()) {
             decisionService.update(decisionV2.id(), new UpdatePricingDecisionRequest(null, List.of(
-                new UpdatePricingDecisionItemRequest(item.id(), null, null, new BigDecimal("1.00"), null))), ceoActor);
+                new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
         PricingDecisionDto approvedV2 = decisionService.approve(decisionV2.id(),
             new ApprovePricingDecisionRequest("อนุมัติ v2", UUID.randomUUID().toString()), ceoActor);
@@ -635,6 +636,20 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         return decision.items().stream()
             .filter(item -> item.pricingRequestItemId() == pricingRequestItemId)
             .findFirst().orElseThrow();
+    }
+
+    /**
+     * V109 selling-price formula (V152) hand-reimplemented independently of
+     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#roundUpSellingPrice}: {@code cost x
+     * (1+margin) x selling_buffer}, rounded UP to the nearest {@code selling_price_round_up_to} —
+     * replacing the old bare {@code cost x (1+margin)} this test hard-coded before the engine
+     * swap. Buffer (1.07) and round-up-to (10) match V109's seeded defaults, unchanged by this
+     * fixture.
+     */
+    private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
+        BigDecimal raw = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(new BigDecimal("1.07"));
+        BigDecimal units = raw.divide(BigDecimal.TEN, 0, RoundingMode.CEILING);
+        return units.multiply(BigDecimal.TEN).setScale(4, RoundingMode.HALF_UP);
     }
 
     private CustomerQuotationItemDto quotationItemFor(CustomerQuotationDto quotation, long pricingRequestItemId) {

@@ -28,7 +28,6 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
-import th.co.glr.hr.pricing.PriceCalcService;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
@@ -84,13 +83,13 @@ class StageDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets = new TicketRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
-        // PriceCalcService/PricingRequestService are mocked exactly as in the sibling stage classes:
-        // nothing exercised here calls either. The two things under test — TicketService's gates
-        // and TicketRepository's SQL — are both real.
+        // PricingRequestService is mocked exactly as in the sibling stage classes: nothing
+        // exercised here calls it. The two things under test — TicketService's gates and
+        // TicketRepository's SQL — are both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests);
 
         EmployeeRepository employees = new EmployeeRepository(

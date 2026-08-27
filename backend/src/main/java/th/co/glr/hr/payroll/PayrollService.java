@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -1705,7 +1706,36 @@ public class PayrollService {
      * regression coverage of both.
      */
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
-        return commissionService.payrollCommissionTotalsByEmployee(payrollMonth);
+        return commissionService.payrollCommissionTotalsByEmployee(payrollMonth).entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> commissionWholeBaht(entry.getValue())));
+    }
+
+    /**
+     * Rounds a month's commission payable to whole baht, {@link RoundingMode#HALF_UP} (owner
+     * decision, 2026-08-25).
+     *
+     * <p>Unlike the SSO rounding in {@code PayrollCalculator#wholeBaht}, this has <b>no statutory
+     * basis</b> — commission is ordinary wages and มาตรา 46 does not reach it. It is the
+     * accountant's house convention, and it is applied here so the ERP stops disagreeing with the
+     * payroll workbook every month. All eight July 2026 commission figures in
+     * {@code GLR salary 7-2026 (fixed).xlsx} are exactly HALF_UP of the tier feed
+     * (11,230.33 -> 11,230 · 2,322.84 -> 2,323 · 140,433.75 -> 140,434 · …), and reconciling them by
+     * hand is what that month cost.
+     *
+     * <p><b>Rounded HERE, at the boundary into payroll, deliberately.</b> Commission reaches
+     * {@code gross_taxable_income}, the ป.96 cumulative limb, the SSO wage base and net pay; if it
+     * were rounded only on the way out, the stored gross would no longer be the base the withholding
+     * was actually computed from. Rounding once, before any of that, keeps every downstream figure
+     * derived from a single number. The consequence is intended: withholding now moves by a few
+     * satang against the July 2026 stored lines, because the tax base itself moved.
+     *
+     * <p>Applied PER EMPLOYEE, before any total accumulates — summing raw and rounding once is a
+     * different number, the same trap {@code SsoExporter#wholeBaht} documents.
+     */
+    private BigDecimal commissionWholeBaht(BigDecimal value) {
+        return (value == null ? BigDecimal.ZERO : value)
+            .setScale(0, RoundingMode.HALF_UP)
+            .setScale(2);
     }
 
     /**

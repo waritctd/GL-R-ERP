@@ -43,6 +43,14 @@ public final class PricingRequestEventKind {
     public static final String CUSTOMER_QUOTATION_REVISION_REQUESTED = "CUSTOMER_QUOTATION_REVISION_REQUESTED";
     // Sweep-only (QuotationExpiryWorker) — never emitted by a client-driven recordOutcome call.
     public static final String CUSTOMER_QUOTATION_EXPIRED   = "CUSTOMER_QUOTATION_EXPIRED";
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). REQUESTED is
+    // raised by CustomerQuotationService the first time a below-CEO-minimum line is saved at a
+    // price nobody has asked for (or been granted) before; APPROVED/REJECTED are raised by
+    // DiscountApprovalService. See sales.quotation_item_discount_approval's own comment for the
+    // full per-line, price-bound state machine.
+    public static final String DISCOUNT_APPROVAL_REQUESTED  = "DISCOUNT_APPROVAL_REQUESTED";
+    public static final String DISCOUNT_APPROVED             = "DISCOUNT_APPROVED";
+    public static final String DISCOUNT_REJECTED              = "DISCOUNT_REJECTED";
     // Step 6: Deposit, Payment, and Order Confirmation.
     public static final String ORDER_CONFIRMED               = "ORDER_CONFIRMED";
     public static final String DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION = "DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION";
@@ -69,6 +77,7 @@ public final class PricingRequestEventKind {
         CUSTOMER_QUOTATION_CREATED, CUSTOMER_QUOTATION_UPDATED, CUSTOMER_QUOTATION_ISSUED,
         CUSTOMER_QUOTATION_CANCELLED, CUSTOMER_QUOTATION_REVISED, CUSTOMER_QUOTATION_ACCEPTED,
         CUSTOMER_QUOTATION_REJECTED, CUSTOMER_QUOTATION_REVISION_REQUESTED, CUSTOMER_QUOTATION_EXPIRED,
+        DISCOUNT_APPROVAL_REQUESTED, DISCOUNT_APPROVED, DISCOUNT_REJECTED,
         ORDER_CONFIRMED, DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION,
         FACTORY_PO_CREATED, FACTORY_PO_PROFORMA_RECORDED, FACTORY_PO_SHIPPING_RECORDED,
         FACTORY_PO_GOODS_RECEIVED, FACTORY_PO_CANCELLED, TICKET_ITEMS_RECONCILED);

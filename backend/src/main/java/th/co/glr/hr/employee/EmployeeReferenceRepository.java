@@ -119,16 +119,55 @@ public class EmployeeReferenceRepository {
         return jdbc.queryForObject("SELECT division_id FROM hr.employee WHERE employee_id = :id", Map.of("id", employeeId), Long.class);
     }
 
+    /**
+     * Resolves {@code hr.division} by name for callers that supplied a division NAME but a
+     * blank/absent division CODE (the {@code !hasText(sourceCode)} branch of {@link
+     * #ensureDivision}, reachable over HTTP via the hr-gated {@code POST /api/employees} and
+     * {@code PATCH /api/employees/{id}} -- PATCH, not PUT: confirmed against {@code
+     * EmployeeController}, which has no {@code @PutMapping} at all).
+     *
+     * <p><b>Same-name rows can carry different {@code source_code} values</b> -- confirmed in
+     * production: {@code "Sales Support 1"} exists as both {@code '0011'} and {@code '0013'},
+     * {@code "QC&ISO"} as both {@code '0009'} and {@code 'QC'} -- so picking among candidates
+     * can never be an unordered {@code LIMIT 1}; Postgres does not guarantee a row order without
+     * an explicit {@code ORDER BY}, and an arbitrary pick could just as easily land on a
+     * blank-coded duplicate as a coded one.
+     *
+     * <p><b>Owner's ruling:</b> when one or more rows already carry this name, reuse the
+     * existing row instead of inserting a duplicate, and choose deterministically among
+     * candidates by (1) preferring a row whose {@code source_code} is non-null and non-blank
+     * over one that is not, then (2) tie-breaking on the LOWEST {@code division_id} (the
+     * earliest-created row), so the choice is stable across calls and never depends on physical
+     * row order. A {@code source_code} is never invented or derived from the name: production's
+     * name-to-code mapping is arbitrary business knowledge (e.g. ฝ่ายขาย -&gt; {@code SA},
+     * ผู้บริหาร -&gt; {@code MN}) rather than a rule, and only one of prod's 19 division names
+     * even carries a {@code '-'} prefix that could tempt a derivation scheme -- so guessing a
+     * code would be worse than leaving it blank.
+     *
+     * <p><b>This narrows the hole; it does not close it.</b> A genuinely new division name --
+     * one that matches NO existing row -- still inserts with {@code source_code} left NULL,
+     * because there is no existing row to reuse a code from. That row is then invisible to the
+     * {@code d.source_code ILIKE 'SA%'} (also {@code 'MD%'}/{@code 'MN%'}/{@code 'PCIM%'})
+     * predicates in {@code CommissionRepository} and {@code NotificationRepository}, the same
+     * blind spot {@code V146__drop_orphaned_null_source_code_divisions.sql} cleaned up: a sales
+     * manager assigned to that division could approve a commission but never be notified one is
+     * waiting. Fully closing this needs either a caller-supplied {@code source_code} on first
+     * creation of a division, or an owner-approved name -&gt; code mapping; both are out of scope
+     * here. See that migration's comment for the fuller incident history.
+     */
     private Long findOrInsertDivisionByName(String name) {
         List<Long> existing = jdbc.queryForList("""
             SELECT division_id
               FROM hr.division
              WHERE name_th = :name
+             ORDER BY (source_code IS NULL OR btrim(source_code) = '') ASC, division_id ASC
              LIMIT 1
             """, Map.of("name", name), Long.class);
         if (!existing.isEmpty()) {
             return existing.getFirst();
         }
+        // Genuinely new name: no existing row of this name to reuse a source_code from. Left
+        // NULL deliberately -- see the javadoc above for why this remains a known, un-closed gap.
         return jdbc.queryForObject("""
             INSERT INTO hr.division(name_th, is_active)
             VALUES (:name, TRUE)

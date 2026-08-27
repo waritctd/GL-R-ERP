@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.config.AppProperties;
@@ -36,10 +37,10 @@ import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PriceCalcConfigRepository;
-import th.co.glr.hr.pricing.PriceCalcService;
+import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingCostingService;
+import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -87,9 +88,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage, factoryQuoteCarryForward());
 
         // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
-        // repository — PriceCalcService is mocked since none of the read paths under test
-        // (list/listPage/get/listPayments/quotation download) ever call it.
-        ticketService = new TicketService(tickets, notifications, mock(PriceCalcService.class),
+        // repository.
+        ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService);
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
@@ -100,9 +100,11 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         // auto-advance check) and, in production, PricingDecisionService — this file only reads
         // through PricingCostingService (see pricingCostingService.get below), so the calculator
         // is wired but never exercised beyond satisfying the constructor.
+        PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
-                new FxRateRepository(jdbc), new PriceCalcConfigRepository(jdbc), new FactoryConfigRepository(jdbc));
+                new FxRateRepository(jdbc), new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc),
+                formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
             notifications, fileStorage, new AppProperties(), landedCostCalculator);
@@ -140,6 +142,54 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = createTicket(DealStage.PROCUREMENT);
 
         assertThat(idsIn(listPage(importUser))).contains(ticketId);
+    }
+
+    /**
+     * The state the whole import worklist exists to serve, and the one the scope used to hide.
+     *
+     * <p>A deal awaiting its IR sits at DEPOSIT_RECEIVED with an ACCEPTED pricing request — the
+     * customer has said yes, so the request is terminal. Under the old PROCUREMENT floor BOTH
+     * disjuncts were false and the row simply did not come back, while PROCUREMENT is written only
+     * by {@code issueImportRequest} itself. Import could not see the deal until after doing the
+     * thing it needed the deal in order to do.
+     *
+     * <p>Deliberately builds the terminal pricing request rather than leaving none: without it the
+     * test would pass on the stage clause alone even if the terminal-status logic were wrong.
+     */
+    @Test
+    void importListPage_dealAwaitingItsImportRequest_isReturned() {
+        long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
+        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
+
+        assertThat(idsIn(listPage(importUser))).contains(ticketId);
+    }
+
+    /**
+     * The deposit-bypass path. {@code issueImportRequest} accepts DEPOSIT_NOTICE_ISSUED and a
+     * bypass policy's CUSTOMER_CONFIRMED, and a deal in either is still standing at ORDER_RECEIVED
+     * — the stage only advances to DEPOSIT_RECEIVED once money lands. A floor of DEPOSIT_RECEIVED
+     * would leave this case broken, so the floor is ORDER_RECEIVED and this pins it.
+     */
+    @Test
+    void importListPage_orderReceivedDealWithNoLivePricingRequest_isReturned() {
+        long ticketId = createTicket(DealStage.ORDER_RECEIVED);
+        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
+
+        assertThat(idsIn(listPage(importUser))).contains(ticketId);
+    }
+
+    /**
+     * Wrong way round: the widening must not have become "import sees everything". NEGOTIATION is
+     * the stage immediately below the new ORDER_RECEIVED floor, and with only a terminal pricing
+     * request neither disjunct holds — so it stays out. Without this, moving the floor to
+     * LEAD_APPROACH by accident would pass every other test in this class.
+     */
+    @Test
+    void importListPage_stageJustBelowTheFloorWithOnlyATerminalPricingRequest_isNotReturned() {
+        long ticketId = createTicket(DealStage.NEGOTIATION);
+        insertPricingRequest(ticketId, "QUOTATION_ACCEPTED");
+
+        assertThat(idsIn(listPage(importUser))).doesNotContain(ticketId);
     }
 
     @Test

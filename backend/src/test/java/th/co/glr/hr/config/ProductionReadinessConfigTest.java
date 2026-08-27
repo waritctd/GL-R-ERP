@@ -35,6 +35,10 @@ import org.springframework.core.env.Environment;
  * entries this class used to check are retired outright (not merely renamed): nothing reads
  * {@code spring.mail.username}/{@code spring.mail.password} once NotificationEmailService/
  * FactoryEmailService moved onto {@code th.co.glr.hr.mail.Mailer}.
+ *
+ * <p>2026-08 (#782): {@code app.mail.override-to} joined the same REQUIRED-when-provider-sends-real-mail
+ * gate too, inverted -- a problem when SET, not when blank -- see the "app.mail.override-to
+ * REQUIRED-when-set-under-prod" block below.
  */
 class ProductionReadinessConfigTest {
 
@@ -274,6 +278,98 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list).hasSize(1);
         assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
         assertThat(appender.list.get(0).getFormattedMessage()).contains("APP_MAIL_FROM is not set");
+    }
+
+    // ---- app.mail.override-to REQUIRED-when-set-under-prod coverage (#782) --------------------
+    //
+    // Deliberate NEW behaviour, not present before #782: app.mail.override-to exists to redirect
+    // every outbound email to one test inbox (see OverrideRedirectingMailer) - if that were left set
+    // on the one profile that actually reaches real inboxes, every real employee's notification and
+    // every real factory's quote mail would be silently redirected, with nothing in the logs
+    // distinguishing that from normal operation. Same REQUIRED-when-provider-sends-real-mail gating,
+    // same real-prod-hard-fails / prod+demo-warns policy as app.mail.from/app-base-url above - this is
+    // the inverse shape (a problem when the property IS set, not when it's blank), not a new policy.
+
+    @Test
+    void resendProviderUnderRealProdHardFailsWhenOverrideToIsSet() {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("re_live_abc123");
+        when(environment.getProperty("app.mail.override-to", "")).thenReturn("qa-inbox@example.com");
+
+        assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("APP_MAIL_OVERRIDE_TO must not be set")
+            // The exception message is a fixed, reviewable string - it must not echo the configured
+            // inbox address into logs/exceptions at boot time (see mailOverrideActiveProblem).
+            .hasMessageNotContaining("qa-inbox@example.com");
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void smtpProviderUnderRealProdHardFailsWhenOverrideToIsSet() {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("smtp");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.override-to", "")).thenReturn("qa-inbox@example.com");
+
+        assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("APP_MAIL_OVERRIDE_TO must not be set");
+    }
+
+    @Test
+    void prodPlusDemoWarnsRatherThanThrowsWhenOverrideToIsSet() {
+        // Same policy as demoProfileWarnsRatherThanThrowsOnAMissingMailFrom above: the Render showcase
+        // must not crash-loop, but the gap must still be visible in the logs.
+        Environment environment = environment("prod", "demo");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("re_live_abc123");
+        when(environment.getProperty("app.mail.override-to", "")).thenReturn("qa-inbox@example.com");
+
+        ProductionReadinessConfig.validate(environment); // must not throw
+
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(appender.list.get(0).getFormattedMessage()).contains("APP_MAIL_OVERRIDE_TO must not be set");
+    }
+
+    @Test
+    void logProviderIgnoresOverrideToEvenUnderRealProd() {
+        // provider=log never contacts a real inbox (see LogMailer) - a stray override-to left set is
+        // inert there, not dangerous, and must not block boot. Mirrors logProviderDoesNotRequireAnyMailProperty
+        // above for the same reason.
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
+        when(environment.getProperty("app.mail.override-to", "")).thenReturn("qa-inbox@example.com");
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
+    }
+
+    @Test
+    void resendProviderUnderRealProdPassesSilentlyWhenOverrideToIsBlank() {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
+        when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
+        when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
+        when(environment.getProperty("app.mail.resend-api-key", "")).thenReturn("re_live_abc123");
+        when(environment.getProperty("app.mail.override-to", "")).thenReturn("");
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
     }
 
     /**

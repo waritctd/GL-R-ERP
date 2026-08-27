@@ -226,21 +226,18 @@ const SERVER_ONLY = {
     + '"ERP Documentation/" document the same call. The plaintext is shown exactly once, which is why there is no '
     + 'UI. Covered by AttendanceControllerTest. LIVE, not dead.',
 
-  // ── Deliberately dormant: the UI was built, shipped, then removed ─────────
-  // All eight ProcurementController mappings. PR #683 (ebaf6888, 2026-08-11) deleted the จัดซื้อ & นำเข้า
-  // page and every client layer together, and its commit body states the backend was kept on purpose:
-  // "left in place, dormant and with no frontend caller. Nothing is dropped". It even predicts this
-  // guard under Known risks: "a future contract-style sweep will flag them as unreachable. That is
-  // intended." 0 factory POs have ever existed in production. ProcurementService remains well covered
-  // by ProcurementServiceIntegrationTest; only the HTTP door has nobody behind it.
-  'GET /api/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'GET /api/factory-purchase-orders/{}': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/cancel': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/goods-received': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/proforma': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/factory-purchase-orders/{}/shipping': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'GET /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
-  'POST /api/pricing-requests/{}/factory-purchase-orders': 'ProcurementController — dormant by owner ruling, PR #683. See the block comment above.',
+  // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
+  // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
+  // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the
+  // backend "in place, dormant and with no frontend caller", and predicted this guard would flag
+  // them. Owner ruling 2026-08-18 closed that out the other way: the controller is deleted, so the
+  // eight endpoints no longer exist and need no exemption. There is nothing to re-add here — the
+  // stale-entry assertion below would fail on an entry naming an endpoint the backend does not serve.
+  //
+  // ONLY THE HTTP DOOR WENT. ProcurementService, ProcurementRepository, the DTOs and
+  // FactoryPurchaseOrderStatus all remain, still covered by ProcurementServiceIntegrationTest, and
+  // sales.factory_purchase_order is untouched — TicketRepository#purchaseOrderRollup still reads it
+  // to derive each deal's import-axis fulfilment status.
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
   // The four pricing entries that stood here (recalculate-cost, cost-override, and the two
@@ -254,12 +251,73 @@ const SERVER_ONLY = {
   // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
   // the leave page links; this endpoint is the server-side archive of record, not that reader.
 
+  // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
+  // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or
+  // accepting an override), revise, delete, read, and print from the stored snapshot. All gated
+  // {import, ceo} in ImportRequestService except required-by-note, which is SALES's field and carries
+  // its own gate; all proven wrong-way-round against real Postgres by
+  // StoredImportRequestIntegrationTest.
+  //
+  // Deliberately NOT wired into hrApi.js in the same change. This PR is a migration plus nine
+  // endpoints plus fourteen integration tests; bundling the UI would make it unreviewable, and the
+  // preview half of this feature shipped exactly this way (#812 backend, #816 UI) without trouble.
+  // The PREVIEW routes remain live and reachable, so the form is still obtainable meanwhile — what is
+  // missing is only the recorded, numbered version.
+  'POST /api/tickets/{}/import-requests':
+    'Raises one DRAFT per brand on the deal, skipping brands that already have a live form. The '
+    + 'entry point for the stored lifecycle.',
+  'GET /api/tickets/{}/import-requests':
+    'The deal\'s stored forms, all versions, with each one\'s printed sheet count.',
+  'GET /api/import-requests/{}':
+    'One stored form by its own id, with its items and printed sheet count — the read the edit and '
+    + 'issue screens will load before acting on a specific version.',
+  'PATCH /api/import-requests/{}':
+    'Edits a draft\'s body, or the import-owned footer of an issued form (those blocks are filled in '
+    + 'by hand AFTER issue). PATCH semantics — an absent field is left alone, never blanked.',
+  'POST /api/import-requests/{}/issue':
+    'DRAFT -> ISSUED: mints IR<yy><nnn> from sales.document_sequence, or accepts a caller override '
+    + 'without advancing the sequence, and supersedes the version it replaces.',
+  'POST /api/import-requests/{}/revise':
+    'Prepares a correction as a new DRAFT at the next version, copying the issued body. The previous '
+    + 'version stays ISSUED until the replacement issues.',
+  'DELETE /api/import-requests/{}':
+    'Deletes a DRAFT. An issued form is never deleted — it is superseded.',
+  'GET /api/import-requests/{}/file':
+    'Prints a stored form from ITS OWN snapshot, so an issued document keeps saying what it said '
+    + 'when it was signed even if the deal is later edited.',
+  'PUT /api/tickets/{}/required-by-note':
+    'Sets the deal-level "กำหนดวันที่ต้องการของ". The one route in this family that belongs to SALES '
+    + '(deal owner or CEO) rather than import, gated from DealStage.ORDER_RECEIVED onward.',
+
+  // The three ใบขอซื้อ (F-SM-001) GETs were listed here between #812 and this change, as a
+  // capability built backend-first whose UI had not landed. They are gone rather than re-worded:
+  // DealFulfilmentPanel's IR block now calls all three through api.importRequests, so they are
+  // ordinary called endpoints and this test refuses to keep an exemption for them.
+
+  // GET/PUT /api/catalog/thickness-defaults stood here from #814 until the CEO settings panel
+  // landed. They are gone rather than re-worded: ThicknessDefaultsPanel now calls both through
+  // hrApi.js, so this test's own "is now called by hrApi — delete the entry" assertion fires if
+  // they come back. That assertion is what removed them.
+
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
   // backend test classes and — by V145 — the V112 table itself, so there is no longer an endpoint
   // to exempt. The two frontend tests asserting the multiplier must NOT come back stay where they
   // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
   // where the misreading happened.
+
+  // CEO discount-approval workflow, Phase 2 (V155). The task's actual UI requirement — a line
+  // shows sales it needs approval and why it was rejected; the CEO approves/rejects with a
+  // reason — is satisfied per-quotation, on the same PricingRequestDetailPage screen the CEO
+  // already reviews pricing on (listDiscountApprovalsForQuotation/approveDiscountApproval/
+  // rejectDiscountApproval, all called and reachable). This CROSS-quotation queue is a genuinely
+  // separate capability (a CEO dashboard listing every pending discount across every deal) that
+  // was not asked for and would be a new IA surface — built on the backend for when/if it is,
+  // not wired to any screen yet.
+  'GET /api/discount-approvals/pending':
+    'DiscountApprovalService.listPending — a CEO-wide queue across all quotations, not needed for '
+    + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
+    + 'built backend-first; wire it up if a cross-deal CEO queue view is ever requested.',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -537,7 +595,6 @@ const UNREACHABLE_FROM_UI = new Set([
   // auto-advance) and why that is a separate change from this one.
   'POST /api/pricing-costings/{}/recalculate',
   'POST /api/pricing-costings/{}/submit',
-  'POST /api/pricing-decisions/{}/recalculate',
   'POST /api/pricing-requests/{}/costings',
   // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
   // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is

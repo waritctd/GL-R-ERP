@@ -143,6 +143,25 @@ export const API_ROUTES = {
     noteTemplates: '/api/document-note-templates',
     remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
   },
+  // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
+  // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —
+  // see ImportRequestQueryRepository's Javadoc.
+  importRequests: {
+    brands: (ticketId) => `/api/tickets/${ticketId}/import-request/brands`,
+    pages: (ticketId, brand, requiredBy) => {
+      const p = new URLSearchParams();
+      if (brand) p.set('brand', brand);
+      if (requiredBy) p.set('requiredBy', requiredBy);
+      return `/api/tickets/${ticketId}/import-request/pages${p.toString() ? `?${p}` : ''}`;
+    },
+    file: (ticketId, brand, ref, requiredBy) => {
+      const p = new URLSearchParams();
+      if (brand) p.set('brand', brand);
+      if (ref) p.set('ref', ref);
+      if (requiredBy) p.set('requiredBy', requiredBy);
+      return `/api/tickets/${ticketId}/import-request${p.toString() ? `?${p}` : ''}`;
+    },
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {
@@ -154,6 +173,10 @@ export const API_ROUTES = {
     },
     pricesBase: '/api/catalog/prices',
     price: (priceId) => `/api/catalog/prices/${priceId}`,
+    // CEO-maintained thickness fallbacks (V153). Both mirror ThicknessDefaultController; PUT is a
+    // BULK save — 244 (factory, collection) pairs cover every gap, and one request per pair would
+    // make a single sitting 244 round trips.
+    thicknessDefaults: '/api/catalog/thickness-defaults',
   },
   factoryConfigs: {
     list: '/api/factory-configs',
@@ -349,7 +372,6 @@ export const API_ROUTES = {
     pricingDecisions: (id) => `/api/pricing-requests/${id}/pricing-decisions`,
     pricingDecisionSalesView: (id) => `/api/pricing-requests/${id}/pricing-decision/sales-view`,
     pricingDecision: (id) => `/api/pricing-decisions/${id}`,
-    pricingDecisionRecalculate: (id) => `/api/pricing-decisions/${id}/recalculate`,
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
     // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
@@ -357,6 +379,10 @@ export const API_ROUTES = {
     pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
     pricingDecisionItemCostOverride: (decisionId, itemId) =>
       `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
+    // V152 (V109 engine wiring). CEO per-item duty product_type override — mirrors
+    // PricingDecisionController.overrideItemProductType.
+    pricingDecisionItemProductTypeOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/product-type-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,
@@ -367,6 +393,14 @@ export const API_ROUTES = {
     customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
     // Step 5: Customer Decision and Commercial Revisions.
     customerQuotationOutcome: (id) => `/api/customer-quotations/${id}/outcome`,
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+    // DiscountApprovalController — a distinct controller/id-space from customer-quotation ids
+    // above (a discount-approval id, not a quotation id), grouped here anyway since every other
+    // sub-resource of the quotation surface lives in this same JS namespace regardless of its
+    // actual REST path prefix (see customerQuotation vs customerQuotations just above).
+    discountApprovalsForQuotation: (quotationId) => `/api/customer-quotations/${quotationId}/discount-approvals`,
+    discountApprovalApprove: (id) => `/api/discount-approvals/${id}/approve`,
+    discountApprovalReject: (id) => `/api/discount-approvals/${id}/reject`,
     // Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationController.
     confirmOrder: (id) => `/api/pricing-requests/${id}/confirm-order`,
     depositNoticeFromQuotation: (id) => `/api/pricing-requests/${id}/deposit-notice`,
@@ -459,6 +493,17 @@ export const ROLE_PERMISSIONS = {
   canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
+  // งานนำเข้า (/fulfilment) — Import's cross-deal fulfilment workspace, which
+  // advances the four stage-12 transitions in place. Mirrors
+  // TicketService.FULFILMENT_ROLES = Set.of("import", "ceo") exactly — the gate
+  // on issueImportRequest / markIrSent / markShipping / markGoodsReceived.
+  //
+  // PRESENTATION ONLY, like every entry in this map: adding a role here would
+  // show it the page and earn it four 403s, not grant it anything. Deliberately
+  // NARROWER than canViewPricingRequestQueue (its nav neighbour, which includes
+  // sales_manager) — a sales_manager on this page would see rows whose every
+  // button the backend refuses.
+  canActOnFulfilment: ['import', 'ceo'],
   canProposePrices: ['import'],
   canApproveReject: ['ceo'],
   canGenerateQuotation: ['sales'],

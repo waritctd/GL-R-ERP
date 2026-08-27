@@ -331,20 +331,26 @@ AND NOT EXISTS (SELECT 1 FROM sales.pricing_decision pd WHERE pd.decision_code =
 --    minimum = landed cost * 1.15. Guard: uq_pricing_decision_item_
 --    request_item (pricing_decision_id, pricing_request_item_id).
 -- ---------------------------------------------------------------------
+-- NOTE (main sync): discount_ceiling_pct was removed from this INSERT. main's
+--      V150__ceo_pricing_decision_simplify DROPs that column (added by V72), and its
+--      comment's "nothing else in the schema touches it" was true of main only -- this
+--      uat-only seed did. On a clean DB V1..V155 run before V900.., so V910 hit a column
+--      V150 had already dropped. The ceiling was seed scaffolding, not asserted by any test.
+-- ---------------------------------------------------------------------
 INSERT INTO sales.pricing_decision_item (
     pricing_decision_id, pricing_request_item_id, pricing_costing_item_id,
     requested_unit_basis, requested_quantity, normalized_quantity_pieces,
     frozen_landed_cost_per_piece_thb, frozen_landed_cost_per_requested_unit_thb,
     currency, proposed_margin_pct, approved_margin_pct,
     proposed_selling_price_per_requested_unit, approved_selling_price_per_requested_unit,
-    discount_ceiling_pct, minimum_selling_price_per_requested_unit
+    minimum_selling_price_per_requested_unit
 )
 SELECT pd.pricing_decision_id, pri.pricing_request_item_id, pci.pricing_costing_item_id,
        'PER_PIECE', ti.qty, ti.qty,
        v.landed_cost_per_unit_thb, v.landed_cost_per_unit_thb,
        'THB', 0.35, 0.35,
        v.selling_price, v.selling_price,
-       0.05, v.min_selling_price
+       v.min_selling_price
 FROM (VALUES
     ('GOLD-6060-MB', 545.8750::numeric, 737.1313::numeric, 627.7563::numeric),
     ('GOLD-3060-WD', 437.4700::numeric, 590.7845::numeric, 503.0905::numeric)

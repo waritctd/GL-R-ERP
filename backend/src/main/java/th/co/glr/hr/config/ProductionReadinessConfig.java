@@ -47,7 +47,10 @@ public class ProductionReadinessConfig {
      *       {@code app.mail.provider} is set to a transport that actually reaches real inboxes --
      *       see {@link #collectProblems}) -- no safe way to run without it, so it keeps the
      *       existing hard-fail-in-real-prod / WARN-in-{@code prod,demo} policy above, just extended
-     *       to list every REQUIRED problem at once instead of only the first.</li>
+     *       to list every REQUIRED problem at once instead of only the first.
+     *       <b>2026-08 (#782):</b> {@code app.mail.override-to} joined this list too, but inverted --
+     *       it is a problem when SET (under the same real-mail-provider condition), not when blank;
+     *       see {@link #mailOverrideActiveProblem}.</li>
      *   <li><b>DEGRADED</b> (payroll employer registration fields, BOT tokens) -- features that
      *       already have a documented no-op/silent-drop fallback elsewhere in the codebase (each
      *       message below names the concrete consequence and the class that owns it) and
@@ -116,6 +119,15 @@ public class ProductionReadinessConfig {
             addIfPresent(required, blankProblem(property(environment, "app.mail.app-base-url"),
                 "APP_MAIL_APP_BASE_URL",
                 "every link in every notification/payslip email would point at the UAT demo host"));
+            // #782: app.mail.override-to exists so a test/UAT deployment can redirect every outbound
+            // email to one inbox (see OverrideRedirectingMailer). A set override left active under
+            // THIS profile - the one deployment mode that actually reaches real inboxes - would
+            // silently redirect every real employee's notification and every real factory's quote
+            // mail to one address instead, with nothing in the logs distinguishing that from normal
+            // operation. Gated on mailProviderSendsRealMail like the two checks above: under
+            // provider=log nothing is actually transmitted, so a stray override-to left set is inert,
+            // not dangerous, and must not block boot.
+            addIfPresent(required, mailOverrideActiveProblem(property(environment, "app.mail.override-to")));
         }
         // Resend-only: SmtpMailer authenticates via app.mail.smtp.* instead, and already hard-fails
         // its own constructor when app.mail.smtp.host is blank (see that class) -- an independent
@@ -192,6 +204,19 @@ public class ProductionReadinessConfig {
     private static String blankProblem(String value, String envVar, String consequence) {
         if (value.isBlank()) {
             return envVar + " is not set — " + consequence;
+        }
+        return null;
+    }
+
+    /** The inverse shape of {@link #blankProblem}: this property is a problem when it IS set, not
+     * when it's blank. Deliberately does not echo the configured value into the exception/log
+     * message - the message is a fixed, reviewable string either way, and there is no reason for a
+     * boot-time error to carry a live inbox address through logs. */
+    private static String mailOverrideActiveProblem(String overrideTo) {
+        if (!overrideTo.isBlank()) {
+            return "APP_MAIL_OVERRIDE_TO must not be set for the prod profile — it would silently "
+                + "redirect every outbound email (real employee notifications and real factory-quote "
+                + "mail alike) to one inbox instead of its real recipient (see OverrideRedirectingMailer)";
         }
         return null;
     }
