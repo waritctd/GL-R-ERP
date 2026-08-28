@@ -1625,6 +1625,203 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Import fills in a blank factory (PricingRequestService#setItemFactory).
+    //
+    // The hole these close: since 2026-08-11 a line may be SUBMITTED with no factory (see
+    // submitCatalogGate_acceptsFreeTextItem... above), and the factory check was deferred to
+    // FactoryQuoteService#groupByFactory. But nothing could then SUPPLY the value — updateDraft is
+    // DRAFT-only and sales-owner-only, the request is past DRAFT by then, and V140 deleted the
+    // MORE_INFO_REQUIRED send-back — so สร้างร่างอีเมล 422'd forever and the only escape was
+    // cancelling the request. setItemFactory is that missing step, and it is an AUTHORIZATION
+    // change (a new write, Import-only), so per CLAUDE.md it is pinned here: through the real
+    // service AND the real repository, against real Postgres, with the refusals asserted
+    // wrong-way-round and every assertion made against the PERSISTED ROW, never the thrown
+    // exception alone.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void setItemFactory_importFillsTheBlankAndTheFactoryEmailStepThenSucceeds() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+
+        // Before: the factory-email step is blocked, and it names the ROW POSITION (2), not the
+        // primary key — which is the whole reason Import could not act on the old message.
+        assertThatThrownBy(() -> factoryQuoteService.generateDrafts(pricingRequestId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+                assertThat(e.getMessage()).contains("รายการที่ 2 (Blank factory line)");
+            });
+
+        pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("  Factory B  "), importActor);
+
+        // The persisted row, trimmed — not merely the DTO the call returned.
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isEqualTo("Factory B");
+        // resolved_factory_name is the CATALOG snapshot and must stay untouched: a hand-typed name
+        // is not a catalog resolution.
+        assertThat(jdbc.queryForObject(
+            "SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isNull();
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_REQUEST_ITEM_FACTORY_SET'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+
+        // After: the step that was blocked now runs, and routes the line to the named factory.
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        assertThat(drafts).extracting(FactoryQuoteDto::factoryName)
+            .containsExactlyInAnyOrder("Factory A", "Factory B");
+    }
+
+    @Test
+    void setItemFactory_isRefusedForTheSalesRepWhoOwnsTheDeal_andForTheCeo() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+
+        // Wrong-way-round: the two roles that can otherwise READ this request in full — its own
+        // sales rep, and the CEO — must not be able to write this field. Import owns the routing
+        // decision because Import is who emails the factory.
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isNull();
+    }
+
+    @Test
+    void setItemFactory_refusesToReRouteALineThatAlreadyNamesAFactory() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long catalogBackedItemId = jdbc.queryForObject("""
+            SELECT pricing_request_item_id FROM sales.pricing_request_item
+             WHERE pricing_request_id = :id AND resolved_factory_name = 'Factory A'
+            """, Map.of("id", pricingRequestId), Long.class);
+
+        // A fill, never a re-route: sales.factory_quote rows are grouped by factory NAME, so
+        // moving a line after its quote exists would strand that quote's item list.
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, catalogBackedItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", catalogBackedItemId), String.class)).isEqualTo("Factory A");
+    }
+
+    @Test
+    void setItemFactory_refusesBeforeImportHasPickedTheRequestUp() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, blankFactoryRequest(), salesActor)
+            .summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+
+        // SUBMITTED, not yet picked up — outside FACTORY_ROUTING_STATUSES, so no Import user may
+        // start editing a request nobody has taken responsibility for.
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isNull();
+    }
+
+    @Test
+    void setItemFactory_cannotReachAnItemBelongingToAnotherPricingRequest() {
+        long targetRequestId = pricingRequestWithOneBlankFactoryLine();
+        long victimRequestId = pricingRequestWithOneBlankFactoryLine();
+        long victimItemId = blankFactoryItemId(victimRequestId);
+
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(targetRequestId, victimItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory B"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        // And the same scoping again at the REPOSITORY level, bypassing the service's own check —
+        // this is the half a mocked repository could never prove: that pricing_request_id really
+        // reaches the WHERE clause and no row is written.
+        assertThat(pricingRequests.fillItemFactory(targetRequestId, victimItemId, "Factory B")).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", victimItemId), String.class)).isNull();
+    }
+
+    @Test
+    void generateDrafts_namesEveryBlankLineByItsRowPositionWithItsProductName() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            new PricingRequestRequests.CreatePricingRequestRequest(
+                PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+                null, "THB", "blank factory test", UUID.randomUUID().toString(),
+                List.of(
+                    pricingItem("SCG", "Tile A", "Factory A", new BigDecimal("10")),
+                    factorylessPricingItem("Blank line two"),
+                    factorylessPricingItem("Blank line three"))),
+            salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        // EVERY offending line in ONE message, each by the row position the detail page renders and
+        // by the product name that page shows — not the first line only, and not by a primary key
+        // that appears nowhere on screen.
+        assertThatThrownBy(() -> factoryQuoteService.generateDrafts(pricingRequestId, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+                assertThat(e.getMessage())
+                    .contains("รายการที่ 2 (Blank line two)")
+                    .contains("รายการที่ 3 (Blank line three)")
+                    .doesNotContain("รายการที่ 1");
+            });
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Long.class)).isZero();
+    }
+
+    /** A deal-active, Import-owned request whose line 1 is catalog-backed and line 2 has no factory at all. */
+    private long pricingRequestWithOneBlankFactoryLine() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, blankFactoryRequest(), salesActor)
+            .summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        return pricingRequestId;
+    }
+
+    private PricingRequestRequests.CreatePricingRequestRequest blankFactoryRequest() {
+        return new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            null, "THB", "blank factory test", UUID.randomUUID().toString(),
+            List.of(
+                pricingItem("SCG", "Tile A", "Factory A", new BigDecimal("10")),
+                factorylessPricingItem("Blank factory line")));
+    }
+
+    private long blankFactoryItemId(long pricingRequestId) {
+        return jdbc.queryForObject("""
+            SELECT pricing_request_item_id FROM sales.pricing_request_item
+             WHERE pricing_request_id = :id
+               AND COALESCE(NULLIF(BTRIM(resolved_factory_name), ''), NULLIF(BTRIM(factory), '')) IS NULL
+            """, Map.of("id", pricingRequestId), Long.class);
+    }
+
+    /**
+     * Unlike {@link #freeTextPricingItem}, which names "Free Text Factory", this line has NO
+     * factory on EITHER side — no catalog product to snapshot one from, and no free text. That is
+     * the shape the whole section above is about, and nothing else in this file produced it.
+     */
+    private PricingRequestRequests.PricingRequestItemRequest factorylessPricingItem(String description) {
+        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, null, description,
+            null, null, "60x60", null, new BigDecimal("1"), new BigDecimal("1"), "piece",
+            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+    }
+
     private PricingRequestRequests.PricingRequestItemRequest freeTextPricingItem(String description) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, null, description,
             null, null, "60x60", "Free Text Factory", new BigDecimal("1"), new BigDecimal("1"), "piece",

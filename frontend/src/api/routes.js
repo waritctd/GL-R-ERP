@@ -353,6 +353,10 @@ export const API_ROUTES = {
       return `/api/pricing-requests${p.toString() ? `?${p}` : ''}`;
     },
     detail: (id) => `/api/pricing-requests/${id}`,
+    // Import fills in the factory on one line Sales left blank — mirrors
+    // PricingRequestController.setItemFactory. Shaped like the CEO's per-item overrides above
+    // (PUT .../items/{itemId}/...) because it writes exactly one field on one line.
+    itemFactory: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/factory`,
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,

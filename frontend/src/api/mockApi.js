@@ -1628,6 +1628,28 @@ function requirePricingRequestItemFieldsValid(items) {
   });
 }
 
+// Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
+// free text, null when the line has neither. Getting this precedence wrong is the mock-more/less-
+// permissive-than-production trap CLAUDE.md warns about, in the "mock omits a field the feature
+// keys on" shape — the mock used to read `item.factory` alone.
+function pricingRequestItemFactory(item) {
+  const resolved = item.resolvedFactoryName?.trim();
+  if (resolved) return resolved;
+  const freeText = item.factory?.trim();
+  return freeText || null;
+}
+
+// Mirrors PricingRequestItemDto.displayName(): the same fields, in the same precedence, that the
+// pricing-request detail page prints on each row — so an error naming a line points at text the
+// reader can actually see.
+function pricingRequestItemDisplayName(item) {
+  const brand = item.catalogBrand?.trim() || item.brand?.trim() || '';
+  const model = item.catalogModel?.trim() || item.model?.trim() || '';
+  const name = `${brand} ${model}`.trim();
+  if (name) return name;
+  return item.productDescription?.trim() || '(ไม่มีชื่อสินค้า)';
+}
+
 // Mirrors PricingRequestRepository.snapshotCatalogSelections: for each item whose productId
 // matches an ACTIVE catalog price, populates the catalog snapshot fields the same way the real
 // UPDATE...FROM does — including catalog_brand = COALESCE(pri.brand, pp.grade) and
@@ -9036,6 +9058,33 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
+    // Mirrors PricingRequestService.setItemFactory: import only, IMPORT_REVIEWING /
+    // AWAITING_FACTORY_RESPONSE only, deal ACTIVE, and a gap-FILL — a line that already has a
+    // factory (from the catalog snapshot or Sales's own text) is refused, never re-routed.
+    // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role/status gates below
+    // approximate the Java service and are not evidence about it. The real gate is pinned by
+    // PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against a real Postgres.
+    async setItemFactory(id, itemId, payload) {
+      const user = hasRole('import');
+      const pr = findPricingRequestRaw(id);
+      if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
+        fail(`ระบุโรงงานได้เฉพาะคำขอราคาที่อยู่ระหว่างการดำเนินการของฝ่ายนำเข้าเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      }
+      requirePricingRequestDealActive(db.tickets.find((t) => t.id === pr.ticketId));
+      const factory = payload?.factory?.trim();
+      if (!factory) fail('ชื่อโรงงานต้องไม่เว้นว่าง', 400);
+      const item = pr.items.find((candidate) => candidate.id === itemId);
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      const existing = pricingRequestItemFactory(item);
+      if (existing) {
+        fail(`รายการนี้ระบุโรงงานไว้แล้ว (${existing}) — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่`, 409);
+      }
+      item.factory = factory;
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FACTORY_SET', pr.status, pr.status);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
     async generateFactoryEmailDrafts(id) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
@@ -9043,10 +9092,26 @@ export const api = {
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
+      // Mirrors FactoryQuoteService.groupByFactory. Two things this used to get wrong, both of
+      // which mattered to the reader of the error rather than to the plumbing a mock test drives:
+      //   - it keyed on `item.factory` alone, while the Java resolves
+      //     firstText(resolvedFactoryName, factory) — a catalog-resolved line with no free-text
+      //     factory 422'd here and succeeded in production;
+      //   - it named `item.id` (the row's PRIMARY KEY) in a message whose "รายการที่ N" phrasing
+      //     means the 1-based row POSITION everywhere else in this workflow, and stopped at the
+      //     first offender.
       const byFactory = new Map();
-      for (const item of pr.items) {
-        if (!item.factory) fail(`รายการที่ ${item.id} ในคำขอราคายังไม่ได้ระบุโรงงาน`, 422);
-        byFactory.set(item.factory, [...(byFactory.get(item.factory) ?? []), item]);
+      const missingFactory = [];
+      pr.items.forEach((item, index) => {
+        const factoryName = pricingRequestItemFactory(item);
+        if (!factoryName) {
+          missingFactory.push(`รายการที่ ${index + 1} (${pricingRequestItemDisplayName(item)})`);
+          return;
+        }
+        byFactory.set(factoryName, [...(byFactory.get(factoryName) ?? []), item]);
+      });
+      if (missingFactory.length) {
+        fail(`ยังไม่ได้ระบุโรงงานสำหรับ ${missingFactory.join(', ')} — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล`, 422);
       }
       for (const [factoryName, items] of byFactory) {
         const exists = mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.factoryName === factoryName && q.current);

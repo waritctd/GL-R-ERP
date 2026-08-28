@@ -30,6 +30,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -63,6 +64,17 @@ public class PricingRequestService {
         Set.of("sales", "import", "ceo", "sales_manager");
     /** Bounded retry count for {@link #cancelOpenForTicket}'s per-row compare-and-set. */
     private static final int CANCEL_MAX_ATTEMPTS = 3;
+    /**
+     * Statuses in which Import may name the factory on a line Sales left blank
+     * ({@link #setItemFactory}). Deliberately IDENTICAL to
+     * {@code FactoryQuoteService.DRAFT_STATUSES} — the window in which the factory-email step can
+     * still be run is exactly the window in which its missing input can still be supplied. Keep
+     * the two in sync by inspection; they are separate aggregates' authz, not a shared reference
+     * (same reasoning as the role sets above).
+     */
+    private static final Set<String> FACTORY_ROUTING_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING,
+        PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     /**
      * Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review
      * remediation COMMIT 4). A DRAFT is the rep's own scratchpad. Once past it, the request has
@@ -389,6 +401,71 @@ public class PricingRequestService {
             "คำขอราคา " + summary.requestCode() + " ถูกรับเรื่องแล้ว");
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_PICKED_UP,
             "คำขอราคา " + summary.requestCode() + " ถูกรับเรื่องโดย Import");
+        return detail(id);
+    }
+
+    /**
+     * Import names the factory on ONE line Sales left blank.
+     *
+     * <p><b>Why this exists.</b> Since 2026-08-11 (owner request) a pricing-request line may be
+     * submitted with no catalog product — that is the whole point of asking Import to price
+     * something the catalogue does not carry yet — and such a line gets no factory from
+     * {@code snapshotCatalogSelections} either. The factory check was therefore deferred to
+     * {@code FactoryQuoteService#groupByFactory}, which 422s at the สร้างร่างอีเมล step. But
+     * nothing could then supply the missing value: {@link #updateDraft} is DRAFT-only and
+     * sales-owner-only, the request is past DRAFT by the time Import sees it, and the
+     * MORE_INFO_REQUIRED send-back was deleted in V140. A blank factory was a DEAD END whose only
+     * escape was cancelling the request and asking Sales to raise a new one. This method is that
+     * missing step.
+     *
+     * <p><b>Why Import and not Sales.</b> Import is the role that talks to factories and the role
+     * the 422 blocks; the value being supplied is a routing decision about who to ask for a price,
+     * which is Import's own job. This is an authorization change, stated deliberately and pinned
+     * against real Postgres by {@code PricingFactoryQuoteCostingIntegrationTest#setItemFactory_*}.
+     *
+     * <p><b>Deliberately a gap-FILL, never a re-route.</b> A line that already has a factory —
+     * from the catalog snapshot or from Sales's own free text — is refused with a 409, because
+     * {@code sales.factory_quote} rows are grouped by factory NAME: moving a line after its quote
+     * exists would strand that quote's item list. Correcting a wrong factory stays what it was
+     * before this method: a new revision, not an edit in place.
+     */
+    @Transactional
+    public PricingRequestDetailDto setItemFactory(long id, long itemId, SetItemFactoryRequest request,
+                                                  UserPrincipal actor) {
+        requireRole(actor, IMPORT_ROLES);
+        PricingRequestSummaryDto summary = requireViewable(id, actor);
+        if (!FACTORY_ROUTING_STATUSES.contains(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ระบุโรงงานได้เฉพาะคำขอราคาที่อยู่ระหว่างการดำเนินการของฝ่ายนำเข้าเท่านั้น (สถานะปัจจุบัน: '"
+                    + summary.status() + "')");
+        }
+        requireActive(requireTicket(summary.ticketId()));
+
+        String factory = request.factory() == null ? "" : request.factory().trim();
+        if (factory.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานต้องไม่เว้นว่าง");
+        }
+        PricingRequestItemDto item = requests.findItems(id).stream()
+            .filter(candidate -> candidate.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้"));
+        String existing = item.resolvedFactory();
+        if (existing != null) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "รายการนี้ระบุโรงงานไว้แล้ว (" + existing + ") — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่");
+        }
+
+        int rows = requests.fillItemFactory(id, itemId, factory);
+        if (rows == 0) {
+            // Lost race against another Import user filling the same blank between the read above
+            // and this write — the repository's own WHERE clause is what caught it. Same shape and
+            // same message as every other compare-and-set miss in this class.
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+        }
+        requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_ITEM_FACTORY_SET, summary.status(), summary.status(),
+            "ระบุโรงงาน '" + factory + "' ให้รายการ " + item.displayName(), null);
         return detail(id);
     }
 

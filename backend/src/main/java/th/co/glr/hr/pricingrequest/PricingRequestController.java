@@ -29,6 +29,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailResponse;
@@ -108,6 +109,24 @@ public class PricingRequestController {
     PricingRequestDetailResponse pickup(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new PricingRequestDetailResponse(pricingRequests.pickup(id, user));
+    }
+
+    /**
+     * Import fills in the factory on one line Sales left blank, so the factory-email step can route
+     * it — see {@code PricingRequestService#setItemFactory} for why this is Import's call and why
+     * it only ever fills a gap. Shaped like the CEO's own per-item overrides
+     * ({@code PUT /pricing-decisions/{id}/items/{itemId}/...}) rather than a PATCH of the whole
+     * request, because it writes exactly one field on one line.
+     */
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/factory")
+    PricingRequestDetailResponse setItemFactory(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @Valid @RequestBody SetItemFactoryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(pricingRequests.setItemFactory(id, itemId, request, user));
     }
 
     @PostMapping("/pricing-requests/{id}/cancel")

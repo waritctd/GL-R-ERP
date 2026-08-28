@@ -30,6 +30,7 @@ vi.mock('../../api/index.js', () => ({
       listAttachments: vi.fn(),
       attachmentUrl: (id) => `#attachment-${id}`,
       factoryQuoteAttachmentUrl: (id) => `#quote-attachment-${id}`,
+      setItemFactory: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
       sendFactoryQuote: vi.fn(),
@@ -227,6 +228,7 @@ function setApiDefaults() {
   api.pricingRequests.listFactoryQuotes.mockResolvedValue({ items: [] });
   api.pricingRequests.listCostings.mockResolvedValue({ items: [] });
   api.pricingRequests.listAttachments.mockResolvedValue({ items: [] });
+  api.pricingRequests.setItemFactory.mockResolvedValue({});
   api.pricingRequests.generateFactoryEmailDrafts.mockResolvedValue({});
   api.pricingRequests.updateFactoryQuote.mockResolvedValue({});
   api.pricingRequests.sendFactoryQuote.mockResolvedValue({});
@@ -1988,5 +1990,93 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
 
     expect(screen.queryByRole('button', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+  });
+});
+
+// ── Import fills in a blank factory ────────────────────────────────────────────────────────────
+// The bug: a line submitted with no factory (valid since 2026-08-11) blocked สร้างร่างอีเมล with a
+// 422 that named the row's PRIMARY KEY — "รายการที่ 35" on a two-line request — and this page
+// offered no way to fix it. UI-LEVEL ONLY, per this file's header: who may actually write the
+// field is proved by PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against real
+// Postgres, not by anything here.
+function buildRequestWithBlankFactoryLine(overrides = {}) {
+  const base = buildRequest();
+  return buildRequest({
+    ...overrides,
+    items: [
+      base.items[0],
+      {
+        ...base.items[0],
+        id: 2,
+        brand: null,
+        model: null,
+        productDescription: 'กระเบื้องนำเข้าพิเศษ',
+        resolvedFactoryName: null,
+        factory: null,
+        catalogProductCode: null,
+        catalogBasePrice: null,
+      },
+    ],
+  });
+}
+
+describe('PricingRequestDetailPage blank-factory lines', () => {
+  it('names the blocking line by ROW POSITION and product name before สร้างร่างอีเมล is ever pressed', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    const warning = screen.getByText(/ยังไม่ได้ระบุโรงงาน 1 รายการ/);
+    // Position 2, not the row id — the number the reader can count on screen.
+    expect(warning.textContent).toContain('รายการที่ 2 (กระเบื้องนำเข้าพิเศษ)');
+    expect(screen.getByText('รายการที่ 2')).toBeTruthy();
+  });
+
+  it('lets Import name the factory on the blank line and sends it to the per-item endpoint', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    fireEvent.change(screen.getByLabelText('ระบุโรงงาน'), { target: { value: ' Cotto Industry ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกโรงงาน' }));
+
+    await waitFor(() => expect(api.pricingRequests.setItemFactory).toHaveBeenCalledWith(
+      501, 2, { factory: 'Cotto Industry' },
+    ));
+  });
+
+  it('offers no input on a line that already names a factory — the backend refuses a re-route', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    // Two lines, one blank: exactly one input, and it belongs to the blank one.
+    expect(screen.getAllByLabelText('ระบุโรงงาน')).toHaveLength(1);
+    expect(screen.getByLabelText('ระบุโรงงาน').id).toBe('pcr-item-factory-2');
+  });
+
+  it('shows Sales the same blocking lines but no input — Import owns the field', async () => {
+    const request = buildRequestWithBlankFactoryLine();
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้/)).toBeTruthy();
+    expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+  });
+
+  it('offers nothing once the request has left Import\'s hands', async () => {
+    const request = buildRequestWithBlankFactoryLine({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+  });
+
+  it('says nothing at all when every line already names a factory', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+
+    expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน/)).toBeNull();
+    expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
   });
 });
