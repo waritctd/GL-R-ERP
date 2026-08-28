@@ -112,6 +112,12 @@ export function App() {
   const [changingPassword, setChangingPassword] = useState(false);
   const navigate = useNavigate();
   const { toast, showToast, dismissToast } = useToast();
+  // A session that still owes a password change is confined by the backend to /api/auth/{me,
+  // logout,change-password} (MustChangePasswordFilter) — every other endpoint 403s. useHrData's
+  // reads are all `enabled`-gated on a truthy `user`, so withholding it here is what stops this
+  // shell firing a fistful of requests that can only fail while the forced modal is the sole
+  // thing rendered below. They start the moment handleChangePassword clears the flag.
+  const dataUser = user?.mustChangePassword ? null : user;
   const {
     currentEmployee,
     employees,
@@ -123,7 +129,7 @@ export function App() {
     updateEmployee,
     createProfileRequest,
     reviewProfileRequest,
-  } = useHrData({ user, showToast });
+  } = useHrData({ user: dataUser, showToast });
 
   const ownRequests = useMemo(
     () => profileRequests.filter((request) => request.employeeId === currentEmployee?.id),

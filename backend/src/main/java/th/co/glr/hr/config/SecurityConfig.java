@@ -10,6 +10,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import th.co.glr.hr.auth.MustChangePasswordFilter;
 import th.co.glr.hr.auth.SessionSecurityFilter;
 
 @Configuration
@@ -17,7 +18,9 @@ import th.co.glr.hr.auth.SessionSecurityFilter;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, SessionSecurityFilter sessionSecurityFilter) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                            SessionSecurityFilter sessionSecurityFilter,
+                                            MustChangePasswordFilter mustChangePasswordFilter) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
@@ -39,7 +42,11 @@ public class SecurityConfig {
                 // fall under default-deny below, so reading the contract / enumerating endpoints
                 // requires an authenticated session rather than being anonymously accessible.
                 .anyRequest().authenticated())
-            .addFilterBefore(sessionSecurityFilter, AnonymousAuthenticationFilter.class);
+            .addFilterBefore(sessionSecurityFilter, AnonymousAuthenticationFilter.class)
+            // Must sit AFTER sessionSecurityFilter so the principal is already resolved, and
+            // inside this chain (not the plain servlet chain) so StrictHttpFirewall has already
+            // normalised the path its allowlist matches on. See MustChangePasswordFilter.
+            .addFilterAfter(mustChangePasswordFilter, SessionSecurityFilter.class);
         return http.build();
     }
 }

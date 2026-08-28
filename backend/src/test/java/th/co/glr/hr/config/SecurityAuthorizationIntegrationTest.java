@@ -550,6 +550,76 @@ class SecurityAuthorizationIntegrationTest {
             .andExpect(status().isForbidden());
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Forced password change (MustChangePasswordFilter). Until 2026-08-28 this gate lived ONLY in
+    // the SPA (App.jsx returned <ChangePasswordModal forced/> instead of the routes), while the
+    // backend handed a must-change login a fully privileged session. These tests exist because
+    // that made the gate cosmetic: anything that was not the React app — curl, the browser
+    // console, any HTTP client — walked straight past it with a temporary password and read
+    // payroll and employee records. They are written wrong-way-round on purpose: the assertions
+    // that matter are the ones proving a must-change session CANNOT reach the API.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void mustChangePasswordSessionCannotReadEmployeesEvenAsHr() throws Exception {
+        // Same role, same everything, one flag apart: HR normally gets 200 here
+        // (see hrCanListEmployees above), so a 403 can only be the forced-change gate.
+        mvc.perform(get("/api/employees").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void mustChangePasswordSessionCannotReachPayrollOrAnyOtherSurface() throws Exception {
+        mvc.perform(get("/api/payroll?payrollMonth=2026-07").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/dashboard/summary").session(mustChangePasswordSessionFor("ceo")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/profile-requests").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isForbidden());
+        mvc.perform(get("/api/employees/1").session(mustChangePasswordSessionFor("ceo")))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void mustChangePasswordSessionCannotWriteEither() throws Exception {
+        // A read-only gate would still let a temp-password holder mutate records.
+        mvc.perform(post("/api/employees")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}")
+                .session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/employees/1/reset-password").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void mustChangePasswordSessionKeepsItsEscapeHatches() throws Exception {
+        // The gate must not brick the account: reading your own principal (how the SPA learns to
+        // render the modal), changing the password, and logging out all stay reachable. Asserted as
+        // "not 403" rather than a specific success code — change-password legitimately 401s here on
+        // a wrong current password; what matters is that the FILTER did not eat the request.
+        mvc.perform(get("/api/auth/me").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.user.mustChangePassword").value(true));
+
+        mvc.perform(post("/api/auth/logout").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isNoContent());
+
+        mvc.perform(post("/api/auth/change-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"currentPassword\":\"wrong\",\"newPassword\":\"NewPassword123\"}")
+                .session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void theAuthAllowlistIsNotAWildcardOverTheWholeAuthNamespace() throws Exception {
+        // /api/auth/me is allowed by exact method+path. A sibling path under the same prefix is not
+        // — this fails if anyone "simplifies" the allowlist to /api/auth/**.
+        mvc.perform(get("/api/auth/me/../employees").session(mustChangePasswordSessionFor("hr")))
+            .andExpect(status().is4xxClientError());
+    }
+
     private long extractAttachmentId(String json) {
         // Cheap, dependency-free extraction (this file has no Jackson ObjectMapper wired) --
         // {"attachment":{"attachmentId":123,...}}.
@@ -681,6 +751,18 @@ class SecurityAuthorizationIntegrationTest {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY,
             new UserPrincipal(1L, role + "@glr.co.th", role, role, 1L, true, LocalDate.now(), false, null, false));
+        return session;
+    }
+
+    /**
+     * Same as {@link #sessionFor}, but with {@code mustChangePassword = TRUE} — i.e. exactly the
+     * principal {@link th.co.glr.hr.auth.AuthService#login} builds for someone who has authenticated
+     * with a temporary password and has not yet chosen their own.
+     */
+    private MockHttpSession mustChangePasswordSessionFor(String role) {
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionContext.SESSION_USER_KEY,
+            new UserPrincipal(1L, role + "@glr.co.th", role, role, 1L, true, LocalDate.now(), true, null, false));
         return session;
     }
 }
