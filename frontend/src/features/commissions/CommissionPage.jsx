@@ -1042,6 +1042,25 @@ export function CommissionPage({ user, showToast }) {
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="w-[150px]" />
             </label>
+            {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
+                deal and checks this page on the same day sees nothing — and the table's empty state
+                cannot warn them, because the CURRENT month usually has other rows and so is not
+                empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
+                Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
+            <Button
+              type="button"
+              variant="secondary"
+              data-testid="commission-next-cycle"
+              title="ค่าคอมจากใบกำกับที่บันทึกเดือนนี้ จะอยู่ในรอบเดือนถัดไป"
+              onClick={() => {
+                const [y, m] = month.split('-').map(Number);
+                const next = new Date(Date.UTC(y, m, 1));
+                setMonth(next.toISOString().slice(0, 7));
+              }}
+            >
+              รอบถัดไป
+              <Icon name="chevronRight" size={14} />
+            </Button>
             {canCreateManual && (
               <Button type="button" variant="secondary" onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}>
                 <Icon name="plus" size={14} />
@@ -1120,7 +1139,7 @@ export function CommissionPage({ user, showToast }) {
             emptyState={{
               icon: 'badge',
               title: 'ยังไม่มีรายการค่าคอม',
-              description: 'เลือกรอบเดือนอื่นหรือรอฝ่ายบัญชีบันทึกใบกำกับ',
+              description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
             }}
           />
 

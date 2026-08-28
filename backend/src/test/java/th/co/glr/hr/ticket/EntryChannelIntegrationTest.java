@@ -263,6 +263,45 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // First-run friction: a deal created through the SERVICE (i.e. by a rep in the UI) must be
+    // advanceable. It was not — the create-deal modal collected neither half of the readiness
+    // gate, so the rep's very first stage move always 400'd with a message they had no way to
+    // anticipate. TicketService#create now logs the creation as an activity, and
+    // CreateTicketRequest carries วันติดตามครั้งถัดไป.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void dealCreatedWithAFollowUpDate_canMakeItsFirstForwardMove() {
+        long ticketId = ticketService.create(new CreateTicketRequest(
+            "ดีลใหม่จากหน้าจอขาย", "NORMAL", customerName, null, projectId, null, null, null,
+            List.of(), LocalDate.now().plusDays(14)), salesRep).summary().id();
+
+        ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
+
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .as("a freshly created deal must be movable without the rep first hunting for two hidden prerequisites")
+            .isEqualTo(DealStage.PRESENTATION);
+    }
+
+    @Test
+    void dealCreatedWithoutAFollowUpDate_isStillRefused() {
+        // Wrong-way-round: the gate did NOT weaken. Creation now supplies the activity half, so
+        // this proves the OTHER half still bites — omit the date and the move is still refused.
+        long ticketId = ticketService.create(new CreateTicketRequest(
+            "ดีลไม่มีวันติดตาม", "NORMAL", customerName, null, projectId, null, null, null,
+            List.of(), null), salesRep).summary().id();
+
+        assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus().value()).isEqualTo(400);
+                assertThat(e.getMessage()).contains("วันติดตามครั้งถัดไป");
+            });
+
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().salesStage())
+            .isEqualTo(DealStage.LEAD_APPROACH);
+    }
+
     private CreateTicketRequest request(String entryChannel) {
         return new CreateTicketRequest("ดีลทดสอบ entry channel", "NORMAL", customerName,
             null, projectId, null, null, entryChannel, List.of());

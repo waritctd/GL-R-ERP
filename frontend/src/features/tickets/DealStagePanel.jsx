@@ -280,6 +280,23 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       <div className="flex flex-col gap-4 px-4 py-4 sm:px-5">
         <PhaseTracker catalog={catalog} salesStage={summary.salesStage} lost={lost} />
 
+        {/* Closing the deal does NOT create the rep's commission. Only the accountant recording
+            the tax invoice does (POST /api/commissions/from-deal, account-only), and that same
+            upload is what flips invoiceOnFile. Until then a CLOSED_PAID deal has earned the rep
+            nothing and nothing on this page said so — the rep had to know to ask. */}
+        {summary.salesStage === 'CLOSED_PAID' && !summary.invoiceOnFile ? (
+          <div
+            className="rounded-xl border border-warning-border bg-warning-bg-soft px-4 py-3"
+            data-testid="awaiting-invoice-for-commission"
+          >
+            <div className="text-sm font-extrabold text-text">รอฝ่ายบัญชีบันทึกใบกำกับภาษี</div>
+            <div className="mt-0.5 text-xs text-text-muted">
+              ปิดการขายแล้ว แต่ค่าคอมมิชชันของผู้ดูแลดีลจะยังไม่เกิดขึ้น
+              จนกว่าฝ่ายบัญชีจะบันทึกใบกำกับภาษีของดีลนี้
+            </div>
+          </div>
+        ) : null}
+
         {lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT' ? (
           <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 ${
             lifecycle === 'ON_HOLD'
