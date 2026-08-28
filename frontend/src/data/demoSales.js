@@ -87,6 +87,10 @@ export function buildDemoSalesSeed() {
         factory: it.factory ?? null,
         requestedQty: it.requestedQty,
         requestedQtySqm: it.requestedQtySqm ?? null,
+        // PricingRequestItemDto's live catalog geometry — prefills the factory-quote response
+        // form's conversion-factor input. See mockApi's own mirror of these two fields.
+        catalogSqmPerPiece: it.catalogSqmPerPiece ?? null,
+        catalogPcsPerBox: it.catalogPcsPerBox ?? null,
         requestedUnit: it.requestedUnit,
         requestedUnitBasis: it.requestedUnitBasis,
         quantityType: it.quantityType,
@@ -1217,7 +1221,7 @@ export function buildDemoSalesSeed() {
     status: 'QUOTATION_ACCEPTED', requestedBy: SALES1, assignedImport: IMPORT1,
     submittedAt: '2026-06-25T09:32:00Z', pickedUpAt: '2026-06-26T08:10:00Z',
     createdAt: '2026-06-25T09:02:00Z', clientRequestSeed: 20,
-    items: [{ sourceTicketItemId: 22, brand: 'Duragres', model: 'Granite Plus', color: 'เทากลาง', texture: 'หยาบกึ่งมัน', size: '60x60 ซม.', factory: 'Duragres Thailand', requestedQty: 300, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'CONFIRMED', catalogBasePrice: 110 }],
+    items: [{ sourceTicketItemId: 22, brand: 'Duragres', model: 'Granite Plus', color: 'เทากลาง', texture: 'หยาบกึ่งมัน', size: '60x60 ซม.', factory: 'Duragres Thailand', requestedQty: 300, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE', quantityType: 'CONFIRMED', catalogBasePrice: 110, catalogSqmPerPiece: 0.36, catalogPcsPerBox: 4 }],
   });
   pushPrEvent(pr20, SALES1, 'PRICING_REQUEST_CREATED', null, 'DRAFT', null, '2026-06-25T09:02:00Z');
   pushPrEvent(pr20, SALES1, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED', null, '2026-06-25T09:32:00Z');

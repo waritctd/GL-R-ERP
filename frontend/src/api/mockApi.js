@@ -8886,6 +8886,13 @@ export const api = {
         factory: item.factory ?? null,
         requestedQty: item.requestedQty,
         requestedQtySqm: item.requestedQtySqm ?? null,
+        // Mirrors PricingRequestItemDto.catalogSqmPerPiece/catalogPcsPerBox, which
+        // PricingRequestRepository#findItems LEFT JOINs off price_catalog.product_prices
+        // (sqm_per_piece / pcs_per_box). They prefill the factory-quote response form's
+        // conversion-factor inputs. Null here unless a fixture supplies them — this mock
+        // has no catalog geometry of its own to join against.
+        catalogSqmPerPiece: item.catalogSqmPerPiece ?? null,
+        catalogPcsPerBox: item.catalogPcsPerBox ?? null,
         requestedUnit: item.requestedUnit,
         requestedUnitBasis: item.requestedUnitBasis,
         quantityType: item.quantityType,
@@ -9010,6 +9017,13 @@ export const api = {
           factory: item.factory ?? null,
           requestedQty: item.requestedQty,
           requestedQtySqm: item.requestedQtySqm ?? null,
+          // Mirrors PricingRequestItemDto.catalogSqmPerPiece/catalogPcsPerBox, which
+          // PricingRequestRepository#findItems LEFT JOINs off price_catalog.product_prices
+          // (sqm_per_piece / pcs_per_box). They prefill the factory-quote response form's
+          // conversion-factor inputs. Null here unless a fixture supplies them — this mock
+          // has no catalog geometry of its own to join against.
+          catalogSqmPerPiece: item.catalogSqmPerPiece ?? null,
+          catalogPcsPerBox: item.catalogPcsPerBox ?? null,
           requestedUnit: item.requestedUnit,
           requestedUnitBasis: item.requestedUnitBasis,
           quantityType: item.quantityType,

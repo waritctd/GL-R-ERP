@@ -515,18 +515,30 @@ public class PricingRequestRepository {
     }
 
     public List<PricingRequestItemDto> findItems(long pricingRequestId) {
+        // LEFT JOIN, and joined against price_catalog.product_prices directly rather than
+        // v_priceable_product: the view exists to gate COSTING on the ACTIVE price-list version
+        // (see CatalogRepository#findThicknessMm), and it does not expose pcs_per_box at all.
+        // Neither factor below is version-sensitive — a tile's face area and the count in its box
+        // are physical facts, not the commercial terms a price list revises — so gating them on
+        // the active version would only withhold a correct prefill from an item whose link points
+        // at an archived row. The costing-time gate is unaffected; it reads its own source.
         return jdbc.query("""
-            SELECT pricing_request_item_id, pricing_request_id, source_ticket_item_id, product_id, variant_id,
-                   brand, model, product_description, color, texture, size, factory,
-                   requested_qty, requested_qty_sqm, requested_unit, requested_unit_basis, quantity_type,
-                   target_delivery_date, delivery_location, special_requirement, sort_order,
-                   price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
-                   catalog_effective_date, resolved_factory_id, resolved_factory_name,
-                   catalog_product_code, catalog_brand, catalog_collection, catalog_model,
-                   product_type_override
-              FROM sales.pricing_request_item
-             WHERE pricing_request_id = :id
-             ORDER BY sort_order, pricing_request_item_id
+            SELECT pri.pricing_request_item_id, pri.pricing_request_id, pri.source_ticket_item_id,
+                   pri.product_id, pri.variant_id,
+                   pri.brand, pri.model, pri.product_description, pri.color, pri.texture, pri.size, pri.factory,
+                   pri.requested_qty, pri.requested_qty_sqm, pri.requested_unit, pri.requested_unit_basis,
+                   pri.quantity_type,
+                   pri.target_delivery_date, pri.delivery_location, pri.special_requirement, pri.sort_order,
+                   pri.price_list_version_id, pri.catalog_price_id, pri.catalog_base_price, pri.catalog_currency,
+                   pri.catalog_effective_date, pri.resolved_factory_id, pri.resolved_factory_name,
+                   pri.catalog_product_code, pri.catalog_brand, pri.catalog_collection, pri.catalog_model,
+                   pri.product_type_override,
+                   pp.sqm_per_piece AS catalog_sqm_per_piece,
+                   pp.pcs_per_box   AS catalog_pcs_per_box
+              FROM sales.pricing_request_item pri
+              LEFT JOIN price_catalog.product_prices pp ON pp.price_id = pri.catalog_price_id
+             WHERE pri.pricing_request_id = :id
+             ORDER BY pri.sort_order, pri.pricing_request_item_id
             """,
             Map.of("id", pricingRequestId),
             (rs, rowNum) -> mapItem(rs));
@@ -1075,7 +1087,9 @@ public class PricingRequestRepository {
             rs.getString("catalog_brand"),
             rs.getString("catalog_collection"),
             rs.getString("catalog_model"),
-            rs.getString("product_type_override")
+            rs.getString("product_type_override"),
+            rs.getBigDecimal("catalog_sqm_per_piece"),
+            rs.getBigDecimal("catalog_pcs_per_box")
         );
     }
 

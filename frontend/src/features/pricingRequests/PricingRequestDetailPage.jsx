@@ -45,6 +45,7 @@ import {
   isCustomerQuotationEditable,
   isCustomerQuotationDiscountEditable,
   canTransition,
+  catalogConversionFactor,
   conversionFactorFor,
   pricingRequestRecipientLabel,
   unitBasisLabel,
@@ -161,6 +162,16 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     // an absent one should fail loudly at the backend rather than quietly price per piece.
     const unitBasis = item.unitBasis;
     const quotedUnit = item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
+    // Prefill ONLY the factor this line's basis actually requires, and only when the quote item
+    // does not already carry one — same precedence LandedCostCalculator#resolveSqmPerPiece uses
+    // (what Import entered always beats a derived value). Scoped to the required factor on purpose:
+    // filling the other two would write catalog numbers onto lines that never needed them and
+    // change what costing resolves for quotes that price correctly today.
+    const factor = conversionFactorFor(unitBasis);
+    const catalogFactor = catalogConversionFactor(requestItem, unitBasis);
+    const prefill = factor && item[factor.field] == null && catalogFactor != null
+      ? { [factor.field]: catalogFactor }
+      : null;
     return {
     pricingRequestItemId: item.pricingRequestItemId,
     supplierProductCode: item.supplierProductCode ?? '',
@@ -181,6 +192,7 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     leadTimeText: item.leadTimeText ?? '',
     availabilityNote: item.availabilityNote ?? '',
     lineNote: item.lineNote ?? '',
+    ...prefill,
     };
   });
 }
@@ -1488,8 +1500,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 }
                 function updateUnitBasis(nextBasis) {
                   const nextLabel = unitBasisCatalog.find((option) => option.code === nextBasis)?.label;
+                  const nextFactor = conversionFactorFor(nextBasis);
                   updateDraft({
-                    items: draft.items.map((item) => ({ ...item, unitBasis: nextBasis, quotedUnit: nextLabel ?? item.quotedUnit })),
+                    items: draft.items.map((item) => {
+                      // The new basis needs a factor this line has never been asked for, so seed it
+                      // from the catalog too — defaultResponseItems only ever sees the basis the
+                      // line was seeded with, and without this a switch to ตร.ม. would land on an
+                      // empty input even when the catalog knows the answer.
+                      const catalogFactor = catalogConversionFactor(requestItemById.get(item.pricingRequestItemId), nextBasis);
+                      const prefill = nextFactor && catalogFactor != null && cleanNumber(item[nextFactor.field]) == null
+                        ? { [nextFactor.field]: catalogFactor }
+                        : null;
+                      return { ...item, unitBasis: nextBasis, quotedUnit: nextLabel ?? item.quotedUnit, ...prefill };
+                    }),
                   });
                 }
                 function discardEdits() {

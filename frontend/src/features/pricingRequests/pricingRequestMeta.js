@@ -148,10 +148,15 @@ export function unitBasisLabel(value) {
 // is seeded per line from that line's own pricing_request_item.requested_unit_basis
 // (FactoryQuoteRepository#insertDraftItems), so a single factory quote genuinely can mix bases —
 // one factory supplying a per-piece tile and a per-sqm slab is an ordinary case, not a corruption.
+// `catalogField` names the PricingRequestItemDto field carrying the same quantity read live from
+// price_catalog.product_prices, used to prefill the input. PER_LINEAR_M has none on purpose: its
+// factor is "linear metres per physical piece" (V68's own words), while the catalog's
+// sqm_per_linear_m is m² PER linear metre — a different quantity, so there is nothing honest to
+// prefill it from. That line is still typed by hand.
 const CONVERSION_FACTOR_BY_BASIS = {
-  PER_SQM: { field: 'sqmPerUnit', label: 'ตร.ม./หน่วย', min: '0.000001', step: '0.000001' },
-  PER_BOX: { field: 'piecesPerBox', label: 'ชิ้น/กล่อง', min: '1', step: '1' },
-  PER_LINEAR_M: { field: 'linearMPerUnit', label: 'เมตร/หน่วย', min: '0.000001', step: '0.000001' },
+  PER_SQM: { field: 'sqmPerUnit', catalogField: 'catalogSqmPerPiece', label: 'ตร.ม./หน่วย', min: '0.000001', step: '0.000001' },
+  PER_BOX: { field: 'piecesPerBox', catalogField: 'catalogPcsPerBox', label: 'ชิ้น/กล่อง', min: '1', step: '1' },
+  PER_LINEAR_M: { field: 'linearMPerUnit', catalogField: null, label: 'เมตร/หน่วย', min: '0.000001', step: '0.000001' },
 };
 
 /**
@@ -160,6 +165,19 @@ const CONVERSION_FACTOR_BY_BASIS = {
  */
 export function conversionFactorFor(unitBasis) {
   return CONVERSION_FACTOR_BY_BASIS[unitBasis] ?? null;
+}
+
+/**
+ * The catalog's own value for the factor `unitBasis` requires, or null when the catalog cannot
+ * supply one (no link, no stored value, or a basis with no catalog counterpart). Non-positive
+ * values are treated as absent: 0 is never a usable conversion factor and would only be rejected
+ * later by LandedCostCalculator#requireFactor.
+ */
+export function catalogConversionFactor(requestItem, unitBasis) {
+  const factor = conversionFactorFor(unitBasis);
+  if (!factor?.catalogField) return null;
+  const value = Number(requestItem?.[factor.catalogField]);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE. */

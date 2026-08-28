@@ -88,7 +88,24 @@ public final class PricingRequestDtos {
         // defaults to PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE"). See
         // PricingDecisionService#overrideItemProductType for who may set this and why it lives
         // here rather than on pricing_decision_item.
-        String productTypeOverride
+        String productTypeOverride,
+        // Physical conversion factors read LIVE from the catalog row catalog_price_id points at
+        // (price_catalog.product_prices), NOT snapshotted onto this table like catalog_base_price
+        // and friends above. Live is right here for the same reason LandedCostCalculator reads
+        // thickness live via CatalogRepository#findThicknessMm: these are geometry, not commercial
+        // terms — a tile's face area does not change when a new price list is published, so there
+        // is no version to freeze, and a corrected catalog row should reach the form immediately.
+        //
+        // They exist to PREFILL the factory-quote response form's conversion-factor inputs
+        // (sqmPerUnit / piecesPerBox), which Import otherwise types by hand off the factory's
+        // packing list. Null whenever the item has no catalog link or the catalog itself has no
+        // value — the form then asks, exactly as it did before.
+        //
+        // Deliberately no linearMPerUnit counterpart: that factor is "linear metres per physical
+        // piece" (V68), while the catalog's sqm_per_linear_m is m² PER linear metre — a different
+        // quantity, not a unit conversion away. Prefilling one from the other would be a guess.
+        BigDecimal catalogSqmPerPiece,
+        BigDecimal catalogPcsPerBox
     ) {}
 
     public record PricingRequestEventDto(

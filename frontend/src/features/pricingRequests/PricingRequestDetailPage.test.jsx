@@ -970,6 +970,118 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
   });
 
+  // ── Catalog prefill ───────────────────────────────────────────────────────────────────────
+  // price_catalog.product_prices already stores the geometry Import was typing off the factory's
+  // packing list (V153 derives sqm_per_piece from sqm_per_box/pcs_per_box, falling back to
+  // width_mm x height_mm / 1e6). PricingRequestRepository#findItems LEFT JOINs it onto the item as
+  // catalogSqmPerPiece/catalogPcsPerBox; this is the form using it.
+  it('prefills ตร.ม./หน่วย from the catalog when the quote item has none', async () => {
+    const request = buildRequest({
+      items: [{
+        id: 1, brand: 'SCG', model: 'A1', productDescription: 'กระเบื้องพื้น SCG A1',
+        requestedQty: 30, requestedUnit: 'ตร.ม.', requestedUnitBasis: 'PER_SQM',
+        resolvedFactoryName: 'SCG Ceramics', quantityType: 'CONFIRMED',
+        catalogSqmPerPiece: 0.36, catalogPcsPerBox: 4,
+      }],
+    });
+    const quote = buildFactoryQuote({
+      status: 'REQUESTED',
+      items: [{
+        id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+        quotedQuantity: 30, quotedUnit: 'ตร.ม.', unitBasis: 'PER_SQM',
+        rawUnitPrice: null, currency: 'THB', sqmPerUnit: null,
+      }],
+    });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByLabelText('ตร.ม./หน่วย รายการ #1').value).toBe('0.36');
+
+    // Import types only the price now — the save carries the prefilled factor with no extra input.
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '900' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ sqmPerUnit: 0.36 })] }),
+    ));
+  });
+
+  it('keeps what Import already entered over the catalog value', async () => {
+    const request = buildRequest({
+      items: [{
+        id: 1, brand: 'SCG', model: 'A1', requestedQty: 30, requestedUnit: 'ตร.ม.',
+        requestedUnitBasis: 'PER_SQM', resolvedFactoryName: 'SCG Ceramics',
+        quantityType: 'CONFIRMED', catalogSqmPerPiece: 0.36,
+      }],
+    });
+    const quote = buildFactoryQuote({
+      status: 'RESPONSE_RECEIVED',
+      items: [{
+        id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+        quotedQuantity: 30, quotedUnit: 'ตร.ม.', unitBasis: 'PER_SQM',
+        rawUnitPrice: 900, currency: 'THB', sqmPerUnit: 0.4,
+      }],
+    });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByLabelText('ตร.ม./หน่วย รายการ #1').value).toBe('0.4');
+  });
+
+  // Scoped to the factor the line's basis requires: a PER_PIECE line prices correctly today with
+  // no factor, and writing one onto it would change what LandedCostCalculator resolves for it.
+  it('does not write a catalog factor onto a line whose basis needs none', async () => {
+    const request = buildRequest({
+      items: [{
+        id: 1, brand: 'SCG', model: 'A1', requestedQty: 20, requestedUnit: 'แผ่น',
+        requestedUnitBasis: 'PER_PIECE', resolvedFactoryName: 'SCG Ceramics',
+        quantityType: 'CONFIRMED', catalogSqmPerPiece: 0.36, catalogPcsPerBox: 4,
+      }],
+    });
+    const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: PER_PIECE
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ sqmPerUnit: null, piecesPerBox: null })],
+      }),
+    ));
+  });
+
+  it('brings the catalog factor in when Import switches หน่วยราคา to one that needs it', async () => {
+    const request = buildRequest({
+      items: [{
+        id: 1, brand: 'SCG', model: 'A1', requestedQty: 20, requestedUnit: 'แผ่น',
+        requestedUnitBasis: 'PER_PIECE', resolvedFactoryName: 'SCG Ceramics',
+        quantityType: 'CONFIRMED', catalogSqmPerPiece: 0.36, catalogPcsPerBox: 4,
+      }],
+    });
+    const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: PER_PIECE
+    renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(await screen.findByLabelText(/^หน่วย/), { target: { value: 'PER_BOX' } });
+    expect(screen.getByLabelText('ชิ้น/กล่อง รายการ #1').value).toBe('4');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '480' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ piecesPerBox: 4 })] }),
+    ));
+  });
+
   // PER_BOX had piecesPerBox in the payload but no input; PER_LINEAR_M had neither, so its
   // linearMPerUnit key was never even sent. Both 422'd with no way for Import to answer.
   it.each([
