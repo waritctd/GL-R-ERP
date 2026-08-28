@@ -45,6 +45,7 @@ import {
   isCustomerQuotationEditable,
   isCustomerQuotationDiscountEditable,
   canTransition,
+  conversionFactorFor,
   pricingRequestRecipientLabel,
   unitBasisLabel,
 } from './pricingRequestMeta.js';
@@ -172,6 +173,11 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
     sqmPerUnit: item.sqmPerUnit ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
+    // linearMPerUnit was missing from this seed AND from cleanResponsePayload below, so a
+    // PER_LINEAR_M line could never send the factory-quote factor its basis requires — the
+    // request simply carried no such key and FactoryQuoteService 422'd every save. Seeded and
+    // cleaned exactly like its two siblings now.
+    linearMPerUnit: item.linearMPerUnit ?? '',
     leadTimeText: item.leadTimeText ?? '',
     availabilityNote: item.availabilityNote ?? '',
     lineNote: item.lineNote ?? '',
@@ -182,6 +188,39 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
 function cleanNumber(value) {
   if (value === '' || value == null) return null;
   return Number(value);
+}
+
+/**
+ * How a factory-quote response row names its product. Shared by the row itself and by the
+ * conversion-factor toast below, so the message points at a string Import can actually find
+ * on screen rather than a bare item id.
+ */
+function itemLabel(requested, pricingRequestItemId) {
+  const named = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
+    .filter(Boolean).join(' ');
+  return named || requested?.productDescription || `รายการ #${pricingRequestItemId}`;
+}
+
+/**
+ * The response lines that quote in a basis needing a conversion factor but carry none — the exact
+ * set FactoryQuoteService#validateAndNormalizeResponseItems would 422 on. Returned rather than
+ * thrown so the caller can name every offending line at once instead of one per round-trip.
+ */
+function lacksConversionFactor(line, factor) {
+  if (!factor) return false;
+  const value = cleanNumber(line[factor.field]);
+  // Stricter than the backend's bare null check on purpose, and deliberately NOT stricter than
+  // the costing stage: LandedCostCalculator#requireFactor rejects <= 0 too, so a zero saved here
+  // would only bounce later, further from the person who typed it.
+  return value == null || !(value > 0);
+}
+
+function missingConversionFactors(draft, labelForItem = (id) => `รายการ #${id}`) {
+  return (draft?.items ?? []).flatMap((item) => {
+    const factor = conversionFactorFor(item.unitBasis);
+    if (!lacksConversionFactor(item, factor)) return [];
+    return [{ label: labelForItem(item.pricingRequestItemId), factorLabel: factor.label }];
+  });
 }
 
 function generateClientRequestId() {
@@ -211,6 +250,7 @@ function cleanResponsePayload(draft) {
       minimumOrderQuantity: cleanNumber(item.minimumOrderQuantity),
       sqmPerUnit: cleanNumber(item.sqmPerUnit),
       piecesPerBox: cleanNumber(item.piecesPerBox),
+      linearMPerUnit: cleanNumber(item.linearMPerUnit),
     })),
   };
 }
@@ -765,7 +805,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
    */
   const [confirmingFactoryQuoteId, setConfirmingFactoryQuoteId] = useState(null);
 
-  async function confirmFactoryQuote(quote, draft) {
+  async function confirmFactoryQuote(quote, draft, labelForItem) {
+    // Caught here rather than left to the server so the message can name the item and the field as
+    // the form labels it. The backend still enforces this — see FactoryQuoteService — but its 422
+    // reads "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit", which named neither the offending line
+    // nor any control on screen, and was the whole of what Import saw when a save bounced.
+    const missing = missingConversionFactors(draft, labelForItem);
+    if (missing.length) {
+      showToast?.('error', `ระบุ ${missing[0].factorLabel} ของ ${missing[0].label} ก่อนยืนยันราคา`
+        + (missing.length > 1 ? ` (และอีก ${missing.length - 1} รายการ)` : ''));
+      return;
+    }
     const dirty = Boolean(responseDrafts[quote.id]);
     const needsReceive = dirty || ['DRAFT', 'REQUESTED'].includes(quote.status);
     setConfirmingFactoryQuoteId(quote.id);
@@ -1399,13 +1449,25 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     || (current.status === 'READY_FOR_COSTING' && dirty));
                 const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
                 const canOpenEmailDraft = isImport(user) && current.status === 'DRAFT';
-                // หน่วยราคา is a per-FACTORY control now, not per-line (owner-supplied mockup) — every
-                // line in `draft.items` shares one unitBasis, so the first line speaks for the whole
-                // group. defaultResponseItems seeds every line from the same source when untouched,
-                // so this only reads as "mixed" if something mutated lines independently, which
-                // nothing below does any more (updateUnitBasis always writes every line at once).
-                const groupUnitBasis = draft.items[0]?.unitBasis ?? '';
-                const needsSqmPerUnit = groupUnitBasis === 'PER_SQM';
+                // หน่วยราคา stays a per-FACTORY control (owner-supplied mockup): picking a value here
+                // still writes every line at once via updateUnitBasis. What it is NOT is a reliable
+                // READ of the lines' state. This used to take draft.items[0] as speaking for the
+                // whole group on the reasoning that "defaultResponseItems seeds every line from the
+                // same source when untouched" — but that source is each line's OWN
+                // pricing_request_item.requested_unit_basis (FactoryQuoteRepository#insertDraftItems
+                // copies it verbatim, per line), so an UNTOUCHED draft is exactly where the bases can
+                // differ. One factory supplying a per-piece tile and a per-sqm slab is ordinary.
+                //
+                // That mattered because the conversion-factor input was gated on this group value:
+                // with a PER_PIECE line first, a PER_SQM line further down rendered no ตร.ม./หน่วย
+                // input at all, while FactoryQuoteService kept 422ing the save for the sqmPerUnit
+                // that line needs — Import could see the error and had no field to answer it with.
+                // The factor input below is per LINE now (conversionFactorFor(line.unitBasis)); this
+                // group value only drives the select, and reports คละหน่วย rather than picking a
+                // winner when the lines genuinely disagree.
+                const lineBases = [...new Set(draft.items.map((item) => item.unitBasis))];
+                const mixedUnitBasis = lineBases.length > 1;
+                const groupUnitBasis = mixedUnitBasis ? '' : lineBases[0] ?? '';
                 const groupCurrency = draft.defaultCurrency || draft.items[0]?.currency || 'THB';
                 const groupUnitLabel = unitBasisCatalog.find((option) => option.code === groupUnitBasis)?.label
                   ?? unitBasisLabel(groupUnitBasis);
@@ -1492,6 +1554,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             value={groupUnitBasis}
                             onChange={(e) => updateUnitBasis(e.target.value)}
                           >
+                            {/* Only present while the lines genuinely disagree, and only as the
+                                current value — choosing any real option calls updateUnitBasis,
+                                which rewrites every line and retires this option for good. */}
+                            {mixedUnitBasis ? <option value="" disabled>คละหน่วย</option> : null}
                             {unitBasisCatalog.map((option) => (
                               <option key={option.code} value={option.code}>{`/ ${option.label}`}</option>
                             ))}
@@ -1501,7 +1567,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     ) : (
                       <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-border-subtle px-5 py-2.5 text-xs text-text-muted mobile:px-4">
                         <span>สกุลเงิน: {groupCurrency}</span>
-                        <span>{`หน่วยราคา: / ${groupUnitLabel}`}</span>
+                        <span>{mixedUnitBasis ? 'หน่วยราคา: คละหน่วย (ดูรายบรรทัด)' : `หน่วยราคา: / ${groupUnitLabel}`}</span>
                       </div>
                     )}
 
@@ -1509,8 +1575,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     {draft.items.map((line, index) => {
                       const itemRef = `รายการ #${line.pricingRequestItemId}`;
                       const requested = requestItemById.get(line.pricingRequestItemId);
-                      const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
-                        .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
+                      const productName = itemLabel(requested, line.pricingRequestItemId);
                       // size, then colour, then texture — matches the order this page has always
                       // rendered them in (see the UAT-reported "cannot tell which price box belongs
                       // to which item" fix this join predates), so the string a reader already
@@ -1534,6 +1599,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       // edit was already approved.
                       const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
                       const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
+                      // Read off THIS line's basis, never the factory's — see mixedUnitBasis above.
+                      const factor = conversionFactorFor(line.unitBasis);
+                      const factorMissing = lacksConversionFactor(line, factor);
                       return (
                         <div
                           key={line.pricingRequestItemId}
@@ -1566,18 +1634,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   value={line.rawUnitPrice ?? ''}
                                   onChange={(e) => updateLine(index, { rawUnitPrice: e.target.value })}
                                 />
-                                {needsSqmPerUnit ? (
+                                {factor ? (
                                   <input
-                                    id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
-                                    className="w-24"
+                                    id={`pcr-quote-factor-${current.id}-${line.pricingRequestItemId}`}
+                                    className={cn('w-24', factorMissing && 'border-danger')}
                                     type="number"
-                                    min="0.000001"
-                                    step="0.000001"
+                                    min={factor.min}
+                                    step={factor.step}
                                     inputMode="decimal"
-                                    placeholder="ตร.ม./หน่วย"
-                                    aria-label={`ตร.ม./หน่วย ${itemRef}`}
-                                    value={line.sqmPerUnit ?? ''}
-                                    onChange={(e) => updateLine(index, { sqmPerUnit: e.target.value })}
+                                    placeholder={factor.label}
+                                    aria-label={`${factor.label} ${itemRef}`}
+                                    aria-invalid={factorMissing || undefined}
+                                    title={`${factor.label} — จำเป็นเมื่อเสนอราคาต่อ ${unitLabel}`}
+                                    value={line[factor.field] ?? ''}
+                                    onChange={(e) => updateLine(index, { [factor.field]: e.target.value })}
                                   />
                                 ) : null}
                               </div>
@@ -1671,7 +1741,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             type="button"
                             variant="primary"
                             disabled={confirmingFactoryQuoteId === current.id}
-                            onClick={() => confirmFactoryQuote(current, draft)}
+                            onClick={() => confirmFactoryQuote(current, draft, (itemId) => itemLabel(requestItemById.get(itemId), itemId))}
                             data-testid="pcr-submit-to-ceo"
                           >
                             {confirmingFactoryQuoteId === current.id ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}

@@ -9208,6 +9208,25 @@ export const api = {
       if (!quote.current) fail('รับคำตอบได้เฉพาะ revision ล่าสุดของใบเสนอราคาโรงงานเท่านั้น', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
       mockRequireNotCeoReviewing(pr);
+      // Mirrors FactoryQuoteService#validateAndNormalizeResponseItems' three conversion-factor
+      // gates. The mock used to store `sqmPerUnit ?? null` and accept the save — more permissive
+      // than production, the dangerous direction: a PER_SQM response with no factor "worked" here
+      // and 422'd in prod, which is precisely why the missing-input defect this mirrors survived
+      // mock-driven verification. Kept as a save-time gate (not only at costing time, where
+      // mockRequireConversionFactor already 422s) because that is where the Java service rejects.
+      for (const item of payload.items ?? []) {
+        const requestItem = (pr.items ?? []).find((i) => i.id === item.pricingRequestItemId);
+        const label = `รายการที่ ${item.pricingRequestItemId}`
+          + (requestItem?.productDescription ? ` (${requestItem.productDescription})` : '');
+        const required = {
+          PER_SQM: ['sqmPerUnit', 'ตร.ม.', 'ตร.ม./หน่วย'],
+          PER_BOX: ['piecesPerBox', 'กล่อง', 'ชิ้น/กล่อง'],
+          PER_LINEAR_M: ['linearMPerUnit', 'เมตร', 'เมตร/หน่วย'],
+        }[item.unitBasis];
+        if (required && item[required[0]] == null) {
+          fail(`${label} เสนอราคาต่อ ${required[1]} จึงต้องระบุ ${required[2]} ของรายการนี้ด้วย`, 422);
+        }
+      }
       const applyResponse = (target) => {
         target.status = 'RESPONSE_RECEIVED';
         target.supplierQuoteRef = payload.supplierQuoteRef ?? null;

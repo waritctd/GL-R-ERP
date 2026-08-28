@@ -779,6 +779,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await screen.findByText('SCG Ceramics');
 
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '55.5' } });
+    // Ditto for PER_SQM/sqmPerUnit — this line's basis has always required the factor.
+    fireEvent.change(screen.getByLabelText('ตร.ม./หน่วย รายการ #1'), { target: { value: '1.2' } });
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
@@ -807,6 +809,10 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
 
     fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+    // Switching to PER_BOX brings the ชิ้น/กล่อง input with it, and the save is now blocked until
+    // it is filled — FactoryQuoteService has always 422'd a PER_BOX line with a null piecesPerBox,
+    // so this test used to assert a payload production would have rejected.
+    fireEvent.change(screen.getByLabelText('ชิ้น/กล่อง รายการ #1'), { target: { value: '6' } });
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
@@ -858,6 +864,138 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await screen.findByText('SCG Ceramics');
 
     expect(screen.queryByLabelText(/^ตร\.ม\.\/หน่วย/)).toBeNull();
+  });
+
+  // ── The reported defect: an unsubmittable factory response ────────────────────────────────
+  // sales.factory_quote_item.unit_basis is seeded PER LINE from that line's own
+  // pricing_request_item.requested_unit_basis (FactoryQuoteRepository#insertDraftItems), so one
+  // factory quote can mix bases. The form used to read ONE basis off draft.items[0] and gate the
+  // conversion-factor input on it, so a PER_SQM line sitting behind a PER_PIECE line rendered no
+  // ตร.ม./หน่วย input at all — while FactoryQuoteService kept 422ing the save for the sqmPerUnit
+  // that line needs. Import could read the error and had no field to answer it with.
+  //
+  // Wrong-way-round on purpose: this asserts the input EXISTS for the line whose basis needs it,
+  // which is exactly what the old first-line-wins gate could not do.
+  const mixedBasisRequest = buildRequest({
+    items: [
+      {
+        id: 1, brand: 'SCG', model: 'A1', productDescription: 'กระเบื้องพื้น SCG A1',
+        requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
+        resolvedFactoryName: 'SCG Ceramics', quantityType: 'CONFIRMED',
+      },
+      {
+        id: 2, brand: 'SCG', model: 'SLAB9', productDescription: 'แผ่นใหญ่ SCG SLAB9',
+        requestedQty: 30, requestedUnit: 'ตร.ม.', requestedUnitBasis: 'PER_SQM',
+        resolvedFactoryName: 'SCG Ceramics', quantityType: 'CONFIRMED',
+      },
+    ],
+  });
+
+  function mixedBasisQuote() {
+    return buildFactoryQuote({
+      status: 'REQUESTED',
+      items: [
+        {
+          id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+          quotedQuantity: 20, quotedUnit: 'แผ่น', unitBasis: 'PER_PIECE',
+          rawUnitPrice: null, currency: 'THB', sqmPerUnit: null,
+        },
+        {
+          id: 912, pricingRequestItemId: 2, supplierProductCode: '', supplierProductDescription: '',
+          quotedQuantity: 30, quotedUnit: 'ตร.ม.', unitBasis: 'PER_SQM',
+          rawUnitPrice: null, currency: 'THB', sqmPerUnit: null,
+        },
+      ],
+    });
+  }
+
+  it('shows the ตร.ม./หน่วย input for a PER_SQM line even when a PER_PIECE line comes first', async () => {
+    const quote = mixedBasisQuote();
+    renderDetailPage({ user: importUser, request: mixedBasisRequest, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    // Only the PER_SQM line gets one — the PER_PIECE line above it still needs no factor.
+    expect(screen.getByLabelText('ตร.ม./หน่วย รายการ #2')).toBeTruthy();
+    expect(screen.queryByLabelText('ตร.ม./หน่วย รายการ #1')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ตร.ม./หน่วย รายการ #2'), { target: { value: '1.44' } });
+    fireEvent.change(screen.getByLabelText('ราคาที่เสนอ รายการ #1'), { target: { value: '50' } });
+    fireEvent.change(screen.getByLabelText('ราคาที่เสนอ รายการ #2'), { target: { value: '900' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({ pricingRequestItemId: 1, sqmPerUnit: null }),
+          expect.objectContaining({ pricingRequestItemId: 2, sqmPerUnit: 1.44 }),
+        ],
+      }),
+    ));
+  });
+
+  it('reports the mixed unit basis instead of letting the first line speak for the factory', async () => {
+    renderDetailPage({ user: importUser, request: mixedBasisRequest, factoryQuotes: [mixedBasisQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.getByLabelText('หน่วยราคา').value).toBe('');
+    expect(screen.getByRole('option', { name: 'คละหน่วย' })).toBeTruthy();
+  });
+
+  // The guard has to name the LINE and the on-screen field: "รายการตอบกลับแบบ PER_SQM ต้องระบุ
+  // sqmPerUnit" (what the server used to answer, and still answers if this is bypassed) names a
+  // basis code and a Java field, neither of which appears on the screen that raised it.
+  it('blocks the save and names the item when a line still has no conversion factor', async () => {
+    const { showToast } = renderDetailPage({
+      user: importUser, request: mixedBasisRequest, factoryQuotes: [mixedBasisQuote()],
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText('ราคาที่เสนอ รายการ #2'), { target: { value: '900' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'error', expect.stringContaining('ระบุ ตร.ม./หน่วย ของ SCG SLAB9'),
+    ));
+    expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
+
+    // Zero is refused as well as blank — deliberately stricter than the backend's null check here,
+    // because LandedCostCalculator#requireFactor rejects <= 0 at costing time anyway, and bouncing
+    // it there would surface the same mistake to a different person days later.
+    fireEvent.change(screen.getByLabelText('ตร.ม./หน่วย รายการ #2'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
+  });
+
+  // PER_BOX had piecesPerBox in the payload but no input; PER_LINEAR_M had neither, so its
+  // linearMPerUnit key was never even sent. Both 422'd with no way for Import to answer.
+  it.each([
+    ['PER_BOX', 'ชิ้น/กล่อง', 'piecesPerBox', '12', 12],
+    ['PER_LINEAR_M', 'เมตร/หน่วย', 'linearMPerUnit', '0.09', 0.09],
+  ])('offers the conversion-factor input for a %s line and sends it', async (unitBasis, label, field, typed, sent) => {
+    const quote = buildFactoryQuote({
+      status: 'REQUESTED',
+      items: [{
+        id: 911, pricingRequestItemId: 1, supplierProductCode: '', supplierProductDescription: '',
+        quotedQuantity: 20, quotedUnit: 'กล่อง', unitBasis,
+        rawUnitPrice: null, currency: 'THB', sqmPerUnit: null,
+      }],
+    });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(`${label} รายการ #1`), { target: { value: typed } });
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '480' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ items: [expect.objectContaining({ [field]: sent })] }),
+    ));
   });
 });
 

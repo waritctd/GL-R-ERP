@@ -729,17 +729,19 @@ public class FactoryQuoteService {
             // to one). requireUnitText only requires non-blank text, same as every other free-text
             // field on this request.
             String quotedUnit = requireUnitText(responseItem.quotedUnit(), "Factory quote unit");
+            // Conditions unchanged; only the wording is. These three used to read
+            // "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit" — a basis code and a Java field name,
+            // neither of which appears anywhere on the screen that raised them, and no hint as to
+            // WHICH line was short. That message was the entirety of what Import saw when a save
+            // bounced, and it named nothing they could act on.
             if (UnitBasis.PER_BOX.equals(unitBasis) && responseItem.piecesPerBox() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
+                throw missingConversionFactor(requestItem, "กล่อง", "ชิ้น/กล่อง");
             }
             if (UnitBasis.PER_SQM.equals(unitBasis) && responseItem.sqmPerUnit() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit");
+                throw missingConversionFactor(requestItem, "ตร.ม.", "ตร.ม./หน่วย");
             }
             if (UnitBasis.PER_LINEAR_M.equals(unitBasis) && responseItem.linearMPerUnit() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการตอบกลับแบบ PER_LINEAR_M ต้องระบุ linearMPerUnit");
+                throw missingConversionFactor(requestItem, "เมตร", "เมตร/หน่วย");
             }
             normalized.add(new ReceiveFactoryQuoteItemRequest(
                 responseItem.pricingRequestItemId(),
@@ -844,6 +846,30 @@ public class FactoryQuoteService {
 
     private String safe(String first, String fallback) {
         return first != null && !first.isBlank() ? first : (fallback == null ? "" : fallback);
+    }
+
+    /**
+     * Names the offending line and the factor it is missing, using the label the response form puts
+     * on the input rather than the basis code or the DTO field name — the same "name both the item
+     * and the missing factor" convention {@code LandedCostCalculator#missingFactor} already follows.
+     */
+    private ApiException missingConversionFactor(PricingRequestItemDto requestItem,
+                                                 String unitLabelTh, String factorLabelTh) {
+        String description = firstText(join(requestItem.brand(), requestItem.model()),
+            requestItem.productDescription());
+        return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+            "รายการที่ " + requestItem.id() + (description != null ? " (" + description + ")" : "")
+                + " เสนอราคาต่อ " + unitLabelTh + " จึงต้องระบุ " + factorLabelTh + " ของรายการนี้ด้วย");
+    }
+
+    private String join(String a, String b) {
+        if (a == null || a.isBlank()) {
+            return b;
+        }
+        if (b == null || b.isBlank()) {
+            return a;
+        }
+        return a.trim() + " " + b.trim();
     }
 
     private String firstText(String first, String fallback) {

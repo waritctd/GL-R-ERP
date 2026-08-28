@@ -140,6 +140,28 @@ export function unitBasisLabel(value) {
   return UNIT_BASIS_OPTIONS.find((u) => u.code === value)?.label ?? value ?? '-';
 }
 
+// Mirrors th.co.glr.hr.factoryquote.FactoryQuoteService#validateAndNormalizeResponseItems: three
+// of the four bases carry a mandatory physical conversion factor, and the service 422s a response
+// line that quotes in one of them without it. PER_PIECE needs none — a piece IS the costing unit.
+//
+// This is keyed on ONE LINE's own unitBasis, not the factory's. sales.factory_quote_item.unit_basis
+// is seeded per line from that line's own pricing_request_item.requested_unit_basis
+// (FactoryQuoteRepository#insertDraftItems), so a single factory quote genuinely can mix bases —
+// one factory supplying a per-piece tile and a per-sqm slab is an ordinary case, not a corruption.
+const CONVERSION_FACTOR_BY_BASIS = {
+  PER_SQM: { field: 'sqmPerUnit', label: 'ตร.ม./หน่วย', min: '0.000001', step: '0.000001' },
+  PER_BOX: { field: 'piecesPerBox', label: 'ชิ้น/กล่อง', min: '1', step: '1' },
+  PER_LINEAR_M: { field: 'linearMPerUnit', label: 'เมตร/หน่วย', min: '0.000001', step: '0.000001' },
+};
+
+/**
+ * The conversion factor a response line quoted in `unitBasis` must carry, or null when that basis
+ * needs none (PER_PIECE, or an unrecognised code — the backend rejects those on its own terms).
+ */
+export function conversionFactorFor(unitBasis) {
+  return CONVERSION_FACTOR_BY_BASIS[unitBasis] ?? null;
+}
+
 /** Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE. */
 export function canCreatePricingRequest(user, deal) {
   return user?.role === 'sales' && deal?.createdById != null
