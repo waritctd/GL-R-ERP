@@ -551,6 +551,38 @@ public class PricingRequestRepository {
                 .addValue("productType", productType));
     }
 
+    /**
+     * Fills in the free-text {@code factory} on ONE line that has none, so Import can route it to a
+     * factory email. Returns the number of rows written — 0 means the WHERE clause rejected it.
+     *
+     * <p>The guard is IN THE SQL on purpose, not only in the service: the {@code WHERE} requires
+     * the row to belong to {@code :pricingRequestId} AND to still have no factory of any kind. That
+     * makes this a gap-FILL that can never re-route a line, even under a concurrent write — which
+     * matters because {@code sales.factory_quote} rows are grouped BY factory name
+     * ({@code FactoryQuoteService#groupByFactory}), so silently moving a line to another factory
+     * after its quote existed would strand that quote's item list. The service reads the item first
+     * and raises the precise 4xx; a 0 here after those checks passed is a lost race, and its caller
+     * turns it into the same 409 {@link #transition} uses.
+     *
+     * <p>{@code resolved_factory_name} is deliberately NOT written. That column is the price-catalog
+     * snapshot ({@link #snapshotCatalogSelections}) and a hand-typed name is not a catalog
+     * resolution; every downstream reader already falls back to {@code factory} via
+     * {@code firstText(resolvedFactoryName, factory)}.
+     */
+    public int fillItemFactory(long pricingRequestId, long pricingRequestItemId, String factory) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET factory = :factory
+             WHERE pricing_request_item_id = :id
+               AND pricing_request_id = :pricingRequestId
+               AND COALESCE(NULLIF(BTRIM(resolved_factory_name), ''), NULLIF(BTRIM(factory), '')) IS NULL
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("factory", factory));
+    }
+
     public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {
         return jdbc.query("""
             SELECT pri.pricing_request_item_id

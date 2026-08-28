@@ -838,6 +838,11 @@ export const api = {
     queue: (params) => apiRequest(API_ROUTES.pricingRequests.queue(params)),
     get: (id) => apiRequest(API_ROUTES.pricingRequests.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.pricingRequests.detail(id), { method: 'PUT', body: payload }),
+    // Import-only, and only while the request is in Import's hands. `payload` is { factory }.
+    // Fills a blank factory; it never re-routes a line that already has one (the service 409s) —
+    // see PricingRequestService#setItemFactory.
+    setItemFactory: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemFactory(id, itemId), { method: 'PUT', body: payload }),
     generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),
     listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
     getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),

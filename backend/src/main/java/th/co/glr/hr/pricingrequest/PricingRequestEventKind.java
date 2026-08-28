@@ -7,6 +7,12 @@ public final class PricingRequestEventKind {
     public static final String PRICING_REQUEST_UPDATED    = "PRICING_REQUEST_UPDATED";
     public static final String PRICING_REQUEST_SUBMITTED  = "PRICING_REQUEST_SUBMITTED";
     public static final String PRICING_REQUEST_PICKED_UP  = "PRICING_REQUEST_PICKED_UP";
+    // Import named the factory on a line Sales left blank. Only ever raised for a line that had
+    // NO factory at all (neither the catalog snapshot nor free text) — see
+    // PricingRequestService#setItemFactory, which refuses to re-route a line that already has
+    // one. It is a routing decision, not metadata: it decides which factory gets asked for a
+    // price, so it belongs in the audit trail beside the pickup and the factory-email events.
+    public static final String PRICING_REQUEST_ITEM_FACTORY_SET = "PRICING_REQUEST_ITEM_FACTORY_SET";
     public static final String MORE_INFO_REQUESTED        = "MORE_INFO_REQUESTED";
     public static final String MORE_INFO_RESPONDED        = "MORE_INFO_RESPONDED";
     public static final String PRICING_REQUEST_CANCELLED  = "PRICING_REQUEST_CANCELLED";
@@ -67,7 +73,8 @@ public final class PricingRequestEventKind {
 
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
-        PRICING_REQUEST_PICKED_UP, MORE_INFO_REQUESTED, MORE_INFO_RESPONDED,
+        PRICING_REQUEST_PICKED_UP, PRICING_REQUEST_ITEM_FACTORY_SET,
+        MORE_INFO_REQUESTED, MORE_INFO_RESPONDED,
         PRICING_REQUEST_CANCELLED, PRICING_REQUEST_REVISED, FACTORY_EMAIL_READY, FACTORY_EMAIL_SENT,
         FACTORY_RESPONSE_RECEIVED, FACTORY_NEGOTIATION_STARTED,
         FACTORY_RESPONSE_READY_FOR_COSTING, FACTORY_RESPONSE_REVISED,

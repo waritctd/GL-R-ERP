@@ -79,6 +79,31 @@ function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
 
+// Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
+// free text. `null` here is exactly what makes FactoryQuoteService.groupByFactory refuse to build
+// the factory-email drafts, so this one predicate decides both the warning and the input below.
+function itemFactoryName(item) {
+  return item?.resolvedFactoryName?.trim() || item?.factory?.trim() || null;
+}
+
+// Mirrors PricingRequestItemDto.displayName() — same fields, same precedence as the row heading
+// this page renders, so the server's "รายการที่ N (ชื่อสินค้า)" names something visible on screen.
+function itemDisplayName(item) {
+  const name = [item?.catalogBrand ?? item?.brand, item?.catalogModel ?? item?.model]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(' ');
+  return name || item?.productDescription?.trim() || '-';
+}
+
+/**
+ * Statuses in which Import may name the factory on a blank line. Mirrors
+ * PricingRequestService.FACTORY_ROUTING_STATUSES, which is itself
+ * FactoryQuoteService.DRAFT_STATUSES: the window in which สร้างร่างอีเมล can still run is exactly
+ * the window in which its missing input can still be supplied.
+ */
+const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
+
 const DISPATCH_STATUS_LABEL = {
   PENDING: 'รอส่ง',
   SENDING: 'กำลังส่ง',
@@ -727,6 +752,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     });
   }
 
+  const setItemFactory = useActionMutation(
+    ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
+    'บันทึกโรงงานแล้ว',
+  );
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
   const sendQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.sendFactoryQuote(quote.id, {
@@ -1050,6 +1079,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
+  // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
+  // above: a key exists only once a change handler has written to it.
+  const [factoryDrafts, setFactoryDrafts] = useState({});
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
   // rather than beside the mutations above because it reads `request`, which is assigned just
@@ -1058,6 +1090,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => new Map((request?.items ?? []).map((item) => [item.id, item])),
     [request],
   );
+  // The lines FactoryQuoteService.groupByFactory would refuse, computed from the SAME predicate it
+  // uses, with the same 1-based row position it reports — so the warning on screen and the 422 the
+  // button would return name the same rows.
+  const missingFactoryItems = useMemo(
+    () => (request?.items ?? [])
+      .map((item, index) => ({ item, position: index + 1 }))
+      .filter((entry) => !itemFactoryName(entry.item)),
+    [request],
+  );
+  // Import owns this field, and only while the request is in its hands. NOT an authorization
+  // decision — PricingRequestService#setItemFactory is — just whether to offer an input that would
+  // otherwise be refused.
+  const canSetItemFactory = isImport(user) && FACTORY_ROUTING_STATUSES.includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
   const factoryItemCount = useMemo(
@@ -1263,19 +1308,81 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <Panel flush title="รายการสินค้าและราคาตั้งต้น">
         <div className="flex flex-col gap-2 p-4">
-          {(request.items ?? []).map((item) => (
-            <div key={item.id} className="rounded-md border border-border bg-surface p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <strong>{[item.catalogBrand ?? item.brand, item.catalogModel ?? item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
-                <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
+          {/* The blocking condition, stated BEFORE the สร้างร่างอีเมล button is pressed. It used to
+              be discoverable only by pressing it and reading a 422 that named the row's primary
+              key — a number that appears nowhere on this page. */}
+          {missingFactoryItems.length ? (
+            <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — สร้างร่างอีเมลถึงโรงงานไม่ได้จนกว่าจะระบุครบ: `}
+              {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
+              {canSetItemFactory
+                ? ' — กรอกชื่อโรงงานในรายการด้านล่างแล้วกดบันทึก'
+                : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
+            </p>
+          ) : null}
+          {(request.items ?? []).map((item, index) => {
+            const factoryName = itemFactoryName(item);
+            // `position` is the 1-based row number the server counts too: findItems returns
+            // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
+            // sortOrder, so "รายการที่ N" means this exact row on both sides.
+            const position = index + 1;
+            return (
+              <div
+                key={item.id}
+                className={cn(
+                  'rounded-md border bg-surface p-3',
+                  factoryName ? 'border-border' : 'border-warning-border',
+                )}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-text-muted">{`รายการที่ ${position}`}</span>
+                  <strong>{itemDisplayName(item)}</strong>
+                  <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span className={factoryName ? undefined : 'font-bold text-warning-dark'}>
+                    {`Factory: ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
+                  </span>
+                  <span>Catalog: {item.catalogProductCode ?? '-'}</span>
+                  <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
+                </div>
+                {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
+                    refuses to re-route one that does (a factory quote may already be grouped under
+                    that name), so offering an editable value here would promise something the
+                    service would 409. */}
+                {canSetItemFactory && !factoryName ? (
+                  <SafeForm
+                    className="mt-2 flex flex-wrap items-end gap-2"
+                    onSubmit={() => setItemFactory.mutate(
+                      { itemId: item.id, factory: (factoryDrafts[item.id] ?? '').trim() },
+                      { onSuccess: () => setFactoryDrafts((current) => {
+                        const next = { ...current };
+                        delete next[item.id];
+                        return next;
+                      }) },
+                    )}
+                  >
+                    <FormField label="ระบุโรงงาน" htmlFor={`pcr-item-factory-${item.id}`}>
+                      <input
+                        id={`pcr-item-factory-${item.id}`}
+                        value={factoryDrafts[item.id] ?? ''}
+                        maxLength={255}
+                        placeholder="ชื่อโรงงานที่จะขอราคา"
+                        onChange={(event) => setFactoryDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                      />
+                    </FormField>
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      disabled={setItemFactory.isPending || !(factoryDrafts[item.id] ?? '').trim()}
+                    >
+                      บันทึกโรงงาน
+                    </Button>
+                  </SafeForm>
+                ) : null}
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                <span>Factory: {item.resolvedFactoryName ?? item.factory ?? '-'}</span>
-                <span>Catalog: {item.catalogProductCode ?? '-'}</span>
-                <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Panel>
 

@@ -677,15 +677,44 @@ public class FactoryQuoteService {
         return requireQuote(quoteId);
     }
 
+    /**
+     * Groups a pricing request's lines by the factory each one is routed to, and refuses the whole
+     * batch if any line has no factory at all.
+     *
+     * <p><b>The message names the ROW, not the primary key.</b> It used to read
+     * {@code "รายการที่ " + item.id()} — the {@code sales.pricing_request_item} PK. The identical
+     * Thai phrase means the 1-based row position everywhere else in this workflow (see
+     * {@code PricingRequestService#identityErrorMessage}), so Import read "รายการที่ 35" on a
+     * three-line request and had no way to tell which line was meant: the PK appears nowhere on
+     * screen. The position below matches what the detail page renders because {@code findItems}
+     * already returns {@code ORDER BY sort_order, pricing_request_item_id} and
+     * {@link java.util.List#sort} is stable, so re-sorting on {@code sortOrder} alone preserves
+     * that order. The product name is included as well, so the line is identifiable even if the
+     * reader is looking at a stale render.
+     *
+     * <p>It also reports EVERY offending line rather than throwing on the first. Fixing them one
+     * 422 at a time was the difference between one trip through
+     * {@code PricingRequestService#setItemFactory} and N of them.
+     */
     private Map<String, List<PricingRequestItemDto>> groupByFactory(List<PricingRequestItemDto> items) {
+        List<PricingRequestItemDto> ordered = items.stream()
+            .sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder))
+            .toList();
         Map<String, List<PricingRequestItemDto>> byFactory = new LinkedHashMap<>();
-        for (PricingRequestItemDto item : items.stream().sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder)).toList()) {
-            String factoryName = firstText(item.resolvedFactoryName(), item.factory());
+        List<String> missing = new ArrayList<>();
+        for (int i = 0; i < ordered.size(); i++) {
+            PricingRequestItemDto item = ordered.get(i);
+            String factoryName = item.resolvedFactory();
             if (factoryName == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
+                missing.add("รายการที่ " + (i + 1) + " (" + item.displayName() + ")");
+                continue;
             }
             byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
+        }
+        if (!missing.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "ยังไม่ได้ระบุโรงงานสำหรับ " + String.join(", ", missing)
+                    + " — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล");
         }
         return byFactory;
     }
@@ -714,7 +743,7 @@ public class FactoryQuoteService {
             if (requestItem == null) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้ไม่ได้เป็นของคำขอราคานี้");
             }
-            String itemFactory = firstText(requestItem.resolvedFactoryName(), requestItem.factory());
+            String itemFactory = requestItem.resolvedFactory();
             if (!quote.factoryName().equals(itemFactory)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }

@@ -89,7 +89,42 @@ public final class PricingRequestDtos {
         // PricingDecisionService#overrideItemProductType for who may set this and why it lives
         // here rather than on pricing_decision_item.
         String productTypeOverride
-    ) {}
+    ) {
+        /**
+         * The factory this line is routed to, or {@code null} when it has none — the price-catalog
+         * snapshot first, then Sales's own free text. This precedence was already written out by
+         * hand at three call sites (grouping the factory-email drafts, validating a factory
+         * response, and now filling a blank); it lives here so all three cannot drift apart.
+         */
+        public String resolvedFactory() {
+            return firstText(resolvedFactoryName, factory);
+        }
+
+        /**
+         * The line's human-readable identity for an error or event message — the SAME fields, in
+         * the same precedence, that the pricing-request detail page prints on each row, so a
+         * message naming a line points at text the reader can actually see on screen. Lives on the
+         * DTO rather than in either service because both {@code PricingRequestService} and
+         * {@code FactoryQuoteService} need it and neither should depend on the other for it.
+         */
+        public String displayName() {
+            String brand = firstText(catalogBrand, this.brand);
+            String model = firstText(catalogModel, this.model);
+            String name = ((brand == null ? "" : brand) + " " + (model == null ? "" : model)).trim();
+            if (!name.isEmpty()) {
+                return name;
+            }
+            String description = firstText(productDescription, null);
+            return description == null ? "(ไม่มีชื่อสินค้า)" : description;
+        }
+
+        private static String firstText(String first, String fallback) {
+            if (first != null && !first.isBlank()) {
+                return first.trim();
+            }
+            return fallback != null && !fallback.isBlank() ? fallback.trim() : null;
+        }
+    }
 
     public record PricingRequestEventDto(
         long id,
