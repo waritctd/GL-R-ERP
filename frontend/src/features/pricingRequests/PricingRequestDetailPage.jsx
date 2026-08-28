@@ -828,6 +828,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [revisionClientRequestId, setRevisionClientRequestId] = useState(() => generateClientRequestId());
   const [quotationHeaderDraft, setQuotationHeaderDraft] = useState({});
   const [quotationItemDrafts, setQuotationItemDrafts] = useState({});
+  // V157: per-item thickness the CEO types on an uncostable line, keyed by decision item id.
+  const [thicknessDrafts, setThicknessDrafts] = useState({});
   const [downloadingQuotationFormat, setDownloadingQuotationFormat] = useState(null);
   // Step 5: Customer Decision and Commercial Revisions.
   const [outcomeClientRequestId, setOutcomeClientRequestId] = useState(() => generateClientRequestId());
@@ -890,6 +892,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
       api.pricingRequests.overridePricingDecisionItemProductType(decision.id, item.id, { productType }),
     'บันทึกประเภทสินค้าแล้ว',
   );
+  // V157, owner request 2026-08-28. Before this, a line whose Price Catalog row resolved no
+  // thickness could not be COSTED at all (V156 marks it uncostable), and the CEO's only way
+  // forward was hand-keying a landed cost via "ปรับต้นทุน" — throwing away a calculation whose
+  // every other input (supplier price, FX, quantity, duty, clearance) was present and correct.
+  // Supplying the one missing freight-lookup key instead lets the engine do the rest.
+  //
+  // Not a relaxation of the no-guessing rule: this is explicit human input, exactly like the
+  // catalogue's own thickness and the CEO's collection defaults. A line with neither stays
+  // uncostable and approve() still refuses it.
+  //
+  // Prefer the CEO settings page's collection default when the answer applies to the whole
+  // PRODUCT — that fixes every future deal too. This is for the deal-grain, one-off case.
+  const overrideItemThickness = useMutation({
+    mutationFn: ({ decision, item, thicknessMm }) =>
+      api.pricingRequests.overridePricingDecisionItemThickness(decision.id, item.id, { thicknessMm }),
+    onSuccess: (_result, { item }) => {
+      setThicknessDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[item.id];
+        return next;
+      });
+      showToast?.('success', 'บันทึกความหนาและคำนวณต้นทุนใหม่แล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'บันทึกความหนาไม่สำเร็จ'),
+  });
   const approveDecision = useMutation({
     mutationFn: (decision) => api.pricingRequests.approvePricingDecision(decision.id, {
       clientRequestId: approveClientRequestId,
@@ -1853,7 +1881,45 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             </span>
                           </div>
                           {costingItem?.uncostableReason ? (
-                            <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
+                            <>
+                              <p className="mt-2 text-xs text-warning">{costingItem.uncostableReason}</p>
+                              {/* V157: the usual cause is a missing thickness, and that is one
+                                  number. Offering it HERE — next to the reason, not buried in a
+                                  menu — is the point: supplying it costs the line normally,
+                                  which beats hand-keying a total via "ปรับต้นทุน". */}
+                              {editable ? (
+                                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-subtle p-2 text-xs">
+                                  <label htmlFor={`pcr-thickness-${item.id}`} className="text-text-muted">
+                                    ระบุความหนาเอง (มม.):
+                                  </label>
+                                  <input
+                                    id={`pcr-thickness-${item.id}`}
+                                    type="number"
+                                    step="0.1"
+                                    min="0"
+                                    className="form-input w-24"
+                                    placeholder="เช่น 9"
+                                    value={thicknessDrafts[item.id] ?? ''}
+                                    disabled={overrideItemThickness.isPending}
+                                    onChange={(e) => setThicknessDrafts((d) => ({ ...d, [item.id]: e.target.value }))}
+                                    data-testid={`pcr-ceo-thickness-override-${item.id}`}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    disabled={overrideItemThickness.isPending || !(Number(thicknessDrafts[item.id]) > 0)}
+                                    onClick={() => overrideItemThickness.mutate({
+                                      decision, item, thicknessMm: Number(thicknessDrafts[item.id]),
+                                    })}
+                                  >
+                                    คำนวณต้นทุนใหม่
+                                  </Button>
+                                  <span className="text-2xs text-text-muted">
+                                    ใช้กับดีลนี้เท่านั้น — ถ้าความหนานี้ใช้ได้กับทั้งสินค้า ให้ตั้งค่าที่หน้าตั้งค่า CEO แทน
+                                  </span>
+                                </div>
+                              ) : null}
+                            </>
                           ) : null}
                           {!editable ? (
                             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">

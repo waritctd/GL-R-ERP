@@ -35,6 +35,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ThicknessOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
@@ -629,7 +630,62 @@ public class PricingDecisionService {
     }
 
     /**
-     * Shared by {@link #recalculateCost} and {@link #overrideItemProductType}: recomputes the
+     * V157, owner request 2026-08-28: let the CEO price a line whose catalogue row resolves NO
+     * thickness, instead of being able only to hand-key a landed cost.
+     *
+     * <p>V156 made a missing thickness survivable — the line is set aside UNCOSTABLE with a stated
+     * reason instead of aborting the whole review — but the only way out was
+     * {@code manual_landed_cost_per_unit_thb} (V141), i.e. typing a total in by hand. Every other
+     * input the formula needs is present; only the freight band's lookup key is missing. This
+     * supplies that one number and lets the engine compute the rest normally.
+     *
+     * <p><b>This is not a relaxation of V153's no-guessing rule.</b> The value is explicit human
+     * input, exactly like the two catalogue-grain sources it falls back to (the row's own
+     * {@code thickness_mm}, then {@code collection_thickness_default}). Nothing is inferred: a
+     * line with no override and no catalogue answer stays UNCOSTABLE, and {@code approve()} still
+     * refuses it. What changed is that the CEO now has a way to answer, not that the system
+     * invents one.
+     *
+     * <p>Prefer {@code collection_thickness_default} whenever the answer generalises to the
+     * PRODUCT — that fixes every future deal too. This override is for the deal-grain case (a
+     * sample run, a special-order slab, a factory confirmation email) where writing the number
+     * into the shared catalogue would be wrong.
+     *
+     * <p>Mirrors {@link #overrideItemProductType} in shape: CEO-only, DRAFT-decision-only, then
+     * recomputes the bound costing in place so the CEO sees the freight applied without a separate
+     * "recalculate" click. {@code thicknessMm == null} clears the override.
+     */
+    @Transactional
+    public PricingDecisionDto overrideItemThickness(long decisionId, long itemId, ThicknessOverrideRequest request,
+                                                     UserPrincipal actor) {
+        requireRole(actor, CEO_ROLES);
+        PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
+        PricingDecisionItemDto item = decision.items().stream()
+            .filter(i -> i.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "รายการที่ " + itemId + " ไม่ได้เป็นของมติราคานี้"));
+
+        BigDecimal thicknessMm = request.thicknessMm();
+        // Rejected here as well as by chk_pricing_request_item_thickness_override_positive, so the
+        // caller gets a 422 with a readable Thai message rather than a raw constraint violation. A
+        // zero is the dangerous input, not merely an invalid one: it would select the LOWEST
+        // freight band instead of refusing to price — the silent mispricing V153 exists to prevent.
+        if (thicknessMm != null && thicknessMm.signum() <= 0) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "ความหนาต้องมากกว่า 0");
+        }
+        pricingRequests.updateItemThicknessOverride(item.pricingRequestItemId(), thicknessMm);
+
+        PricingDecisionDto recomputed = recomputeCostingInPlace(decision);
+        addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
+            thicknessMm != null
+                ? "CEO ระบุความหนารายการที่ " + itemId + " เป็น " + thicknessMm + " มม. (สำหรับคำนวณค่าขนส่ง)"
+                : "CEO ล้างการระบุความหนารายการที่ " + itemId + " (กลับไปใช้ข้อมูลจาก Price Catalog)");
+        return recomputed;
+    }
+
+    /**
+     * Shared by {@link #recalculateCost}, {@link #overrideItemProductType} and
+     * {@link #overrideItemThickness}: recomputes the
      * bound costing IN PLACE (same {@code pricing_costing_id}, preserving any existing per-line
      * cost override — {@link PricingCostingRepository#replaceItemsPreservingOverrides}) and
      * re-derives every decision item's frozen cost + proposed selling price from the (possibly

@@ -383,6 +383,11 @@ export const API_ROUTES = {
     // PricingDecisionController.overrideItemProductType.
     pricingDecisionItemProductTypeOverride: (decisionId, itemId) =>
       `/api/pricing-decisions/${decisionId}/items/${itemId}/product-type-override`,
+    // V157. CEO per-item thickness override, so a line whose Price Catalog row resolves no
+    // thickness can still be COSTED rather than only hand-priced — mirrors
+    // PricingDecisionController.overrideItemThickness.
+    pricingDecisionItemThicknessOverride: (decisionId, itemId) =>
+      `/api/pricing-decisions/${decisionId}/items/${itemId}/thickness-override`,
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     customerQuotations: (id) => `/api/pricing-requests/${id}/quotations`,
     customerQuotation: (id) => `/api/customer-quotations/${id}`,

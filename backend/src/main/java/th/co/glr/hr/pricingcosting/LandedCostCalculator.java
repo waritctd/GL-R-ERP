@@ -378,7 +378,15 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Thickness comes ONLY from the catalog link — {@code price_catalog.product_prices.thickness_mm}
+     * Resolution order is the CEO's per-line override FIRST (V157 —
+     * {@code pricing_request_item.thickness_mm_override}), then the catalog link. The override is
+     * deal-grain: it answers "how thick is the tile on THIS line" for the one-off case (a sample
+     * run, a special-order slab, a factory confirmation email) where writing the number into the
+     * shared catalogue would be wrong. An answer that generalises to the PRODUCT belongs in
+     * {@code price_catalog.collection_thickness_default} instead, so every deal benefits. Both are
+     * explicit human input — this is still never guessed and never defaulted.
+     *
+     * <p>Absent an override, thickness comes from the catalog link — {@code price_catalog.product_prices.thickness_mm}
      * via {@code pricing_request_item.catalog_price_id} (the submit-time snapshot, V61), falling
      * back to the live {@code product_id} (both columns point at the SAME target,
      * {@code price_catalog.product_prices.price_id}, V68) when the snapshot has not run yet —
@@ -398,6 +406,12 @@ public class LandedCostCalculator {
      * is ever priced on a guessed thickness — the guarantee moved, it did not weaken.
      */
     private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem) {
+        // V157: the CEO's per-line answer wins over the catalogue. Checked before the catalog
+        // lookup, not merged after it, so an override also stands in for a line with no catalog
+        // link at all (Import's free-text lines) — that case has no row to read a thickness from.
+        if (requestItem.thicknessMmOverride() != null) {
+            return requestItem.thicknessMmOverride();
+        }
         Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
         return priceId == null ? null : catalog.findThicknessMm(priceId).orElse(null);
     }

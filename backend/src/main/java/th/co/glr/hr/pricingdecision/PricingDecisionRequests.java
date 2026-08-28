@@ -58,4 +58,13 @@ public final class PricingDecisionRequests {
      * formula-derived and auditable from the product_type alone, recorded on the row itself
      * ({@code pricing_costing_item.product_type}), not just in the event trail. */
     public record ProductTypeOverrideRequest(String productType) {}
+
+    /**
+     * V157. {@code thicknessMm} null CLEARS the override, reverting the line to the V153 catalogue
+     * chain (and back to UNCOSTABLE if that chain resolves nothing). Deliberately NOT
+     * {@code @DecimalMin}-annotated here: the guard lives in
+     * {@code PricingDecisionService#overrideItemThickness} and in the DB CHECK, so a non-positive
+     * value fails identically whichever way the row is written.
+     */
+    public record ThicknessOverrideRequest(BigDecimal thicknessMm) {}
 }

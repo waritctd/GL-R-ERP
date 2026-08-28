@@ -9766,6 +9766,43 @@ export const api = {
       return delay({ decision });
     },
 
+    // V157. Mirrors PricingDecisionService.overrideItemThickness's GATES (role -> decision
+    // open-for-mutation -> item-belongs-to-decision) and nothing else. It cannot mirror the
+    // POINT of the endpoint: the real one supplies the missing freight-band lookup key and the
+    // engine then costs the line, but this mock has no freight/duty/clearance band engine at all
+    // (V109 is real backend-only money math — CLAUDE.md says not to reimplement it here), and it
+    // never produces an uncostable line to begin with, since it has no uncostableReason concept.
+    //
+    // So a green mock-mode run here is evidence the control renders and calls the endpoint, and
+    // NOTHING about whether a previously-uncostable line becomes costable or is priced correctly.
+    // That is proven only by the real-DB Java test (ThicknessOverrideIntegrationTest).
+    async overridePricingDecisionItemThickness(decisionId, itemId, payload = {}) {
+      hasRole('ceo');
+      const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
+      if (!decision) fail('ไม่พบมติราคานี้', 404);
+      if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      const pr = findPricingRequestRaw(decision.pricingRequestId);
+      if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+      const item = decision.items.find((i) => i.id === Number(itemId));
+      if (!item) fail(`รายการที่ ${itemId} ไม่ได้เป็นของมติราคานี้`, 400);
+      const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
+      const costingItem = costing?.items.find((ci) => ci.id === item.pricingCostingItemId);
+      if (!costingItem) fail('ไม่พบรายการต้นทุนที่ผูกกับมติราคานี้', 409);
+
+      // Mirrors the service's own guard AND chk_pricing_request_item_thickness_override_positive.
+      // A zero is the dangerous input, not merely invalid: it would select the LOWEST freight
+      // band instead of refusing to price.
+      const raw = payload.thicknessMm;
+      const thicknessMm = raw == null || raw === '' ? null : Number(raw);
+      if (thicknessMm != null && !(thicknessMm > 0)) fail('ความหนาต้องมากกว่า 0', 422);
+
+      costingItem.thicknessMmOverride = thicknessMm;
+      costingItem.calculatedAt = new Date().toISOString();
+      item.updatedAt = new Date().toISOString();
+      decision.updatedAt = new Date().toISOString();
+      return delay({ decision });
+    },
+
     async approvePricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));

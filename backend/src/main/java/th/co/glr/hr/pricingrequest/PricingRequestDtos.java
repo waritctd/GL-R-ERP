@@ -88,7 +88,15 @@ public final class PricingRequestDtos {
         // defaults to PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE"). See
         // PricingDecisionService#overrideItemProductType for who may set this and why it lives
         // here rather than on pricing_decision_item.
-        String productTypeOverride
+        String productTypeOverride,
+        // V157: CEO override of the thickness used for THIS line's freight-band lookup, when the
+        // catalogue resolves none. NULL = no override — LandedCostCalculator falls back to the
+        // V153 catalogue chain (the row's own thickness_mm, then collection_thickness_default),
+        // and a line that still resolves nothing stays UNCOSTABLE (V156) rather than being priced
+        // on a guess. Deal-grain on purpose: an answer that generalises to the PRODUCT belongs in
+        // collection_thickness_default so the whole catalogue benefits. See
+        // PricingDecisionService#overrideItemThickness for who may set it.
+        BigDecimal thicknessMmOverride
     ) {}
 
     public record PricingRequestEventDto(

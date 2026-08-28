@@ -48,6 +48,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ThicknessOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
@@ -380,6 +381,121 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage()).contains("ต้นทุน");
             });
+    }
+
+    /**
+     * V157 — the other half of the V156 story above. That test pins what happens when NOBODY
+     * supplies a thickness: the line reaches the CEO uncostable and approve() refuses it. This one
+     * pins the way OUT that V157 adds: the CEO supplies the one missing freight-lookup key and the
+     * engine costs the line normally, instead of the CEO having to hand-key a landed cost.
+     *
+     * <p>Written against the real service + real Postgres, not a mock: the whole claim is that the
+     * override reaches the freight-band lookup, and a mocked repository would "pass" while the SQL
+     * did something else.
+     */
+    @Test
+    void missingThickness_ceoSuppliesIt_andTheLineCostsNormally() {
+        long noThicknessProductId = insertCatalogProduct("Override Thickness Factory", "IT", "OVR-THICK-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        jdbc.update("""
+            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
+            VALUES ('Override Thickness Factory', 'ovr@example.com', 'THB', 'piece', 'Italy')
+            ON CONFLICT (factory_name) DO UPDATE SET country = EXCLUDED.country
+            """, Map.of());
+        long pricingRequestId = readyForReviewWithProduct(noThicknessProductId, "Override Thickness Factory",
+            new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
+            new BigDecimal("1"), null, null);
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        long itemId = decision.items().get(0).id();
+        assertThat(uncostableReasonOf(decision.pricingCostingId()))
+            .as("baseline: with no thickness anywhere, the line is uncostable")
+            .isNotNull();
+
+        // ── the V157 capability ──────────────────────────────────────────────────────────
+        PricingDecisionDto costed = decisionService.overrideItemThickness(decision.id(), itemId,
+            new ThicknessOverrideRequest(new BigDecimal("9.0")), ceoActor);
+
+        assertThat(uncostableReasonOf(costed.pricingCostingId()))
+            .as("supplying the thickness clears the uncostable state — this is the gate approve() checks")
+            .isNull();
+        BigDecimal freightAt9mm = freightOf(costed.pricingCostingId());
+        assertThat(freightAt9mm)
+            .as("freight is now actually computed, not left null")
+            .isNotNull().isGreaterThan(BigDecimal.ZERO);
+        assertThat(costed.items().get(0).frozenLandedCostPerRequestedUnitThb())
+            .as("and the line carries a real cost the CEO never had to type")
+            .isNotNull();
+
+        // The override must drive the BAND LOOKUP, not merely be stored. 5mm and 9mm fall in
+        // different IT thickness bands ([3,8) vs [8,12)), so a stored-but-unused override would
+        // leave these two equal — which is exactly the bug this asserts against.
+        BigDecimal freightAt5mm = freightOf(decisionService.overrideItemThickness(decision.id(), itemId,
+            new ThicknessOverrideRequest(new BigDecimal("5.0")), ceoActor).pricingCostingId());
+        assertThat(freightAt5mm)
+            .as("a thickness in a different freight band produces a different freight")
+            .isNotEqualByComparingTo(freightAt9mm);
+
+        // Wrong-way-round: clearing must REVERT to uncostable, not leave the last value applied.
+        // If this ever goes green with a cost still attached, the override has become a silent
+        // default — the exact thing V153 refuses.
+        PricingDecisionDto cleared = decisionService.overrideItemThickness(decision.id(), itemId,
+            new ThicknessOverrideRequest(null), ceoActor);
+        assertThat(uncostableReasonOf(cleared.pricingCostingId()))
+            .as("clearing the override returns the line to uncostable — nothing lingers")
+            .isNotNull();
+        assertThat(freightOf(cleared.pricingCostingId())).isNull();
+    }
+
+    @Test
+    void thicknessOverride_rejectsNonPositive_andNonCeoCallers() {
+        long productId = insertCatalogProduct("Guard Thickness Factory", "IT", "GUARD-THICK-001",
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+        jdbc.update("""
+            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
+            VALUES ('Guard Thickness Factory', 'guard@example.com', 'THB', 'piece', 'Italy')
+            ON CONFLICT (factory_name) DO UPDATE SET country = EXCLUDED.country
+            """, Map.of());
+        long pricingRequestId = readyForReviewWithProduct(productId, "Guard Thickness Factory",
+            new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
+            new BigDecimal("1"), null, null);
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        long itemId = decision.items().get(0).id();
+
+        // Zero is the dangerous input, not merely invalid: it would select the LOWEST freight band
+        // rather than refusing to price.
+        assertThatThrownBy(() -> decisionService.overrideItemThickness(decision.id(), itemId,
+                new ThicknessOverrideRequest(BigDecimal.ZERO), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
+        assertThatThrownBy(() -> decisionService.overrideItemThickness(decision.id(), itemId,
+                new ThicknessOverrideRequest(new BigDecimal("-1")), ceoActor))
+            .isInstanceOf(ApiException.class);
+
+        // Wrong-way-round authz: assert the callers who must NOT reach it cannot.
+        for (UserPrincipal notCeo : List.of(salesActor, importActor)) {
+            assertThatThrownBy(() -> decisionService.overrideItemThickness(decision.id(), itemId,
+                    new ThicknessOverrideRequest(new BigDecimal("9.0")), notCeo))
+                .isInstanceOfSatisfying(ApiException.class,
+                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+        assertThat(uncostableReasonOf(decision.pricingCostingId()))
+            .as("and none of those rejected calls left a thickness behind")
+            .isNotNull();
+    }
+
+    private String uncostableReasonOf(long pricingCostingId) {
+        return jdbc.queryForObject(
+            "SELECT uncostable_reason FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
+            Map.of("id", pricingCostingId), String.class);
+    }
+
+    private BigDecimal freightOf(long pricingCostingId) {
+        return jdbc.queryForObject(
+            "SELECT freight_cost_thb FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
+            Map.of("id", pricingCostingId), BigDecimal.class);
     }
 
     @Test

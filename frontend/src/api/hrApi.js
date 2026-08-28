@@ -868,6 +868,10 @@ export const api = {
     // V152 (V109 engine wiring). No request body arity beyond { productType } — null clears it.
     overridePricingDecisionItemProductType: (decisionId, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemProductTypeOverride(decisionId, itemId), { method: 'PUT', body: payload }),
+    // V157. No request body arity beyond { thicknessMm } — null clears it, reverting the line to
+    // the Price Catalog's own thickness chain (and back to uncostable if that resolves nothing).
+    overridePricingDecisionItemThickness: (decisionId, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemThicknessOverride(decisionId, itemId), { method: 'PUT', body: payload }),
     // Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationController.
     createCustomerQuotation: (id, payload = {}) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id), { method: 'POST', body: payload }),
     listCustomerQuotations: (id) => apiRequest(API_ROUTES.pricingRequests.customerQuotations(id)),

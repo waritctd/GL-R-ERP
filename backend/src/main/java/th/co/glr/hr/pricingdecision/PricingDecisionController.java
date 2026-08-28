@@ -17,6 +17,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesView
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ThicknessOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -96,6 +97,17 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("decision", decisions.overrideItemProductType(decisionId, itemId, request, user));
+    }
+
+    @PutMapping("/pricing-decisions/{decisionId}/items/{itemId}/thickness-override")
+    Map<String, PricingDecisionDto> overrideItemThickness(
+        @PathVariable long decisionId,
+        @PathVariable long itemId,
+        @RequestBody ThicknessOverrideRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("decision", decisions.overrideItemThickness(decisionId, itemId, request, user));
     }
 
     @PostMapping("/pricing-decisions/{decisionId}/approve")

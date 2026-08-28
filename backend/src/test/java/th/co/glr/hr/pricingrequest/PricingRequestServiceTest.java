@@ -1465,7 +1465,7 @@ class PricingRequestServiceTest {
             brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
             null, null, specialRequirement, 0, 900L, 900L, new BigDecimal("100.0000"), "THB",
-            null, 900L, "Test Factory", null, null, null, null, null);
+            null, 900L, "Test Factory", null, null, null, null, null, null);
     }
 
     /** Same shape as {@link #itemDtoWithIdentity}, but with every catalog snapshot field left null — for the dedicated catalog-gate tests. */
@@ -1474,7 +1474,7 @@ class PricingRequestServiceTest {
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, null, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
-            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null, null);
+            null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreatePricingRequestRequest createRequest(String recipientType, Long recipientContactId,

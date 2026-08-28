@@ -1,5 +1,6 @@
 package th.co.glr.hr.pricingrequest;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -523,7 +524,7 @@ public class PricingRequestRepository {
                    price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
                    catalog_effective_date, resolved_factory_id, resolved_factory_name,
                    catalog_product_code, catalog_brand, catalog_collection, catalog_model,
-                   product_type_override
+                   product_type_override, thickness_mm_override
               FROM sales.pricing_request_item
              WHERE pricing_request_id = :id
              ORDER BY sort_order, pricing_request_item_id
@@ -549,6 +550,24 @@ public class PricingRequestRepository {
             new MapSqlParameterSource()
                 .addValue("id", pricingRequestItemId)
                 .addValue("productType", productType));
+    }
+
+    /**
+     * V157. Mirrors {@link #updateItemProductTypeOverride} exactly — same table, same
+     * null-clears-the-override semantics. {@code thicknessMm} null reverts the line to the V153
+     * catalogue chain; the DB's own
+     * {@code chk_pricing_request_item_thickness_override_positive} rejects a non-positive value,
+     * which would otherwise select the LOWEST freight band instead of refusing to price.
+     */
+    public int updateItemThicknessOverride(long pricingRequestItemId, BigDecimal thicknessMm) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET thickness_mm_override = :thicknessMm
+             WHERE pricing_request_item_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("thicknessMm", thicknessMm));
     }
 
     public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {
@@ -1075,7 +1094,8 @@ public class PricingRequestRepository {
             rs.getString("catalog_brand"),
             rs.getString("catalog_collection"),
             rs.getString("catalog_model"),
-            rs.getString("product_type_override")
+            rs.getString("product_type_override"),
+            rs.getBigDecimal("thickness_mm_override")
         );
     }
 
