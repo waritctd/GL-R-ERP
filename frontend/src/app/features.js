@@ -25,9 +25,12 @@ const env = import.meta.env ?? (typeof process !== 'undefined' ? process.env : {
 //
 // The flag is an off-switch, not an on-switch: sales is enabled unless
 // VITE_ENABLE_SALES is explicitly "false". That direction matters — the
-// production build sets no VITE_ vars at all (vercel.json has no env block and
-// .env* is gitignored), so an `=== 'true'` check left sales disabled in
-// production regardless of what the deploy intended.
+// production build does not set this var, so an `=== 'true'` check left sales
+// disabled in production regardless of what the deploy intended. (This comment
+// used to say production sets "no VITE_ vars at all" because vercel.json has no
+// env block and .env* is gitignored. That is false — it misses the Vercel
+// dashboard; see the SELF_SERVICE_ONLY note below. The conclusion for THIS flag
+// is unchanged: VITE_ENABLE_SALES is genuinely absent from the deployed bundle.)
 export const SALES_ENABLED = env.VITE_ENABLE_SALES !== 'false';
 
 // Release lockdown (2026-08-30): everyone except HR and CEO sees ONLY the
@@ -40,9 +43,14 @@ export const SALES_ENABLED = env.VITE_ENABLE_SALES !== 'false';
 // SALES_ENABLED above and for a stronger version of the same reason. Two
 // facts force it:
 //
-//   1. The production build sets no VITE_ vars at all, so an `=== 'true'`
-//      check would ship an UNLOCKED production — the failure that must not
-//      happen.
+//   1. This var is not set in the production build, so an `=== 'true'` check
+//      would ship an UNLOCKED production — the failure that must not happen.
+//      (Production's env is NOT empty, despite what the SALES_ENABLED comment
+//      above used to claim: read out of the deployed bundle on 2026-08-30 it
+//      carries VITE_USE_MOCKS plus ~15 VITE_VERCEL_* system vars, set in the
+//      Vercel DASHBOARD — a source neither vercel.json nor .gitignore covers.
+//      It simply does not carry THIS var. Setting it to 'false' there is the
+//      unlock lever when the release is over.)
 //   2. On this Vercel project there is no reliable way to set one. The
 //      phase-1 UAT branch tried `vercel.json` build.env (ignored outright —
 //      "legacy config, not applied for Git-connected projects") and then

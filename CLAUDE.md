@@ -21,7 +21,7 @@ This repository is a GL&R **HR + Sales/CRM portal** growing into an ERP platform
 ### Sales/CRM stack — UNFROZEN (2026-07-16)
 The sales/CRM stack (tickets, quotation, deposit, commission, pricing/FX, catalog, customer, factory, ceo-settings) **is no longer frozen**. v0.1.0 was the HR-core-only release and is now historical; sales/CRM is part of the current release line and may be repaired, refactored, and improved like any other surface.
 
-`VITE_ENABLE_SALES` still gates sales nav + routes at runtime, but it is now an **off-switch**: sales is enabled unless the var is explicitly `false`. The direction matters — the production build sets no `VITE_` vars (there is no `env` block in `vercel.json` and `.env*` is gitignored), so the previous `=== 'true'` check left sales disabled in production regardless of intent.
+`VITE_ENABLE_SALES` still gates sales nav + routes at runtime, but it is now an **off-switch**: sales is enabled unless the var is explicitly `false`. The direction matters — `VITE_ENABLE_SALES` is not set in the production build, so the previous `=== 'true'` check left sales disabled in production regardless of intent. ⚠️ **This used to say the production build sets "no `VITE_` vars at all" because `vercel.json` has no `env` block and `.env*` is gitignored. That reasoning is incomplete and the claim is false** — it misses the **Vercel dashboard**, which is a third source. Read out of the deployed bundle on 2026-08-30, production's `import.meta.env` carries `VITE_USE_MOCKS: "false"` (dashboard-set) plus ~15 `VITE_VERCEL_*` system vars. What is true is narrower: *this particular var* is unset. Never reason from "production sets nothing"; read the deployed bundle.
 
 ### Sales flow redesign — business logic IS changing (2026-07-20)
 The sales deal/pricing workflow is under an **approved multi-step redesign**. Step 1 separates the `PricingRequest` aggregate from the Deal Ticket, so the model is now:
@@ -241,8 +241,11 @@ registers still run.
   hidden pages' JS chunks are still emitted into `dist`. It hides surfaces; it enforces nothing.
 
 **The flag is an OFF-switch (`!== 'false'`), locked by default, and that direction is load-bearing.**
-Production sets no `VITE_` vars, so an `=== 'true'` check would ship an unlocked production — the
-one failure that must not happen. Setting a var instead is not a safe substitute: `vercel.json`'s
+`VITE_SELF_SERVICE_ONLY` is not set anywhere in the production build, so an `=== 'true'` check
+would ship an unlocked production — the one failure that must not happen. (Note production's env is
+*not* empty — see the correction above — it simply does not carry this var. **Setting it to `false`
+in the Vercel dashboard is therefore the unlock lever when the release is over**, no code change
+needed; that is also why nobody should set it by accident.) Setting a var instead is not a safe substitute: `vercel.json`'s
 `build.env` is genuinely ignored (legacy config, not read for Git-connected projects), and the
 phase-1 UAT branch's `buildCommand` attempt *appeared* to fail too — though the real cause there was
 that branch's own tracked `frontend/.env.production` overriding the flag inside the build, so
@@ -255,6 +258,13 @@ The lock is turned off for local work by `frontend/.env.development` (dev server
 `.gitignore`) and `vitest.config.js`'s `test.env` (the suite keeps exercising the full product).
 Both are development-mode-only and cannot reach a production build. **Never add a matching
 `frontend/.env.production`** — that file *is* loaded by the production build.
+
+**Confirmed live on production 2026-08-30**, read out of the deployed bundle at
+`demo-glr.vercel.app` rather than inferred: the injected env object has no `VITE_SELF_SERVICE_ONLY`
+key, and the emitted expression is `he=me.VITE_SELF_SERVICE_ONLY!==\`false\`` — i.e. `undefined !==
+'false'` = locked. Note the deployed entry-chunk hash does **not** match a local `npm run build`
+(Vercel installs fresh, and injects its own `VITE_VERCEL_*` vars), so compare the *env object and
+the expression*, never the hash, when checking a deploy.
 
 **Work goes on `develop`, not `main`.** `develop` is the long-lived integration branch for the
 release window; branch features off it and merge back there. `main` takes only what is deliberately
