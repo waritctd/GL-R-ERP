@@ -196,7 +196,9 @@ describe('EmployeeDashboard — employee mode: three-tier hierarchy', () => {
     const pendingPanel = screen.getByText('รอดำเนินการ').closest('section');
     const rows = within(pendingPanel);
 
-    expect(rows.getByText('ลาของฉัน')).not.toBeNull();
+    // 'ลารออนุมัติ', not 'ลาของฉัน': in employee mode the leave figure can include a non-titled
+    // supervisor's direct reports, so the label must not claim the count is only the viewer's own.
+    expect(rows.getByText('ลารออนุมัติ')).not.toBeNull();
     expect(rows.getByText('2 รายการ')).not.toBeNull();
     // Three zero rows (OT, profile requests, notifications) all render as dashes.
     expect(rows.getAllByText('—')).toHaveLength(3);

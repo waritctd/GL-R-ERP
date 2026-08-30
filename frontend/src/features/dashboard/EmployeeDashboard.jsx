@@ -96,7 +96,11 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     return [
       { icon: 'users', label: 'พนักงานในฝ่าย', value: numberValue(headcount.active), helper: 'Active', tone: 'indigo' },
       { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Division', tone: 'amber', onClick: go('/overtime', access.overtime()) },
-      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Division', tone: 'teal', onClick: go('/leave', access.leave()) },
+      // Leave is scoped by reports-to, NOT by division -- see DashboardService#leaveScope. The OT
+      // row above keeps 'Division' because overtime genuinely does route ฝ่าย manager -> CEO; these
+      // two helpers deliberately differ now, and making them match again would relabel a number
+      // that is no longer division-wide.
+      { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Direct reports', tone: 'teal', onClick: go('/leave', access.leave()) },
       { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal', onClick: go('/attendance', access.attendance()) },
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
       { icon: 'bell', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), helper: 'Unread', tone: 'indigo' },
@@ -125,7 +129,12 @@ function employeePendingRows(summary, pendingCount, { navigate, access }) {
   const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
   return [
     { key: 'overtime', label: 'OT ของฉัน', value: numberValue(pending.overtime), tone: 'warning', onClick: go('/overtime', access.overtime()) },
-    { key: 'leave', label: 'ลาของฉัน', value: numberValue(pending.leave), tone: 'info', onClick: go('/leave', access.leave()) },
+    // NOT 'ลาของฉัน'. A supervisor who has direct reports but whose position title lacks
+    // "ผู้จัดการ" lands in employee mode (dashboardMode: headcount.scope is 'none' and
+    // user.manager is false), yet DashboardService#leaveScope now counts their reports' pending
+    // leave alongside their own. "ลาของฉัน" would state that figure is only theirs. The OT row
+    // above keeps "ของฉัน" because overtime really is self-scoped for this mode.
+    { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), tone: 'info', onClick: go('/leave', access.leave()) },
     { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), tone: 'warning', onClick: go('/profile', access.profile()) },
     // No onClick: the topbar bell dropdown is the only UI for notifications,
     // so a row that navigated nowhere would be a false affordance (UX-04).

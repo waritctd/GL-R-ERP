@@ -127,12 +127,14 @@ public class DashboardService {
      * number IS the bug.
      *
      * <p>hr keeps {@code all()} ({@code LeaveService#canReviewAll}, {@code REVIEW_ALL_ROLES} is
-     * {@code {hr}} only). ceo is folded into the same {@code all()} branch, matching the
-     * pre-existing {@link #pendingEmployeeScope} pattern and {@code LeaveService#canViewAll}
-     * ({@code VIEW_ALL_ROLES} is {@code {hr, ceo}}) -- ceo can view every division's requests but,
-     * per {@code REVIEW_ALL_ROLES}, cannot actually action one unless they also happen to be that
-     * employee's direct manager; this dashboard count is a visibility figure, not a claim that ceo
-     * can approve everything it counts. Overtime genuinely does route ฝ่าย manager -> CEO, so
+     * {@code {hr}} only). ceo is folded into the same {@code all()} branch to match the pre-existing
+     * {@link #pendingEmployeeScope} pattern, but be aware that for ceo <b>this branch is dead</b>:
+     * {@link #pendingVisibility} computes leave visibility as {@code isHr || manager ||
+     * employeeSelf}, and all three are false for ceo ({@code isHr} is {@code {hr}} only, while
+     * {@code canViewCompany} short-circuits both {@code employeeSelf} and {@code isDivisionManager}),
+     * so {@link DashboardRepository#pendingApprovals} never calls {@code countLeave} and the ceo
+     * leave badge is always {@code 0}. Do not read this branch as "ceo sees company-wide pending
+     * leave" -- it does not, and that is unchanged by this fix. Overtime genuinely does route ฝ่าย manager -> CEO, so
      * {@link #pendingEmployeeScope} keeps {@link DashboardQueryScope#division} for it; leave never
      * shared that routing, hence the divergence.
      */

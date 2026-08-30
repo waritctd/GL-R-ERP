@@ -18,11 +18,12 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * LeaveService#canReviewEmployee} = {@code canReviewAll(user)} (hr ONLY -- {@code
  * REVIEW_ALL_ROLES} is {@code {hr}}, NOT ceo) OR {@code isDirectManager}, and {@code
  * isDirectManager} reads {@code hr.employee.reports_to_employee_id} (see {@code
- * LeaveRepository#findEmployeeAccess} and its {@code e.reports_to_employee_id} predicates). ceo
- * still gets the dashboard's company-wide {@code all()} branch (see {@code
- * DashboardService#leaveScope}), matching the pre-existing scope pattern this fix mirrors and
- * {@code LeaveService#canViewAll}'s hr+ceo -- that is a VIEW figure, not a claim ceo can approve
- * every request it counts. {@code DashboardRepository#countOvertime} correctly stays division-scoped --
+ * LeaveRepository#findEmployeeAccess} and its {@code e.reports_to_employee_id} predicates). ceo is
+ * routed to the {@code all()} branch by {@code DashboardService#leaveScope}, but that branch is
+ * DEAD for ceo: {@code DashboardService#pendingVisibility} gates leave on {@code isHr || manager ||
+ * employeeSelf}, all three false for ceo, so {@code countLeave} is never called and the ceo leave
+ * badge is always 0. There is deliberately no ceo case below, because there is no ceo leave count
+ * to assert. {@code DashboardRepository#countOvertime} correctly stays division-scoped --
  * overtime genuinely routes ฝ่าย manager -&gt; CEO -- so this class also pins that {@code
  * countOvertime} is untouched, on the SAME fixture, so a regression that scoped BOTH counters the
  * same way (undoing the fix) or NEITHER (breaking overtime) would both be visible here.
