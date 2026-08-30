@@ -868,6 +868,38 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
+  // Leave requires approval (2026-08-05, F1): pendingSubmittedLeaveCount rides on the SAME
+  // suggestedInputs() response as the unpaidLeaveDays suggestion above -- see PayrollPage.jsx's own
+  // comment on why it shares that call, gate, and try/catch.
+  describe('pending-approval leave advisory (F1)', () => {
+    it('shows the warning with the count when leave requests are still pending approval for the month', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [],
+        pendingSubmittedLeaveCount: 3,
+      });
+
+      renderPayrollPage();
+
+      const banner = await screen.findByText(/รายการที่ยังรอการอนุมัติในรอบเดือนนี้/);
+      expect(banner.textContent).toMatch(/3 รายการ/);
+    });
+
+    it('renders no warning when no leave requests are pending approval for the month', async () => {
+      api.payroll.suggestedInputs.mockResolvedValue({
+        payrollMonth: '2026-07-01',
+        suggestions: [],
+        pendingSubmittedLeaveCount: 0,
+      });
+
+      renderPayrollPage();
+      // Wait for the page to finish its first real render before asserting an absence.
+      await expandUnpaidLeaveSection();
+
+      expect(screen.queryByText(/รายการที่ยังรอการอนุมัติในรอบเดือนนี้/)).toBeNull();
+    });
+  });
+
   describe('per-run withholding-tax override (V88)', () => {
     async function openOverrideInput() {
       fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));

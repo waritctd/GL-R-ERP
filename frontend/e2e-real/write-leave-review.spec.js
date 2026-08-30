@@ -13,21 +13,33 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //    three years back, past FULL_SERVICE_MONTHS, so the prorating branch returns the full quota.
 //    `submitting VACATION now succeeds` below is the regression guard for that.
 //
-// 2. The service, which the README previously mis-attributed to the seed. **LeaveService#submit
-//    never produces a SUBMITTED request at all.** Line ~286 reads
+// 2. The service. At authoring time this was the harder blocker, and no seed fix could route
+//    around it: **LeaveService#submit never produced a SUBMITTED request at all.** It read
 //
 //        LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
 //
-//    so a submission is auto-approved or auto-rejected on the spot; there is no pending state to
-//    review. Fixing the hire date changed VACATION from AUTO_REJECTED to APPROVED — it did not,
-//    and could not, produce anything reviewable. No amount of seed work reaches the review path
-//    through the API, because that path is not reachable from #submit by construction.
+//    so a submission was auto-approved or auto-rejected on the spot — there was no pending state
+//    to review, and fixing the hire date only moved VACATION from AUTO_REJECTED to APPROVED; it
+//    did not, and could not, produce anything reviewable. No amount of seed work reached the
+//    review path through the API, because that path was not reachable from #submit by construction.
+//
+//    THIS IS NO LONGER TRUE. Leave requires approval (2026-08-05) changed that line to
+//
+//        LeaveStatus status = systemNote == null ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
+//
+//    A rule-passing submission now lands SUBMITTED — awaiting a human reviewer — instead of
+//    auto-APPROVED, so the review path IS reachable through the API. `submitting VACATION now
+//    succeeds` below submits a fresh request, asserts SUBMITTED (not APPROVED), and cancels it
+//    itself so the run leaves no live row behind.
 //
 // WHAT THAT LEAVES TESTABLE, AND WHY IT IS STILL WORTH HAVING.
 //
-// The only SUBMITTED row in the demo database is the one V21 seeds for DEMO-EMP01, and it is
-// singular and consumable: approving it once would leave every later run with nothing, which is
-// exactly the shared-database trap the other write specs are built to avoid. So this file asserts
+// V21 seeds one persistent SUBMITTED row for DEMO-EMP01, and it is singular and consumable:
+// approving or rejecting it would leave every later run with nothing, which is exactly the
+// shared-database trap the other write specs are built to avoid. (The create-then-cancel test
+// below also produces a SUBMITTED row of its own now that #submit can create one on demand — but
+// it retires that row itself before the test ends, so it is never a second persistent one.)
+// So the REFUSAL and CAPABILITY tests below read V21's row rather than mint their own, and assert
 // the review gate in the two directions that mutate nothing:
 //
 //   • the REFUSALS — a non-reviewer's approve/reject is 403 AND leaves the row untouched. Per this
@@ -44,9 +56,11 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // surfaces with opposite answers for the same actor, which is precisely what an approximating mock
 // gets wrong.
 //
-// STILL NOT COVERED, deliberately: the successful approve → APPROVED transition. Driving it needs
-// either a reviewable row the API cannot create, or a per-test database reset this suite does not
-// have. Recorded in e2e-real/README.md rather than faked here.
+// STILL NOT COVERED here: the successful approve → APPROVED transition. The blocker recorded
+// above is gone — #submit can produce a reviewable row on demand now, the same way the
+// create-then-cancel test below does. Driving submit → approve → verify APPROVED → reconcile
+// quota end-to-end has simply not been built in this file; it is a real gap, not a technical
+// impossibility, and stays recorded in e2e-real/README.md as a follow-up rather than faked here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OWNER = 'employee'; // DEMO-EMP01 — the employee V21's SUBMITTED row belongs to.
@@ -123,9 +137,10 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
 
   test('submitting VACATION now succeeds — the V139 hire-date regression guard', async () => {
     // Before V139 this returned 400: hire_date was NULL, employeeAnnualQuota returned zero, and
-    // the request failed closed with no quota. It now lands APPROVED, which is #submit's normal
-    // outcome for a request that breaks no rule (there is no SUBMITTED path — see this file's
-    // header). Cancelled immediately so the run leaves no live rows behind.
+    // the request failed closed with no quota. It now lands SUBMITTED, which is #submit's normal
+    // outcome for a request that breaks no rule (there IS a SUBMITTED path now — see this file's
+    // header). Cancelled in the finally block below so the run leaves no live row behind even if
+    // an assertion here throws first.
     const day = workingDayFromToday(45);
     const response = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
       leaveTypeCode: 'VACATION',
@@ -152,22 +167,30 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     // Parsed from the text already read above rather than a second response.json() — one read,
     // one source of truth for what the server actually returned.
     const { request: created } = JSON.parse(body);
-    expect(created.status).toBe('APPROVED');
-    expect(
-      Number(created.quotaRemainingBefore),
-      'quota must be non-zero — that is the whole point of the backfill'
-    ).toBeGreaterThan(0);
 
-    // Cancel as HR, NOT as the owner. LeaveService#cancel lets a non-reviewer cancel only a
-    // SUBMITTED request (`if (!reviewer && !"SUBMITTED".equals(...)) -> 409`), and #submit just
-    // auto-APPROVED this one — so an owner-issued cancel 409s and silently leaves the row live.
-    // That leak is not cosmetic: VACATION's annual quota is 6.00 days, and CANCELLED is outside
-    // ACTIVE_QUOTA_STATUSES while APPROVED is inside it, so six leaked runs exhaust the quota and
-    // every later run fails on a zero balance for a reason that looks nothing like the cause.
-    // Asserted rather than fired and forgotten, so a future change to the cancel gate surfaces
-    // here instead of as a slow quota leak.
-    const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${created.id}/cancel`, {});
-    expect(cleanup.status(), 'cleanup cancel must succeed or this spec is not re-runnable').toBe(200);
+    try {
+      expect(created.status).toBe('SUBMITTED');
+      expect(
+        Number(created.quotaRemainingBefore),
+        'quota must be non-zero — that is the whole point of the backfill'
+      ).toBeGreaterThan(0);
+    } finally {
+      // Cancel as HR, NOT as the owner — though both are legal now. LeaveService#cancel lets a
+      // non-reviewer (the owner) cancel only while still SUBMITTED (`if (!reviewer &&
+      // !"SUBMITTED".equals(...)) -> 409`), and #submit leaves this row exactly there, so an
+      // owner-issued cancel would succeed too. HR is kept anyway: a REVIEWER's cancel is valid
+      // regardless of status (SUBMITTED or APPROVED), which is the more robust choice in a
+      // finally block that must clean up whatever state the assertions above left the row in.
+      //
+      // That cleanup is not cosmetic: VACATION's annual quota is 6.00 days, and CANCELLED is
+      // outside ACTIVE_QUOTA_STATUSES while SUBMITTED (like APPROVED before this branch) is
+      // inside it, so a handful of leaked runs exhausts the quota and every later run fails on a
+      // zero balance for a reason that looks nothing like the cause. Asserted rather than fired
+      // and forgotten, so a future change to the cancel gate surfaces here instead of as a slow
+      // quota leak.
+      const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${created.id}/cancel`, {});
+      expect(cleanup.status(), 'cleanup cancel must succeed or this spec is not re-runnable').toBe(200);
+    }
   });
 
   test('HR is a leave reviewer while an unrelated peer is not', async () => {

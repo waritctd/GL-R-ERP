@@ -19,6 +19,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -54,7 +55,8 @@ class LeaveApproverOrgNormalizationIntegrationTest extends AbstractPostgresInteg
             mock(LeaveAttachmentRepository.class),
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class),
+            mock(EmployeeRepository.class));
         try (InputStream in = getClass().getClassLoader()
                 .getResourceAsStream("db/migration/V121__org_normalize_approvers_and_schedules.sql")) {
             assertThat(in).as("V121 migration file must be on the test classpath").isNotNull();
