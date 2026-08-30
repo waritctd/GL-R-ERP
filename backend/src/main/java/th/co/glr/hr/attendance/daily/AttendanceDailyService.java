@@ -202,6 +202,12 @@ public class AttendanceDailyService {
         return repository.findUnmappedBadges(fromDate, toDate);
     }
 
+    /** Pass-through for a report title that names a division-scoped filter -- see
+     * {@link AttendanceDailyRepository#findDivisionName}. */
+    public String findDivisionName(long divisionId) {
+        return repository.findDivisionName(divisionId);
+    }
+
     public List<AttendanceEmployeeOption> listEmployeeOptions(
             Long actorEmployeeId, Long managerDivisionId, boolean includeAll) {
         return repository.findEmployeeOptions(actorEmployeeId, managerDivisionId, includeAll);

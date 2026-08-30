@@ -7891,6 +7891,18 @@ export const api = {
       hasRole('hr', 'ceo');
       throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
+    // HR monthly attendance summary export (xlsx). Mirrors AttendanceController.monthlySummary --
+    // no role gate here either (see this block's own comment above): resolveScope decides what a
+    // real export contains, but this mock has no persisted attendance_daily/leave_request store to
+    // aggregate a real monthly rollup from. Returns the same "the real file renders server-side"
+    // placeholder every other xlsx/pdf demo download in this file returns (see
+    // mockDocPlaceholderBlob's own comment) rather than fabricating a believable-looking summary --
+    // a fake workbook would look verified without proving anything about the real aggregation or
+    // the real role gate. AUTHZ IS NOT AUTHORITATIVE HERE regardless -- see the block comment above.
+    async monthlySummary(params = {}) {
+      requireSession();
+      return mockDocPlaceholderBlob([`สรุปเวลาทำงานประจำเดือน ${params.month ?? ''}`]);
+    },
   },
 
   // Mirrors HolidayController (attendance/schedule/) -- hr.holiday admin CRUD, HR/CEO only.

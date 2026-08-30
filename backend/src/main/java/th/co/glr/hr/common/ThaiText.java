@@ -3,6 +3,7 @@ package th.co.glr.hr.common;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.Locale;
 
 /**
@@ -76,6 +77,22 @@ public final class ThaiText {
     /** {@code d MONTH}, no year -- the FROM side of a cross-month/cross-year {@link #dateRange}. */
     private static String dayMonth(LocalDate d) {
         return d.getDayOfMonth() + " " + THAI_MONTHS[d.getMonthValue() - 1];
+    }
+
+    /**
+     * {@code MONTH (year+543)}, e.g. สิงหาคม 2569 -- the whole-month counterpart to {@link
+     * #date(LocalDate)}, for a report titled by month rather than by day (e.g.
+     * {@code AttendanceMonthlySummaryExporter}'s "สรุปเวลาทำงานประจำเดือน" title line). Reuses the
+     * same {@link #THAI_MONTHS} table {@link #date(LocalDate)}/{@link #dayMonth(LocalDate)} do, so a
+     * future month-name edit cannot land in one and not the other.
+     *
+     * @return {@code ""} for a {@code null} month, mirroring {@link #date(LocalDate)}'s null-guard.
+     */
+    public static String monthYear(YearMonth month) {
+        if (month == null) {
+            return "";
+        }
+        return THAI_MONTHS[month.getMonthValue() - 1] + " " + (month.getYear() + 543);
     }
 
     /**

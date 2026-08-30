@@ -631,6 +631,23 @@ public class AttendanceDailyRepository {
             LocalDate.class);
     }
 
+    /**
+     * A division's display name -- used by {@code AttendanceMonthlySummaryService} to name a
+     * division-scoped export's title line ("ฝ่าย: ...") without a second query against {@code
+     * attendance_daily} itself; this reads {@code hr.division} only, once per export, never per row.
+     *
+     * @return {@code null} if the id does not resolve to a row -- should not happen for a real
+     *     {@code AttendanceScope.divisionId()}, but a label lookup miss is safer left to the
+     *     caller's own fallback text than thrown as an error over what is purely report cosmetics.
+     */
+    public String findDivisionName(long divisionId) {
+        List<String> found = jdbc.query(
+            "SELECT name_th FROM hr.division WHERE division_id = :divisionId",
+            new MapSqlParameterSource("divisionId", divisionId),
+            (rs, rowNum) -> rs.getString("name_th"));
+        return found.isEmpty() ? null : found.get(0);
+    }
+
     /** The employee's division, needed to resolve their schedule. */
     public Long findDivisionId(long employeeId) {
         List<Long> found = jdbc.query(

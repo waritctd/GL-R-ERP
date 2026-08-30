@@ -50,6 +50,13 @@ export const api = {
       apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
     devices: () => apiRequest(API_ROUTES.attendance.devices),
+    // HR monthly attendance summary (xlsx). Plain fetch + res.blob(), same shape as
+    // payroll.exportFile above -- apiRequest's JSON handling is wrong for a binary download.
+    monthlySummary: async (params) => {
+      const res = await fetch(withQuery(API_ROUTES.attendance.monthlySummary, params), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
   },
   // Mirrors HolidayController (attendance/schedule/) — hr.holiday admin CRUD, HR/CEO only.
   holidays: {
