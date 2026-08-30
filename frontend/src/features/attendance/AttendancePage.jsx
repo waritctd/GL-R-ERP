@@ -495,31 +495,9 @@ export function AttendancePage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="เวลาทำงาน"
-        // Floor on the TITLE column, measured (browser sweep, 2026-08-30). PageHeader's default is
-        // `grid-cols-[minmax(0,1fr)_auto]`: the title column may shrink to ZERO while the actions
-        // column is `auto` and never shrinks. Adding สรุปรายเดือน made this row four buttons wide
-        // (619px at 721px viewport), so the title column yielded everything -- and because <h1>
-        // carries `[overflow-wrap:anywhere]`, the text did not overflow visibly, it broke INSIDE
-        // the word: "เวลาทำงาน" rendered one character per line, 20px wide over 8 lines, and the
-        // header grew to 459px tall. Measured band 721-~850px, i.e. the tablet band nobody
-        // screenshots -- at <=720px `mobile:` stacks the header and at >=860px there is room, so
-        // both of the usual checkpoints look clean.
-        //
-        // 180px clears the widest of the two strings this header renders (title max-content 125px,
-        // subtitle 155px), so both stay on one line. The actions div already has `flex-wrap`; it
-        // never wrapped only because the title column yielded first. With the floor the buttons
-        // wrap to two rows and the header is 86px tall at 721/768/820, with zero page overflow.
-        //
-        // Unconditional rather than `tablet:`-scoped on purpose: `cn` is twMerge, so this REPLACES
-        // the base `grid-cols-*` in the same merge group (deterministic), where a `tablet:` variant
-        // would instead co-exist with it and depend on stylesheet emission order. It is a no-op at
-        // desktop widths (1fr already exceeds 180px) and `mobile:grid-cols-[minmax(0,1fr)]` still
-        // wins below 720px exactly as it does today -- that relationship is unchanged.
-        //
-        // Scoped to this page, not fixed in PageHeader: the same crush would hit ANY page that
-        // grows a fourth action, but changing the shared component is a cross-cutting change for
-        // every page in the app and does not belong in an attendance-export branch.
-        className="grid-cols-[minmax(180px,1fr)_auto]"
+        // The per-page `grid-cols-[minmax(180px,1fr)_auto]` override that used to sit here is gone:
+        // the title-column floor it added is now PageHeader's own default, so every page gets it.
+        // See PageHeader.jsx for the mechanism and the measurements.
         subtitle={
           isSelfView
             ? 'เวลาเข้า-ออกงานของคุณในเดือนนี้'
