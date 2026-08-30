@@ -795,7 +795,7 @@ public class PayrollService {
                     + "ตัวเลขจะปรากฏเมื่อฝ่ายบุคคลประมวลผลเงินเดือนจริงและระบุจำนวนวันทำงานแล้ว");
         }
 
-        Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
+        Map<Long, BigDecimal> overtimeByEmployee = overtimePayByEmployee(payrollMonth);
         Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
         Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
         Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
@@ -853,7 +853,7 @@ public class PayrollService {
         Map<Long, PayrollEmployeeInputRequest> inputByEmployee = inputs.stream()
             .collect(Collectors.toMap(PayrollEmployeeInputRequest::employeeId, Function.identity(), (left, right) -> right));
         List<PayrollEmployeeSnapshot> employees = payrollRepository.findActiveEmployees();
-        Map<Long, BigDecimal> overtimeByEmployee = payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth);
+        Map<Long, BigDecimal> overtimeByEmployee = overtimePayByEmployee(payrollMonth);
         Map<Long, BigDecimal> commissionByEmployee = commissionPayByEmployee(payrollMonth);
         // V128: approved สวัสดิการ now reaches payroll instead of being keyed by hand.
         Map<Long, BigDecimal> welfareByEmployee = payrollRepository.findApprovedWelfarePayByEmployee(payrollMonth);
@@ -1284,6 +1284,18 @@ public class PayrollService {
             employee.employeeId(), DeductionObligationKind.LEGAL_EXECUTION, payrollMonth,
             input == null ? null : safe(input.legalExecutionDeduction()));
 
+        // Whole-baht earnings (owner decision, 2026-08-29). Every component is rounded HALF_UP HERE,
+        // at the single point where the map is assembled, so nothing downstream -- gross, the ป.96
+        // limbs, the SSO wage base, the tax, net pay, the payslip, the KBank transfer amount -- is
+        // ever derived from a satang the payslip cannot show. HR typing 1,500.50 into a พิเศษ slot
+        // silently becomes 1,501; that is the owner's explicit instruction, and the stored line (not
+        // the typed value) is what the payslip and every export render, so they stay consistent.
+        //
+        // Deliberately NOT rounded: the garnishment (กรมบังคับคดี) below. A court order names an exact
+        // figure -- ฿0.39 in the August 2026 run -- and rounding it would change what the court is
+        // owed. That single line is why one employee's net can legitimately carry satang.
+        componentAmounts.replaceAll((component, amount) -> payrollWholeBaht(amount));
+
         PayrollClassifiedCalculation calculation = payrollCalculator.calculateClassified(new PayrollClassifiedCalculationInput(
             employee.employeeId(),
             employee.employeeCode() + " " + employee.employeeName(),
@@ -1292,12 +1304,12 @@ public class PayrollService {
             componentSsoInclusion,
             input == null ? BigDecimal.ZERO : input.unpaidLeaveDays(),
             leaveRefundDays == null ? BigDecimal.ZERO : leaveRefundDays,
-            resolvedStudentLoanDeduction,
-            input == null ? BigDecimal.ZERO : input.otherPretaxDeduction(),
-            input == null ? BigDecimal.ZERO : input.otherPostTaxDeductions(),
+            payrollWholeBaht(resolvedStudentLoanDeduction),
+            input == null ? BigDecimal.ZERO : payrollWholeBaht(input.otherPretaxDeduction()),
+            input == null ? BigDecimal.ZERO : payrollWholeBaht(input.otherPostTaxDeductions()),
             // หักตามใบเตือน (handoff section 6): POST-TAX only now.
-            input == null ? BigDecimal.ZERO : input.warningLetterDeduction(),
-            customerReturnDeduction,
+            input == null ? BigDecimal.ZERO : payrollWholeBaht(input.warningLetterDeduction()),
+            payrollWholeBaht(customerReturnDeduction),
             customerReturnAlreadyEarned,
             resolvedLegalExecutionRequested,
             input == null ? null : input.garnishmentType(),
@@ -1707,7 +1719,29 @@ public class PayrollService {
      */
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
         return commissionService.payrollCommissionTotalsByEmployee(payrollMonth).entrySet().stream()
-            .collect(Collectors.toMap(Map.Entry::getKey, entry -> commissionWholeBaht(entry.getValue())));
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> payrollWholeBaht(entry.getValue())));
+    }
+
+    /**
+     * Approved overtime payable this month, rounded to whole baht per employee (owner decision,
+     * 2026-08-28) — the same house convention {@link #commissionWholeBaht} applies to commission,
+     * and for the same reason: the accountant's workbook and the bank transfer file both carry
+     * whole baht, and a satang here is what forces a manual reconciliation pass every month.
+     *
+     * <p>{@code PayrollRepository#findApprovedOvertimePayByEmployee} deliberately keeps returning
+     * the exact figure — {@code payable_minutes/60 × hourly × multiplier} summed over the month is
+     * almost never a whole baht — because that is the number the overtime screens and
+     * {@code OvertimeDayTypeDerivedFromCalendarIntegrationTest}/
+     * {@code RetroactiveOvertimeReachesPayrollIntegrationTest} verify. Rounding <b>here</b>, at the
+     * boundary into payroll, keeps those assertions about OT <em>pricing</em> intact while making
+     * every payroll figure derived from the rounded number.
+     *
+     * <p>Applied PER EMPLOYEE, before any total accumulates — summing raw and rounding once is a
+     * different number (see {@code SsoExporter#wholeBaht}).
+     */
+    private Map<Long, BigDecimal> overtimePayByEmployee(LocalDate payrollMonth) {
+        return payrollRepository.findApprovedOvertimePayByEmployee(payrollMonth).entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> payrollWholeBaht(entry.getValue())));
     }
 
     /**
@@ -1733,6 +1767,16 @@ public class PayrollService {
      * different number, the same trap {@code SsoExporter#wholeBaht} documents.
      */
     private BigDecimal commissionWholeBaht(BigDecimal value) {
+        return payrollWholeBaht(value);
+    }
+
+    /**
+     * Rounds a money figure to whole baht, {@link RoundingMode#HALF_UP}, restoring the 2dp money
+     * scale so callers and the stored columns keep their shape. The shared primitive behind
+     * {@link #commissionWholeBaht} and {@link #overtimePayByEmployee}; see those for the
+     * why-here-and-not-elsewhere reasoning, which differs between the two.
+     */
+    private BigDecimal payrollWholeBaht(BigDecimal value) {
         return (value == null ? BigDecimal.ZERO : value)
             .setScale(0, RoundingMode.HALF_UP)
             .setScale(2);

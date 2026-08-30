@@ -121,9 +121,9 @@ class PayrollYtdAndSsoIntegrationTest extends AbstractPostgresIntegrationTest {
         PayrollLineDto withoutHistoryLine = previewLineFor(august, withoutHistory);
 
         assertThat(withHistoryLine.socialSecurity()).isEqualByComparingTo("875.00");
-        assertThat(withHistoryLine.withholdingTax()).isEqualByComparingTo("8247.50");
+        assertThat(withHistoryLine.withholdingTax()).isEqualByComparingTo("8248.00");
 
-        assertThat(withoutHistoryLine.withholdingTax()).isEqualByComparingTo("2212.50");
+        assertThat(withoutHistoryLine.withholdingTax()).isEqualByComparingTo("2213.00");
         assertThat(withHistoryLine.withholdingTax())
             .isGreaterThan(withoutHistoryLine.withholdingTax().multiply(new BigDecimal("3")));
     }

@@ -590,9 +590,18 @@ public class PayrollCalculator {
             : baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
-        BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
+        // FLOORED to whole baht, not HALF_UP (owner decision, 2026-08-29). เงินเดือน/30 almost never
+        // divides evenly -- 29,495/30 = 983.1667 a day -- so this is the one earnings-or-deduction
+        // figure the engine COMPUTES that would otherwise put satang on a payslip. Rounding a
+        // deduction DOWN deducts no more than was actually earned-and-not-worked, which is the side
+        // the owner chose to err on.
+        //
+        // The refund is floored too, deliberately, even though for a payment "favour the employee"
+        // would argue for CEILING: a refund exists to REVERSE a deduction, and flooring both makes
+        // deduct-then-refund of the same day cancel to exactly zero instead of leaving a stray baht.
+        BigDecimal unpaidLeaveDeduction = wholeBahtDown(dailyRate.multiply(unpaidLeaveDays));
         BigDecimal leaveRefundDays = quantity(input.leaveRefundDays());
-        BigDecimal leaveDeductionRefund = money(dailyRate.multiply(leaveRefundDays));
+        BigDecimal leaveDeductionRefund = wholeBahtDown(dailyRate.multiply(leaveRefundDays));
         BigDecimal otherPretaxDeduction = money(input.otherPretaxDeduction());
 
         BigDecimal grossEarnings = money(regularSumRaw.add(knownSum).add(cumulativeSum));
@@ -723,9 +732,26 @@ public class PayrollCalculator {
             .subtract(money(yearToDate.cumulativeLimbWithholdingTax()))
             .max(ZERO);
 
-        BigDecimal computedWithholding = money(withholdRegular.add(withholdKnown).add(withholdCumulative));
+        // Whole-baht withholding (owner decision, 2026-08-28). The ภ.ง.ด.1 figure and the KBank PCT
+        // transfer amount are both rendered straight from the stored columns -- Pnd1Exporter emits
+        // withholding_tax with two decimals, KBankPctExporter emits net_amount as satang -- so a
+        // satang here is a satang on the filing and on the bank file. Rounding the TAX (rather than
+        // net_amount) is what keeps net = gross - deductions foot: net follows for free once every
+        // deduction is whole. Same HALF_UP house convention as SSO (มาตรา 46 วรรคท้าย, see wholeBaht)
+        // and commission (PayrollService#commissionWholeBaht); unlike SSO it has no statutory basis.
+        //
+        // The <=0.50 rounding residual is credited to the REGULAR limb, matching the override path
+        // below: the regular limb is the catch-all, and moving it there rather than into the
+        // cumulative limb cannot under-tax a future period's cumulative limb. withholdKnown has no
+        // stored limb column of its own and is likewise carried by the regular limb.
+        BigDecimal exactWithholding = money(withholdRegular.add(withholdKnown).add(withholdCumulative));
+        BigDecimal computedWithholding = wholeBaht(exactWithholding);
+        withholdRegular = withholdRegular.add(computedWithholding.subtract(exactWithholding));
 
-        BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null ? null : money(input.withholdingTaxOverride());
+        // Rounded too, for the same reason: an HR-typed override REPLACES the withheld amount
+        // outright, so a satang override would put a satang straight back onto the filing and the
+        // transfer file, defeating the rule above.
+        BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null ? null : wholeBaht(input.withholdingTaxOverride());
         BigDecimal withholdingTax = computedWithholding;
         BigDecimal withholdingTaxRegularLimb = withholdRegular;
         BigDecimal withholdingTaxCumulativeLimb = withholdCumulative;
@@ -1213,6 +1239,16 @@ public class PayrollCalculator {
      */
     private BigDecimal wholeBaht(BigDecimal value) {
         return (value == null ? ZERO : value).setScale(0, RoundingMode.HALF_UP).setScale(MONEY_SCALE);
+    }
+
+    /**
+     * Whole baht rounded toward zero — the deduction-side counterpart to {@link #wholeBaht}, for the
+     * computed leave figures only (see their call site for why the direction differs). FLOOR and
+     * DOWN coincide here because a leave deduction is never negative; DOWN is used so a negative
+     * input could never round away from zero and deduct MORE than the exact amount.
+     */
+    private BigDecimal wholeBahtDown(BigDecimal value) {
+        return (value == null ? ZERO : value).setScale(0, RoundingMode.DOWN).setScale(MONEY_SCALE);
     }
 
     private BigDecimal quantity(BigDecimal value) {

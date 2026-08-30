@@ -122,13 +122,13 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         // 100,000; SSO allowance = min(10,500, 0 + 875x12) = 10,500; taxAllowanceTotal = 60,000 +
         // 10,500 = 70,500; taxableAnnualIncome = 600,000 - 100,000 - 70,500 = 429,500; annualTax =
         // 150,000@5% + 129,500@10% = 7,500 + 12,950 = 20,450; withholdingTax = 20,450 / 12 = 1,704.1666
-        // -> HALF_UP 1,704.17.
+        // -> HALF_UP 1,704.17 -> whole baht 1,704.00 (2026-08-28).
         assertThat(line.projectedAnnualIncome()).isEqualByComparingTo("600000.00");
         assertThat(line.taxAllowanceTotal()).isEqualByComparingTo("70500.00");
         assertThat(line.taxableAnnualIncome()).isEqualByComparingTo("429500.00");
         assertThat(line.annualTax()).isEqualByComparingTo("20450.00");
-        assertThat(line.withholdingTax()).isEqualByComparingTo("1704.17");
-        assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("1704.17");
+        assertThat(line.withholdingTax()).isEqualByComparingTo("1704.00");
+        assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("1704.00");
     }
 
     // ---- EXTRA_KNOWN_FREQUENCY (ข้อ 1(5)): x known count, taxed as the difference ------------------
@@ -151,9 +151,10 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         // taxableWithKnown = 189,500 + 60,000 = 249,500; annualTaxWithKnown =
         // (249,500-150,000)@5% = 4,975.00; withholdKnown = 4,975 - 1,975 = 3,000.00 (withheld IN FULL
         // this period, no division, no reprojection -- it is a one-off, not a recurring wage).
-        // Total withholding = 164.58 + 3,000.00 = 3,164.58.
-        assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("164.58");
-        assertThat(line.withholdingTax()).isEqualByComparingTo("3164.58");
+        // Total withholding = 164.58 + 3,000.00 = 3,164.58 -> whole baht 3,165.00; the +0.42 residual
+        // lands on the regular limb (164.58 -> 165.00), so the two limbs still sum to the total.
+        assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("165.00");
+        assertThat(line.withholdingTax()).isEqualByComparingTo("3165.00");
         assertThat(line.taxableAnnualIncome()).isEqualByComparingTo("249500.00");
         assertThat(line.annualTax()).isEqualByComparingTo("4975.00");
     }
@@ -183,7 +184,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         // 1,975 - 0 (nothing withheld on this limb before) = 2,500.00. Total = 164.58 + 2,500.00 =
         // 2,664.58.
         assertThat(januaryLine.withholdingTaxCumulativeLimb()).isEqualByComparingTo("2500.00");
-        assertThat(januaryLine.withholdingTax()).isEqualByComparingTo("2664.58");
+        assertThat(januaryLine.withholdingTax()).isEqualByComparingTo("2665.00");
 
         // Month 2 (February): special_pay_2 = 20,000 more (cumulative actual now 70,000 for the year).
         PayrollEmployeeInputRequest februaryInput = input(employeeId,
@@ -199,9 +200,9 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         // taxableWithCumulative = 189,500 + 70,000 (YTD cumulative actual) = 259,500;
         // annualTaxWithCumulative = (259,500-150,000)@5% = 5,475.00; withholdCumulative = 5,475 -
         // 1,975 - 2,500 (already withheld on this limb in January) = 1,000.00. Total = 164.58 +
-        // 1,000.00 = 1,164.58.
+        // 1,000.00 = 1,164.58 -> whole baht 1,165.00.
         assertThat(februaryLine.withholdingTaxCumulativeLimb()).isEqualByComparingTo("1000.00");
-        assertThat(februaryLine.withholdingTax()).isEqualByComparingTo("1164.58");
+        assertThat(februaryLine.withholdingTax()).isEqualByComparingTo("1165.00");
     }
 
     // ---- SSO wage base honours the per-component inclusion matrix ---------------------------------
@@ -590,6 +591,54 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
                     + "independently and consume the same tax brackets twice)",
                 sumOfMonthlyWithholding)
             .isEqualByComparingTo("157375.00");
+    }
+
+    /**
+     * Whole-baht payslip (owner decision, 2026-08-29), through the real service + Postgres seam.
+     *
+     * <p>Three rules, each chosen for a reason and each proven here by a value that would otherwise
+     * carry satang:
+     * <ul>
+     *   <li><b>HR-typed earnings round HALF_UP</b>: ฿1,500.50 keyed into พิเศษ 4 is stored as
+     *       ฿1,501.00. The line — not the typed request — is what the payslip, the KBank PCT
+     *       transfer file and ภ.ง.ด.1 all render, so this is what makes them agree.</li>
+     *   <li><b>The computed unpaid-leave deduction FLOORS</b>: ฿29,495/30 = ฿983.1667 a day, so one
+     *       day is ฿983.00, not ฿983.17. Down, because it is a deduction.</li>
+     *   <li><b>Everything composes</b>: gross, deductions and net all land whole.</li>
+     * </ul>
+     *
+     * <p>Non-vacuous: ฿1,500.50 and the ฿0.1667/day remainder are both satang the pre-2026-08-29
+     * engine stored verbatim. Revert either rounding and the matching assertion fails on the satang.
+     */
+    @Test
+    void everyPayslipFigureIsWholeBahtWithTypedEarningsRoundedAndComputedLeaveDeductionFloored() {
+        LocalDate month = LocalDate.of(2026, 3, 1);
+        long employeeId = seedEmployee("WHOLE-BAHT", "กลมบาท", "ทดสอบ", new BigDecimal("29495.00"));
+        payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
+            new ComponentTaxTreatmentUpsertRequest(employeeId, PayrollComponent.SPECIAL_PAY_4, PayrollTaxTreatment.REGULAR_REPROJECT)
+        ), employeeId);
+
+        PayrollLineDto line = previewLineFor(month, employeeId, input(
+            employeeId, specialPays4(new BigDecimal("1500.50")), BigDecimal.ZERO,
+            BigDecimal.ONE,          // one unpaid leave day -> 29,495/30 = 983.1667
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            false, null, null));
+
+        assertThat(line.specialPays().get(3).amount())
+            .as("HR-typed 1,500.50 is rounded HALF_UP on the stored line")
+            .isEqualByComparingTo("1501.00");
+        assertThat(line.unpaidLeaveDeduction())
+            .as("983.1667/day floors to 983.00, not 983.17")
+            .isEqualByComparingTo("983.00");
+        for (BigDecimal figure : List.of(line.grossTaxableIncome(), line.socialSecurity(),
+                line.withholdingTax(), line.totalDeductions(), line.netPay())) {
+            assertThat(figure.stripTrailingZeros().scale())
+                .as("no satang may reach the payslip: %s", figure.toPlainString())
+                .isLessThanOrEqualTo(0);
+        }
+        assertThat(line.netPay())
+            .as("guard against a vacuous pass on an all-zero line")
+            .isGreaterThan(BigDecimal.ZERO);
     }
 
     // --- helpers ------------------------------------------------------------

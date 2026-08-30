@@ -279,15 +279,21 @@ class PayrollExcelReconciliationTest {
     void anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear() {
         SheetRow row = sheetRow("จริญญา");
 
+        // Whole-baht withholding (2026-08-28, see PayrollCalculator's computedWithholding): the four
+        // pins below are the SAME measured figures HALF_UP-rounded to whole baht -- 1204.17 -> 1204,
+        // 268.75 -> 269, 914.58 -> 915 -- not re-measured. The decay SHAPE this test exists to pin
+        // (gradual for REGULAR_REPROJECT, immediate for EXTRA_CUMULATIVE_ACTUAL, and the month each
+        // one first reaches zero) is unchanged by rounding.
+
         // REGULAR_REPROJECT (ข้อ 1(4)): annualised x months remaining, so it decays gradually and is
         // still withholding something through May; zero only from June (measured).
         assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.REGULAR_REPROJECT,
-            new BigDecimal("1204.17"), new BigDecimal("268.75"), 6);
+            new BigDecimal("1204.00"), new BigDecimal("269.00"), 6);
 
         // EXTRA_CUMULATIVE_ACTUAL (ข้อ 1(6)): actual amount, never multiplied out, so there is no
         // projection to shrink gradually -- it is already zero by March (measured).
         assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL,
-            new BigDecimal("914.58"), BigDecimal.ZERO, 3);
+            new BigDecimal("915.00"), BigDecimal.ZERO, 3);
     }
 
     /**
@@ -347,6 +353,61 @@ class PayrollExcelReconciliationTest {
         return calculateForMonth(row, PayrollTaxAllowanceInput.empty(), 5);
     }
 
+    /**
+     * Whole-baht withholding (owner decision, 2026-08-28). ภ.ง.ด.1 and the KBank PCT transfer file
+     * are both rendered straight from the stored columns, so a satang in the withheld tax is a
+     * satang on the filing and on the bank file; the accountant's workbook has always carried whole
+     * baht. Same house convention already applied to SSO and commission.
+     *
+     * <p><b>Non-vacuous by construction.</b> The pinned figure below is one the PRE-rounding engine
+     * got demonstrably wrong for this purpose: this exact fixture (จริญญา, month 1, empty YTD, empty
+     * allowances, REGULAR_REPROJECT) produced <b>1204.17</b> before the change, which is what {@link
+     * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} pinned until 2026-08-28. Revert
+     * {@code PayrollCalculator}'s {@code wholeBaht(exactWithholding)} and this test goes red on the
+     * satang, not merely on a tautology about {@code scale()}.
+     *
+     * <p>The limb assertion is the other half: rounding the TOTAL without moving the residual into a
+     * limb would silently break {@code withholding_tax = regular + cumulative}, the invariant next
+     * period's year-to-date bookkeeping reads back.
+     */
+    @Test
+    void withholdingTaxIsWholeBahtAndTheLimbsStillSumToIt() {
+        PayrollClassifiedCalculation january =
+            calculateForMonth(sheetRow("จริญญา"), PayrollTaxAllowanceInput.empty(), 1);
+
+        assertThat(january.withholdingTax())
+            .as("pre-rounding this fixture withheld 1204.17")
+            .isEqualByComparingTo(new BigDecimal("1204.00"));
+        assertThat(january.withholdingTax().stripTrailingZeros().scale())
+            .as("no satang may survive into the ภ.ง.ด.1 / KBank PCT figure")
+            .isLessThanOrEqualTo(0);
+        assertThat(january.withholdingTax())
+            .as("guard against a vacuous pass on an engine that withholds nothing")
+            .isGreaterThan(BigDecimal.ZERO);
+        assertThat(january.withholdingTaxRegularLimb().add(january.withholdingTaxCumulativeLimb()))
+            .as("the <=0.50 rounding residual must land on a limb, not vanish")
+            .isEqualByComparingTo(january.withholdingTax());
+    }
+
+    /**
+     * An HR override REPLACES the withheld amount outright, so a satang override would put a satang
+     * straight back onto the filing and the transfer file. 1315.60 is not hypothetical — it is the
+     * ป.96 correction typed for ชนิดา ทองเทพ in the August 2026 run, before the whole-baht rule.
+     */
+    @Test
+    void aSatangWithholdingTaxOverrideIsRoundedToWholeBahtToo() {
+        SheetRow row = sheetRow("จริญญา");
+        PayrollClassifiedCalculation overridden = calculateClassified(
+            new BigDecimal(row.baseSalary()), new BigDecimal(row.allowances()), BigDecimal.ZERO,
+            false, PayrollTaxAllowanceInput.empty(), 1, PayrollTaxTreatment.REGULAR_REPROJECT,
+            new BigDecimal("1315.60"));
+
+        assertThat(overridden.withholdingTax()).isEqualByComparingTo(new BigDecimal("1316.00"));
+        assertThat(overridden.withholdingTaxOverride()).isEqualByComparingTo(new BigDecimal("1316.00"));
+        // Net follows the rounded tax, so the transfer amount stays whole too.
+        assertThat(overridden.netPay().stripTrailingZeros().scale()).isLessThanOrEqualTo(0);
+    }
+
     private PayrollClassifiedCalculation calculateForMonth(
             SheetRow row, PayrollTaxAllowanceInput allowances, int month) {
         return calculateForMonth(row, allowances, month, PayrollTaxTreatment.REGULAR_REPROJECT);
@@ -403,6 +464,15 @@ class PayrollExcelReconciliationTest {
             BigDecimal baseSalary, BigDecimal specialPay1, BigDecimal directorRemuneration,
             boolean ssoIncludeSpecialPay1, PayrollTaxAllowanceInput allowances, int month,
             PayrollTaxTreatment specialPayTreatment) {
+        return calculateClassified(baseSalary, specialPay1, directorRemuneration, ssoIncludeSpecialPay1,
+            allowances, month, specialPayTreatment, null);
+    }
+
+    /** Same, with an explicit HR withholding-tax override (null = none). */
+    private PayrollClassifiedCalculation calculateClassified(
+            BigDecimal baseSalary, BigDecimal specialPay1, BigDecimal directorRemuneration,
+            boolean ssoIncludeSpecialPay1, PayrollTaxAllowanceInput allowances, int month,
+            PayrollTaxTreatment specialPayTreatment, BigDecimal withholdingTaxOverride) {
         Map<PayrollComponent, BigDecimal> amounts = new EnumMap<>(PayrollComponent.class);
         amounts.put(PayrollComponent.SALARY, baseSalary);
         amounts.put(PayrollComponent.SPECIAL_PAY_1, specialPay1);
@@ -440,7 +510,7 @@ class PayrollExcelReconciliationTest {
             PayrollYearToDate.empty(),
             month,
             2026,             // taxYear (the sheet is พ.ค.69 / May 2026)
-            null              // withholdingTaxOverride
+            withholdingTaxOverride
         ));
     }
 

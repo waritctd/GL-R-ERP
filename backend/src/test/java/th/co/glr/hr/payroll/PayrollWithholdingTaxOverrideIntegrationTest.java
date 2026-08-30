@@ -35,11 +35,11 @@ import th.co.glr.hr.ticket.TicketRepository;
  * progressive-tax figures ({@code annualTax}, {@code taxableAnnualIncome}, {@code
  * projectedAnnualIncome}) are still computed and reported UNCHANGED. Baseline for this salary
  * (40,000, January, no YTD, no stored allowance) is pinned elsewhere in the suite: taxableAnnualIncome
- * 309,500.00, annualTax 8,450.00, computed withholdingTax 704.17 (see
+ * 309,500.00, annualTax 8,450.00, computed withholdingTax 704.00 (whole baht since 2026-08-28; see
  * PayrollAllowanceDirectorNonTaxableIntegrationTest).
  */
 class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresIntegrationTest {
-    private static final BigDecimal COMPUTED_WITHHOLDING = new BigDecimal("704.17");
+    private static final BigDecimal COMPUTED_WITHHOLDING = new BigDecimal("704.00");
 
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
