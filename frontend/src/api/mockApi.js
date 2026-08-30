@@ -3457,17 +3457,34 @@ function dashboardPending(user, ticketSummary) {
   const profileRequests = isHr || employeeSelf
     ? db.profileRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'pending').length
     : 0;
-  // OT and leave share one gate and one predicate in DashboardRepository
-  // (`pendingVisibility` gives both `isHr || manager || employeeSelf`, and both
-  // countOvertime/countLeave match `status = 'SUBMITTED'` only). MANAGER_APPROVED
-  // is deliberately NOT counted: it is awaiting the CEO, not the viewer, and the
-  // Java query excludes it — counting it here would make the mock read higher
-  // than production.
+  // OT and leave share one GATE (`isHr || manager || employeeSelf`, mirroring
+  // DashboardService#pendingVisibility) but, since PR #846's D1 follow-up fix,
+  // NOT one predicate anymore. countOvertime stays genuinely division-scoped
+  // (employeeIds above, from dashboardEmployeeScope) — overtime really does
+  // route ฝ่าย manager -> CEO. countLeave never shared that routing: it is
+  // scoped by reports_to_employee_id via canReviewLeave (own leave OR an ACTIVE
+  // direct report), the SAME predicate leave.list() below uses for the /leave
+  // LIST this badge links to — mirroring DashboardRepository#countLeave /
+  // DashboardService#leaveScope on the Java side, which in turn mirrors
+  // LeaveRepository's `lr.employee_id = :me OR e.reports_to_employee_id = :me`
+  // plus the is_active guard. Scoping leave by employeeIds/division_id here
+  // (as this used to) makes the mock read HIGHER than production for any
+  // manager whose division holds someone outside their own reports-to chain —
+  // the "mock more permissive than production" shape CLAUDE.md flags (issue
+  // #199). Both still match `status = 'SUBMITTED'` only; MANAGER_APPROVED is
+  // deliberately NOT counted for either — it is awaiting the CEO, not the
+  // viewer, and the Java query excludes it — counting it here would make the
+  // mock read higher than production. canReviewLeave has no ceo bypass (only
+  // hr) — it does not need one: the isHr||manager||employeeSelf gate above is
+  // already false for ceo (canViewCompany short-circuits both `manager` and
+  // `employeeSelf` on the Java side — see DashboardService#pendingVisibility),
+  // so this line is never reached for ceo, unchanged by this fix.
   const overtime = isHr || manager || employeeSelf
     ? db.overtimeRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
     : 0;
   const leave = isHr || manager || employeeSelf
-    ? db.leaveRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
+    ? db.leaveRequests.filter((request) => request.status === 'SUBMITTED'
+        && (request.employeeId === user.employeeId || canReviewLeave(user, request.employeeId))).length
     : 0;
   const commissions = ['sales_manager', 'ceo'].includes(user.role)
     ? db.commissions.filter((record) => ['SUBMITTED', 'MANAGER_APPROVED'].includes(record.status)).length
