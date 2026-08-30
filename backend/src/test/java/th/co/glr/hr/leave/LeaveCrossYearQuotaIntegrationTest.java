@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -52,6 +53,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             mock(FileStorageService.class),
             mock(AuditService.class),
             mock(NotificationService.class),
+            mock(EmployeeRepository.class),
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
@@ -65,7 +67,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "VACATION", "2026-12-31", "2027-01-01"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("2.00");
         assertThat(result.paidDays()).isEqualByComparingTo("2.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
@@ -96,7 +98,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         LeaveRequestDto priorRequest = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2027-01-05", "2027-01-12"), // 6 working days, exactly the 2027 quota
             employee(employeeId));
-        assertThat(priorRequest.status()).isEqualTo("APPROVED");
+        assertThat(priorRequest.status()).isEqualTo("SUBMITTED");
         assertThat(priorRequest.paidDays()).isEqualByComparingTo("6.00");
 
         // Mon 2026-12-28 .. Fri 2027-01-01: working days 12/28, 12/29, 12/30, 12/31 (4, all 2026),
@@ -106,7 +108,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "VACATION", "2026-12-28", "2027-01-01"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("5.00");
         assertThat(result.paidDays()).isEqualByComparingTo("4.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("1.00");
@@ -145,7 +147,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("98.00");
         assertThat(result.paidDays()).isEqualByComparingTo("51.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("47.00");
@@ -187,6 +189,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
         assertThat(result.unpaidDays()).isEqualByComparingTo("47.00");
+        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // to APPROVED requests -- drive the request there before checking payroll's per-month view.
+        leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
 
         Map<Long, BigDecimal> novemberDeduction =
             leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-11-01"));
@@ -224,11 +229,14 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "VACATION", "2026-12-21", "2027-01-05"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("APPROVED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("12.00");
         assertThat(result.paidDays()).isEqualByComparingTo("9.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("3.00");
 
+        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // to APPROVED requests -- drive the request there before checking payroll's month attribution.
+        leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-12-01")))
             .containsEntry(employeeId, new BigDecimal("3.00"));
         // The critical negative assertion.
@@ -247,6 +255,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "VACATION", "2026-12-21", "2027-01-05"),
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("3.00");
+        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (fired from
+        // #cancel below) only fires for a request that is APPROVED at cancel time.
+        leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
         insertProcessedPayrollPeriod(LocalDate.parse("2026-12-01"));
 
@@ -281,6 +292,9 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("47.00");
+        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (fired from
+        // #cancel below) only fires for a request that is APPROVED at cancel time.
+        leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
         insertProcessedPayrollPeriod(LocalDate.parse("2026-11-01"));
 

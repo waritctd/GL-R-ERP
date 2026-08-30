@@ -223,34 +223,41 @@ behaviour worth knowing. All stay recorded so they remain visible.
   nothing about the sales pipeline at all — it is neither run nor skipped-and-reported, just absent
   from that invocation's test count. Every OTHER multi-step flow — leave, a deposit confirmation —
   still has no end-to-end coverage anywhere since the mock suite was removed.
-- **Leave's successful approve transition is still not driven, and the reason is the service, not
-  the seed.** This entry used to blame the demo seed alone. Two things were in the way and only one
-  of them was seed-shaped:
+- **Leave's successful approve transition is still not driven — but the old reason (the service,
+  not the seed) no longer applies.** This entry used to blame the demo seed alone, then was
+  corrected to blame the service instead. Both were real, in order:
 
-  1. *The seed, now fixed.* Every demo employee had `hire_date IS NULL`, and
+  1. *The seed, fixed by V139.* Every demo employee had `hire_date IS NULL`, and
      `LeaveService#employeeAnnualQuota` returns ZERO when `findHireDate` is empty, so `VACATION`
      (6.00) and `PERSONAL` (3.00) prorated to nothing and failed closed on quota, while
      `#autoRejectNote` failed `ORDINATION` with `HIRE_DATE_MISSING_MIN_SERVICE`.
      `V139__demo_missing_role_personas_and_hire_dates.sql` backfills a hire date three years back,
      past `FULL_SERVICE_MONTHS`, and `write-leave-review.spec.js` guards that.
-  2. *The service, which no seed can work around.* **`LeaveService#submit` never produces a
-     `SUBMITTED` request.** It reads
-     `LeaveStatus status = systemNote == null ? APPROVED : AUTO_REJECTED` — a submission is decided
-     on the spot, so there is no pending state to review. Fixing the hire date moved `VACATION`
-     from `AUTO_REJECTED` to `APPROVED`; it did not, and could not, create anything reviewable.
+  2. *The service, fixed by leave requires approval (2026-08-05).* `LeaveService#submit` used to
+     read `LeaveStatus status = systemNote == null ? APPROVED : AUTO_REJECTED` — a submission was
+     decided on the spot, so there was no pending state to review, and fixing the hire date only
+     moved `VACATION` from `AUTO_REJECTED` to `APPROVED`; it did not, and could not, create
+     anything reviewable. That line now reads
+     `LeaveStatus status = systemNote == null ? SUBMITTED : AUTO_REJECTED`, so a rule-passing
+     submission lands `SUBMITTED` — awaiting a human reviewer — and the review path IS reachable
+     through the API.
 
-  The only `SUBMITTED` row in the database is the single one `V21` seeds for `DEMO-EMP01`, and it
-  is consumable — approving it once leaves every later run with nothing. So `write-leave-review.spec.js`
-  asserts the review gate in the two directions that mutate nothing: the **refusals** (`ceo`,
-  `import`, `sales` are each 403 on approve *and* reject, with the row re-read afterwards to prove
-  it was untouched), and HR's **capability** via the `canReview` flag — which
-  `#withCanReviewFlag`'s Javadoc states is computed from the same decision `#approve`/`#reject`
-  gate on, not a role check. That pins the counterpart to #199: HR reviews leave while
-  `OvertimeService` refuses HR outright.
+  `V21` still seeds one persistent `SUBMITTED` row for `DEMO-EMP01`, and it remains singular and
+  consumable — approving or rejecting it leaves every later run with nothing.
+  `write-leave-review.spec.js` reads that row (rather than minting its own) for the tests that must
+  not mutate anything: the **refusals** (`ceo`, `import`, `sales` are each 403 on approve *and*
+  reject, with the row re-read afterwards to prove it was untouched), and HR's **capability** via
+  the `canReview` flag — which `#withCanReviewFlag`'s Javadoc states is computed from the same
+  decision `#approve`/`#reject` gate on, not a role check. That pins the counterpart to #199: HR
+  reviews leave while `OvertimeService` refuses HR outright. Separately, that same spec's
+  `submitting VACATION now succeeds` test now submits its own fresh request, asserts it lands
+  `SUBMITTED`, and cancels it itself — proof the review path is reachable, without touching `V21`'s
+  row.
 
-  **What is still missing is the successful `SUBMITTED → APPROVED` transition.** Driving it needs
-  either a reviewable row the API cannot create or a per-test database reset this suite does not
-  have.
+  **What is still missing is the successful `SUBMITTED → APPROVED` transition.** The old blocker
+  (no reviewable row the API could create) is gone. Driving submit → approve → verify `APPROVED` →
+  reconcile quota end-to-end has simply not been built yet; it is a real gap, not a technical
+  impossibility, and is a candidate for a follow-up.
 - **"Every route loads" is not "every route works".** `route-coverage.spec.js` asserts each page
   renders without hitting the error boundary and without a 5xx behind it. It does not assert the
   page shows the *right* thing; `smoke.spec.js` does that for two screens only.

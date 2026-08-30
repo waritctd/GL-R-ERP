@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -37,7 +38,8 @@ class LeaveReviewSummaryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(LeaveAttachmentRepository.class),
             mock(FileStorageService.class),
             mock(AuditService.class),
-            mock(NotificationService.class));
+            mock(NotificationService.class),
+            mock(EmployeeRepository.class));
     }
 
     @Test

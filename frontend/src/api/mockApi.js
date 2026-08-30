@@ -5482,8 +5482,15 @@ export const api = {
       } else if (noticeDays > 0 && payload.startDate < noticeCutoff && payload.startDate >= today) {
         systemNote = `ต้องยื่นคำขอลาล่วงหน้าอย่างน้อย ${noticeDays} วัน กรุณาติดต่อหัวหน้าหรือ HR หากเป็นเหตุเร่งด่วน`;
       }
-      const status = systemNote ? 'AUTO_REJECTED' : 'APPROVED';
-      const remainingAfter = status === 'APPROVED' ? remainingBefore - totalDays : remainingBefore;
+      // Leave requires approval (2026-08-05): mirrors LeaveService#submit -- a rule-passing request
+      // now lands SUBMITTED (awaiting #approve/#reject below), not APPROVED; auto-rejection is
+      // unchanged. paidDays/unpaidDays/remaining are still computed HERE at submit time and persist
+      // unchanged through a later #approve, exactly as the real service's computeQuotaSplit does
+      // (its `approved` flag is `outcome == null`, i.e. "did the rule chain pass", never a literal
+      // status check) -- so remainingAfter is keyed off systemNote (did any gate fire), not off the
+      // request's own status label.
+      const status = systemNote ? 'AUTO_REJECTED' : 'SUBMITTED';
+      const remainingAfter = systemNote ? remainingBefore : remainingBefore - totalDays;
       const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
       // Paper-form contact-during-leave block: request value if non-blank, else the employee's
@@ -7206,7 +7213,28 @@ export const api = {
     // figures, same spirit as `current` returning a null period above.
     async suggestedInputs(params = {}) {
       hasRole('hr', 'ceo');
-      return delay({ payrollMonth: params.payrollMonth ? `${params.payrollMonth}-01` : null, suggestions: [] });
+      const payrollMonth = params.payrollMonth ? `${params.payrollMonth}-01` : null;
+      // DELIBERATE DEVIATION FROM uat (leave requires approval, 2026-08-05): uat's PayrollPage.jsx
+      // reads `suggestionResponse?.pendingSubmittedLeaveCount`, but uat's own mockApi.js never grew
+      // that field on this response -- the banner it feeds is unreachable under
+      // VITE_USE_MOCKS=true, the exact "mock omits a field the feature keys on" shape CLAUDE.md
+      // names (the etag case). Added here; not present on uat.
+      // Mirrors LeaveRepository#countSubmittedLeaveOverlappingMonth: count of SUBMITTED leave
+      // requests whose [startDate, endDate] overlaps this payroll month. Month math stays plain
+      // integers/strings (no Date-from-ISO-string parsing) to sidestep local-vs-UTC date-only
+      // parsing entirely.
+      let pendingSubmittedLeaveCount = 0;
+      if (params.payrollMonth) {
+        const [yearStr, monthStr] = params.payrollMonth.split('-');
+        const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+        const monthEndInclusive = `${yearStr}-${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
+        pendingSubmittedLeaveCount = db.leaveRequests.filter(
+          (request) => request.status === 'SUBMITTED'
+            && request.startDate <= monthEndInclusive
+            && request.endDate >= payrollMonth
+        ).length;
+      }
+      return delay({ payrollMonth, suggestions: [], pendingSubmittedLeaveCount });
     },
     async preview() {
       hasRole('hr', 'ceo');
