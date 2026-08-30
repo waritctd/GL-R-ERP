@@ -39,6 +39,28 @@ const FRONTEND_PORT = Number(process.env.E2E_REAL_FRONTEND_PORT || 5251);
 const REMOTE_BASE_URL = (process.env.E2E_BASE_URL || '').trim().replace(/\/$/, '');
 const IS_REMOTE = REMOTE_BASE_URL.length > 0;
 
+// Release lockdown (SELF_SERVICE_ONLY — frontend/src/app/features.js). This suite has to set the
+// flag in TWO places and they must agree, because two different processes read it:
+//
+//   1. THIS process. route-coverage.spec.js imports app/permissions.js and uses canAccessPath as
+//      its permission oracle. permissions.js imports features.js, which falls back to process.env
+//      outside Vite — so without this line the oracle would read the flag as ON (absent !== 'false')
+//      and expect an access-denied page on every route the app happily renders.
+//   2. The frontend under test, below.
+//
+// LOCAL mode drives `npm run dev`, which loads frontend/.env.development and is therefore UNLOCKED
+// — so the oracle is pinned unlocked to match. REMOTE mode drives an already-deployed build, which
+// is a production build and therefore LOCKED — so the oracle is left locked to match that instead.
+// Getting this backwards does not error; it just fails every route the two disagree about, which
+// is why it is spelled out rather than left to a default.
+//
+// Consequence worth stating: in local mode this suite covers the FULL app, not the locked
+// configuration that ships. The lock's own behaviour is covered by unit tests
+// (app/permissions.test.js, App.test.jsx, AppShell.test.jsx), not here.
+if (!IS_REMOTE) {
+  process.env.VITE_SELF_SERVICE_ONLY = 'false';
+}
+
 if (IS_REMOTE) {
   let parsed;
   try {
@@ -152,6 +174,11 @@ export default defineConfig({
       VITE_USE_MOCKS: 'false',
       // vite.config.js proxies /api here, so the browser's fetches reach the real Spring app.
       VITE_API_PROXY_TARGET: BACKEND_URL,
+      // Explicitly FALSE for the same reason VITE_USE_MOCKS is: frontend/.env.development already
+      // sets it, but an inline var beats every .env file, so pinning it here makes the frontend
+      // under test unlocked no matter what env files a checkout happens to carry. Kept in lockstep
+      // with the oracle pinned above — see the comment there for why the two must agree.
+      VITE_SELF_SERVICE_ONLY: 'false',
     },
     url: `http://127.0.0.1:${FRONTEND_PORT}`,
     reuseExistingServer: false,

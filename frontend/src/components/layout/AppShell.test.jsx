@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
 
 globalThis.React = React;
@@ -384,5 +384,107 @@ describe('AppShell — <main> is the containing block for its own scrolled subtr
     expect(classes).not.toContain('static');
     expect(classes).not.toContain('absolute');
     expect(classes).not.toContain('fixed');
+  });
+});
+
+// Release lockdown (SELF_SERVICE_ONLY — app/features.js): the sidebar keeps
+// only the ungrouped แดชบอร์ด plus the 'self' group for every role except HR
+// and CEO. features.js reads import.meta.env at module-load time and
+// vitest.config.js pins the flag OFF for the suite, so the locked case needs
+// vi.stubEnv + vi.resetModules + a dynamic import of a fresh AppShell.
+describe('AppShell navigation under the release lockdown', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function renderLockedShell(user, flag = 'true') {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', flag);
+    vi.resetModules();
+    const { AppShell: FreshAppShell } = await import('./AppShell.jsx');
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<FreshAppShell user={user} employee={null} onLogout={vi.fn()} pendingRequestCount={0} />}>
+              <Route index element={<div>เนื้อหา</div>} />
+              <Route path="*" element={<div>เนื้อหา</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  // Asserted wrong-way-round: the items and the group headers must be GONE.
+  // A test that only checked the self-service items are present would pass
+  // just as happily with the whole sales menu still sitting beside them.
+  it('leaves a sales rep the self-service group and nothing else', async () => {
+    await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.queryByText('งานขาย')).toBeNull();
+    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
+    expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
+
+    expect(screen.getByText('บุคคลของฉัน')).toBeTruthy();
+    expect(screen.getByText('แดชบอร์ด')).toBeTruthy();
+    expect(screen.getByText('เวลาทำงาน')).toBeTruthy();
+    expect(screen.getByText('วันลา')).toBeTruthy();
+    expect(screen.getByText('คำขอเงินพิเศษ')).toBeTruthy();
+    expect(screen.getByText('ค่าลดหย่อนภาษี')).toBeTruthy();
+  });
+
+  it('strips the import and account worklists too', async () => {
+    await renderLockedShell({ role: 'import', employeeId: 42, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('คิวขอราคา')).toBeNull();
+    expect(screen.queryByText('งานนำเข้า')).toBeNull();
+
+    await renderLockedShell({ role: 'account', employeeId: 43, name: 'บัญชี ทดสอบ', email: 'account@test.local' });
+    expect(screen.queryByText('งานการเงิน')).toBeNull();
+  });
+
+  // A division manager loses the 'ทีมของฉัน' group but keeps the routes it
+  // pointed at: its three entries are /employee-requests, /leave and
+  // /attendance, all of which the surviving 'self' group also lists. Approval
+  // work therefore still has a way in.
+  it('drops a division manager’s team group without stranding their approvals', async () => {
+    await renderLockedShell({ role: 'employee', employeeId: 44, manager: true, name: 'หัวหน้า ทดสอบ', email: 'mgr@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.queryByText('ทีมของฉัน')).toBeNull();
+    expect(screen.queryByText('การอนุมัติวันลา')).toBeNull();
+    expect(screen.getByText('วันลา')).toBeTruthy();
+    expect(screen.getByText('คำขอเงินพิเศษ')).toBeTruthy();
+  });
+
+  it('exempts hr — the HR and payroll groups survive', async () => {
+    await renderLockedShell({ role: 'hr', employeeId: 45, name: 'บุคคล ทดสอบ', email: 'hr@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.getByText('พนักงานทั้งหมด')).toBeTruthy();
+    expect(screen.getByText('เงินเดือน')).toBeTruthy();
+    expect(screen.getByText('ตรวจสอบค่าลดหย่อนภาษี')).toBeTruthy();
+  });
+
+  it('exempts ceo — payroll and the CEO price config survive', async () => {
+    await renderLockedShell({ role: 'ceo', employeeId: 46, name: 'ผู้บริหาร ทดสอบ', email: 'ceo@test.local' });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.getByText('เงินเดือน')).toBeTruthy();
+    expect(screen.getByText('ตั้งค่าราคา')).toBeTruthy();
+  });
+
+  it('changes nothing when the flag is off', async () => {
+    await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' }, 'false');
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('งานขาย')).toBeTruthy();
   });
 });

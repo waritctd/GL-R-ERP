@@ -1,4 +1,5 @@
 import { ROLE_PERMISSIONS } from '../api/routes.js';
+import { SELF_SERVICE_ONLY } from './features.js';
 
 export function hasPermission(role, key) {
   return ROLE_PERMISSIONS[key]?.includes(role) ?? false;
@@ -149,8 +150,67 @@ const PATH_GUARDS = [
   { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
 
+// Release lockdown (SELF_SERVICE_ONLY, app/features.js). HR and CEO are the
+// only roles that keep the full portal: HR runs payroll and works the ล.ย.01 /
+// profile-request registers, and CEO reads them. Every other role — sales,
+// sales_manager, import, account, warehouse, qc, employee, and a division
+// manager (role `employee` + manager flag) — is confined to self-service.
+//
+// A division manager keeps their approval work despite being locked: leave and
+// OT approval live INSIDE /leave and /employee-requests, both self-service
+// paths, not on the DivisionManagerOverview landing this hides.
+const SELF_SERVICE_EXEMPT_ROLES = ['hr', 'ceo'];
+
+export function isSelfServiceLocked(user) {
+  if (!SELF_SERVICE_ONLY) return false;
+  return !SELF_SERVICE_EXEMPT_ROLES.includes(user?.role);
+}
+
+// The lockdown is an ALLOWLIST, not a blocklist, and that direction is the
+// whole point. canAccessPath below fails OPEN for any path no PATH_GUARDS
+// entry claims (`if (!guard) return true`), so a blocklist would silently
+// admit every route added after this one was written. Listing what stays
+// visible instead makes a new route locked-by-default — the safe direction.
+//
+// Entries match exactly or as a path prefix (`/leave` covers `/leave/new`).
+// The prefix test requires the trailing slash, so `/tax-allowance` does NOT
+// admit `/tax-allowance-review` — HR's register, which must stay hidden.
+const SELF_SERVICE_PATHS = [
+  '/profile',
+  // Alias that redirects to /profile (App.jsx) — must be allowed identically
+  // or an old notification deep-link dies at the access-denied page.
+  '/my-requests',
+  '/attendance',
+  '/leave',
+  '/employee-requests',
+  // Same reasoning as /my-requests: /overtime is a redirect alias for
+  // /employee-requests?tab=ot, and OvertimeService hardcodes it in notification
+  // links.
+  '/overtime',
+  '/tax-allowance',
+];
+
+export function isSelfServicePath(path) {
+  // Match on the pathname alone. Every caller today passes a bare path
+  // (RequireAccess passes location.pathname; EmployeeDashboard's quickActions
+  // list holds bare paths), but the lock changed the cost of getting this
+  // wrong: an unmatched path used to fall through to PATH_GUARDS and be
+  // ALLOWED, and now it is REFUSED. `/employee-requests?tab=ot` — the exact
+  // shape the /overtime alias and EmployeeSelfService's OT card use — would
+  // otherwise send a user to the access-denied page for their own OT tab.
+  // This can only ever admit a path whose pathname is already on the list, so
+  // it cannot widen the lock.
+  const pathname = path.split(/[?#]/)[0];
+  if (pathname === '/') return true;
+  return SELF_SERVICE_PATHS.some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
+}
+
 export function canAccessPath(path, user) {
   if (!user) return false;
+  // Checked BEFORE the guards below, not after: the lockdown has to deny paths
+  // the user's role would otherwise pass (a sales rep on /tickets) as well as
+  // paths no guard claims at all.
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
   return guard.can(user);

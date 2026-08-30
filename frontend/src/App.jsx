@@ -8,7 +8,7 @@ import { LoginPage } from './features/auth/LoginPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
-import { hasPermission, isDivisionManager } from './app/permissions.js';
+import { hasPermission, isDivisionManager, isSelfServiceLocked } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
 // Route pages are code-split: each import() becomes its own chunk, loaded on
@@ -147,6 +147,14 @@ export function App() {
   // instead of re-deriving `!user?.manager` inline — a manager-flagged
   // employee lands on DivisionManagerOverview above, never here.
   const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
+  // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). False for HR
+  // and CEO, who keep the role -> Overview chain below untouched; true for
+  // every other role, which short-circuits that chain to the self-service
+  // landing. It has to override the chain rather than sit inside it: a sales
+  // rep's SalesOverview, a sales_manager's ManagerOverview and a division
+  // manager's DivisionManagerOverview all render pipeline or team data the
+  // lock is meant to remove, and each is chosen ABOVE the self-service branch.
+  const selfServiceLocked = isSelfServiceLocked(user);
 
   useEffect(() => {
     let alive = true;
@@ -261,7 +269,32 @@ export function App() {
               // a plain employee on EmployeeSelfService; any other/unknown role
               // (or a manager-flagged non-employee role, which shouldn't happen)
               // falls through to the generic EmployeeDashboard as a safety net.
-              user.role === 'hr' ? (
+              // Locked roles never reach the chain below — employeeId decides only
+              // WHICH self-service landing they get. EmployeeSelfService reads the
+              // employee's own attendance/leave/OT, so a user row with no linked
+              // employee (an admin-only login) has nothing to show there and falls
+              // back to EmployeeDashboard, exactly as the unlocked path does.
+              selfServiceLocked ? (
+                user.employeeId ? (
+                  <EmployeeSelfService
+                    user={user}
+                    employee={currentEmployee}
+                    profileRequests={dashboardRequests}
+                    dashboardSummary={dashboardSummary}
+                    taxAllowanceSummary={taxAllowanceSummary}
+                    showToast={showToast}
+                  />
+                ) : (
+                  <EmployeeDashboard
+                    user={user}
+                    employee={currentEmployee}
+                    profileRequests={dashboardRequests}
+                    dashboardSummary={dashboardSummary}
+                    taxAllowanceSummary={taxAllowanceSummary}
+                    showToast={showToast}
+                  />
+                )
+              ) : user.role === 'hr' ? (
                 <HrOverview
                   employees={employees}
                   dashboardSummary={dashboardSummary}

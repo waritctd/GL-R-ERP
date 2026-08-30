@@ -224,6 +224,42 @@ PR body is now the handoff**, and the code's own comments carry the reasoning. S
 still cite those paths; treat such a pointer as a history reference, not a live file. Nothing is
 lost — use the `retired-docs` skill to read any of them back out of git history.
 
+## Release lockdown — `main` ships SELF-SERVICE ONLY (2026-08-30)
+
+`main` deploys the Vercel frontend the moment anything merges, and the current release is scoped
+to the self-service surface. `SELF_SERVICE_ONLY` (`frontend/src/app/features.js`) hides everything
+else from every role **except `hr` and `ceo`**, who keep the full portal so payroll and the HR
+registers still run.
+
+- **Visible when locked:** `/` (the self-service landing), `/profile` + `/my-requests`,
+  `/attendance`, `/leave` + `/leave/new`, `/employee-requests` + `/overtime`, `/tax-allowance`.
+  The allowlist is `SELF_SERVICE_PATHS` in `frontend/src/app/permissions.js`.
+- **Hidden when locked:** the whole sales/CRM stack, the HR admin queues, payroll/finance, and the
+  division-manager `ทีมของฉัน` nav group. Leave and OT **approval still works** — those controls
+  live inside `/leave` and `/employee-requests`, which stay visible.
+- ⚠️ **This is UI scoping, NOT a security boundary.** Every backend endpoint still serves, and the
+  hidden pages' JS chunks are still emitted into `dist`. It hides surfaces; it enforces nothing.
+
+**The flag is an OFF-switch (`!== 'false'`), locked by default, and that direction is load-bearing.**
+Production sets no `VITE_` vars, so an `=== 'true'` check would ship an unlocked production — the
+one failure that must not happen. Setting a var instead is not a safe substitute: `vercel.json`'s
+`build.env` is genuinely ignored (legacy config, not read for Git-connected projects), and the
+phase-1 UAT branch's `buildCommand` attempt *appeared* to fail too — though the real cause there was
+that branch's own tracked `frontend/.env.production` overriding the flag inside the build, so
+`buildCommand` is untested on `main` rather than known-broken. See commits `8c11e7b9` / `6e9dd661`
+on `feat/uat-phase1-self-service`. **Either way, do not make this lock depend on a deploy-time
+variable existing.** Verify any build by asset hash: `npm run build` with no vars must emit the SAME
+entry-chunk hash as `VITE_SELF_SERVICE_ONLY=true npm run build`, and a DIFFERENT one from `=false`.
+
+The lock is turned off for local work by `frontend/.env.development` (dev server; force-added past
+`.gitignore`) and `vitest.config.js`'s `test.env` (the suite keeps exercising the full product).
+Both are development-mode-only and cannot reach a production build. **Never add a matching
+`frontend/.env.production`** — that file *is* loaded by the production build.
+
+**Work goes on `develop`, not `main`.** `develop` is the long-lived integration branch for the
+release window; branch features off it and merge back there. `main` takes only what is deliberately
+being released, because merging to `main` *is* the frontend deploy.
+
 ## Repo quick facts
 - **Frontend styling is mid-migration:** Tailwind 4 (`@tailwindcss/vite`) with tokens in `src/index.css`, alongside a legacy global `src/styles.css` being progressively retired. `styles.css` is imported as `@import "./styles.css" layer(legacy)` — so a Tailwind utility **always** beats a `styles.css` rule regardless of selector specificity. Measure computed styles before assuming a legacy rule still applies.
 - **There is no `typecheck` script** — this is a plain JS project with no TypeScript. Validation is `npm run lint && npm test && npm run build`. Do not claim a typecheck ran.
