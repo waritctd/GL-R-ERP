@@ -38,7 +38,7 @@ class DashboardServiceTest {
             DashboardQueryScope scope = invocation.getArgument(0);
             return AttendanceSummaryDto.empty(scope.label());
         });
-        when(repository.pendingApprovals(any(), any(), any(), any())).thenAnswer(invocation -> {
+        when(repository.pendingApprovals(any(), any(), any(), any(), any())).thenAnswer(invocation -> {
             DashboardQueryScope scope = invocation.getArgument(0);
             return PendingApprovalsSummaryDto.of(scope.label(), 0, 0, 0, 0, 0);
         });
@@ -68,13 +68,17 @@ class DashboardServiceTest {
         ArgumentCaptor<DashboardQueryScope> pendingScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         ArgumentCaptor<DashboardPendingVisibility> visibility = ArgumentCaptor.forClass(DashboardPendingVisibility.class);
         ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
-        verify(repository).pendingApprovals(pendingScope.capture(), visibility.capture(), any(), ticketScope.capture());
+        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
+        verify(repository).pendingApprovals(
+            pendingScope.capture(), visibility.capture(), any(), ticketScope.capture(), leaveScope.capture());
         assertThat(pendingScope.getValue().isAll()).isTrue();
         assertThat(visibility.getValue().profileRequests()).isTrue();
         assertThat(visibility.getValue().overtime()).isTrue();
         assertThat(visibility.getValue().leave()).isTrue();
         assertThat(visibility.getValue().tickets()).isFalse();
         assertThat(ticketScope.getValue().isNone()).isTrue();
+        // Scope-decision case 1/5: hr -> ALL for leave (matches LeaveService#canReviewAll).
+        assertThat(leaveScope.getValue().isAll()).isTrue();
     }
 
     @Test
@@ -84,6 +88,14 @@ class DashboardServiceTest {
         ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
         assertThat(ticketScope.getValue().isAll()).isTrue();
+
+        // Scope-decision case 3/5: ceo -> ALL for leave, same branch as hr -- NOT because
+        // LeaveService#canReviewAll covers ceo (REVIEW_ALL_ROLES is {hr} only), but because this
+        // mirrors the pre-existing pendingEmployeeScope pattern and LeaveService#canViewAll
+        // (VIEW_ALL_ROLES is {hr, ceo}): a company-wide VIEW figure, not an approval claim.
+        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
+        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
+        assertThat(leaveScope.getValue().isAll()).isTrue();
     }
 
     @Test
@@ -97,12 +109,19 @@ class DashboardServiceTest {
 
         ArgumentCaptor<DashboardQueryScope> pendingScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         ArgumentCaptor<DashboardPendingVisibility> visibility = ArgumentCaptor.forClass(DashboardPendingVisibility.class);
-        verify(repository).pendingApprovals(pendingScope.capture(), visibility.capture(), any(), any());
+        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
+        verify(repository).pendingApprovals(pendingScope.capture(), visibility.capture(), any(), any(), leaveScope.capture());
         assertThat(pendingScope.getValue().isDivision()).isTrue();
         assertThat(visibility.getValue().profileRequests()).isFalse();
         assertThat(visibility.getValue().overtime()).isTrue();
         assertThat(visibility.getValue().leave()).isTrue();
         assertThat(visibility.getValue().tickets()).isFalse();
+        // Scope-decision case 2/5: division manager -> REPORTS_TO carrying the MANAGER's own
+        // employeeId (11L, not a target employee's) -- overtime keeps the DIVISION scope above
+        // (pendingScope), leave deliberately does not. This is the divergence the bug was in.
+        assertThat(leaveScope.getValue().isReportsTo()).isTrue();
+        assertThat(leaveScope.getValue().isDivision()).isFalse();
+        assertThat(leaveScope.getValue().employeeId()).isEqualTo(11L);
     }
 
     @Test
@@ -121,6 +140,28 @@ class DashboardServiceTest {
         ArgumentCaptor<DashboardQueryScope> ticketScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
         assertThat(ticketScope.getValue().isNone()).isTrue();
+
+        // Scope-decision case 4/5: ordinary (non-manager) employee -> SELF, carrying their OWN
+        // employeeId -- an employee's dashboard card counts their own pending requests, a
+        // different semantic from the manager/hr cases above; not "fixed" here on purpose.
+        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
+        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
+        assertThat(leaveScope.getValue().isSelf()).isTrue();
+        assertThat(leaveScope.getValue().employeeId()).isEqualTo(12L);
+    }
+
+    @Test
+    void leaveScopeIsNoneWhenTheAccountHasNoLinkedEmployeeRecord() {
+        // Scope-decision case 5/5: null employeeId -> NONE. An "employee" role with no bound
+        // employeeId can never be a division manager (isDivisionManager requires a manager flag
+        // AND a divisionId, neither supplied here) and falls through to self(null), which
+        // DashboardQueryScope.self's own null guard turns into none() -- so this counts nothing
+        // rather than leaking someone else's requests or throwing.
+        service.summary(user("employee", null, null, false));
+
+        ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
+        verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
+        assertThat(leaveScope.getValue().isNone()).isTrue();
     }
 
     @Test

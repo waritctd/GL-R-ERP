@@ -42,6 +42,7 @@ public class DashboardService {
         DashboardQueryScope pendingEmployeeScope = pendingEmployeeScope(user);
         DashboardQueryScope commissionScope = commissionScope(user);
         DashboardQueryScope ticketScope = ticketScope(user);
+        DashboardQueryScope leaveScope = leaveScope(user);
         DashboardPendingVisibility pendingVisibility = pendingVisibility(user);
 
         TicketSummaryDto tickets = dashboardRepository.tickets(ticketScope, monthStart, overdueBefore);
@@ -59,7 +60,7 @@ public class DashboardService {
             user.manager(),
             generatedAt,
             dashboardRepository.headcount(headcountScope),
-            dashboardRepository.pendingApprovals(pendingEmployeeScope, pendingVisibility, commissionScope, ticketScope),
+            dashboardRepository.pendingApprovals(pendingEmployeeScope, pendingVisibility, commissionScope, ticketScope, leaveScope),
             dashboardRepository.attendance(attendanceScope, today, monthStart),
             latestPayrollPeriodId,
             tickets,
@@ -93,6 +94,33 @@ public class DashboardService {
         }
         if (isDivisionManager(user)) {
             return DashboardQueryScope.division(user.divisionId());
+        }
+        return DashboardQueryScope.self(user.employeeId());
+    }
+
+    /**
+     * Mirrors {@link #pendingEmployeeScope} in shape -- ONLY the division-manager branch differs,
+     * and it differs on purpose. Leave review authority is {@code LeaveService#canReviewEmployee}
+     * = {@code canReviewAll(user)} (hr ONLY -- {@code REVIEW_ALL_ROLES} is {@code {hr}}) OR
+     * {@code isDirectManager}, and {@code isDirectManager} reads
+     * {@code hr.employee.reports_to_employee_id} (see {@code LeaveRepository}'s
+     * {@code e.reports_to_employee_id} predicates) -- NOT {@code division_id}. ceo is folded into
+     * the same {@code all()} branch as hr below, matching the pre-existing
+     * {@link #pendingEmployeeScope} pattern this mirrors (unchanged by this fix) and
+     * {@code LeaveService#canViewAll} ({@code VIEW_ALL_ROLES} IS {@code {hr, ceo}}) -- ceo can view
+     * every division's requests but, per {@code REVIEW_ALL_ROLES}, cannot actually action one
+     * unless they also happen to be that employee's direct manager; this dashboard count is a
+     * visibility figure, not a claim that ceo can approve everything it counts. Overtime genuinely
+     * does route ฝ่าย manager -> CEO, so {@link #pendingEmployeeScope} keeps
+     * {@link DashboardQueryScope#division} for it; leave does not share that routing and must not
+     * share the scope. Do not consolidate the two branches back together.
+     */
+    private DashboardQueryScope leaveScope(UserPrincipal user) {
+        if (HR_APPROVAL_ROLES.contains(user.role()) || "ceo".equals(user.role())) {
+            return DashboardQueryScope.all();
+        }
+        if (isDivisionManager(user)) {
+            return DashboardQueryScope.reportsTo(user.employeeId());
         }
         return DashboardQueryScope.self(user.employeeId());
     }

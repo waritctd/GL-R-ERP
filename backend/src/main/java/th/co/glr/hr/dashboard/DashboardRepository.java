@@ -74,15 +74,18 @@ public class DashboardRepository {
             DashboardQueryScope employeeScope,
             DashboardPendingVisibility visibility,
             DashboardQueryScope commissionScope,
-            DashboardQueryScope ticketScope) {
+            DashboardQueryScope ticketScope,
+            DashboardQueryScope leaveScope) {
         long profileRequests = visibility.profileRequests()
             ? countProfileRequests(employeeScope)
             : 0;
         long overtime = visibility.overtime()
             ? countOvertime(employeeScope)
             : 0;
+        // leaveScope is deliberately NOT employeeScope -- see countLeave below and
+        // DashboardService#leaveScope for why leave review authority does not follow division_id.
         long leave = visibility.leave()
-            ? countLeave(employeeScope)
+            ? countLeave(leaveScope)
             : 0;
         long commissions = visibility.commissions()
             ? countCommissions(commissionScope)
@@ -398,6 +401,20 @@ public class DashboardRepository {
             """, scope);
     }
 
+    /**
+     * Deliberately scoped by {@code reports_to_employee_id} (a {@code REPORTS_TO} scope), NOT
+     * {@code division_id} -- unlike {@link #countOvertime}, which is genuinely division-scoped
+     * because overtime really does route ฝ่าย manager -> CEO. Leave review authority is
+     * {@code LeaveService#canReviewEmployee} = {@code canReviewAll(user)} (hr ONLY) OR
+     * {@code isDirectManager}, and {@code isDirectManager} reads {@code hr.employee}'s
+     * {@code reports_to_employee_id} (see {@code LeaveRepository#findEmployeeAccess} and its
+     * {@code e.reports_to_employee_id} predicates) -- a division can hold far more members than a
+     * manager's direct reports, so scoping this counter by division overcounts what
+     * {@code /leave} would actually let that manager act on. Do not "consolidate" this back onto
+     * {@code employeeScope}/division scoping; that IS the bug this diverges from. See
+     * {@link DashboardService#leaveScope} for why ceo still lands in the {@code all()} branch
+     * despite {@code canReviewAll} being hr-only.
+     */
     private long countLeave(DashboardQueryScope scope) {
         return countEmployeeScoped("""
             SELECT COUNT(*)
@@ -450,6 +467,10 @@ public class DashboardRepository {
         if (scope.isDivision()) {
             params.addValue("divisionId", scope.divisionId());
             return " AND " + employeeAlias + ".division_id = :divisionId";
+        }
+        if (scope.isReportsTo()) {
+            params.addValue("managerEmployeeId", scope.employeeId());
+            return " AND " + employeeAlias + ".reports_to_employee_id = :managerEmployeeId";
         }
         if (scope.isSelf()) {
             params.addValue("employeeId", scope.employeeId());
