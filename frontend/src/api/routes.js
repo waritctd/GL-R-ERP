@@ -28,6 +28,10 @@ export const API_ROUTES = {
     cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
+    // HR monthly attendance summary export (xlsx) -- mirrors AttendanceController's
+    // GET /monthly-summary.xlsx exactly. No top-level role gate: AttendanceService.resolveScope
+    // (the same scope `daily` above already honours) decides what lands in the file.
+    monthlySummary: '/api/attendance/monthly-summary.xlsx',
   },
   holidays: {
     list: '/api/holidays',

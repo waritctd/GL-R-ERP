@@ -23,7 +23,9 @@ import {
   formatBangkokTime,
   formatDuration,
   formatShortDate,
+  formatThaiMonthYearFromMonthInputValue,
 } from '../../utils/format.js';
+import { downloadBlob } from '../../utils/download.js';
 import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
 import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
 
@@ -82,6 +84,10 @@ export function AttendancePage({ user, showToast }) {
   // no employeeId would only reach a 400 there, so the button that opens the modal stays hidden
   // rather than offering an action that can only fail.
   const canRequestCorrection = !isCeo && !!user.employeeId;
+  // Same condition that already gates the ฝ่าย/พนักงาน filter bar below (`!isSelfView`): an
+  // employee looking at their own month has nothing to summarise that this page doesn't already
+  // show them a day at a time, and the button would just offer a report scoped to themselves alone.
+  const canViewMonthlySummary = !isSelfView;
   // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
   // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
   // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
@@ -108,6 +114,8 @@ export function AttendancePage({ user, showToast }) {
   const [markPresentOpen, setMarkPresentOpen] = useState(false);
   const [markingPresent, setMarkingPresent] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [generatingSummary, setGeneratingSummary] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [lastImport, setLastImport] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -334,6 +342,31 @@ export function AttendancePage({ user, showToast }) {
     }
   }
 
+  /**
+   * สรุปรายเดือน export: an xlsx workbook for the chosen month, honouring the SAME ฝ่าย/พนักงาน
+   * filter (`employeeId`/`divisionId`) the day-view table above already applies -- camelCase query
+   * params, matching `daysQuery`'s own `api.attendance.daily(...)` call just above (a snake_case
+   * key here would silently miss `AttendanceController`'s `@RequestParam(value = "employeeId", ...)`
+   * binding and the filter would drop with no error, since a GET query string gets no
+   * snake_case-to-camelCase translation the way a POST JSON body does elsewhere in this codebase).
+   */
+  async function downloadMonthlySummary({ month }) {
+    setGeneratingSummary(true);
+    try {
+      const blob = await api.attendance.monthlySummary({
+        month,
+        ...(employeeId ? { employeeId } : {}),
+        ...(divisionId ? { divisionId } : {}),
+      });
+      downloadBlob(blob, `attendance-summary-${month}`, 'xlsx');
+      setSummaryOpen(false);
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดสรุปเวลาทำงานไม่สำเร็จ');
+    } finally {
+      setGeneratingSummary(false);
+    }
+  }
+
   async function importFile(event) {
     event.preventDefault();
     if (!selectedFile) {
@@ -424,6 +457,26 @@ export function AttendancePage({ user, showToast }) {
     [employeeOptions, divisionId],
   );
 
+  // Read-only description of the ฝ่าย/พนักงาน filter a สรุปรายเดือน export will carry, shown inside
+  // MonthlySummaryModal -- taken from the SAME divisionId/employeeId state the day-view filter bar
+  // above already reads (never from a separate copy the modal keeps itself), so there is no way for
+  // the dialog to promise a scope different from what the button that opened it is filtered to.
+  // Deliberately worded to echo AttendanceMonthlySummaryService#describeAppliedFilter's own "ฝ่าย: …
+  // · พนักงาน: … " / "ทุกฝ่าย (พนักงานทั้งหมด)" phrasing on the backend, so the modal's promise and
+  // the workbook's own title-block line read as the same sentence.
+  const summaryFilterLabel = useMemo(() => {
+    const parts = [];
+    if (divisionId) {
+      const division = divisionOptions.find((option) => String(option.id) === String(divisionId));
+      parts.push(`ฝ่าย: ${division ? division.name : `#${divisionId}`}`);
+    }
+    if (employeeId) {
+      const employee = employeeOptions.find((option) => String(option.employee_id) === String(employeeId));
+      parts.push(`พนักงาน: ${employee ? `${employee.employee_name} (${employee.employee_code})` : `#${employeeId}`}`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : 'ทุกฝ่าย (พนักงานทั้งหมด)';
+  }, [divisionId, employeeId, divisionOptions, employeeOptions]);
+
   const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
 
   // Single element, reused at two possible positions below (never both at once) -- see the
@@ -442,6 +495,31 @@ export function AttendancePage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="เวลาทำงาน"
+        // Floor on the TITLE column, measured (browser sweep, 2026-08-30). PageHeader's default is
+        // `grid-cols-[minmax(0,1fr)_auto]`: the title column may shrink to ZERO while the actions
+        // column is `auto` and never shrinks. Adding สรุปรายเดือน made this row four buttons wide
+        // (619px at 721px viewport), so the title column yielded everything -- and because <h1>
+        // carries `[overflow-wrap:anywhere]`, the text did not overflow visibly, it broke INSIDE
+        // the word: "เวลาทำงาน" rendered one character per line, 20px wide over 8 lines, and the
+        // header grew to 459px tall. Measured band 721-~850px, i.e. the tablet band nobody
+        // screenshots -- at <=720px `mobile:` stacks the header and at >=860px there is room, so
+        // both of the usual checkpoints look clean.
+        //
+        // 180px clears the widest of the two strings this header renders (title max-content 125px,
+        // subtitle 155px), so both stay on one line. The actions div already has `flex-wrap`; it
+        // never wrapped only because the title column yielded first. With the floor the buttons
+        // wrap to two rows and the header is 86px tall at 721/768/820, with zero page overflow.
+        //
+        // Unconditional rather than `tablet:`-scoped on purpose: `cn` is twMerge, so this REPLACES
+        // the base `grid-cols-*` in the same merge group (deterministic), where a `tablet:` variant
+        // would instead co-exist with it and depend on stylesheet emission order. It is a no-op at
+        // desktop widths (1fr already exceeds 180px) and `mobile:grid-cols-[minmax(0,1fr)]` still
+        // wins below 720px exactly as it does today -- that relationship is unchanged.
+        //
+        // Scoped to this page, not fixed in PageHeader: the same crush would hit ANY page that
+        // grows a fourth action, but changing the shared component is a cross-cutting change for
+        // every page in the app and does not belong in an attendance-export branch.
+        className="grid-cols-[minmax(180px,1fr)_auto]"
         subtitle={
           isSelfView
             ? 'เวลาเข้า-ออกงานของคุณในเดือนนี้'
@@ -457,6 +535,15 @@ export function AttendancePage({ user, showToast }) {
               >
                 <Icon name="plus" />
                 ทำเครื่องหมายเข้างาน
+              </Button>
+            ) : null}
+            {canViewMonthlySummary ? (
+              // secondary, same reasoning as ขอแก้ไขเวลา below: canMarkPresent (hr/ceo) and
+              // canViewMonthlySummary (!isSelfView) overlap for HR/CEO, so this must not compete
+              // with ทำเครื่องหมายเข้างาน for the one primary-weight slot in this row.
+              <Button variant="secondary" onClick={() => setSummaryOpen(true)}>
+                <Icon name="fileText" />
+                สรุปรายเดือน
               </Button>
             ) : null}
             {canRequestCorrection ? (
@@ -630,6 +717,23 @@ export function AttendancePage({ user, showToast }) {
         <AttendanceCorrectionRequestModal
           showToast={showToast}
           onClose={() => setCorrectionOpen(false)}
+        />
+      ) : null}
+
+      {summaryOpen ? (
+        // `today` (not `selectedDate`) is the max/default month: the date STEPPER above is clamped
+        // to the browsable window (monthBounds()), which can only ever reach the CURRENT month, but
+        // HR's main use for this report is LAST month, for payroll -- so this opens its own
+        // <input type="month">, independent of the day-view's own date state, defaulting to (and
+        // capped at) the current month rather than inheriting a stepper value that could not
+        // usefully address the month HR most wants anyway.
+        <MonthlySummaryModal
+          defaultMonth={today.slice(0, 7)}
+          maxMonth={today.slice(0, 7)}
+          filterLabel={summaryFilterLabel}
+          submitting={generatingSummary}
+          onClose={() => setSummaryOpen(false)}
+          onSubmit={downloadMonthlySummary}
         />
       ) : null}
 
@@ -917,6 +1021,62 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
           onChange={(event) => setNotes(event.target.value)}
         />
       </label>
+    </Modal>
+  );
+}
+
+/**
+ * The สรุปรายเดือน (monthly attendance summary) export dialog -- a single {@code <input
+ * type="month">} plus a read-only recap of the ฝ่าย/พนักงาน filter that will be applied, so there is
+ * no doubt about what lands in the downloaded file before generating it. `month` starts as
+ * `defaultMonth` (the current month) and is capped at `maxMonth` (also the current month, passed by
+ * the caller rather than computed here) -- HR can still type/pick any PAST month freely, only the
+ * upper bound is fixed.
+ */
+function MonthlySummaryModal({ defaultMonth, maxMonth, filterLabel, submitting, onClose, onSubmit }) {
+  const [month, setMonth] = useState(defaultMonth);
+
+  return (
+    <Modal
+      title="สรุปเวลาทำงานประจำเดือน"
+      subtitle="ดาวน์โหลดสรุปเวลาทำงานทั้งเดือนเป็นไฟล์ Excel (.xlsx)"
+      onClose={submitting ? undefined : onClose}
+      footer={(
+        <>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>
+            ยกเลิก
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={submitting}
+            onClick={() => onSubmit({ month })}
+          >
+            <Icon name="fileText" />
+            {submitting ? 'กำลังสร้างไฟล์…' : 'ดาวน์โหลด'}
+          </Button>
+        </>
+      )}
+    >
+      <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+        เดือน
+        <input
+          type="month"
+          value={month}
+          max={maxMonth}
+          onChange={(event) => setMonth(event.target.value || defaultMonth)}
+        />
+      </label>
+      {/* The native <input type="month"> picker renders its own locale-dependent label ("August
+          2026", "2026-08", …) depending on the browser, which is not necessarily how a Thai HR user
+          reads a เดือน — this line pins the same reading regardless of browser locale, so nobody
+          generates a file for the wrong month because the picker's own label looked ambiguous. */}
+      <p className="mt-1.5 text-xs text-text-muted">{formatThaiMonthYearFromMonthInputValue(month)}</p>
+
+      <div className="mt-4 rounded-md border border-border bg-surface-subtle p-3 text-sm">
+        <strong className="block text-text-secondary">ขอบเขตที่จะดาวน์โหลด</strong>
+        <span className="text-text-muted">{filterLabel}</span>
+      </div>
     </Modal>
   );
 }

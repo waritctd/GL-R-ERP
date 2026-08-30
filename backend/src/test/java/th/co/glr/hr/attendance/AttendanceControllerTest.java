@@ -7,10 +7,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
+import java.time.YearMonth;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
@@ -23,8 +26,9 @@ import th.co.glr.hr.common.ApiExceptionHandler;
 
 class AttendanceControllerTest {
     private final AttendanceService attendanceService = mock(AttendanceService.class);
+    private final AttendanceMonthlySummaryService monthlySummaryService = mock(AttendanceMonthlySummaryService.class);
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new AttendanceController(attendanceService, new SessionContext()))
+        .standaloneSetup(new AttendanceController(attendanceService, monthlySummaryService, new SessionContext()))
         .setControllerAdvice(new ApiExceptionHandler())
         .setValidator(validator())
         .build();
@@ -316,6 +320,71 @@ class AttendanceControllerTest {
             .andExpect(status().isForbidden());
 
         verifyNoInteractions(attendanceService);
+    }
+
+    // Controller-level wiring only: no role gate to prove here (see the endpoint's own javadoc for
+    // why), month parsing, and the response headers/body. AttendanceMonthlySummaryServiceTest covers
+    // the aggregation rules and AttendanceMonthlySummaryIntegrationTest covers scope enforcement
+    // against a real database -- neither of those is re-tested with this mocked service.
+    @Test
+    void exportsMonthlySummaryForAnyAuthenticatedCaller() throws Exception {
+        byte[] workbook = {1, 2, 3};
+        when(monthlySummaryService.export(
+                org.mockito.ArgumentMatchers.any(UserPrincipal.class),
+                eq(YearMonth.of(2026, 8)),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.isNull()))
+            .thenReturn(workbook);
+
+        mvc.perform(get("/api/attendance/monthly-summary.xlsx?month=2026-08")
+                .session(sessionFor("employee")))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Content-Type",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+            .andExpect(header().string("Content-Disposition",
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("attachment"),
+                    org.hamcrest.Matchers.containsString("attendance-summary-2026-08.xlsx"))))
+            .andExpect(content().bytes(workbook));
+    }
+
+    @Test
+    void passesRequestedEmployeeAndDivisionFiltersThrough() throws Exception {
+        when(monthlySummaryService.export(
+                org.mockito.ArgumentMatchers.any(UserPrincipal.class),
+                eq(YearMonth.of(2026, 8)), eq(10L), eq(5L)))
+            .thenReturn(new byte[0]);
+
+        mvc.perform(get("/api/attendance/monthly-summary.xlsx?month=2026-08&employeeId=10&divisionId=5")
+                .session(sessionFor("hr")))
+            .andExpect(status().isOk());
+
+        verify(monthlySummaryService).export(
+            org.mockito.ArgumentMatchers.any(UserPrincipal.class), eq(YearMonth.of(2026, 8)), eq(10L), eq(5L));
+    }
+
+    @Test
+    void rejectsAMalformedMonth() throws Exception {
+        mvc.perform(get("/api/attendance/monthly-summary.xlsx?month=not-a-month")
+                .session(sessionFor("hr")))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(monthlySummaryService);
+    }
+
+    @Test
+    void rejectsAMissingMonth() throws Exception {
+        mvc.perform(get("/api/attendance/monthly-summary.xlsx")
+                .session(sessionFor("hr")))
+            .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(monthlySummaryService);
+    }
+
+    @Test
+    void requiresAuthenticationForMonthlySummary() throws Exception {
+        mvc.perform(get("/api/attendance/monthly-summary.xlsx?month=2026-08"))
+            .andExpect(status().isUnauthorized());
     }
 
     private MockHttpSession sessionFor(String role) {

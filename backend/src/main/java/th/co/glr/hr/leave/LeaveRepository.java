@@ -454,6 +454,55 @@ public class LeaveRepository {
     }
 
     /**
+     * Monthly attendance summary: APPROVED leave requests for
+     * {@code employeeIds} overlapping [{@code fromDate}, {@code toDate}], feeding {@code
+     * th.co.glr.hr.attendance.AttendanceMonthlySummaryService}'s leave-day attribution so that
+     * report's ขาดงาน column means genuinely unexcused absence rather than conflating it with
+     * approved ลา (decision #1 in the plan).
+     *
+     * <p><strong>APPROVED only</strong> -- deliberately narrower than {@link
+     * #findActiveLeaveSpans}'s SUBMITTED/APPROVED scope just above. A still-SUBMITTED request has
+     * not actually kept anyone from work yet (it might still be rejected), so counting it here would
+     * misreport a day that could still turn into an ordinary ขาดงาน as already-settled leave.
+     *
+     * <p>Joins {@code hr.leave_type} for {@code name_th} -- see {@link ApprovedLeaveSpanDto}'s own
+     * javadoc for why the caller must never hardcode a Thai label per {@code leaveTypeCode} instead.
+     *
+     * <p>{@code employeeIds} empty short-circuits to an empty list without querying, same convention
+     * as {@link #findActiveLeaveSpans} -- an empty SQL {@code IN (...)} list is invalid, and an
+     * attendance scope that resolved to zero employees (e.g. a ฝ่าย manager's out-of-division
+     * {@code employeeId}) has no one left to ask about anyway.
+     */
+    public List<ApprovedLeaveSpanDto> findApprovedLeaveOverlapping(
+            Collection<Long> employeeIds, LocalDate fromDate, LocalDate toDate) {
+        if (employeeIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+            SELECT lr.employee_id, lr.leave_type_code, lt.name_th AS leave_type_name_th,
+                   lr.start_date, lr.end_date, lr.start_time, lr.end_time, lr.total_days
+              FROM hr.leave_request lr
+              JOIN hr.leave_type lt ON lt.leave_type_code = lr.leave_type_code
+             WHERE lr.employee_id IN (:employeeIds)
+               AND lr.status = 'APPROVED'
+               AND lr.start_date <= :toDate
+               AND lr.end_date >= :fromDate
+            """, new MapSqlParameterSource()
+            .addValue("employeeIds", employeeIds)
+            .addValue("fromDate", fromDate)
+            .addValue("toDate", toDate),
+            (rs, rowNum) -> new ApprovedLeaveSpanDto(
+                rs.getLong("employee_id"),
+                rs.getString("leave_type_code"),
+                rs.getString("leave_type_name_th"),
+                rs.getObject("start_date", LocalDate.class),
+                rs.getObject("end_date", LocalDate.class),
+                rs.getObject("start_time", LocalTime.class),
+                rs.getObject("end_time", LocalTime.class),
+                rs.getObject("total_days", BigDecimal.class)));
+    }
+
+    /**
      * V118 cross-year quota fix (2026-08-02): reads from {@code hr.leave_request_quota_year}, NOT the
      * parent's own {@code total_days}/{@code quota_year} -- a request's days may now be attributed to
      * more than one calendar year (§5.4 MATERNITY), so quota consumption for a given year must sum

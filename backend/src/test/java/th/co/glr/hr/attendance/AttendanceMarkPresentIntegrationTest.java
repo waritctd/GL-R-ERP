@@ -26,6 +26,7 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
+import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -68,7 +69,13 @@ class AttendanceMarkPresentIntegrationTest extends AbstractPostgresIntegrationTe
             new AttendanceDatParser(),
             properties,
             dailyService);
-        controller = new AttendanceController(service, new SessionContext());
+        // Real AttendanceMonthlySummaryService (not a mock) -- unrelated to markPresent, but this
+        // file's own philosophy ("wires the real AttendanceController — not a mock") extends
+        // naturally to the controller's other collaborator now that it has one; both LeaveRepository
+        // and AttendanceMonthlySummaryExporter are cheap to construct for real.
+        AttendanceMonthlySummaryService monthlySummaryService = new AttendanceMonthlySummaryService(
+            service, dailyService, new LeaveRepository(jdbc), new AttendanceMonthlySummaryExporter());
+        controller = new AttendanceController(service, monthlySummaryService, new SessionContext());
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         alice = insertEmployee("A001", division);

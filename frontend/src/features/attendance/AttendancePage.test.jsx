@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', () => ({
       importDat: vi.fn(),
       recalculate: vi.fn(),
       markPresent: vi.fn(),
+      monthlySummary: vi.fn(),
     },
     // AttendanceCorrectionPanel.jsx now renders on this page (fix/attendance-correction-on-attendance-page)
     // for anyone CEO or with an employeeId -- both hrUser and selfViewUser below qualify, so every
@@ -351,5 +352,95 @@ describe('AttendancePage attendance-correction button and section', () => {
     await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: 'ขอแก้ไขเวลา' })).toBeNull();
     expect(screen.queryByRole('heading', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ })).toBeNull();
+  });
+});
+
+// สรุปรายเดือน (monthly attendance summary export): the button's HR-vs-self-view gate, the modal's
+// month + read-only filter recap, and the download call/failure path. Mocks the api module per this
+// file's own convention -- no assertion on real blob bytes anywhere below.
+describe('AttendancePage monthly summary export', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.attendance.daily.mockResolvedValue({ days: [] });
+    api.attendance.employees.mockResolvedValue({ employees: [] });
+    api.attendance.devices.mockResolvedValue({ devices: [] });
+    api.attendance.unmapped.mockResolvedValue({ badges: [] });
+    api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
+    // jsdom has no real Blob-URL machinery -- same stub PayrollPage.test.jsx uses for its own
+    // downloadBlob-driven downloads, needed here so a SUCCESSFUL monthlySummary() resolution can
+    // reach downloadBlob() without throwing and masking the assertion as an unrelated error toast.
+    URL.createObjectURL = vi.fn(() => 'blob:attendance-summary');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  it('renders "สรุปรายเดือน" for HR', async () => {
+    renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+    expect(await screen.findByRole('button', { name: 'สรุปรายเดือน' })).not.toBeNull();
+  });
+
+  it('does not render "สรุปรายเดือน" in self-view', async () => {
+    renderWithClient(<AttendancePage user={selfViewUser} showToast={vi.fn()} />);
+
+    // Same settle signal the correction-button tests above use -- unambiguous regardless of how
+    // many รีเฟรช buttons the page ends up with.
+    await waitFor(() => expect(api.attendance.daily).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'สรุปรายเดือน' })).toBeNull();
+  });
+
+  it("opening the modal and confirming calls api.attendance.monthlySummary with the month and the page's current ฝ่าย/พนักงาน filter", async () => {
+    api.attendance.employees.mockResolvedValue({
+      employees: [
+        {
+          employee_id: 10, employee_code: 'E010', employee_name: 'พนักงาน เอ',
+          nick_name: 'เอ', department_name: 'ขาย', division_id: 1, division_name: 'ฝ่ายขาย',
+        },
+        {
+          employee_id: 11, employee_code: 'E011', employee_name: 'พนักงาน บี',
+          nick_name: 'บี', department_name: 'ขาย', division_id: 1, division_name: 'ฝ่ายขาย',
+        },
+      ],
+    });
+    api.attendance.monthlySummary.mockResolvedValue(new Blob(['xlsx'], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }));
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-08-15T05:00:00Z')); // 2026-08-15 12:00 Bangkok
+      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+
+      // Pick a specific employee from the page's OWN filter bar BEFORE opening the modal, so the
+      // download call is proven to carry the SAME filter this picker set, not a value the modal
+      // invented independently.
+      const employeeSelect = await screen.findByLabelText('พนักงาน');
+      fireEvent.change(employeeSelect, { target: { value: '10' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'สรุปรายเดือน' }));
+
+      const monthInput = await screen.findByLabelText('เดือน');
+      // Defaults to the CURRENT month (2026-08-15's month), not selectedDate/monthStart -- see the
+      // modal's own comment for why it must not inherit the day-view stepper's clamp.
+      expect(monthInput.value).toBe('2026-08');
+
+      fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลด/ }));
+
+      await waitFor(() => expect(api.attendance.monthlySummary).toHaveBeenCalledTimes(1));
+      expect(api.attendance.monthlySummary).toHaveBeenCalledWith({ month: '2026-08', employeeId: '10' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed download surfaces a toast rather than throwing', async () => {
+    api.attendance.monthlySummary.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
+    const showToast = vi.fn();
+
+    renderWithClient(<AttendancePage user={hrUser} showToast={showToast} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'สรุปรายเดือน' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ดาวน์โหลด/ }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เครือข่ายขัดข้อง'));
   });
 });
