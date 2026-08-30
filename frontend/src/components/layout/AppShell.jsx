@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { SALES_ENABLED } from '../../app/features.js';
-import { hasPermission, isDivisionManager } from '../../app/permissions.js';
+import { hasPermission, isDivisionManager, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { roleLabel } from '../../utils/format.js';
@@ -125,6 +125,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     mainRef.current?.focus();
   }, []);
   const isTeamManager = isDivisionManager(user);
+  const navLocked = isSelfServiceLocked(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
@@ -257,7 +258,24 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Tax-allowance (ล.ย.01) self-service declaration (issue #387) — mirrors the route's own
     // guard in permissions.js's PATH_GUARDS (`!!u.employeeId`, same shape as /profile).
     { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
-  ].filter((item) => item.show);
+  ]
+    .filter((item) => item.show)
+    // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). Everyone
+    // except HR and CEO keeps only the ungrouped '/' dashboard and the 'self'
+    // group (เวลาทำงาน, คำขอเงินพิเศษ, วันลา, ค่าลดหย่อนภาษี); the 'sales',
+    // 'hr', 'finance' and 'team' groups disappear entirely.
+    //
+    // Group-based, not path-based, and deliberately so: a new nav item is
+    // hidden by default under the lock unless it is explicitly filed under
+    // 'self', which matches how permissions.js's SELF_SERVICE_PATHS allowlist
+    // treats routes. The two lists have to agree — a visible item pointing at a
+    // path canAccessPath refuses would render a nav link straight to the
+    // access-denied page.
+    //
+    // Dropping the 'team' group costs a division manager nothing but duplicate
+    // links: its three entries point at /employee-requests, /leave and
+    // /attendance, which are the same routes the surviving 'self' group lists.
+    .filter((item) => !navLocked || !item.group || item.group === 'self');
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);

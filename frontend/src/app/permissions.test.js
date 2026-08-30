@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { hasPermission, allowedRoute, canAccessPath, isDivisionManager } from './permissions.js';
 
 describe('hasPermission', () => {
@@ -382,5 +382,193 @@ describe('isDivisionManager', () => {
   it('is false for no user', () => {
     expect(isDivisionManager(null)).toBe(false);
     expect(isDivisionManager(undefined)).toBe(false);
+  });
+});
+
+// Release lockdown (SELF_SERVICE_ONLY — app/features.js). features.js reads
+// import.meta.env once, at module-load time, and vitest.config.js pins the flag
+// OFF for the whole suite so the ~1300 tests above keep exercising the full
+// product. Turning it back ON therefore needs vi.stubEnv + vi.resetModules + a
+// dynamic import of a fresh permissions.js: the static `import` at the top of
+// this file already evaluated with the flag off and can only ever prove the
+// unlocked case.
+describe('canAccessPath under the release lockdown', () => {
+  const sales = { role: 'sales', employeeId: 41 };
+  const salesManager = { role: 'sales_manager', employeeId: 42 };
+  const importer = { role: 'import', employeeId: 43 };
+  const account = { role: 'account', employeeId: 44 };
+  const employee = { role: 'employee', employeeId: 45 };
+  const divisionManager = { role: 'employee', employeeId: 46, manager: true };
+  const hr = { role: 'hr', employeeId: 47 };
+  const ceo = { role: 'ceo', employeeId: 48 };
+
+  const LOCKED_ROLES = [sales, salesManager, importer, account, employee, divisionManager];
+
+  // Paths the lock must REMOVE. Asserted wrong-way-round on purpose: each of
+  // these is a page the role could otherwise reach, so the test fails if the
+  // lock stops applying rather than merely if a permission changes.
+  const HIDDEN = [
+    '/hr',
+    '/employees',
+    '/employees/12',
+    '/requests',
+    '/tax-allowance-review',
+    '/payroll',
+    '/payroll/deduction-shortfalls',
+    '/payroll/deduction-consents',
+    '/settings/attendance-calendar',
+    '/settings/leave-policy',
+    '/tickets',
+    '/tickets/7',
+    '/tickets/7/deposit',
+    '/pricing-requests',
+    '/pricing-requests/9',
+    '/fulfilment',
+    '/commissions',
+    '/finance',
+    '/catalog',
+    '/price-import',
+    '/ceo-settings',
+  ];
+
+  const VISIBLE = [
+    '/',
+    '/profile',
+    '/my-requests',
+    '/attendance',
+    '/leave',
+    '/leave/new',
+    '/employee-requests',
+    '/overtime',
+    '/tax-allowance',
+  ];
+
+  async function locked() {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+    vi.resetModules();
+    return import('./permissions.js');
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('refuses every non-self-service path for every locked role', async () => {
+    const { canAccessPath: guard } = await locked();
+    const reachable = [];
+    for (const user of LOCKED_ROLES) {
+      for (const path of HIDDEN) {
+        if (guard(path, user)) reachable.push(`${user.role}${user.manager ? '(manager)' : ''} -> ${path}`);
+      }
+    }
+    expect(reachable).toEqual([]);
+  });
+
+  it('keeps every self-service path reachable for every locked role', async () => {
+    const { canAccessPath: guard } = await locked();
+    const refused = [];
+    for (const user of LOCKED_ROLES) {
+      for (const path of VISIBLE) {
+        if (!guard(path, user)) refused.push(`${user.role}${user.manager ? '(manager)' : ''} -> ${path}`);
+      }
+    }
+    expect(refused).toEqual([]);
+  });
+
+  // The prefix trap this allowlist is built to avoid: HR's ล.ย.01 REGISTER
+  // shares a leading string with the employee's own declaration form. A
+  // `startsWith('/tax-allowance')` test would have admitted it.
+  it('does not let /tax-allowance admit HR’s /tax-allowance-review', async () => {
+    const { canAccessPath: guard } = await locked();
+    expect(guard('/tax-allowance', sales)).toBe(true);
+    expect(guard('/tax-allowance-review', sales)).toBe(false);
+  });
+
+  // The lock flipped an unmatched path from allowed to refused, so a query
+  // string on an otherwise-visible path became a way to lock a user out of
+  // their own page. /employee-requests?tab=ot is the live shape: it is where
+  // the /overtime alias redirects and what EmployeeSelfService's OT card links
+  // to.
+  it('matches on the pathname, ignoring a query string or hash', async () => {
+    const { canAccessPath: guard } = await locked();
+    expect(guard('/employee-requests?tab=ot', sales)).toBe(true);
+    expect(guard('/employee-requests?tab=welfare', sales)).toBe(true);
+    expect(guard('/leave?status=pending#top', sales)).toBe(true);
+    // Still refused — the pathname is what is checked, so a query string is no
+    // way around the lock.
+    expect(guard('/tickets?id=1', sales)).toBe(false);
+    expect(guard('/payroll?month=2026-08', sales)).toBe(false);
+  });
+
+  // The allowlist's reason for existing: canAccessPath fails OPEN for any path
+  // no PATH_GUARDS entry claims, so a route added after this lock shipped must
+  // be hidden by default rather than silently exposed.
+  it('refuses a path no guard claims — the lock is an allowlist, not a blocklist', async () => {
+    const { canAccessPath: guard } = await locked();
+    expect(guard('/some-feature-added-later', sales)).toBe(false);
+    expect(guard('/some-feature-added-later', hr)).toBe(true);
+  });
+
+  it('exempts hr and ceo — their existing access is untouched', async () => {
+    const { canAccessPath: guard } = await locked();
+    expect(guard('/payroll', hr)).toBe(true);
+    expect(guard('/employees', hr)).toBe(true);
+    expect(guard('/tax-allowance-review', hr)).toBe(true);
+    expect(guard('/settings/leave-policy', hr)).toBe(true);
+    expect(guard('/payroll', ceo)).toBe(true);
+    expect(guard('/ceo-settings', ceo)).toBe(true);
+    expect(guard('/tickets', ceo)).toBe(true);
+    // Pre-existing denials still hold — the lock exempts these roles, it does
+    // not widen them. /employees is hr-only (EmployeeController is
+    // requireAnyRole("hr")), so CEO is refused with or without the lock.
+    expect(guard('/employees', ceo)).toBe(false);
+  });
+
+  // The lock narrows; it must never widen. A locked user with no linked
+  // employee row still fails the pre-existing `!!u.employeeId` guards.
+  it('does not widen a self-service path past its own guard', async () => {
+    const { canAccessPath: guard } = await locked();
+    const noEmployeeRow = { role: 'sales', employeeId: null };
+    expect(guard('/profile', noEmployeeRow)).toBe(false);
+    expect(guard('/tax-allowance', noEmployeeRow)).toBe(false);
+  });
+
+  it('changes nothing when the flag is off', async () => {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'false');
+    vi.resetModules();
+    const { canAccessPath: guard } = await import('./permissions.js');
+    expect(guard('/tickets', sales)).toBe(true);
+    expect(guard('/catalog', sales)).toBe(true);
+    expect(guard('/finance', account)).toBe(true);
+  });
+});
+
+describe('isSelfServiceLocked', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('locks every role except hr and ceo when the flag is on', async () => {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+    vi.resetModules();
+    const { isSelfServiceLocked: isLocked } = await import('./permissions.js');
+    for (const role of ['sales', 'sales_manager', 'import', 'account', 'employee', 'warehouse', 'qc']) {
+      expect(isLocked({ role })).toBe(true);
+    }
+    expect(isLocked({ role: 'hr' })).toBe(false);
+    expect(isLocked({ role: 'ceo' })).toBe(false);
+    // An unknown or absent role is locked, not exempt — fail closed.
+    expect(isLocked({ role: undefined })).toBe(true);
+    expect(isLocked(null)).toBe(true);
+  });
+
+  it('locks nobody when the flag is off', async () => {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'false');
+    vi.resetModules();
+    const { isSelfServiceLocked: isLocked } = await import('./permissions.js');
+    expect(isLocked({ role: 'sales' })).toBe(false);
+    expect(isLocked(null)).toBe(false);
   });
 });
