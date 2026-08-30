@@ -84,7 +84,7 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
      * allowance component is exactly 875 x 12 = 10,500.00 (also the annual cap), so taxAllowanceTotal
      * = 60,000 (personal) + 10,500 = 70,500.00; taxableAnnualIncome = 480,000 - 100,000 - 70,500 =
      * 309,500.00; annualTax = 150,000@5% + 9,500@10% = 7,500 + 950 = 8,450.00; withholdingTax =
-     * 8,450 / 12 = 704.1666... -> HALF_UP 704.17; totalDeductions = 875.00 + 704.17 = 1,579.17;
+     * 8,450 / 12 = 704.1666... -> whole baht 704.00 (2026-08-28); totalDeductions = 875.00 + 704.00 = 1,579.00;
      * netPay = 40,000.00 - 1,579.17 = 38,420.83.
      */
     @Test
@@ -104,9 +104,9 @@ class PayrollPersistedPayslipIntegrationTest extends AbstractPostgresIntegration
         // Pinned expectations, independently derived above.
         assertThat(processedLine.grossEarnings()).isEqualByComparingTo("40000.00");
         assertThat(processedLine.socialSecurity()).isEqualByComparingTo("875.00");
-        assertThat(processedLine.withholdingTax()).isEqualByComparingTo("704.17");
-        assertThat(processedLine.totalDeductions()).isEqualByComparingTo("1579.17");
-        assertThat(processedLine.netPay()).isEqualByComparingTo("38420.83");
+        assertThat(processedLine.withholdingTax()).isEqualByComparingTo("704.00");
+        assertThat(processedLine.totalDeductions()).isEqualByComparingTo("1579.00");
+        assertThat(processedLine.netPay()).isEqualByComparingTo("38421.00");
 
         // Re-read from the DB via a fresh repository call -- a second, independent path back to the
         // same row -- and use THOSE values (not the pinned constants above) to build the PDF

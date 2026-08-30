@@ -74,7 +74,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
     /**
      * Salary 40,000, January (monthsRemaining = 12), no YTD. Baseline (no stored allowance):
      * taxableAnnualIncome 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax
-     * 704.17 (see {@link PayrollPersistedPayslipIntegrationTest} for the full trace -- identical
+     * 704.00 (whole baht since 2026-08-28; see {@link PayrollPersistedPayslipIntegrationTest} for the full trace -- identical
      * inputs).
      *
      * <p>With a stored {@code childAllowance} of 100,000.00 for the same employee/tax-year: family
@@ -92,7 +92,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         PayrollLineDto beforeAllowance = previewLineFor(month, employeeId);
         assertThat(beforeAllowance.taxableAnnualIncome()).isEqualByComparingTo("309500.00");
         assertThat(beforeAllowance.annualTax()).isEqualByComparingTo("8450.00");
-        assertThat(beforeAllowance.withholdingTax()).isEqualByComparingTo("704.17");
+        assertThat(beforeAllowance.withholdingTax()).isEqualByComparingTo("704.00");
 
         payrollRepository.upsertTaxAllowances(2026, List.of(
             new EmployeeTaxAllowanceUpsertRequest(
@@ -120,7 +120,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(afterAllowance.taxAllowanceTotal()).isEqualByComparingTo("170500.00");
         assertThat(afterAllowance.taxableAnnualIncome()).isEqualByComparingTo("209500.00");
         assertThat(afterAllowance.annualTax()).isEqualByComparingTo("2975.00");
-        assertThat(afterAllowance.withholdingTax()).isEqualByComparingTo("247.92");
+        assertThat(afterAllowance.withholdingTax()).isEqualByComparingTo("248.00");
         assertThat(afterAllowance.withholdingTax()).isLessThan(beforeAllowance.withholdingTax());
     }
 
@@ -155,8 +155,8 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(directorLine.grossTaxableIncome()).isEqualByComparingTo("150000.00");
         assertThat(directorLine.ssoWageBase()).isEqualByComparingTo("0.00");
         assertThat(directorLine.socialSecurity()).isEqualByComparingTo("0.00");
-        assertThat(directorLine.withholdingTax()).isEqualByComparingTo("22916.67");
-        assertThat(directorLine.netPay()).isEqualByComparingTo("127083.33");
+        assertThat(directorLine.withholdingTax()).isEqualByComparingTo("22917.00");
+        assertThat(directorLine.netPay()).isEqualByComparingTo("127083.00");
 
         // The director's zero SSO is specific to them, not a preview-wide effect.
         assertThat(plainLine.socialSecurity()).isEqualByComparingTo("875.00");
@@ -168,7 +168,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
      * Salary 30,000, January, nonTaxableIncome 5,000 supplied in the request body. Reuses the exact
      * scenario and pinned figures from {@code PayrollCalculatorTest#nonTaxableIncomeIsExcludedFromTaxAndSsoButAddedBackToNet}
      * (grossEarnings 30,000.00 -- non-taxable income never joins gross earnings; grossTaxableIncome
-     * 30,000.00; socialSecurity 875.00; withholdingTax 164.58; netPay = 30,000 - 1,039.58 + 5,000 =
+     * 30,000.00; socialSecurity 875.00; withholdingTax 165.00 (whole baht); netPay = 30,000 - 1,040.00 + 5,000 =
      * 33,960.42) but drives it through {@link PayrollService#preview} against real Postgres via a
      * {@link PayrollEmployeeInputRequest}, rather than constructing {@link PayrollCalculationInput}
      * directly.
@@ -190,8 +190,8 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
         assertThat(line.grossTaxableIncome()).isEqualByComparingTo("30000.00");
         assertThat(line.socialSecurity()).isEqualByComparingTo("875.00");
-        assertThat(line.withholdingTax()).isEqualByComparingTo("164.58");
-        assertThat(line.netPay()).isEqualByComparingTo("33960.42");
+        assertThat(line.withholdingTax()).isEqualByComparingTo("165.00");
+        assertThat(line.netPay()).isEqualByComparingTo("33960.00");
     }
 
     /**
