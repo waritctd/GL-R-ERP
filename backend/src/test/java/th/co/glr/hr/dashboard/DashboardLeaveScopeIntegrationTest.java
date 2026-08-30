@@ -41,6 +41,33 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * NOT the reviewer for -- rather than confirming they can see their own direct report's leave. An
  * assertion that the manager sees their direct report is not evidence; the assertion that they
  * cannot see the same-division employee who reports elsewhere is.
+ *
+ * <p>Extended for PR #846's follow-up review, which found the original fix directionally right but
+ * incomplete in BOTH directions:
+ * <ul>
+ *   <li>{@code nonTitleSupervisorSeesTheirDirectReportsPendingLeaveEvenWithoutAManagerTitle} (D2,
+ *       HIGH) -- {@code leaveScope}'s old gate was {@code isDivisionManager}, a POSITION-TITLE
+ *       match, but leave review authority is "is anyone's {@code reports_to_employee_id}", an
+ *       independent fact. A real supervisor whose title lacked ผู้จัดการ saw a dashboard badge of
+ *       0 while their {@code /leave} review queue had items. This is the one case here asked the
+ *       RIGHT way round on purpose: D2 is an under-count (a false negative), so the test that
+ *       matters proves they CAN see what they should, not that they cannot see what they should
+ *       not (that is D2's sibling test below and the class's original two tests).</li>
+ *   <li>{@code inactiveDirectReportsPendingLeaveIsNotCounted} (D3, MEDIUM) -- the predicate emitted
+ *       only {@code reports_to_employee_id = :id}, missing the {@code is_active = TRUE} guard
+ *       {@code LeaveRepository#countReviewableSubmitted} and {@code LeaveService#isDirectManager}
+ *       both require (pinned on the reviewer-authority side by
+ *       {@code LeaveReviewSummaryIntegrationTest#aManagerOfAnInactiveReportOnlyIsNotAReviewer}).</li>
+ *   <li>{@code managersOwnPendingLeaveIsCountedAlongsideTheirDirectReports} (D4, MEDIUM) -- moving
+ *       off division scope (which always included the manager's own row) onto a reports-to-only
+ *       predicate silently dropped a manager's own pending leave from their own badge.</li>
+ * </ul>
+ * All three are fixed by ONE predicate change: {@code DashboardQueryScope.ownOrDirectReports}, which
+ * deliberately matches the {@code /leave} LIST predicate this badge links to
+ * ({@code LeaveRepository}'s {@code lr.employee_id = :me OR e.reports_to_employee_id = :me}) plus
+ * the {@code is_active} guard -- see {@code DashboardService#leaveScope}'s Javadoc for the full
+ * reasoning, including why this deliberately diverges from
+ * {@code LeaveRepository#countReviewableSubmitted} (which excludes the caller's own requests).
  */
 class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
@@ -119,6 +146,62 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
             .isEqualTo(1);
     }
 
+    @Test
+    void nonTitleSupervisorSeesTheirDirectReportsPendingLeaveEvenWithoutAManagerTitle() {
+        // Same manager/directReport pair as the class fixture, but manager=false on the
+        // UserPrincipal -- simulating a real supervisor whose position title does NOT contain
+        // ผู้จัดการ (DivisionAccessPolicy.isManager is a title-string match, an INDEPENDENT fact
+        // from "is anyone's reports_to_employee_id" -- PR #846 defect D2). Asked the RIGHT way
+        // round on purpose (see class Javadoc): this is an under-count bug, so the test that
+        // matters is that they DO see it, not that they don't.
+        UserPrincipal nonTitleSupervisor = new UserPrincipal(4L, "sup@glr.co.th", "sup", "employee",
+            manager, true, LocalDate.now(), false, division, false);
+
+        PendingApprovalsSummaryDto pending = service.summary(nonTitleSupervisor).pendingApprovals();
+
+        assertThat(pending.leave())
+            .as("D2: a real supervisor without ผู้จัดการ in their title must still see their "
+                + "active direct report's SUBMITTED leave -- must fail against the "
+                + "isDivisionManager-gated branch this fix removes, exactly as it would have "
+                + "before this fix even though managerPrincipal() (manager=true) already covers "
+                + "the same fixture pair above")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void inactiveDirectReportsPendingLeaveIsNotCounted() {
+        // A direct report who is no longer active but still carries a stale SUBMITTED row must
+        // NOT be counted (PR #846 defect D3) -- mirrors LeaveRepository#countReviewableSubmitted's
+        // `AND e.is_active = TRUE` guard and
+        // LeaveReviewSummaryIntegrationTest#aManagerOfAnInactiveReportOnlyIsNotAReviewer.
+        long inactiveReport = insertEmployee("R003", division, manager, false);
+        insertSubmittedLeave(inactiveReport);
+
+        PendingApprovalsSummaryDto pending = service.summary(managerPrincipal()).pendingApprovals();
+
+        assertThat(pending.leave())
+            .as("only directReport's (active) SUBMITTED leave counts -- the inactive report's "
+                + "stale SUBMITTED row must NOT inflate the count from 1 to 2")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void managersOwnPendingLeaveIsCountedAlongsideTheirDirectReports() {
+        // A manager's own SUBMITTED leave silently vanished when the scope moved off division
+        // (division always included the manager's own row) onto reports_to_employee_id alone (a
+        // manager does not report to themselves) -- PR #846 defect D4. The badge must count it
+        // again: it mirrors the /leave LIST predicate (lr.employee_id = :me OR ...), which DOES
+        // include the caller's own rows -- NOT countReviewableSubmitted's reviewer-only predicate
+        // (which deliberately excludes own; a manager cannot review their own leave).
+        insertSubmittedLeave(manager);
+
+        PendingApprovalsSummaryDto pending = service.summary(managerPrincipal()).pendingApprovals();
+
+        assertThat(pending.leave())
+            .as("directReport's SUBMITTED leave (1) PLUS the manager's own (1) == 2")
+            .isEqualTo(2);
+    }
+
     // --- fixture helpers ------------------------------------------------
 
     private UserPrincipal managerPrincipal() {
@@ -147,15 +230,20 @@ class DashboardLeaveScopeIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     private long insertEmployee(String code, long divisionId, Long reportsToEmployeeId) {
+        return insertEmployee(code, divisionId, reportsToEmployeeId, true);
+    }
+
+    private long insertEmployee(String code, long divisionId, Long reportsToEmployeeId, boolean active) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("code", code)
             .addValue("divisionId", divisionId)
             .addValue("reportsTo", reportsToEmployeeId)
+            .addValue("active", active)
             .addValue("hireDate", LocalDate.of(2020, 1, 1));
         return jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, badge_card_no, first_name_th, last_name_th,
                                      division_id, reports_to_employee_id, hire_date, is_active)
-            VALUES (:code, :code, 'ทดสอบ', :code, :divisionId, :reportsTo, :hireDate, TRUE)
+            VALUES (:code, :code, 'ทดสอบ', :code, :divisionId, :reportsTo, :hireDate, :active)
             RETURNING employee_id
             """, params, Long.class);
     }

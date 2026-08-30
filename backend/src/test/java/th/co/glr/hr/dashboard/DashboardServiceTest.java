@@ -116,10 +116,16 @@ class DashboardServiceTest {
         assertThat(visibility.getValue().overtime()).isTrue();
         assertThat(visibility.getValue().leave()).isTrue();
         assertThat(visibility.getValue().tickets()).isFalse();
-        // Scope-decision case 2/5: division manager -> REPORTS_TO carrying the MANAGER's own
-        // employeeId (11L, not a target employee's) -- overtime keeps the DIVISION scope above
-        // (pendingScope), leave deliberately does not. This is the divergence the bug was in.
-        assertThat(leaveScope.getValue().isReportsTo()).isTrue();
+        // Scope-decision case 2/5: division manager -> OWN_OR_DIRECT_REPORTS carrying the
+        // MANAGER's own employeeId (11L, not a target employee's) -- overtime keeps the DIVISION
+        // scope above (pendingScope), leave deliberately does not. This is the divergence the bug
+        // was in. NOTE this scope value is now IDENTICAL to what a non-manager gets below
+        // (employeeSummaryUsesSelfScopeAndNoBroadHeadcountOrTickets) -- leaveScope no longer
+        // branches on isDivisionManager at all (PR #846 defect D2 fix), so "manager=true" here is
+        // not actually what selects this branch anymore. It is kept true anyway so this test still
+        // separately exercises the headcount/pendingScope DIVISION assertions above, which DO still
+        // depend on it.
+        assertThat(leaveScope.getValue().isOwnOrDirectReports()).isTrue();
         assertThat(leaveScope.getValue().isDivision()).isFalse();
         assertThat(leaveScope.getValue().employeeId()).isEqualTo(11L);
     }
@@ -141,22 +147,28 @@ class DashboardServiceTest {
         verify(repository).tickets(ticketScope.capture(), eq(LocalDate.of(2026, 7, 1)), any());
         assertThat(ticketScope.getValue().isNone()).isTrue();
 
-        // Scope-decision case 4/5: ordinary (non-manager) employee -> SELF, carrying their OWN
-        // employeeId -- an employee's dashboard card counts their own pending requests, a
-        // different semantic from the manager/hr cases above; not "fixed" here on purpose.
+        // Scope-decision case 4/5: ordinary (non-manager, manager=false) employee -> ALSO
+        // OWN_OR_DIRECT_REPORTS now, carrying their OWN employeeId -- this is the D2 regression
+        // proof at the unit level. Before this fix, manager=false routed here to self(12L) and
+        // ONLY manager=true (case 2/5 above) reached reportsTo(...); now both land on the exact
+        // same scope TYPE regardless of the manager flag, because leaveScope no longer branches on
+        // isDivisionManager at all. A non-manager with no active direct reports still ends up
+        // counting only their own leave in practice (see DashboardLeaveScopeIntegrationTest's
+        // nonTitleSupervisor case for the branch actually mattering), so this is not a behaviour
+        // change for the common case -- attendanceScope right above still correctly uses self().
         ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);
         verify(repository).pendingApprovals(any(), any(), any(), any(), leaveScope.capture());
-        assertThat(leaveScope.getValue().isSelf()).isTrue();
+        assertThat(leaveScope.getValue().isOwnOrDirectReports()).isTrue();
         assertThat(leaveScope.getValue().employeeId()).isEqualTo(12L);
     }
 
     @Test
     void leaveScopeIsNoneWhenTheAccountHasNoLinkedEmployeeRecord() {
-        // Scope-decision case 5/5: null employeeId -> NONE. An "employee" role with no bound
-        // employeeId can never be a division manager (isDivisionManager requires a manager flag
-        // AND a divisionId, neither supplied here) and falls through to self(null), which
-        // DashboardQueryScope.self's own null guard turns into none() -- so this counts nothing
-        // rather than leaking someone else's requests or throwing.
+        // Scope-decision case 5/5: null employeeId -> NONE. leaveScope calls
+        // DashboardQueryScope.ownOrDirectReports(null) unconditionally for a non-hr/ceo role (no
+        // isDivisionManager gate to fall through anymore), and ownOrDirectReports's own null guard
+        // turns that into none() -- so this counts nothing rather than leaking someone else's
+        // requests or throwing.
         service.summary(user("employee", null, null, false));
 
         ArgumentCaptor<DashboardQueryScope> leaveScope = ArgumentCaptor.forClass(DashboardQueryScope.class);

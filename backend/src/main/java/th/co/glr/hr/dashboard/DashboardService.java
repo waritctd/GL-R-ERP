@@ -99,30 +99,48 @@ public class DashboardService {
     }
 
     /**
-     * Mirrors {@link #pendingEmployeeScope} in shape -- ONLY the division-manager branch differs,
-     * and it differs on purpose. Leave review authority is {@code LeaveService#canReviewEmployee}
-     * = {@code canReviewAll(user)} (hr ONLY -- {@code REVIEW_ALL_ROLES} is {@code {hr}}) OR
-     * {@code isDirectManager}, and {@code isDirectManager} reads
-     * {@code hr.employee.reports_to_employee_id} (see {@code LeaveRepository}'s
-     * {@code e.reports_to_employee_id} predicates) -- NOT {@code division_id}. ceo is folded into
-     * the same {@code all()} branch as hr below, matching the pre-existing
-     * {@link #pendingEmployeeScope} pattern this mirrors (unchanged by this fix) and
-     * {@code LeaveService#canViewAll} ({@code VIEW_ALL_ROLES} IS {@code {hr, ceo}}) -- ceo can view
-     * every division's requests but, per {@code REVIEW_ALL_ROLES}, cannot actually action one
-     * unless they also happen to be that employee's direct manager; this dashboard count is a
-     * visibility figure, not a claim that ceo can approve everything it counts. Overtime genuinely
-     * does route ฝ่าย manager -> CEO, so {@link #pendingEmployeeScope} keeps
-     * {@link DashboardQueryScope#division} for it; leave does not share that routing and must not
-     * share the scope. Do not consolidate the two branches back together.
+     * Unlike {@link #pendingEmployeeScope}, this is NOT gated by {@link #isDivisionManager}. It used
+     * to be: a "division manager" per {@code DivisionAccessPolicy.isManager} is a POSITION-TITLE
+     * match (contains "ผู้จัดการ"), which routed a title match to {@code reportsTo(...)} and
+     * everyone else to {@code self(...)} -- so a real supervisor whose title happened not to contain
+     * ผู้จัดการ got a dashboard badge of 0 while their own {@code /leave} review queue had items
+     * (PR #846 defect D2). Leave review authority is "is anyone's {@code reports_to_employee_id}" --
+     * an independent, department-normalized fact (see
+     * {@code LeaveApproverOrgNormalizationIntegrationTest}), not a title string -- so the title gate
+     * is removed here rather than repaired: EVERY non-hr/non-ceo user now gets the SAME
+     * {@link DashboardQueryScope#ownOrDirectReports} scope. Someone with no active direct reports
+     * simply matches only their own leave, exactly what {@code self(...)} used to give them, so
+     * this is not a widening for the common case -- only for the real-reviewer-without-title-match
+     * case D2 was about.
+     *
+     * <p>{@link DashboardQueryScope#ownOrDirectReports} deliberately matches the {@code /leave} LIST
+     * predicate this badge navigates to ({@code LeaveRepository#findRequests},
+     * {@code LeaveRepository}'s {@code lr.employee_id = :me OR e.reports_to_employee_id = :me}),
+     * plus the {@code is_active} guard {@code LeaveRepository#countReviewableSubmitted} and
+     * {@code LeaveService#isDirectManager} both also require (PR #846 defect D3) -- NOT
+     * {@code countReviewableSubmitted}'s reviewer-only predicate, which deliberately EXCLUDES the
+     * caller's own requests (a manager cannot review their own leave). This dashboard count is a
+     * VIEW figure that must agree with the page it links to, not an approval-eligibility count, so a
+     * manager's own SUBMITTED leave counts again here (PR #846 defect D4) even though it would not
+     * count toward {@code countReviewableSubmitted}. Do not "fix" this back toward
+     * {@code countReviewableSubmitted}'s shape -- a badge that leads to a page showing a different
+     * number IS the bug.
+     *
+     * <p>hr keeps {@code all()} ({@code LeaveService#canReviewAll}, {@code REVIEW_ALL_ROLES} is
+     * {@code {hr}} only). ceo is folded into the same {@code all()} branch, matching the
+     * pre-existing {@link #pendingEmployeeScope} pattern and {@code LeaveService#canViewAll}
+     * ({@code VIEW_ALL_ROLES} is {@code {hr, ceo}}) -- ceo can view every division's requests but,
+     * per {@code REVIEW_ALL_ROLES}, cannot actually action one unless they also happen to be that
+     * employee's direct manager; this dashboard count is a visibility figure, not a claim that ceo
+     * can approve everything it counts. Overtime genuinely does route ฝ่าย manager -> CEO, so
+     * {@link #pendingEmployeeScope} keeps {@link DashboardQueryScope#division} for it; leave never
+     * shared that routing, hence the divergence.
      */
     private DashboardQueryScope leaveScope(UserPrincipal user) {
         if (HR_APPROVAL_ROLES.contains(user.role()) || "ceo".equals(user.role())) {
             return DashboardQueryScope.all();
         }
-        if (isDivisionManager(user)) {
-            return DashboardQueryScope.reportsTo(user.employeeId());
-        }
-        return DashboardQueryScope.self(user.employeeId());
+        return DashboardQueryScope.ownOrDirectReports(user.employeeId());
     }
 
     private DashboardPendingVisibility pendingVisibility(UserPrincipal user) {

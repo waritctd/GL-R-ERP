@@ -63,10 +63,11 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(divisionHeadcount.byDivision()).hasSize(1);
 
         // leaveScope (5th arg) is deliberately the SAME value as employeeScope (1st arg) in both
-        // calls below, NOT a DashboardQueryScope.reportsTo(...) -- this fixture's insertEmployee
-        // never populates reports_to_employee_id (see its helper below), so a REPORTS_TO scope
-        // would just count 0 here regardless of correctness and prove nothing. That is fine: this
-        // test's job is to confirm pendingApprovals(...) wires each counter through to its SQL
+        // calls below, NOT a DashboardQueryScope.ownOrDirectReports(...) -- this fixture's
+        // insertEmployee never populates reports_to_employee_id (see its helper below), so an
+        // OWN_OR_DIRECT_REPORTS scope would just count 0 here regardless of correctness and prove
+        // nothing. That is fine: this test's job is to confirm pendingApprovals(...) wires each
+        // counter through to its SQL
         // under a GIVEN scope (ALL/DIVISION here still exercise whereEmployeeScope's shared
         // branches via countLeave, same as before this parameter existed) -- it is not a scope
         // authorization test. The reports-to boundary itself (a manager must NOT see a

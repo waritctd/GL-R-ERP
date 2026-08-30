@@ -402,18 +402,23 @@ public class DashboardRepository {
     }
 
     /**
-     * Deliberately scoped by {@code reports_to_employee_id} (a {@code REPORTS_TO} scope), NOT
+     * Deliberately scoped by "own row OR an ACTIVE direct report's" (an
+     * {@code OWN_OR_DIRECT_REPORTS} scope, keyed off {@code reports_to_employee_id}), NOT
      * {@code division_id} -- unlike {@link #countOvertime}, which is genuinely division-scoped
-     * because overtime really does route ฝ่าย manager -> CEO. Leave review authority is
-     * {@code LeaveService#canReviewEmployee} = {@code canReviewAll(user)} (hr ONLY) OR
-     * {@code isDirectManager}, and {@code isDirectManager} reads {@code hr.employee}'s
-     * {@code reports_to_employee_id} (see {@code LeaveRepository#findEmployeeAccess} and its
-     * {@code e.reports_to_employee_id} predicates) -- a division can hold far more members than a
-     * manager's direct reports, so scoping this counter by division overcounts what
-     * {@code /leave} would actually let that manager act on. Do not "consolidate" this back onto
-     * {@code employeeScope}/division scoping; that IS the bug this diverges from. See
+     * because overtime really does route ฝ่าย manager -> CEO. A division can hold far more members
+     * than a manager's direct reports, so scoping this counter by division overcounts what
+     * {@code /leave} would actually let that manager act on (PR #846's original defect). Do not
+     * "consolidate" this back onto {@code employeeScope}/division scoping; that IS the bug this
+     * diverges from.
+     *
+     * <p>The scope is intentionally NOT gated behind {@code isDivisionManager} (a position-title
+     * match) either -- see {@link DashboardService#leaveScope}'s Javadoc for why that gate was
+     * removed rather than repaired (PR #846 defect D2), why the {@code is_active} guard is required
+     * (defect D3), and why this predicate deliberately includes the caller's OWN requests (defect
+     * D4) even though {@code LeaveRepository#countReviewableSubmitted} -- the reviewer-eligibility
+     * count, a different question -- deliberately excludes them. See
      * {@link DashboardService#leaveScope} for why ceo still lands in the {@code all()} branch
-     * despite {@code canReviewAll} being hr-only.
+     * despite {@code LeaveService#canReviewAll} being hr-only.
      */
     private long countLeave(DashboardQueryScope scope) {
         return countEmployeeScoped("""
@@ -468,9 +473,19 @@ public class DashboardRepository {
             params.addValue("divisionId", scope.divisionId());
             return " AND " + employeeAlias + ".division_id = :divisionId";
         }
-        if (scope.isReportsTo()) {
-            params.addValue("managerEmployeeId", scope.employeeId());
-            return " AND " + employeeAlias + ".reports_to_employee_id = :managerEmployeeId";
+        if (scope.isOwnOrDirectReports()) {
+            // Own row OR an ACTIVE direct report -- mirrors the /leave LIST predicate
+            // (LeaveRepository's `lr.employee_id = :me OR e.reports_to_employee_id = :me`) plus the
+            // is_active guard countReviewableSubmitted also requires. Deliberately NOT
+            // countReviewableSubmitted's reviewer-only shape (which excludes own) -- see
+            // DashboardService#leaveScope and DashboardQueryScope#ownOrDirectReports for why. The
+            // join that supplies employeeAlias already equates its employee_id to the request row's
+            // own employee_id (see countLeave/countEmployeeScoped below), so employeeAlias.employee_id
+            // here IS the request owner's id, not merely the joined employee's.
+            params.addValue("callerId", scope.employeeId());
+            return " AND (" + employeeAlias + ".employee_id = :callerId OR ("
+                + employeeAlias + ".reports_to_employee_id = :callerId AND "
+                + employeeAlias + ".is_active = TRUE))";
         }
         if (scope.isSelf()) {
             params.addValue("employeeId", scope.employeeId());
