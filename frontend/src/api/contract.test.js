@@ -184,7 +184,6 @@ const ARITY_EXEMPTIONS = {
   'payroll.distributePayslips': 'Deliberate "not supported in mock mode" stub — the mock sends no email and has no payslips to attach.',
   'payroll.saveTaxAllowances': 'Deliberate "not supported in mock mode" stub — allowances change real withholding tax.',
   'payroll.estimateMyTaxAllowanceDeclaration': 'Deliberate "not supported in mock mode" stub — the estimate runs real Thai tax math through PayrollCalculator twice; reimplementing it here is exactly the mirrored-computation trap.',
-  'payroll.applyTaxAllowanceDeclaration': 'Deliberate "not supported in mock mode" stub — applying promotes into hr.employee_tax_allowance and changes real withholding tax.',
   'payroll.reverifyTaxAllowanceDeclaration': 'Deliberate "not supported in mock mode" stub — re-verification rewrites a whole year of verification_status, real payroll-affecting state.',
   'payroll.getYtdSeed': 'Returns an empty single-year fixture; the mock stores no year-to-date seed rows for the year argument to select.',
   'payroll.saveYtdSeed': 'Deliberate "not supported in mock mode" stub — the YTD seed carries real year-to-date income and tax figures.',

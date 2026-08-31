@@ -669,8 +669,11 @@ export const api = {
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.approve(id), { method: 'POST', body: { reviewerNote } }),
     rejectTaxAllowanceDeclaration: (id, reviewerNote) =>
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.reject(id), { method: 'POST', body: { reviewerNote } }),
-    applyTaxAllowanceDeclaration: (id, effectiveMonth) =>
-      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.apply(id), { method: 'POST', body: { effectiveMonth } }),
+    // No body: the งวดเดือน this used to send went with the whole-year ruling (2026-08-31), and
+    // approveTaxAllowanceDeclaration now promotes to payroll on its own. Only a row approved before
+    // that ruling and never applied can still reach this endpoint.
+    applyTaxAllowanceDeclaration: (id) =>
+      apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.apply(id), { method: 'POST' }),
     // Yearly expiry (decision #10, 2026-08-01): HR-only mirror of the scheduled expiry sweep --
     // EXPIRED -> APPROVED, a fresh deadline. Mirrors TaxAllowanceDeclarationService#reverify.
     reverifyTaxAllowanceDeclaration: (id) =>
