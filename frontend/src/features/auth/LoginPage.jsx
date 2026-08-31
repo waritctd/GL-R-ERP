@@ -49,7 +49,13 @@ export function LoginPage({ onLogin, loading, error }) {
 
   function submit(event) {
     event.preventDefault();
-    onLogin(form);
+    // Trim here as well as in LoginRequest's constructor, because the two halves of this repo ship
+    // on different clocks: merging to `main` deploys this bundle immediately, while the backend runs
+    // a pinned pre-built image that only changes when someone builds and deploys a new tag
+    // (CLAUDE.md, "main IS production, but the two halves deploy DIFFERENTLY"). Trimming client-side
+    // means a pasted-with-a-space address logs in as soon as the frontend is live, rather than
+    // waiting on an image bump. Only the email — a password's spaces are the user's, not ours.
+    onLogin({ ...form, email: form.email.trim() });
   }
 
   return (
@@ -85,6 +91,19 @@ export function LoginPage({ onLogin, loading, error }) {
                 type="text"
                 inputMode="email"
                 autoComplete="email"
+                // A phone keyboard capitalises the first letter of a plain text field and runs
+                // autocorrect over it, so `somchai@glr.co.th` is offered back as `Somchai@glr.co.th`
+                // — often with a trailing space once the correction is accepted. Case alone is
+                // harmless (EmployeeAuthRepository#findByEmail folds it), but the space is not: it
+                // fails LoginRequest's @Email before the lookup runs. Turning both off is what stops
+                // the field editing the address behind the user.
+                //
+                // Left as type="text" on purpose. type="email" would add native browser validation
+                // on top of the server's, changing which inputs are rejected and where the message
+                // comes from — a bigger behaviour change than this fix is asking for.
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 required
                 className="pl-10"
               />
