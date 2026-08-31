@@ -3,6 +3,8 @@ package th.co.glr.hr.attachment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -99,5 +101,54 @@ class FileStorageServiceTest {
         assertThat(stored.content()).isEqualTo(payload);
         assertThat(stored.storageKey()).startsWith("leave/10/").endsWith(".pdf");
         assertThat(uploadsDir.resolve(stored.storageKey())).doesNotExist();
+    }
+
+    // ---- 2026-08-31: a storage failure must say it is a storage failure -----------------------
+
+    /**
+     * An uploads dir whose PARENT is a regular file: {@code Files.createDirectories} fails on it
+     * for every user, root included. Deliberately not a {@code chmod}-based fixture -- that one is
+     * satisfiable by privilege and would silently stop testing anything under a root container.
+     */
+    private Path uncreatableUploadsDir() throws IOException {
+        Path blocker = uploadsDir.resolve("not-a-directory");
+        Files.writeString(blocker, "x");
+        return blocker.resolve("uploads");
+    }
+
+    @Test
+    void storeReportsAnUnwritableUploadsDirAsSuchInsteadOfAGenericServerError() throws IOException {
+        FileStorageService service = new FileStorageService(uncreatableUploadsDir().toString());
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "receipt.pdf", "application/pdf", "pdf".getBytes());
+
+        // Before this, the IOException escaped as an UncheckedIOException that no handler in
+        // ApiExceptionHandler claims, so the caller was told 500 "เกิดข้อผิดพลาดภายในระบบ" -- the
+        // same message every unhandled bug in the application produces. On production 2026-08-31
+        // that is exactly what every welfare evidence upload returned, and it pointed at nothing.
+        assertThatThrownBy(() -> service.store("special-money", 1L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("APP_UPLOADS_DIR")
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+
+    /**
+     * The mime and size gates must still answer BEFORE the storage gate. A caller who sent a .exe
+     * to a broken server has two problems, and the one they can act on is the file they chose --
+     * telling them the server's disk is misconfigured would send them to an administrator over
+     * something they can fix themselves in a second.
+     */
+    @Test
+    void aRejectedFileTypeStillReportsTheFileTypeEvenWhenStorageIsAlsoBroken() throws IOException {
+        FileStorageService service = new FileStorageService(uncreatableUploadsDir().toString());
+        MockMultipartFile file = new MockMultipartFile(
+            "file", "payload.exe", "application/octet-stream", "exe".getBytes());
+
+        assertThatThrownBy(() -> service.store("special-money", 1L, file, BUSINESS_ATTACHMENT_MIME_TYPES))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("PDF")
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }
