@@ -216,3 +216,25 @@ describe('GRANDFATHERED_EXPIRED short label + verification copy (F6)', () => {
     expect(payrollVerificationInfo('EXPIRED_UNVERIFIED').tone).toBe('danger');
   });
 });
+
+describe('taxAllowanceStatusInfo — the APPLIED badge after the whole-year ruling', () => {
+  // Owner ruling 2026-08-31: approval promotes the declaration for its whole tax year, always at
+  // effective month 1. Naming that month would put a meaningless "ตั้งแต่เดือน 1" on every current
+  // declaration, so month 1 reads as ทั้งปีภาษี instead. Pre-ruling rows dated 2–12 must keep
+  // naming their month — they genuinely only apply from there on, and collapsing them into
+  // "ทั้งปีภาษี" would claim a coverage the payroll SQL does not give them.
+  const applied = (appliedEffectiveMonth) => taxAllowanceStatusInfo(
+    { status: 'APPROVED', appliedAt: '2026-08-31T00:00:00.000Z', appliedEffectiveMonth }, null,
+  );
+
+  it('reads ทั้งปีภาษี for a whole-year row, with no month named', () => {
+    const info = applied(1);
+    expect(info.key).toBe('APPLIED');
+    expect(info.label).toBe('ใช้กับเงินเดือนแล้ว ทั้งปีภาษี');
+    expect(info.label).not.toMatch(/เดือน 1/);
+  });
+
+  it('still names the month of a pre-ruling mid-year row', () => {
+    expect(applied(7).label).toBe('ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน 7');
+  });
+});

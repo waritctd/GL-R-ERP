@@ -107,9 +107,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
     @Test
     void sweepExpiresAnOverdueApplicationOnBothTablesAndIsIdempotent() {
         long employeeId = seedEmployee("EXP-A", new BigDecimal("50000.00"));
-        // taxYear 2020: apply()'s expires_on default (31 Dec of the declaration's own tax year) is
+        // taxYear 2020: the promotion's expires_on default (31 Dec of the declaration's own tax year) is
         // therefore 2020-12-31 -- safely in the past regardless of when this test actually runs.
-        long declarationId = submitApprovedAndApplied(employeeId, 2020, 1, new BigDecimal("60000"));
+        long declarationId = submitApprovedAndApplied(employeeId, 2020, new BigDecimal("60000"));
 
         int expiredCount = service.expireOverdueVerifications();
         assertThat(expiredCount).isEqualTo(1);
@@ -139,7 +139,7 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
     void sweepDoesNotTouchAnAlreadyProcessedMonthForAnUnrelatedEmployee() {
         // employeeToExpire: an overdue applied declaration the sweep SHOULD act on.
         long employeeToExpire = seedEmployee("EXP-B", new BigDecimal("50000.00"));
-        submitApprovedAndApplied(employeeToExpire, 2020, 1, new BigDecimal("60000"));
+        submitApprovedAndApplied(employeeToExpire, 2020, new BigDecimal("60000"));
 
         // employeeProcessed: a COMPLETELY different employee whose June 2026 payroll has already
         // been processed for real, with its own standing (non-expiring, non-declaration-backed)
@@ -165,7 +165,7 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
     @Test
     void reverifyRestoresBothTablesAndPayrollPicksTheAllowanceUpAgain() {
         long employeeId = seedEmployee("EXP-D", new BigDecimal("50000.00"));
-        long declarationId = submitApprovedAndApplied(employeeId, 2020, 1, new BigDecimal("60000"));
+        long declarationId = submitApprovedAndApplied(employeeId, 2020, new BigDecimal("60000"));
         service.expireOverdueVerifications();
         assertThat(declarationRepository.findById(declarationId).orElseThrow().status())
             .isEqualTo(TaxAllowanceDeclarationStatus.EXPIRED);
@@ -183,9 +183,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
 
     // --- helpers ---------------------------------------------------------------------------------
 
-    private long submitApprovedAndApplied(long employeeId, int taxYear, int effectiveMonth, BigDecimal spouseAllowance) {
+    private long submitApprovedAndApplied(long employeeId, int taxYear, BigDecimal spouseAllowance) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
-            taxYear, effectiveMonth, spouseAllowance,
+            taxYear, spouseAllowance,
             null, null, null, null,
             null, null, null,
             null, null, null, null,
@@ -196,8 +196,10 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             null,
             null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         TaxAllowanceDeclarationDto declaration = service.submitOwn(request, employeeActor(employeeId));
+        // One call, not two: approval promotes to payroll in its own transaction since the
+        // whole-year ruling (2026-08-31). The name keeps "AndApplied" because that is still exactly
+        // what this leaves behind -- an APPROVED declaration with applied_at set.
         approveSigned(declaration.declarationId());
-        service.apply(declaration.declarationId(), null, hrActor());
         return declaration.declarationId();
     }
 

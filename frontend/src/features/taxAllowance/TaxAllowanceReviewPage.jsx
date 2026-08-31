@@ -58,10 +58,13 @@ const STATUS_CHIPS = [
   { key: 'REJECTED', label: taxAllowanceStatusShortLabel('REJECTED') },
 ];
 
-const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
-
+/**
+ * Backlog drain, not part of the flow: since the whole-year ruling (2026-08-31) อนุมัติ promotes to
+ * payroll in the same transaction, so the only rows that can still reach this dialog are ones
+ * approved BEFORE the ruling and never applied — the ยังไม่ใช้กับเงินเดือน queue. It no longer asks
+ * for a งวดเดือน (the backend endpoint takes no body at all); a ล.ย.01 covers its whole tax year.
+ */
 function ApplyDialog({ row, onClose, onConfirm, busy }) {
-  const [month, setMonth] = useState(row?.declaration?.effectiveMonth ?? new Date().getMonth() + 1);
   if (!row) return null;
   return (
     <Modal
@@ -70,20 +73,15 @@ function ApplyDialog({ row, onClose, onConfirm, busy }) {
       footer={(
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>ยกเลิก</Button>
-          <Button onClick={() => onConfirm(month)} disabled={busy}>
+          <Button onClick={onConfirm} disabled={busy}>
             {busy ? 'กำลังดำเนินการ…' : 'ยืนยัน'}
           </Button>
         </>
       )}
     >
       <p className="confirm-dialog-message text-text-secondary leading-normal">
-        จะเริ่มลดภาษีของ <strong>{row.employeeName}</strong> ตั้งแต่งวดเดือน {month}
+        จะเริ่มลดภาษีของ <strong>{row.employeeName}</strong> ตลอดปีภาษี {row.declaration?.taxYear}
       </p>
-      <FormField label="งวดเดือนที่มีผล" htmlFor="apply-effective-month">
-        <select id="apply-effective-month" value={month} onChange={(event) => setMonth(Number(event.target.value))}>
-          {MONTH_OPTIONS.map((option) => <option key={option} value={option}>เดือน {option}</option>)}
-        </select>
-      </FormField>
     </Modal>
   );
 }
@@ -303,7 +301,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
 
   const approveMutation = useMutation({
     mutationFn: ({ id, reviewerNote }) => api.payroll.approveTaxAllowanceDeclaration(id, reviewerNote),
-    onSuccess: () => { invalidate(); showToast?.('success', 'อนุมัติแบบแจ้งแล้ว'); setApproveTarget(null); },
+    onSuccess: () => { invalidate(); showToast?.('success', 'อนุมัติแบบแจ้งแล้ว มีผลกับเงินเดือนทั้งปีภาษีนี้'); setApproveTarget(null); },
     onError: (error) => showToast?.('error', error.message || 'อนุมัติไม่สำเร็จ'),
   });
   const rejectMutation = useMutation({
@@ -312,7 +310,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     onError: (error) => showToast?.('error', error.message || 'ปฏิเสธไม่สำเร็จ'),
   });
   const applyMutation = useMutation({
-    mutationFn: ({ id, effectiveMonth }) => api.payroll.applyTaxAllowanceDeclaration(id, effectiveMonth),
+    mutationFn: ({ id }) => api.payroll.applyTaxAllowanceDeclaration(id),
     onSuccess: () => { invalidate(); showToast?.('success', 'นำแบบแจ้งไปใช้กับเงินเดือนแล้ว'); setApplyTarget(null); },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
@@ -323,7 +321,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   });
   const onBehalfMutation = useMutation({
     mutationFn: ({ employeeId, values }) => api.payroll.createTaxAllowanceDeclarationOnBehalf({
-      ...buildAllowanceSubmitBody(values, { taxYear, effectiveMonth: values.effectiveMonth }),
+      ...buildAllowanceSubmitBody(values, { taxYear }),
       employeeId,
     }),
     onSuccess: () => { invalidate(); showToast?.('success', 'สร้างและอนุมัติแบบแจ้งแทนพนักงานแล้ว'); setOnBehalfTarget(null); },
@@ -407,8 +405,12 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     {
       key: 'applied',
       header: 'ใช้กับเงินเดือน',
+      // Post-ruling rows all read 1 = the whole tax year. A pre-ruling row keeps naming its month,
+      // because it genuinely only applies from that month on (see TaxAllowanceBreakdown's twin).
       render: (row) => (row.declaration?.appliedAt
-        ? <span>ตั้งแต่เดือน {row.declaration.appliedEffectiveMonth}</span>
+        ? <span>{Number(row.declaration.appliedEffectiveMonth) === 1
+          ? 'ทั้งปีภาษี'
+          : `ตั้งแต่เดือน ${row.declaration.appliedEffectiveMonth}`}</span>
         : <span className="text-text-muted">-</span>),
     },
     {
@@ -553,7 +555,10 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
       <ConfirmDialog
         open={!!approveTarget}
         title="อนุมัติแบบแจ้ง"
-        message={approveTarget ? `อนุมัติแบบแจ้งของ ${approveTarget.employeeName} ยอดค่าลดหย่อนที่ประกาศ ${formatMoney(declaredAllowanceTotal(approveTarget.declaration))}` : ''}
+        message={approveTarget
+          ? `อนุมัติแบบแจ้งของ ${approveTarget.employeeName} ยอดค่าลดหย่อนที่ประกาศ ${formatMoney(declaredAllowanceTotal(approveTarget.declaration))}`
+            + ` — จะมีผลกับการหักภาษี ณ ที่จ่ายตลอดปีภาษี ${approveTarget.declaration?.taxYear} ทันที`
+          : ''}
         busy={approveMutation.isPending}
         onConfirm={() => approveMutation.mutate({ id: approveTarget.declaration.declarationId })}
         onCancel={() => setApproveTarget(null)}
@@ -583,7 +588,7 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
           row={applyTarget}
           busy={applyMutation.isPending}
           onClose={() => setApplyTarget(null)}
-          onConfirm={(month) => applyMutation.mutate({ id: applyTarget.declaration.declarationId, effectiveMonth: month })}
+          onConfirm={() => applyMutation.mutate({ id: applyTarget.declaration.declarationId })}
         />
       ) : null}
       {onBehalfTarget ? (

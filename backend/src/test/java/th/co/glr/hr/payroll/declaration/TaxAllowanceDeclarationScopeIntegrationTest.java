@@ -20,7 +20,6 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationRegisterResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
@@ -200,12 +199,18 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
     }
 
+    /**
+      * Written against a declaration HR has NOT approved, so the allowance table is genuinely empty
+      * when the employee tries: since approval promotes on its own (whole-year ruling, 2026-08-31),
+      * approving first would leave a row that says nothing about whether the employee's own call was
+      * refused. The role check runs before the APPROVED/applied_at status checks, so a PENDING
+      * declaration still exercises exactly the gate under test.
+      */
     @Test
     void employeeCannotApplyAndTheAllowanceTableStaysEmpty() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
-        approveSigned(declaration.declarationId());
 
-        assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, employeeActor(employeeA)))
+        assertThatThrownBy(() -> service.apply(declaration.declarationId(), employeeActor(employeeA)))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
         assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
@@ -224,8 +229,10 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
 
-        approveSigned(declaration.declarationId()); // HR approves for real, so apply has something to reach
-        assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, ceoActor()))
+        // Left PENDING on purpose — same reasoning as employeeCannotApplyAndTheAllowanceTableStaysEmpty
+        // above: HR approving here would write the allowance row itself, so a non-empty table
+        // afterwards would no longer be evidence about what the CEO's call did.
+        assertThatThrownBy(() -> service.apply(declaration.declarationId(), ceoActor()))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
     }
@@ -252,7 +259,6 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
     private TaxAllowanceDeclarationSubmitRequest submitRequest(int taxYear, BigDecimal spouseAllowance) {
         return new TaxAllowanceDeclarationSubmitRequest(
             taxYear,                 // taxYear
-            null,                    // effectiveMonth -> defaults to January
             spouseAllowance,         // spouseAllowance
             null, null, null, null,  // child, parentCare, disabledCare, maternity
             null, null, null,        // life, health, parentHealth

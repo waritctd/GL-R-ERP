@@ -1,7 +1,11 @@
 // Demo seed data for the payroll/commission stores that are genuinely fake-able
 // in mock mode (see CLAUDE.md — payroll/tax calculation itself stays untouched;
-// payroll.preview/process, saveTaxAllowances and applyTaxAllowanceDeclaration
-// all still throw "not supported in mock mode", unchanged by this file).
+// payroll.preview/process and saveTaxAllowances still throw "not supported in
+// mock mode", unchanged by this file. applyTaxAllowanceDeclaration STOPPED being
+// one of them on 2026-08-31 — it now shares approve's promotion helper, which is
+// a field copy of declared amounts, not tax math; see mockApi.js's
+// promoteTaxAllowanceDeclaration for why that is honest and what it still does
+// NOT prove).
 //
 // db.commissions / db.taxAllowanceDeclarations / db.taxAllowanceAttachments /
 // db.deductionObligations / db.payrollInputDrafts are workflow/tracking state —
@@ -256,6 +260,11 @@ export function buildDemoCommissions() {
 // taxAllowanceStatus.js's APPLIED badge both rendered "ตั้งแต่เดือน 2026-07", and ApplyDialog seeds
 // its <select> from `declaration.effectiveMonth` against options 1-12, which a string matches none
 // of. Keep these integers — see buildDemoEmployeeTaxAllowances below, which seeds the same field.
+//
+// The months 2-12 still seeded here are deliberate since the whole-year ruling (2026-08-31): they
+// are the PRE-RULING shape, and they are what makes the register's split visible in mock mode — a
+// month-7 row keeps reading "ตั้งแต่เดือน 7" while anything approved now reads "ทั้งปีภาษี". ApplyDialog
+// no longer has a <select> to seed, and nothing written from here on will be anything but 1.
 function blankAllowances(overrides = {}) {
   return {
     spouseAllowance: 0, childAllowance: 0, parentCareAllowance: 0, disabledCareAllowance: 0,

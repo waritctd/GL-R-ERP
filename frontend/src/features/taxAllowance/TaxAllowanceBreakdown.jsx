@@ -104,7 +104,13 @@ export function TaxAllowanceBreakdown({ declaration, caps = [], payrollAllowance
             ดูได้ที่หน้า “เงินเดือน” ของพนักงาน ในบรรทัด “ค่าลดหย่อนรวม”
           </p>
           <div className="text-2xs text-text-muted">
-            มีผลตั้งแต่เดือน {payrollAllowance.effectiveMonth}
+            {/* Whole-year ruling (2026-08-31): everything promoted since reads month 1 and is simply
+                "มีผลทั้งปีภาษี". A pre-ruling row still dated 2-12 keeps naming its month — that is
+                real, still governs payroll from that month on, and hiding it would make a stale
+                mid-year declaration indistinguishable from a current whole-year one. */}
+            {Number(payrollAllowance.effectiveMonth) === 1
+              ? 'มีผลทั้งปีภาษี'
+              : `มีผลตั้งแต่เดือน ${payrollAllowance.effectiveMonth}`}
             {payrollAllowance.verifiedAt ? ` · ยืนยันเมื่อ ${formatShortDate(payrollAllowance.verifiedAt)}` : ''}
             {payrollAllowance.verificationDeadline ? ` · ต้องยืนยันภายใน ${formatShortDate(payrollAllowance.verificationDeadline)}` : ''}
           </div>

@@ -1035,6 +1035,42 @@ public class PayrollRepository {
      * cut-offs after launch, whichever is later" (handoff section 3), computed by the service
      * layer. This method only stores whatever deadline the caller passes.
      */
+    /**
+     * Removes one employee's MID-YEAR allowance rows for a tax year — everything except the
+     * whole-year row at {@code effective_month = 1}. Called by {@code
+     * TaxAllowanceDeclarationService#promoteToPayrollAllowances} immediately before it upserts the
+     * whole-year row, and by nothing else.
+     *
+     * <p><b>Why a delete and not just an upsert.</b> {@link #findTaxAllowancesByEmployee} resolves
+     * {@code DISTINCT ON (employee_id) ... WHERE effective_month <= :month ORDER BY effective_month
+     * DESC}: the LATEST dated row on or before the payroll month wins. Since the whole-year ruling
+     * (2026-08-31) every promotion writes month 1, which LOSES that ordering to any pre-ruling row
+     * this employee still carries for the same year — so an upsert alone would leave a superseded
+     * month-7 declaration governing July through December while the register showed the new one as
+     * applied. That divergence is invisible from the UI, which is what makes it worth a delete.
+     *
+     * <p>Scoped to ONE employee and ONE tax year, and only ever reached through a deliberate HR
+     * approval. It never touches another year, another employee, or the month-1 row itself — the
+     * upsert that follows owns that row via {@code ON CONFLICT (employee_id, tax_year,
+     * effective_month)}.
+     *
+     * <p>The figures those deleted rows produced are NOT lost: an already-processed month's
+     * {@code hr.payroll_line} rows persist the amounts actually filed, and the declaration each row
+     * came from survives in {@code hr.tax_allowance_declaration} as SUPERSEDED.
+     *
+     * @return how many mid-year rows were removed — 0 for the ordinary case of an employee who has
+     *     only ever been promoted under the whole-year rule.
+     */
+    public int deleteMidYearTaxAllowances(long employeeId, int taxYear) {
+        return jdbc.update("""
+            DELETE FROM hr.employee_tax_allowance
+             WHERE employee_id = :employeeId AND tax_year = :taxYear AND effective_month <> 1
+            """,
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("taxYear", taxYear));
+    }
+
     public void setTaxAllowanceVerificationDeadline(long employeeId, int taxYear, LocalDate deadline) {
         jdbc.update("""
             UPDATE hr.employee_tax_allowance

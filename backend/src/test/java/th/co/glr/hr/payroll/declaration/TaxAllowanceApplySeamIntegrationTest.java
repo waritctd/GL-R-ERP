@@ -40,10 +40,15 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
- * Pins the decision-#2 guarantee (plan doc): a declaration must not affect payroll until HR
- * explicitly applies it, per employee — through the REAL {@code PayrollRepository
- * #findTaxAllowancesByEmployee} SQL and the REAL {@code PayrollService#preview}, never a unit-test
- * stand-in.
+ * Pins the APPROVAL seam — through the REAL {@code PayrollRepository#findTaxAllowancesByEmployee}
+ * SQL and the REAL {@code PayrollService#preview}, never a unit-test stand-in.
+ *
+ * <p><b>Decision #2 was reversed by the owner on 2026-08-31.</b> It used to read "a declaration must
+ * not affect payroll until HR explicitly applies it", and this file pinned that: approval moved
+ * nothing, a separate per-employee Apply (with its own งวดเดือน) did. The rule now is that HR's
+ * APPROVAL is go-live, for the declaration's whole tax year. The tests below were rewritten in that
+ * direction rather than deleted, because the half that still matters is unchanged — SUBMITTING must
+ * still move nothing, and the parent table must still end VERIFIED with exactly one row.
  *
  * <p>Also pins the single most likely way this feature ships a silent tax error (plan doc, "the
  * DISTINCT ON expiry trap"): {@code findTaxAllowancesByEmployee} is {@code SELECT DISTINCT ON
@@ -120,7 +125,7 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
 
     @Test
     void aPendingDeclarationNeverAppearsInFindTaxAllowancesByEmployee() {
-        submit(new BigDecimal("60000"), 1);
+        submit(new BigDecimal("60000"));
 
         Map<Long, th.co.glr.hr.payroll.PayrollTaxAllowanceInput> resolved =
             payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
@@ -128,26 +133,23 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(resolved).doesNotContainKey(employeeId);
     }
 
+    /** The reversed decision #2: approval alone is go-live, with no second Apply call anywhere. */
     @Test
-    void anApprovedButUnappliedDeclarationStillDoesNotAppear() {
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 1);
+    void approvingPutsItInTheParentTableAsVerifiedWithNoSeparateApply() {
+        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
         approveSigned(declaration.declarationId());
 
         TaxAllowanceDeclarationDto approved = declarationRepository.findById(declaration.declarationId()).orElseThrow();
         assertThat(approved.status()).isEqualTo(TaxAllowanceDeclarationStatus.APPROVED);
-        assertThat(approved.appliedAt()).as("approved-but-unapplied is the whole point of decision #2").isNull();
+        assertThat(approved.appliedAt()).as("approve() promotes in its own transaction now").isNotNull();
+        assertThat(approved.appliedEffectiveMonth())
+            .as("whole tax year, never a chosen month")
+            .isEqualTo(1);
+        assertThat(approved.expiresOn()).isEqualTo(LocalDate.of(2026, 12, 31));
 
-        Map<Long, th.co.glr.hr.payroll.PayrollTaxAllowanceInput> resolved =
-            payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1));
-        assertThat(resolved).doesNotContainKey(employeeId);
-    }
-
-    @Test
-    void onlyApplyPutsItInTheParentTableAsVerified() {
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 1);
-        approveSigned(declaration.declarationId());
-
-        service.apply(declaration.declarationId(), null, hrActor());
+        // A second promotion is refused -- the applied_at IS NULL guard in markApplied.
+        assertThatThrownBy(() -> service.apply(declaration.declarationId(), hrActor()))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
         assertThat(countEmployeeTaxAllowanceRows(employeeId)).isEqualTo(1);
         String verificationStatus = jdbc.queryForObject(
@@ -171,24 +173,22 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
      * this pins that ordering never regresses.
      */
     @Test
-    void applyingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
-        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"), 1);
+    void approvingASecondDeclarationOverAnAlreadyVerifiedRowStillEndsVerified() {
+        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
         approveSigned(first.declarationId());
-        service.apply(first.declarationId(), null, hrActor());
         assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
 
-        // A second declaration for the SAME employee/year/effective-month, with a DIFFERENT amount --
-        // its apply() drives upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row
-        // that is currently VERIFIED, the exact interaction the reset-on-overwrite fix touches.
-        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"), 1);
+        // A second declaration for the SAME employee/year, with a DIFFERENT amount -- its promotion
+        // drives upsertTaxAllowances down the ON CONFLICT DO UPDATE branch over a row that is
+        // currently VERIFIED, the exact interaction the reset-on-overwrite fix touches.
+        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
         approveSigned(second.declarationId());
-        service.apply(second.declarationId(), null, hrActor());
 
         assertThat(countEmployeeTaxAllowanceRows(employeeId))
-            .as("still one dated row for this employee/year/month -- ON CONFLICT overwrote, not duplicated")
+            .as("still one row for this employee/year -- ON CONFLICT overwrote, not duplicated")
             .isEqualTo(1);
         assertThat(verificationStatusOf(employeeId))
-            .as("apply() must still end VERIFIED even though upsertTaxAllowances resets it mid-transaction")
+            .as("promotion must still end VERIFIED even though upsertTaxAllowances resets it mid-transaction")
             .isEqualTo("VERIFIED");
         Long verifiedBy = jdbc.queryForObject(
             "SELECT verified_by_id FROM hr.employee_tax_allowance WHERE employee_id = :id",
@@ -206,18 +206,87 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             .isEqualByComparingTo("90000.00");
     }
 
+    /**
+     * The PROCESSED-month guard is GONE, and this pins that deliberately rather than leaving its
+     * absence to be re-added by someone reading the old comment. It refused a promotion whose target
+     * month was already {@code PROCESSED}, which made sense while HR picked the month. The whole-year
+     * rule makes the target ALWAYS January, so keeping it would refuse every approval from February
+     * onward — it would not protect a filed month, it would break the feature for eleven of twelve.
+     *
+     * <p>Nothing here retro-alters January: the seeded PROCESSED period's own {@code hr.payroll_line}
+     * rows are never touched by any statement the promotion runs.
+     */
     @Test
-    void applyIsRefusedForAnAlreadyProcessedMonthAndWritesNoRow() {
-        seedProcessedPeriod(LocalDate.of(2026, 3, 1));
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 3);
+    void approvingIsNotBlockedByAnAlreadyProcessedMonth() {
+        seedProcessedPeriod(LocalDate.of(2026, 1, 1));
+        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
+
         approveSigned(declaration.declarationId());
 
-        assertThatThrownBy(() -> service.apply(declaration.declarationId(), null, hrActor()))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(countEmployeeTaxAllowanceRows(employeeId)).isEqualTo(1);
+        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow().appliedAt())
+            .isNotNull();
+    }
 
+    /**
+     * THE trap the whole-year rule introduces, and the reason {@code
+     * PayrollRepository#deleteMidYearTaxAllowances} exists. {@code findTaxAllowancesByEmployee} is
+     * {@code ORDER BY effective_month DESC}: a whole-year row at month 1 LOSES to any surviving
+     * mid-year row. Without the delete, this employee's September payroll would keep computing on
+     * the ฿30,000 July row while the register showed the ฿90,000 declaration as applied — a silent
+     * wrong tax, invisible from every screen.
+     *
+     * <p>Written wrong-way-round on purpose: the assertion that matters is that the OLD figure is
+     * gone, not that the new one is present.
+     */
+    @Test
+    void approvingClearsAStaleMidYearRowInsteadOfLosingToItOnEffectiveMonthDesc() {
+        jdbc.update("""
+            INSERT INTO hr.employee_tax_allowance
+                (employee_id, tax_year, effective_month, spouse_allowance, verification_status)
+            VALUES (:id, 2026, 7, 30000, 'VERIFIED')
+            """, Map.of("id", employeeId));
+        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 9, 1))
+            .get(employeeId).spouseAllowance())
+            .as("precondition: the stale July row is what September resolves to today")
+            .isEqualByComparingTo("30000.00");
+
+        approveSigned(submit(new BigDecimal("90000")).declarationId());
+
+        assertThat(countEmployeeTaxAllowanceRows(employeeId))
+            .as("one row per employee/tax-year -- the July row is gone, not shadowed")
+            .isEqualTo(1);
+        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 9, 1))
+            .get(employeeId).spouseAllowance())
+            .as("September must NOT still resolve the superseded July figure")
+            .isEqualByComparingTo("90000.00");
+        // ...and every month of the year now resolves it, which is what "ทั้งปีภาษี" means.
+        assertThat(payrollRepository.findTaxAllowancesByEmployee(LocalDate.of(2026, 2, 1))
+            .get(employeeId).spouseAllowance())
+            .isEqualByComparingTo("90000.00");
+    }
+
+    /**
+     * The backlog drain {@link TaxAllowanceDeclarationService#apply} still exists for: a row approved
+     * BEFORE the ruling, when approval did not promote. That state can no longer be produced through
+     * the service, so it is built through the repository — the same two calls the pre-ruling
+     * {@code approve} made.
+     */
+    @Test
+    void applyStillDrainsADeclarationApprovedBeforeTheRulingWithNoMonthArgument() {
+        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
+        declarationRepository.approve(declaration.declarationId(), hrEmployeeId, "pre-ruling approval");
+        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow().appliedAt())
+            .as("precondition: APPROVED with applied_at still NULL")
+            .isNull();
         assertThat(countEmployeeTaxAllowanceRows(employeeId)).isZero();
-        TaxAllowanceDeclarationDto stillUnapplied = declarationRepository.findById(declaration.declarationId()).orElseThrow();
-        assertThat(stillUnapplied.appliedAt()).isNull();
+
+        service.apply(declaration.declarationId(), hrActor());
+
+        assertThat(countEmployeeTaxAllowanceRows(employeeId)).isEqualTo(1);
+        assertThat(verificationStatusOf(employeeId)).isEqualTo("VERIFIED");
+        assertThat(declarationRepository.findById(declaration.declarationId()).orElseThrow()
+            .appliedEffectiveMonth()).isEqualTo(1);
     }
 
     /**
@@ -260,12 +329,12 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
 
     @Test
     void approvingANewerDeclarationSupersedesThePreviousAndHistorySurvives() {
-        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"), 1);
+        TaxAllowanceDeclarationDto first = submit(new BigDecimal("60000"));
         approveSigned(first.declarationId());
 
         // A second declaration for the same employee/year — allowed once the first is no longer
         // PENDING (uq_tad_one_pending_per_employee_year only blocks a SECOND concurrent PENDING).
-        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"), 1);
+        TaxAllowanceDeclarationDto second = submit(new BigDecimal("90000"));
         approveSigned(second.declarationId());
 
         TaxAllowanceDeclarationDto firstAfter = declarationRepository.findById(first.declarationId()).orElseThrow();
@@ -282,11 +351,11 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     @Test
-    void aFullPayrollPreviewIsByteForByteUnchangedBeforeAndAfterSubmitAndApprove() {
+    void aFullPayrollPreviewIsUnchangedBySubmittingAndThenMovesOnApproval() {
         PayrollLineDto before = lineFor(payrollService.preview(
             new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrPrincipal()));
 
-        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"), 1);
+        TaxAllowanceDeclarationDto declaration = submit(new BigDecimal("60000"));
         PayrollLineDto afterSubmit = lineFor(payrollService.preview(
             new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrPrincipal()));
         assertThat(afterSubmit.taxAllowanceTotal())
@@ -298,17 +367,18 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
         PayrollLineDto afterApprove = lineFor(payrollService.preview(
             new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrPrincipal()));
         assertThat(afterApprove.taxAllowanceTotal())
-            .as("approving must not move payroll either — only Apply may")
-            .isEqualByComparingTo(before.taxAllowanceTotal());
-        assertThat(afterApprove.withholdingTax()).isEqualByComparingTo(before.withholdingTax());
+            .as("approving IS go-live since 2026-08-31 — June must now see the ฿60,000")
+            .isEqualByComparingTo(before.taxAllowanceTotal().add(new BigDecimal("60000.00")));
+        assertThat(afterApprove.withholdingTax())
+            .as("and less allowance-free income means strictly less withholding")
+            .isLessThan(before.withholdingTax());
     }
 
     // --- helpers ---------------------------------------------------------------------------------
 
-    private TaxAllowanceDeclarationDto submit(BigDecimal spouseAllowance, int effectiveMonth) {
+    private TaxAllowanceDeclarationDto submit(BigDecimal spouseAllowance) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
             2026,                     // taxYear
-            effectiveMonth,           // effectiveMonth
             spouseAllowance,          // spouseAllowance
             null, null, null, null,   // child, parentCare, disabledCare, maternity
             null, null, null,         // life, health, parentHealth
