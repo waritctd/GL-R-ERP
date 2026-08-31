@@ -11,6 +11,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeDto;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
 
 @Service
 public class ProfileRequestService {
@@ -19,12 +20,14 @@ public class ProfileRequestService {
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
     private final AuditService auditService;
+    private final NotificationRepository notifications;
 
     public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees,
-                                 AuditService auditService) {
+                                 AuditService auditService, NotificationRepository notifications) {
         this.profileRequests = profileRequests;
         this.employees = employees;
         this.auditService = auditService;
+        this.notifications = notifications;
     }
 
     public List<ProfileRequestDto> list(UserPrincipal user) {
@@ -49,7 +52,13 @@ public class ProfileRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับฟิลด์ข้อมูลส่วนตัวนี้");
         }
         long id = profileRequests.create(user.employeeId(), request, user);
-        return profileRequests.findById(id).map(this::toDto).orElseThrow();
+        ProfileRequestRecord created = profileRequests.findById(id).orElseThrow();
+        // Fetched once and threaded into both the notification copy and the returned DTO below,
+        // rather than letting toDto(record) re-query EmployeeRepository a second time for the
+        // same employee.
+        EmployeeDto employee = employees.findEmployeeSummaryById(created.employeeId()).orElse(null);
+        notifications.notifyHrOfProfileRequest("PROFILE_REQUEST_SUBMITTED", submittedMessage(employee, created));
+        return toDto(created, employee);
     }
 
     @Transactional
@@ -71,10 +80,17 @@ public class ProfileRequestService {
             applyApprovedRequest(existing);
         }
         ProfileRequestRecord reviewed = profileRequests.findById(id).orElseThrow();
-        String action = "approved".equals(request.status())
-            ? "APPROVE_PROFILE_REQUEST"
-            : "REJECT_PROFILE_REQUEST";
+        boolean approved = "approved".equals(request.status());
+        String action = approved ? "APPROVE_PROFILE_REQUEST" : "REJECT_PROFILE_REQUEST";
         auditService.record(reviewer, action, "profile_request", id, existing, reviewed);
+
+        // Tell the requesting employee what happened to their own request -- ProfileRequestService
+        // emitted zero notifications before this change, so this and the notifyHrOfProfileRequest
+        // call in create() above are both new.
+        notifications.notifyEmployeeOfProfileRequest(reviewed.employeeId(),
+            approved ? "PROFILE_REQUEST_APPROVED" : "PROFILE_REQUEST_REJECTED",
+            approved ? approvedMessage(reviewed) : rejectedMessage(reviewed, request.reviewerNote()));
+
         return toDto(reviewed);
     }
 
@@ -91,6 +107,55 @@ public class ProfileRequestService {
             }
             default -> throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับฟิลด์ข้อมูลส่วนตัวนี้");
         }
+    }
+
+    // --- notification copy (2026-08-31) --------------------------------------------------------
+    //
+    // Never interpolate fieldKey (a machine code like "email"/"emergency") into any of these three
+    // strings -- always fieldLabel(), which is already Thai ("อีเมล", "เบอร์โทรศัพท์",
+    // "ที่อยู่ปัจจุบัน", "ผู้ติดต่อฉุกเฉิน"). A previous round shipped a raw machine code
+    // (TRAVEL_PER_DIEM) into a subject line at real people -- see
+    // NotificationRepository#notifyEmployeeAt's comment for the same lesson, and
+    // ProfileRequestNotificationIntegrationTest#everyNotificationMessageCarriesTheThaiLabelNeverTheRawFieldKey
+    // for the regression guard.
+
+    /** To HR, when an employee files a new request. */
+    private String submittedMessage(EmployeeDto employee, ProfileRequestRecord record) {
+        // employee is only ever null if the employee row backing a just-created request vanished
+        // between the insert and this read -- the FK on hr.profile_change_request.employee_id
+        // makes that a can't-happen in practice. Fall back to the name snapshotted on the request
+        // itself rather than risk an NPE over an edge case this defensively.
+        String who = employee == null
+            ? record.requestedBy()
+            : titleAndName(employee) + " (" + employee.code() + ")";
+        String fromClause = isBlank(record.oldValue()) ? "" : " จาก " + record.oldValue();
+        return who + " ขอแก้ไข" + record.fieldLabel() + fromClause + " เป็น " + record.newValue();
+    }
+
+    /** To the employee, when HR approves their request. */
+    private String approvedMessage(ProfileRequestRecord record) {
+        return "อัปเดต" + record.fieldLabel() + "ในทะเบียนพนักงานของคุณเป็น " + record.newValue() + " เรียบร้อยแล้ว";
+    }
+
+    /** To the employee, when HR rejects their request. */
+    private String rejectedMessage(ProfileRequestRecord record, String reviewerNote) {
+        String reasonClause = isBlank(reviewerNote) ? "" : " เหตุผล: " + reviewerNote;
+        return "คำขอแก้ไข" + record.fieldLabel() + "ของคุณไม่ได้รับอนุมัติ" + reasonClause;
+    }
+
+    /**
+     * A Thai title glues directly onto the first name with no space in between ("นาย" +
+     * "ภาคภูมิ" -&gt; "นายภาคภูมิ"); {@code nameTh()} already carries exactly one space between
+     * first and last name ({@code EmployeeRepository#fullName}). {@code titleTh()} is nullable on
+     * some imported rows, so a missing title degrades to the bare name rather than a leading space.
+     */
+    private static String titleAndName(EmployeeDto employee) {
+        String title = employee.titleTh();
+        return (title == null ? "" : title) + employee.nameTh();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private ProfileRequestDto toDto(ProfileRequestRecord record) {
