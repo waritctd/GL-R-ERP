@@ -28,7 +28,11 @@ import th.co.glr.hr.config.AppProperties;
 
 @Service
 public class AttendanceService {
-    private static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
+    // Package-private (not private): AttendanceMonthlySummaryService's "generated at" timestamp
+    // needs the SAME zone this class uses for "today", or the export's own header could disagree
+    // with the day-view page about what day it currently is. One constant, reused, rather than a
+    // second ZoneId.of("Asia/Bangkok") literal drifting from this one.
+    static final ZoneId DEFAULT_WORK_DATE_ZONE = ZoneId.of("Asia/Bangkok");
     // HR and executives (ceo) see all attendance company-wide.
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
 

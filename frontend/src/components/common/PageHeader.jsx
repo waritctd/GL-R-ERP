@@ -32,8 +32,35 @@ export function PageHeader({
 
   return (
     <header
+      // The title column carries a 180px FLOOR, not `minmax(0,1fr)`. That difference is
+      // load-bearing, and the failure it prevents is invisible rather than loud:
+      //
+      // `minmax(0,1fr)` lets the title column shrink to ZERO while the actions column (`auto`)
+      // never shrinks at all. So a header with enough action buttons hands the entire row to the
+      // buttons -- and because <h1>/<p> below carry `[overflow-wrap:anywhere]`, the starved text
+      // does not overflow where you would see it. It breaks INSIDE the word, one character per
+      // line. Measured on /attendance as HR at 721px with four buttons (2026-08-30): the title
+      // column resolved to 19.6px against 619px of actions, "เวลาทำงาน" rendered as 8 lines of one
+      // character, and the header grew to 459px tall.
+      //
+      // Thai makes this worse than it sounds: Thai text has no inter-word spaces, so a title is
+      // effectively one long token and `anywhere` is the only thing letting it wrap at all --
+      // there is no word boundary to fall back on, and no width too narrow for it to "fit".
+      //
+      // The actions container already has `flex-wrap`. It never wrapped only because the title
+      // column yielded first, so giving the title a floor is all that is needed -- the buttons
+      // then wrap to a second row on their own and the header settles at 86px.
+      //
+      // 180px is a MINIMUM, not a width: `1fr` still gives the title everything spare, so this is
+      // a no-op at desktop widths and on any page whose actions are narrow. It is also never
+      // applied on mobile -- `mobile:grid-cols-[minmax(0,1fr)]` below collapses to a single column
+      // under 720px, where the title already gets the full row.
+      //
+      // Why the band is easy to miss: <=720px stacks (clean), 860-1040px has room (clean), and
+      // 1041px+ breaks AGAIN because the permanent sidebar narrows the content area. A
+      // 390/1024/1440 sweep therefore reports no problem at all. Swept 360-1440 incl. 721/768/1041.
       className={cn(
-        'grid grid-cols-[minmax(0,1fr)_auto] items-start gap-[18px] mobile:grid-cols-[minmax(0,1fr)] mobile:gap-2.5',
+        'grid grid-cols-[minmax(180px,1fr)_auto] items-start gap-[18px] mobile:grid-cols-[minmax(0,1fr)] mobile:gap-2.5',
         className,
       )}
       aria-labelledby={titleId}
