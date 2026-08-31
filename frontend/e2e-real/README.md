@@ -210,6 +210,20 @@ behaviour worth knowing. All stay recorded so they remain visible.
 
 ### Not covered — read this before citing a green run
 
+- **The admin portal activity log (`/activity-log`) is not swept, and deliberately cannot be.**
+  The page and its three endpoints are gated on `hr.employee.is_admin`, which `V157` grants to
+  `employee_code = 'GLR-1001'` alone — a real employee, not a demo one. No persona this suite can
+  log in as holds it, so every one of them lands on the access-denied page. The route is listed in
+  `route-coverage.spec.js`'s `EXCLUDED_ROUTE_PATTERNS` with that reason.
+
+  ⚠️ **Do not "fix" this by seeding an admin persona.** The personas live in `db/migration-demo`,
+  and `render.yaml` pins `SPRING_FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/migration-demo`
+  on the service that serves **real production** — that is how `V139`'s demo accounts came to exist
+  in the prod database on 2026-08-14. Seeding one here would grant `is_admin` on production.
+
+  The gate is covered where it belongs instead: `ActivityLogAuthzIntegrationTest` drives the real
+  service and repository against real Postgres, twelve cases, every one asked wrong-way-round.
+
 - **Overtime and the sales pipeline are the two business workflows driven end to end — by two
   DIFFERENT mechanisms, and only one of them runs in `npm run test:e2e`.** Overtime's coverage
   (`write-overtime.spec.js`) runs locally, against the local stack this file's "Running it" section

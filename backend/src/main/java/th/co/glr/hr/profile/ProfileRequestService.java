@@ -49,7 +49,11 @@ public class ProfileRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับฟิลด์ข้อมูลส่วนตัวนี้");
         }
         long id = profileRequests.create(user.employeeId(), request, user);
-        return profileRequests.findById(id).map(this::toDto).orElseThrow();
+        ProfileRequestDto created = profileRequests.findById(id).map(this::toDto).orElseThrow();
+        // The review side (APPROVE_/REJECT_PROFILE_REQUEST) was already audited; the submission was
+        // not, so the trail recorded who decided a request but never who raised it.
+        auditService.record(user, "SUBMIT_PROFILE_REQUEST", "profile_request", id, null, created);
+        return created;
     }
 
     @Transactional

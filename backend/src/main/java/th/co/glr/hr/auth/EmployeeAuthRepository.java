@@ -67,6 +67,24 @@ public class EmployeeAuthRepository {
         }
     }
 
+    /**
+     * Whether this employee holds the admin capability, for the UI hint on {@link AuthResponse}.
+     *
+     * <p>Intentionally duplicated by {@code ActivityLogRepository#isAdmin} rather than shared. That
+     * one is the security gate and must not depend on the auth module; this one only decides
+     * whether a nav item renders. Both read the same column with the same predicate, and the gate
+     * is what actually protects the data.
+     */
+    public boolean isAdmin(long employeeId) {
+        Boolean admin = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.employee
+                 WHERE employee_id = :id AND is_active AND is_admin
+            )
+            """, Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(admin);
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""
