@@ -14,9 +14,11 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.employee.EmployeeDto;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.EmployeeRepository.LorYor01HeaderSource;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import java.io.IOException;
@@ -117,7 +119,10 @@ public class TaxAllowanceDeclarationService {
     private final AuditService auditService;
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
+    /** The HR role fan-out only — see {@link #notifyOwner} for why the employee-facing path below
+     * uses {@link #notificationService} instead. */
     private final NotificationRepository notifications;
+    private final NotificationService notificationService;
     /**
      * วัน/เดือน/ปี ที่แจ้งรายการ is a Thai calendar date on a Thai tax form, so it must be derived in
      * Bangkok. Bare {@code LocalDate.now()} (as used elsewhere in this class) reads the JVM default,
@@ -148,6 +153,7 @@ public class TaxAllowanceDeclarationService {
         FileStorageService fileStorage,
         PayrollService payrollService,
         NotificationRepository notifications,
+        NotificationService notificationService,
         AppProperties appProperties,
         LorYor01Renderer lorYor01Renderer
     ) {
@@ -159,6 +165,7 @@ public class TaxAllowanceDeclarationService {
         this.fileStorage = fileStorage;
         this.payrollService = payrollService;
         this.notifications = notifications;
+        this.notificationService = notificationService;
         this.appProperties = appProperties;
         this.lorYor01Renderer = lorYor01Renderer;
     }
@@ -271,6 +278,7 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "SUBMIT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration", id, null, created);
+        notifyHrOfSubmission(created);
         return created;
     }
 
@@ -341,6 +349,16 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "CREATE_TAX_ALLOWANCE_DECLARATION_ON_BEHALF", "tax_allowance_declaration",
             id, null, created);
+        // Audit finding (2026-08-31, notification sweep): this path never notified the employee at
+        // all -- it produces an APPROVED declaration (decision #9 is "for staff who never log in",
+        // but that describes portal access, not email; email is a separate channel and still worth
+        // sending). Reuses TAX_ALLOWANCE_APPROVED rather than a new type: the fact that matters to
+        // the employee (their declaration IS approved) is identical to a regular #approve, so the
+        // frontend's existing type->icon mapping already renders this correctly with no touch. The
+        // message text is the only thing that differs, to stay accurate about who acted.
+        notifyOwner(employeeId, "TAX_ALLOWANCE_APPROVED",
+            "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
+            "ฝ่ายบุคคลสร้างและอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + taxYear + " ให้คุณแล้ว");
         return created;
     }
 
@@ -685,6 +703,15 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after reverify"));
         auditService.record(actor, "REVERIFY_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
+        // Audit finding (2026-08-31, notification sweep): the mirror image of #expireOverdueVerifications
+        // notifying on EXPIRED never had its own reverse notification -- an employee whose allowance
+        // lapsed and was told so would otherwise never be told it came back. Reuses
+        // TAX_ALLOWANCE_APPROVED for the same reason createOnBehalf does above: the declaration IS
+        // approved again, and the frontend needs no new type to render that correctly.
+        notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_APPROVED",
+            "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
+            "แบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear()
+                + " ที่เคยหมดอายุ ได้รับการยืนยันใหม่จากฝ่ายบุคคลแล้ว สิทธิลดหย่อนของคุณกลับมาใช้งานได้ตามปกติ");
         return updated;
     }
 
@@ -845,16 +872,60 @@ public class TaxAllowanceDeclarationService {
      * declaration's own {@code employeeId}, not {@code actor.employeeId()}: HR approving on behalf
      * of someone must not send itself the notice.
      *
-     * <p>Uses the generic {@link NotificationRepository#insert} rather than {@code notifyEmployee}/
-     * {@code notifyEmployeeForPricingRequest}: those hardcode a ticket/pricing-request link and
+     * <p>Uses {@link NotificationService#notify}, the same call shape leave / overtime / welfare /
+     * attendance-correction already use — {@code sendEmail=true} unconditionally, matching every
+     * other call site of that method in this codebase. This replaced a bare {@code
+     * NotificationRepository#insert} call (2026-08-31): that path never reached the mail layer at
+     * all, so every ล.ย.01 event was in-app only regardless of the recipient's inbox. Deliberately
+     * NOT {@code NotificationRepository}'s ticket-scoped {@code notifyEmployee}/{@code
+     * notifyEmployeeForPricingRequest} either: those hardcode a ticket/pricing-request link and
      * resolve their title through the ticket-scoped {@code TICKET_EVENT_TITLES} map, neither of
      * which fits ล.ย.01. The link is the employee's own declaration page.
      *
-     * <p>Joins the caller's transaction, like {@link AuditService#record} — an approve that rolls
-     * back must not leave a notification claiming it happened.
+     * <p>Joins the caller's transaction, like {@link AuditService#record}: {@code
+     * NotificationService#notify} is itself {@code @Transactional}, and calling it from inside an
+     * already-{@code @Transactional} method here makes it join that transaction rather than open a
+     * second one (Spring's default {@code REQUIRED} propagation) — an approve that rolls back must
+     * not leave a notification, or a queued email, claiming it happened.
      */
     private void notifyOwner(long ownerEmployeeId, String type, String title, String message) {
-        notifications.insert(ownerEmployeeId, type, title, message, "/tax-allowance");
+        notificationService.notify(ownerEmployeeId, type, title, message, "/tax-allowance", true);
+    }
+
+    /**
+     * Notifies HR that a declaration is waiting in their queue — the submit-side gap this class had
+     * before 2026-08-31 (an employee filed and HR was told nothing; the {@code notifyOwner} gap above
+     * was the decision side of the same class of defect). Fires from exactly one place: {@link
+     * #submitOwn}. {@link #createOnBehalf} also calls {@code repository.insert}, but never leaves a
+     * PENDING row for anyone to see — it supersedes/approves within the SAME transaction, so nobody
+     * is waiting and this must not fire there too.
+     *
+     * <p>Goes through {@link NotificationRepository#notifyHrAt}, the same {@code "hr"} division
+     * fan-out {@code ProfileRequestService} uses (added #860) — not {@link #notificationService},
+     * which only ever addresses one employee and has no role fan-out.
+     *
+     * <p>The "who filed" text is composed the same way {@code ProfileRequestService.titleAndName}
+     * does: a Thai title glued directly onto {@code nameTh()} with no space, safe because {@code
+     * EmployeeRepository#fullName} already puts exactly one space between first and last name. Falls
+     * back to the declaration's own (title-less) {@code employeeName}/{@code employeeCode} — already
+     * resolved by {@code repository.findById}'s own join — on the practically-unreachable case where
+     * the fresh {@link EmployeeRepository} lookup comes back empty (the FK on {@code
+     * hr.tax_allowance_declaration.employee_id} makes a vanished row a can't-happen, same reasoning
+     * {@code ProfileRequestService#submittedMessage} documents for its own fallback).
+     */
+    private void notifyHrOfSubmission(TaxAllowanceDeclarationDto declaration) {
+        String who = employeeRepository.findEmployeeSummaryById(declaration.employeeId())
+            .map(employee -> titleAndName(employee) + " (" + employee.code() + ")")
+            .orElseGet(() -> declaration.employeeName() + " (" + declaration.employeeCode() + ")");
+        notifications.notifyHrAt("TAX_ALLOWANCE_SUBMITTED",
+            who + " ยื่นแบบ ล.ย.01 ปีภาษี " + declaration.taxYear(),
+            "/tax-allowance-review");
+    }
+
+    /** Copy of {@code ProfileRequestService.titleAndName} — see that method's Javadoc. */
+    private static String titleAndName(EmployeeDto employee) {
+        String title = employee.titleTh();
+        return (title == null ? "" : title) + employee.nameTh();
     }
 
     private void requireEmployeeActor(UserPrincipal actor) {
