@@ -572,3 +572,70 @@ describe('isSelfServiceLocked', () => {
     expect(isLocked(null)).toBe(false);
   });
 });
+
+describe('activity log access (admin capability)', () => {
+  const user = (role, extra = {}) => ({ id: 216, employeeId: 216, role, ...extra });
+
+  it('denies every role when the backend sends no admin field at all', () => {
+    // The production image is pinned AHEAD of this code, so /api/auth/me returns
+    // { user: {...} } with NO admin key, and App.jsx's userFromAuthResponse resolves
+    // Boolean(undefined) -> false. This asserts the window between the frontend deploy and
+    // the backend deploy fails CLOSED. The 2026-08-17 /fulfilment incident was this same
+    // frontend-ships-alone asymmetry failing OPEN instead.
+    for (const role of ['sales', 'hr', 'ceo', 'employee', 'account', 'warehouse', 'qc']) {
+      expect(canAccessPath('/activity-log', user(role, { admin: undefined }))).toBe(false);
+    }
+  });
+
+  it('denies non-admins once the backend does send the field', () => {
+    for (const role of ['sales', 'hr', 'ceo', 'employee', 'sales_manager']) {
+      expect(canAccessPath('/activity-log', user(role, { admin: false }))).toBe(false);
+    }
+  });
+
+  it('denies a caller whose role merely claims to be admin', () => {
+    // No role grants this; only the flag does. Guards against the gate drifting into a role
+    // check, which is what the backend mutation check covers on the other side.
+    expect(canAccessPath('/activity-log', user('admin', { admin: false }))).toBe(false);
+  });
+
+  it('allows a flagged admin even though their derived role is sales', () => {
+    expect(canAccessPath('/activity-log', user('sales', { admin: true }))).toBe(true);
+  });
+
+  // These two need the lockdown ON, so they re-import the module with the flag stubbed —
+  // vitest.config.js's test.env sets VITE_SELF_SERVICE_ONLY=false for the rest of the suite,
+  // which is why the plain tests above cannot assert lockdown behaviour.
+  describe('under the self-service lockdown', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    async function lockedCanAccessPath() {
+      vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+      vi.resetModules();
+      const module = await import('./permissions.js');
+      return module.canAccessPath;
+    }
+
+    it('opens /activity-log to a flagged admin whose role is not exempt', async () => {
+      // วริศรา is role `sales`, which is NOT in SELF_SERVICE_EXEMPT_ROLES, so without the
+      // per-path exemption the lockdown would hide this page from its only holder.
+      const locked = await lockedCanAccessPath();
+      expect(locked('/activity-log', user('sales', { admin: true }))).toBe(true);
+    });
+
+    it('unlocks NOTHING else for that admin', async () => {
+      // The narrow-exemption check. Being admin must open /activity-log and nothing more; if
+      // this ever goes green for /tickets, the exemption has been widened into a full
+      // lockdown bypass — which is exactly what adding `admin` to SELF_SERVICE_EXEMPT_ROLES
+      // would have done, and why it was not done that way.
+      const locked = await lockedCanAccessPath();
+      const admin = user('sales', { admin: true });
+      for (const path of ['/tickets', '/payroll', '/employees', '/commissions', '/catalog']) {
+        expect(locked(path, admin)).toBe(false);
+      }
+    });
+  });
+});

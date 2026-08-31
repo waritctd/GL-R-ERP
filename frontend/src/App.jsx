@@ -28,6 +28,7 @@ const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelf
 const DivisionManagerOverview = lazy(() => import('./features/dashboard/DivisionManagerOverview.jsx').then(toDefault('DivisionManagerOverview')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
+const ActivityLogPage = lazy(() => import('./features/activityLog/ActivityLogPage.jsx').then(toDefault('ActivityLogPage')));
 const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
 const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
 const ProfileRequestsPage = lazy(() => import('./features/profileRequests/ProfileRequestsPage.jsx').then(toDefault('ProfileRequestsPage')));
@@ -74,6 +75,15 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 // Thin wrappers that source the ticket id from the URL for the frozen sales
 // pages (they already fetch by id internally — branch 5 only rewires how the
 // id and navigation arrive).
+// AuthResponse carries `admin` as a sibling of `user`, not a field on it (see AuthResponse.java:
+// UserPrincipal is session state with 306 test construction sites). Flatten it here so the rest of
+// the app keeps reading one user object. This only decides whether the nav item renders — every
+// admin endpoint re-checks the flag against the database.
+function userFromAuthResponse(response) {
+  if (!response?.user) return null;
+  return { ...response.user, admin: Boolean(response.admin) };
+}
+
 function TicketDetailRoute({ user, showToast }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -162,7 +172,7 @@ export function App() {
       try {
         const response = await api.auth.me();
         if (!alive) return;
-        setUser(response.user);
+        setUser(userFromAuthResponse(response));
       } catch {
         if (alive) setUser(null);
       } finally {
@@ -178,7 +188,7 @@ export function App() {
     setLoginError('');
     try {
       const response = await api.auth.login(payload);
-      setUser(response.user);
+      setUser(userFromAuthResponse(response));
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
       // Never surface the raw server message on the login screen (it's English —
@@ -198,7 +208,7 @@ export function App() {
     setChangingPassword(true);
     try {
       const response = await api.auth.changePassword(payload);
-      setUser(response.user);
+      setUser(userFromAuthResponse(response));
       showToast('success', 'เปลี่ยนรหัสผ่านเรียบร้อย');
     } finally {
       setChangingPassword(false);
@@ -375,6 +385,9 @@ export function App() {
             {/* The request table now lives on /profile. This route stays
                 registered as an alias so existing notification deep-links
                 resolve instead of falling through to the 404 route. */}
+            {/* Admin-only. permissions.js guards it on user.admin and exempts it narrowly from
+                the self-service lockdown; the server re-checks hr.employee.is_admin per call. */}
+            <Route path="/activity-log" element={<ActivityLogPage />} />
             <Route path="/my-requests" element={<Navigate to="/profile" replace />} />
             <Route
               path="/profile"

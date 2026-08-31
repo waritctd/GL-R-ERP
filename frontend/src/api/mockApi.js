@@ -4409,6 +4409,28 @@ export const api = {
     },
   },
   // Mirrors EmployeeController + EmployeeService (employee/).
+  // Mirrors ActivityLogController / ActivityLogService.
+  //
+  // NOT supported in mock mode, deliberately. The rows this serves are written by
+  // ActivityLogFilter in front of every real /api/ request, and there is no request
+  // pipeline here to produce them — a fabricated fixture would make the page look
+  // populated while proving nothing about the real query, the real ORDER BY, or the
+  // real admin gate. CLAUDE.md's "fixture supplies what production lacks" shape.
+  // The gate itself is authoritative only in the Java service; see ActivityLogAuthzIntegrationTest.
+  activityLog: {
+    async list(params = {}) {
+      void params;
+      throw new Error('activityLog.list is not supported in mock mode - run against the real backend');
+    },
+    async audit(params = {}) {
+      void params;
+      throw new Error('activityLog.audit is not supported in mock mode - run against the real backend');
+    },
+    async summary(params = {}) {
+      void params;
+      throw new Error('activityLog.summary is not supported in mock mode - run against the real backend');
+    },
+  },
   employees: {
     async list(params = {}) {
       hasRole('hr');

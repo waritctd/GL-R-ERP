@@ -2,25 +2,34 @@ package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
 
 class AuthServiceTest {
     private final EmployeeAuthRepository employees = mock(EmployeeAuthRepository.class);
     private final PasswordEncoder encoder = new BCryptPasswordEncoder();
-    private final AuthService service = new AuthService(employees, encoder);
+    private final AuditService audit = mock(AuditService.class);
+    private final AuthService service = new AuthService(employees, encoder, audit);
 
     @Test
     void rejectsTheEmployeeCodeAsAPassword() {
@@ -185,6 +194,76 @@ class AuthServiceTest {
             new ChangePasswordRequest("GLR-42", "GLR-42"), httpRequest.getSession()))
             .isInstanceOfSatisfying(ApiException.class, exception ->
                 assertThat(exception.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void recordsAnAuditRowOnSuccessfulLogin() {
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+
+        service.login(new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest());
+
+        ArgumentCaptor<UserPrincipal> actor = ArgumentCaptor.forClass(UserPrincipal.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> details =
+            ArgumentCaptor.forClass((Class<Map<String, Object>>) (Class<?>) Map.class);
+        verify(audit).record(actor.capture(), eq("LOGIN"), eq("employee"), eq(42L),
+            isNull(), details.capture());
+        assertThat(actor.getValue().email()).isEqualTo("hr@glr.co.th");
+        assertThat(actor.getValue().id()).isEqualTo(42L);
+        // The role is derived from the division at login time and the division can change later,
+        // so capturing it here is a historical record, not something re-derivable from the row.
+        assertThat(details.getValue()).containsEntry("role", "hr");
+        assertThat(details.getValue()).containsEntry("mustChangePassword", false);
+    }
+
+    @Test
+    void recordsNoAuditRowWhenTheCredentialsAreRejected() {
+        // Wrong-way-round: the audit trail must not imply a login that never happened. Every
+        // rejection path in login() is exercised, because each returns before the record call.
+        when(employees.findByEmail("missing@glr.co.th")).thenReturn(Optional.empty());
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        when(employees.findByEmail("nohash@glr.co.th")).thenReturn(Optional.of(employee(17L, null, true)));
+        when(employees.findByEmail("inactive@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, null, encoder.encode("Str0ngPass!"), false, false)));
+
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("missing@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest()))
+            .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("hr@glr.co.th", "wrong-password", null), new MockHttpServletRequest()))
+            .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("nohash@glr.co.th", "anything", null), new MockHttpServletRequest()))
+            .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest("inactive@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest()))
+            .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.login(
+            new LoginRequest(null, null, "hr"), new MockHttpServletRequest()))
+            .isInstanceOf(ApiException.class);
+
+        verify(audit, never()).record(any(), anyString(), anyString(), anyLong(), any(), any());
+    }
+
+    @Test
+    void stillLogsInWhenTheAuditWriteFails() {
+        // An audit-table problem must never become a company-wide lockout: a login mutates
+        // nothing, so there is no half-written state to protect by failing the request.
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        doThrow(new RuntimeException("audit_log unavailable"))
+            .when(audit).record(any(), anyString(), anyString(), anyLong(), any(), any());
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+
+        AuthResponse response = service.login(
+            new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), httpRequest);
+
+        assertThat(response.user().email()).isEqualTo("hr@glr.co.th");
+        assertThat(httpRequest.getSession(false)).isNotNull();
+        assertThat(httpRequest.getSession(false).getAttribute(SessionContext.SESSION_USER_KEY))
+            .isInstanceOf(UserPrincipal.class);
     }
 
     private EmployeeLoginRecord employee(long divisionId) {

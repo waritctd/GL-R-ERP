@@ -67,7 +67,7 @@ class EmployeeServiceResetPasswordTest {
             42L, "GLR-42", "user@glr.co.th", "User", true, null, null, null, null,
             LocalDate.now(), hash.getValue(), /* mustChangePassword */ true);
         when(loginRepo.findByEmail("user@glr.co.th")).thenReturn(Optional.of(record));
-        AuthService authService = new AuthService(loginRepo, encoder);
+        AuthService authService = new AuthService(loginRepo, encoder, org.mockito.Mockito.mock(th.co.glr.hr.audit.AuditService.class));
 
         // The temp password logs in and surfaces mustChangePassword=true.
         AuthResponse ok = authService.login(

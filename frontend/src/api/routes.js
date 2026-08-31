@@ -5,6 +5,12 @@ export const API_ROUTES = {
     me: '/api/auth/me',
     changePassword: '/api/auth/change-password',
   },
+  // Admin-only. Mirrors ActivityLogController.
+  activityLog: {
+    list: '/api/activity-log',
+    audit: '/api/activity-log/audit',
+    summary: '/api/activity-log/summary',
+  },
   employees: {
     list: '/api/employees',
     create: '/api/employees',

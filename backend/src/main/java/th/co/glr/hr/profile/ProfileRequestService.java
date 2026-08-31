@@ -58,7 +58,13 @@ public class ProfileRequestService {
         // same employee.
         EmployeeDto employee = employees.findEmployeeSummaryById(created.employeeId()).orElse(null);
         notifications.notifyHrOfProfileRequest("PROFILE_REQUEST_SUBMITTED", submittedMessage(employee, created));
-        return toDto(created, employee);
+        ProfileRequestDto dto = toDto(created, employee);
+        // The review side (APPROVE_/REJECT_PROFILE_REQUEST) was already audited; the submission was
+        // not, so the trail recorded who decided a request but never who raised it. Placed after
+        // main's notification block rather than replacing it: both sides of this merge are wanted,
+        // and reusing `employee` keeps that side's single-fetch optimisation intact.
+        auditService.record(user, "SUBMIT_PROFILE_REQUEST", "profile_request", id, null, dto);
+        return dto;
     }
 
     @Transactional

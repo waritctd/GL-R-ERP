@@ -70,6 +70,19 @@ const EXCLUDED_ROUTE_PATTERNS = [
   // A test-only probe component mounted for the mock suite's SafeForm guard spec — not a
   // product route, and not something a real user can reach meaningfully.
   '/__e2e/safe-form-submitter-probe',
+  // Admin-only portal activity log. NO seeded persona holds the admin capability, so every
+  // persona this suite can log in as gets the access-denied page — sweeping it would assert
+  // nothing about the page itself.
+  //
+  // ⚠️ Seeding an admin persona to close this is NOT the fix, and would be actively harmful.
+  // The personas live in db/migration-demo, and render.yaml pins
+  // SPRING_FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/migration-demo on the service
+  // that serves REAL production — that is how V139's demo accounts came to exist in the prod
+  // database on 2026-08-14. A demo admin persona would therefore grant is_admin on production.
+  //
+  // The gate itself is covered where it belongs: ActivityLogAuthzIntegrationTest drives the real
+  // service and repository against real Postgres, twelve cases, all wrong-way-round.
+  '/activity-log',
 ];
 
 function declaredRoutes() {
