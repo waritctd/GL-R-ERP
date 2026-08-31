@@ -32,7 +32,6 @@ export function allowedRoute(route, user) {
   if (route === 'employees' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;
-  if (route === 'myrequests' && !hasPermission(user.role, 'canSubmitProfileRequests')) return fallback;
   // Role-scoped views: 'tickets' is the pipeline BROWSER (canViewDealPipeline
   // — sales/sales_manager/ceo only), 'ticket-detail' stays the broader
   // ticket-DETAIL read (canViewTickets — keeps import/account).

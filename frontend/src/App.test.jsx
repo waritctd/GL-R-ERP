@@ -59,7 +59,6 @@ vi.mock('./api/index.js', () => ({
   },
   ROLE_PERMISSIONS: {
     canUseEmployeeExperience: ['employee'],
-    canSubmitProfileRequests: ['employee'],
     canViewEmployees: ['hr'],
     canManageEmployees: ['hr'],
     canReviewProfileRequests: ['hr'],

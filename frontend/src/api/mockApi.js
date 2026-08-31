@@ -4489,7 +4489,12 @@ export const api = {
       return delay({ profileRequests });
     },
     async create(payload) {
-      const user = hasRole('employee');
+      // Identity-gated, not role-gated -- mirrors ProfileRequestController#create /
+      // ProfileRequestService#create exactly (the role check moved out of the controller; the
+      // service's own employeeId != null guard is what remains). Same idiom as
+      // mockAttendanceScope's self-service branch.
+      const user = requireSession();
+      if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const employee = findEmployee(user.employeeId);
       const request = {
         id: Math.max(...db.profileRequests.map((item) => item.id)) + 1,
