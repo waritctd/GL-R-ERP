@@ -83,7 +83,7 @@ public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
      * The first stack frame, and only the first.
      *
      * <p>Enough to find the line that failed; not enough to reconstruct the request. Storing whole
-     * traces here would put connection strings, tokens and employee data on a web page — see V158.
+     * traces here would put connection strings, tokens and employee data on a web page — see V159.
      */
     private static String firstFrameOf(IThrowableProxy thrown) {
         if (thrown == null) {

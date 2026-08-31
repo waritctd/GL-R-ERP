@@ -170,7 +170,7 @@ export function ActivityLogPage() {
               {row.exceptionType}{row.exceptionMessage ? `: ${row.exceptionMessage}` : ''}
             </span>
           )}
-          {/* One frame by design — see V158. Never a full trace on a web page. */}
+          {/* One frame by design — see V159. Never a full trace on a web page. */}
           {row.firstFrame && <code className="text-[11px] text-text-faint">{row.firstFrame}</code>}
         </div>
       ),

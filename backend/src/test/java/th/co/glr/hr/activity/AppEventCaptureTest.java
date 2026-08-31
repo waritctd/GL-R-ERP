@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
  * Pins what the log capture does and — more importantly — what it refuses to do.
  *
  * <p>Two of these are safety properties rather than features. The level filter and the single-frame
- * rule are what keep {@code hr.app_event} from becoming a full log mirror on a web page; V158 says
+ * rule are what keep {@code hr.app_event} from becoming a full log mirror on a web page; V159 says
  * so in the schema and this says so in a test that fails if someone widens either.
  */
 class AppEventCaptureTest {

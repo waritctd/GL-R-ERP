@@ -64,7 +64,7 @@ public class ScheduledJobEventConfig {
         }
     }
 
-    /** First frame only, never the whole trace — the V158 rule. */
+    /** First frame only, never the whole trace — the V159 rule. */
     private static String firstFrameOf(Throwable failure) {
         if (failure == null) {
             return null;

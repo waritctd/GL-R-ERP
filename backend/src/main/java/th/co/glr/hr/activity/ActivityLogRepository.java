@@ -185,7 +185,7 @@ public class ActivityLogRepository {
      * WARN/ERROR events and job runs, newest first, optionally narrowed to one kind.
      *
      * <p>Selects {@code first_frame} but never a full trace, because no full trace is stored —
-     * see V158. If a column ever appears here holding one, that is a data-exposure change.
+     * see V159. If a column ever appears here holding one, that is a data-exposure change.
      */
     public List<AppEventDto> findAppEvents(OffsetDateTime from, OffsetDateTime to,
                                            String kind, int limit) {

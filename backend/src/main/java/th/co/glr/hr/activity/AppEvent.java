@@ -6,7 +6,7 @@ import java.time.OffsetDateTime;
  * One application event bound for {@code hr.app_event} — a WARN/ERROR log line, or one execution
  * of a {@code @Scheduled} worker.
  *
- * <p>{@code firstFrame} is deliberately one frame rather than a stack trace. See V158: this ends up
+ * <p>{@code firstFrame} is deliberately one frame rather than a stack trace. See V159: this ends up
  * on a web page, and a whole trace is where a connection string or an employee's data leaks.
  */
 public record AppEvent(
