@@ -171,7 +171,13 @@ public class NotificationRepository {
         // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
         // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
         // routine pipeline noise; the whole point of this notification is that it is not.
-        Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง")
+        Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง"),
+        // profile/ProfileRequestService — profile-change-request notifications (2026-08-31).
+        // ProfileRequestService emitted zero notifications before this; these three cover
+        // submit (to HR) and approve/reject (to the requesting employee).
+        Map.entry("PROFILE_REQUEST_SUBMITTED", "มีคำขอแก้ไขข้อมูลพนักงานรออนุมัติ"),
+        Map.entry("PROFILE_REQUEST_APPROVED", "อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว"),
+        Map.entry("PROFILE_REQUEST_REJECTED", "คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -180,6 +186,11 @@ public class NotificationRepository {
 
     public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
         notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    /** ProfileRequestService#update, notifying the employee whose own request was reviewed. */
+    public void notifyEmployeeOfProfileRequest(long employeeId, String type, String message) {
+        notifyEmployeeAt(employeeId, type, message, "/profile");
     }
 
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
@@ -234,9 +245,28 @@ public class NotificationRepository {
         notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId);
     }
 
+    /** ProfileRequestService#create, notifying HR that a new request is waiting on them. */
+    public void notifyHrOfProfileRequest(String type, String message) {
+        notifyByRoleInternal("hr", type, message, "/requests");
+    }
+
     private void notifyByRoleInternal(String role, String type, String message, String link) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
+            // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
+            // NOT a naive `d.source_code ILIKE 'HR%'` -- that was tried once already and found wrong
+            // in two ways (EmployeeRepository#findHrEmployeeIds's S-3 review finding): it is a prefix
+            // match where roleFor requires an EXACT "hr", and it has no fallback to the name_th
+            // prefix for the real rows where source_code is NULL. Reused verbatim from the two
+            // already-reviewed SQL mirrors of this same branch, PendingApproverSql
+            // #SINGLE_ACTIVE_HR_NAME_SQL and EmployeeRepository#findHrEmployeeIds, aliases adjusted
+            // to this method's own `d`/`p` joins. The NOT LIKE '%กรรมการ%' guard reproduces roleFor's
+            // precedence: isExecutive is checked BEFORE "hr".equals(code), so an HR-division employee
+            // who is also an executive resolves to "ceo" in Java and must not be notified here too.
+            case "hr" -> """
+                LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(COALESCE(d.name_th, ''), '-', 1)))) = 'hr'
+                AND regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') NOT LIKE '%กรรมการ%'
+                """;
             case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
