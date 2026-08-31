@@ -46,10 +46,17 @@ import th.co.glr.hr.config.AppProperties;
  *       PER INSURED PERSON, then summed for the block total — <b>พ.ร.บ.ประกันสังคม พ.ศ. 2533 มาตรา 46
  *       วรรคท้าย</b>: "สำหรับเศษของเงินสมทบที่มีจำนวนตั้งแต่ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท
  *       ถ้าน้อยกว่านั้นให้ปัดทิ้ง" ("...applied per insured person"). The employer portion mirrors the
- *       already-rounded employee portion, matching §33. This is a FILING-ONLY rounding: it does not
- *       touch {@code payroll_line.social_security} or the payslip deduction, which keeps deducting
- *       the unrounded amount (e.g. ฿562.50) while the employer remits the filed whole-baht figure
- *       (฿563) — a known, deliberate divergence; see the PR body.</li>
+ *       already-rounded employee portion, matching §33. <b>Whether this rounding is filing-only is
+ *       time-dependent.</b> Until PR #834 (merged 2026-08-25, deployed in backend image
+ *       {@code v2026-08-25}) it was: the engine stored and deducted the unrounded amount (e.g.
+ *       ฿562.50) while the employer remitted the filed whole-baht figure (฿563). #834 moved the same
+ *       rounding into the engine — {@code PayrollCalculator#wholeBaht}, at both {@code monthlySso}
+ *       call sites — so for periods processed on or after that deploy the payslip deduction,
+ *       {@code payroll_line.social_security} and this filing all carry ONE number, and the rounding
+ *       here is idempotent. #834 shipped NO migration and NO backfill, so periods processed BEFORE
+ *       that deploy keep their unrounded stored contribution: for those the divergence is still
+ *       real, and the rounding here is what CORRECTS them at export time (it does not rewrite the
+ *       stored value).</li>
  *   <li><b>ค่าจ้าง whole-baht rounding</b> — also rounded {@link RoundingMode#HALF_UP} to 0 decimal
  *       places per person. Unlike the contribution rounding above, this is NOT stated by any statute
  *       this codebase has found — it is inferred from GL&amp;R's reference filing, where all 27
