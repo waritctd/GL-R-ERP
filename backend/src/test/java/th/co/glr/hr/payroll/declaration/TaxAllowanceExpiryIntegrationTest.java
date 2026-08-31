@@ -99,6 +99,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(FileStorageService.class),
             payrollService,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+            // Not under test here — this class is about the expiry SWEEP's own selection/timing
+            // logic (TaxAllowanceNotificationIntegrationTest covers the notification content).
+            mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         hrEmployeeId = seedEmployee("EXP-HR", new BigDecimal("50000.00"));

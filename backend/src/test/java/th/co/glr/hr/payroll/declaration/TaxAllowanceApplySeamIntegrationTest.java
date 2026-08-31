@@ -110,6 +110,8 @@ class TaxAllowanceApplySeamIntegrationTest extends AbstractPostgresIntegrationTe
             // estimateAllowanceEffect to run the SAME calculator instance #preview does.
             payrollService,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+            // Not under test here — this class is about the apply() seam / byte-for-byte pinning.
+            mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         employeeId = seedEmployee("SEAM-EMP", new BigDecimal("50000.00"));

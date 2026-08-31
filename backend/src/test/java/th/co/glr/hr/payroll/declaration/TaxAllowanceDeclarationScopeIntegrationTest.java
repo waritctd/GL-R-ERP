@@ -17,6 +17,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
@@ -65,13 +66,17 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         service = new TaxAllowanceDeclarationService(
             repository,
             payrollRepository,
-            // A mock is enough for what THIS class asserts. Two methods now reach EmployeeRepository
-            // -- createOnBehalf, and getOwn's ล.ย.01 header prefill -- and neither is exercised
-            // here: a Mockito mock answers Optional.empty() for the prefill, so every getOwn call
-            // below sees an empty header block, which is exactly the state these declaration-scoping
-            // assertions want. The prefill's own scoping cannot be tested through a mock at all
-            // (CLAUDE.md: a mocked repository passes while the SQL does something else), so it has
-            // its own class against real Postgres -- TaxAllowanceHeaderPrefillIntegrationTest.
+            // A mock is enough for what THIS class asserts. Three methods now reach EmployeeRepository
+            // -- createOnBehalf, getOwn's ล.ย.01 header prefill, and (2026-08-31) submitOwn's
+            // HR-submission notification text -- and none is exercised for its EmployeeRepository
+            // content here: a Mockito mock answers Optional.empty() for all three, so every getOwn
+            // call below sees an empty header block (exactly the state these declaration-scoping
+            // assertions want) and every submitOwn's HR notification falls back to the declaration's
+            // own (title-less) employeeName/employeeCode rather than NPE-ing. The prefill's own
+            // scoping cannot be tested through a mock at all (CLAUDE.md: a mocked repository passes
+            // while the SQL does something else), so it has its own class against real Postgres --
+            // TaxAllowanceHeaderPrefillIntegrationTest. The HR-submission notification's own SQL fan-
+            // out has its own class the same way -- TaxAllowanceNotificationIntegrationTest.
             mock(EmployeeRepository.class),
             new TaxAllowanceCapCatalog(),
             mock(AuditService.class),
@@ -81,6 +86,9 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             mock(FileStorageService.class),
             mock(PayrollService.class),
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+            // Not under test here — every submitOwn call in this file writes a real
+            // TAX_ALLOWANCE_SUBMITTED row that nothing in this class asserts on.
+            mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAD-A");
