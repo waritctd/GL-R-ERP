@@ -7,7 +7,6 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { hasPermission } from '../../app/permissions.js';
 import { formatAddress, formatShortDate, requestStatus } from '../../utils/format.js';
 import { TaxAllowanceSummaryPanel } from '../taxAllowance/TaxAllowanceSummaryPanel.jsx';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
@@ -16,9 +15,11 @@ const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(
 
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest, taxAllowanceSummary }) {
   const [requestField, setRequestField] = useState(null);
-  // Employee-tier users (employee + the new warehouse/qc roles) request profile changes rather
-  // than edit directly — tie the affordance to the permission, not a single hard-coded role.
-  const isEmployee = hasPermission(user.role, 'canSubmitProfileRequests');
+  // Identity-gated, not role-gated: every role reaches /profile under the self-service lock, so
+  // whether the "ขอแก้ไข" button shows depends on being linked to an employee record at all, not
+  // on which role that link has. Mirrors ProfileRequestController#create's server-side gate
+  // (employeeId != null) exactly, and the existing `/profile` PATH_GUARDS entry in permissions.js.
+  const canRequestChange = !!user.employeeId;
   const pendingKeys = useMemo(
     () => new Set(profileRequests.filter((request) => request.status === 'pending').map((request) => request.fieldKey)),
     [profileRequests],
@@ -75,7 +76,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
                 <strong>{field.fieldLabel}</strong>
                 <small className="block text-[length:var(--text-xs)] font-medium text-text-muted">{field.displayValue ?? field.oldValue}</small>
               </span>
-              {isEmployee ? (
+              {canRequestChange ? (
                 <Button
                   type="button"
                   variant="secondary"
@@ -113,7 +114,7 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
           <EmptyState
             icon="clipboard"
             title="ยังไม่มีคำขอแก้ไข"
-            description={isEmployee ? 'กด "ขอแก้ไข" ที่ข้อมูลติดต่อด้านบนเพื่อส่งคำขอ' : undefined}
+            description={canRequestChange ? 'กด "ขอแก้ไข" ที่ข้อมูลติดต่อด้านบนเพื่อส่งคำขอ' : undefined}
           />
         ) : profileRequests.map((request) => {
           const status = requestStatus(request.status);

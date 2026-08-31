@@ -1,7 +1,10 @@
 package th.co.glr.hr.profile;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -45,6 +48,25 @@ class ProfileRequestControllerTest {
             .andExpect(status().isBadRequest());
 
         verifyNoInteractions(profileRequestService);
+    }
+
+    @Test
+    void nonEmployeeRoleWithAnEmployeeIdReachesTheServiceRatherThanBeing403d() throws Exception {
+        // The gate is deliberately identity-based now (see ProfileRequestController#create), so a
+        // role that is not "employee" must reach the service layer instead of being refused here
+        // at the controller -- ProfileRequestService#create is what actually enforces employeeId
+        // != null.
+        ProfileRequestDto stub = new ProfileRequestDto(1L, 10L, "phone", "เบอร์โทรศัพท์",
+            "02-000-0000", "089-999-9999", "sales", LocalDate.now(), "pending", null, null);
+        when(profileRequestService.create(any(), any())).thenReturn(stub);
+
+        mvc.perform(post("/api/profile-requests")
+                .session(sessionFor("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fieldKey\":\"phone\",\"fieldLabel\":\"เบอร์โทรศัพท์\",\"newValue\":\"0899999999\"}"))
+            .andExpect(status().isOk());
+
+        verify(profileRequestService).create(any(), any());
     }
 
     @Test
