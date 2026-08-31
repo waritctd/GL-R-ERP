@@ -150,6 +150,74 @@ public class ActivityLogRepository {
     }
 
     /**
+     * Inserts one batch of application events. Called only from {@link AppEventWriter}'s single
+     * writer thread.
+     */
+    public void insertAppEvents(List<AppEvent> events) {
+        if (events.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = events.stream()
+            .map(event -> new MapSqlParameterSource()
+                .addValue("at", event.at())
+                .addValue("kind", event.kind())
+                .addValue("level", event.level())
+                .addValue("logger", event.logger())
+                .addValue("message", event.message() == null ? "" : event.message())
+                .addValue("exceptionType", event.exceptionType())
+                .addValue("exceptionMessage", event.exceptionMessage())
+                .addValue("firstFrame", event.firstFrame())
+                .addValue("correlationId", event.correlationId())
+                .addValue("thread", event.thread())
+                .addValue("durationMs", event.durationMs()))
+            .toArray(MapSqlParameterSource[]::new);
+        jdbc.batchUpdate("""
+            INSERT INTO hr.app_event
+                (at, kind, level, logger, message, exception_type, exception_message,
+                 first_frame, correlation_id, thread, duration_ms)
+            VALUES
+                (:at, :kind, :level, :logger, :message, :exceptionType, :exceptionMessage,
+                 :firstFrame, :correlationId, :thread, :durationMs)
+            """, batch);
+    }
+
+    /**
+     * WARN/ERROR events and job runs, newest first, optionally narrowed to one kind.
+     *
+     * <p>Selects {@code first_frame} but never a full trace, because no full trace is stored —
+     * see V158. If a column ever appears here holding one, that is a data-exposure change.
+     */
+    public List<AppEventDto> findAppEvents(OffsetDateTime from, OffsetDateTime to,
+                                           String kind, int limit) {
+        Map<String, Object> params = Map.of(
+            "from", from, "to", to,
+            "kind", kind == null ? "" : kind,
+            "filterByKind", kind != null && !kind.isBlank(),
+            "limit", limit);
+        return jdbc.query("""
+            SELECT id, at, kind, level, logger, message, exception_type, exception_message,
+                   first_frame, correlation_id, duration_ms
+              FROM hr.app_event
+             WHERE at >= :from
+               AND at <  :to
+               AND (NOT :filterByKind OR kind = :kind)
+             ORDER BY at DESC, id DESC
+             LIMIT :limit
+            """, params, (rs, rowNum) -> new AppEventDto(
+                rs.getLong("id"),
+                rs.getObject("at", OffsetDateTime.class),
+                rs.getString("kind"),
+                rs.getString("level"),
+                rs.getString("logger"),
+                rs.getString("message"),
+                rs.getString("exception_type"),
+                rs.getString("exception_message"),
+                rs.getString("first_frame"),
+                rs.getString("correlation_id"),
+                rs.getObject("duration_ms", Integer.class)));
+    }
+
+    /**
      * Live read of the admin capability.
      *
      * <p>Deliberately not cached on {@link th.co.glr.hr.auth.UserPrincipal}: the principal is

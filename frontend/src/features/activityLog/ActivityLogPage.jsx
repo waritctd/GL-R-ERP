@@ -28,6 +28,7 @@ const TABS = [
   { value: 'summary', label: 'สรุป' },
   { value: 'actions', label: 'การดำเนินการ' },
   { value: 'requests', label: 'คำขอทั้งหมด' },
+  { value: 'system', label: 'ระบบและข้อผิดพลาด' },
 ];
 
 const TONE_CLASS = {
@@ -89,6 +90,12 @@ export function ActivityLogPage() {
     enabled: tab === 'requests',
   });
 
+  const systemQuery = useQuery({
+    queryKey: ['activityLog', 'system', range],
+    queryFn: () => api.activityLog.events(range),
+    enabled: tab === 'system',
+  });
+
   const summaryColumns = useMemo(() => [
     { key: 'person', header: 'พนักงาน', render: (row) => personLabel(row) },
     {
@@ -135,13 +142,62 @@ export function ActivityLogPage() {
     },
   ], []);
 
-  const active = tab === 'summary' ? summaryQuery : tab === 'actions' ? auditQuery : requestsQuery;
-  const rows = active.data ?? [];
-  const columns = tab === 'summary' ? summaryColumns : tab === 'actions' ? auditColumns : requestColumns;
+  const systemColumns = useMemo(() => [
+    { key: 'at', header: 'เวลา', render: (row) => formatDateTime(row.at) },
+    {
+      key: 'kind',
+      header: 'ประเภท',
+      render: (row) => (row.kind === 'JOB' ? 'งานเบื้องหลัง' : 'ข้อความระบบ'),
+    },
+    {
+      key: 'level',
+      header: 'ระดับ',
+      render: (row) => (
+        <span className={row.level === 'ERROR' ? TONE_CLASS.negative : row.level === 'WARN' ? 'text-amber-700 dark:text-amber-400' : TONE_CLASS.muted}>
+          {row.level}
+        </span>
+      ),
+    },
+    { key: 'logger', header: 'ที่มา', render: (row) => <code className="text-xs">{row.logger || '-'}</code> },
+    {
+      key: 'message',
+      header: 'รายละเอียด',
+      render: (row) => (
+        <div className="flex flex-col gap-0.5">
+          <span>{row.message}</span>
+          {row.exceptionType && (
+            <span className="text-xs text-text-muted">
+              {row.exceptionType}{row.exceptionMessage ? `: ${row.exceptionMessage}` : ''}
+            </span>
+          )}
+          {/* One frame by design — see V158. Never a full trace on a web page. */}
+          {row.firstFrame && <code className="text-[11px] text-text-faint">{row.firstFrame}</code>}
+        </div>
+      ),
+    },
+    {
+      key: 'durationMs',
+      header: 'ใช้เวลา',
+      align: 'right',
+      render: (row) => (row.durationMs == null ? '-' : `${row.durationMs.toLocaleString('th-TH')} ms`),
+    },
+  ], []);
 
-  const emptyMessage = tab === 'actions'
-    ? 'ไม่มีการดำเนินการในช่วงเวลานี้'
-    : 'ไม่มีการใช้งานในช่วงเวลานี้';
+  // Lookup rather than chained ternaries: at four tabs the ternary chain stopped being readable,
+  // and a missing branch would have silently rendered the wrong tab's columns.
+  const QUERIES = { summary: summaryQuery, actions: auditQuery, requests: requestsQuery, system: systemQuery };
+  const COLUMNS = { summary: summaryColumns, actions: auditColumns, requests: requestColumns, system: systemColumns };
+  const EMPTY = {
+    summary: 'ไม่มีการใช้งานในช่วงเวลานี้',
+    actions: 'ไม่มีการดำเนินการในช่วงเวลานี้',
+    requests: 'ไม่มีการใช้งานในช่วงเวลานี้',
+    system: 'ไม่มีข้อผิดพลาดหรืองานเบื้องหลังในช่วงเวลานี้',
+  };
+
+  const active = QUERIES[tab];
+  const rows = active.data ?? [];
+  const columns = COLUMNS[tab];
+  const emptyMessage = EMPTY[tab];
 
   return (
     <div className="flex flex-col gap-4">
