@@ -50,6 +50,16 @@ public class ActivityLogService {
     }
 
     /**
+     * WARN/ERROR events and scheduled-job runs — the half of the Render log a request log cannot
+     * see. Same gate as everything else here.
+     */
+    public List<AppEventDto> appEvents(UserPrincipal actor, LocalDate from, LocalDate to,
+                                       String kind, Integer limit) {
+        requireAdmin(actor);
+        return repository.findAppEvents(startOf(from), endOf(to), kind, clampLimit(limit));
+    }
+
+    /**
      * The gate.
      *
      * <p>Checks {@code hr.employee.is_admin} live rather than trusting anything on the session

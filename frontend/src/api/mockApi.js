@@ -4426,6 +4426,10 @@ export const api = {
       void params;
       throw new Error('activityLog.audit is not supported in mock mode - run against the real backend');
     },
+    async events(params = {}) {
+      void params;
+      throw new Error('activityLog.events is not supported in mock mode - run against the real backend');
+    },
     async summary(params = {}) {
       void params;
       throw new Error('activityLog.summary is not supported in mock mode - run against the real backend');

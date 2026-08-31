@@ -9,6 +9,7 @@ export const API_ROUTES = {
   activityLog: {
     list: '/api/activity-log',
     audit: '/api/activity-log/audit',
+    events: '/api/activity-log/events',
     summary: '/api/activity-log/summary',
   },
   employees: {

@@ -23,6 +23,7 @@ export const api = {
   activityLog: {
     list: (params) => apiRequest(withQuery(API_ROUTES.activityLog.list, params)),
     audit: (params) => apiRequest(withQuery(API_ROUTES.activityLog.audit, params)),
+    events: (params) => apiRequest(withQuery(API_ROUTES.activityLog.events, params)),
     summary: (params) => apiRequest(withQuery(API_ROUTES.activityLog.summary, params)),
   },
   employees: {
