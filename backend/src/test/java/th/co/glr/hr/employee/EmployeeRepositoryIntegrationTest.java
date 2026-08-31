@@ -38,6 +38,60 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(dto.salaryHistory()).isNotEmpty();
     }
 
+    /**
+     * Addresses are canonicalised on the way IN, so {@code hr.employee.email} holds one form per
+     * person no matter how HR happened to type it.
+     *
+     * <p>Logging in was never the problem — {@code EmployeeAuthRepository#findByEmail} folds case in
+     * SQL, so a single mixed-case row has always worked. The problem is <em>two</em> rows: {@code
+     * V11.1} and {@code V47} index {@code LOWER(btrim(email))} without making it unique, so nothing
+     * stopped a second employee being created as {@code Somchai@glr.co.th} beside an existing
+     * {@code somchai@glr.co.th}. Both satisfy the login predicate, and {@code ORDER BY
+     * e.is_active DESC, e.employee_id LIMIT 1} then picks one silently — so which password works
+     * depends on which row sorts first, which is exactly how "my email only works sometimes" gets
+     * reported. Normalising at the write keeps a duplicate visible as a duplicate.
+     *
+     * <p>Covers all three writes, because they are three separate call sites into the same column:
+     * {@code create}, {@code update}, and {@code updateEmail} — the last being how {@code
+     * ProfileRequestService} applies an employee's approved email change.
+     */
+    @Test
+    void storesEmailLowercasedAndTrimmedHoweverItWasTyped() {
+        long id = repository.create(
+            req("สมชาย ใจดี", "SALES", "  Suneesllim.1977@GMAIL.com  ", new BigDecimal("25000")));
+
+        assertThat(readEmail(id)).isEqualTo("suneesllim.1977@gmail.com");
+
+        // The HR employee-edit form.
+        repository.update(id, emailOnlyRequest(" Warehouse.Manager@GLR.co.th "));
+        assertThat(readEmail(id)).isEqualTo("warehouse.manager@glr.co.th");
+
+        // ProfileRequestService applying an approved employee-requested change.
+        repository.updateEmail(id, "  Somchai.P@GLR.CO.TH ");
+        assertThat(readEmail(id)).isEqualTo("somchai.p@glr.co.th");
+    }
+
+    /** Only the email set; every other field null, so {@code addSet} leaves the rest untouched. */
+    private UpsertEmployeeRequest emailOnlyRequest(String email) {
+        return new UpsertEmployeeRequest(
+            null, null, null, null, null, null, null, null, null, null, // code..maritalStatus
+            email, null, null, null, null,                              // email..departmentTh
+            null, null, null, null, null, null,                         // positionTh..directorRemuneration
+            null,                                                       // withholdingTaxOverride
+            null, null, null, null, null, null);                        // hireDate..emergencyPhone
+    }
+
+    /**
+     * The column, not just the constructor: asserts against {@code hr.employee.email} directly
+     * rather than through {@code findEmployeeById}, so a DTO-level tidy-up could not stand in for a
+     * value that actually landed mixed-case in the database.
+     */
+    private String readEmail(long id) {
+        return jdbc.queryForObject(
+            "SELECT email FROM hr.employee WHERE employee_id = :id",
+            java.util.Map.of("id", id), String.class);
+    }
+
     @Test
     void searchFilterMatchesEmailCaseInsensitively() {
         repository.create(req("สมชาย ใจดี", "SALES", "somchai@glr.co.th", new BigDecimal("25000")));

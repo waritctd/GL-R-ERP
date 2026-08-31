@@ -39,7 +39,13 @@ public class AuthService {
         if (!hasText(safeRequest.email()) || !hasText(safeRequest.password())) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
         }
-        EmployeeLoginRecord employee = employees.findByEmail(safeRequest.email().trim())
+        // No .trim() here any more: LoginRequest's constructor already trimmed and lowercased, and
+        // it cannot be bypassed — a record's canonical constructor runs however the instance is
+        // built. Trimming again here was not merely redundant, it was actively misleading: it made
+        // this service tolerate whitespace that @Valid had already rejected one layer above, so the
+        // trim that mattered looked like it lived here when it did not. Removing it is also what
+        // gives LoginEmailNormalizationIntegrationTest's whitespace case something to prove.
+        EmployeeLoginRecord employee = employees.findByEmail(safeRequest.email())
             .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS));
         if (!employee.active() || !passwordMatches(safeRequest.password(), employee)) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, INVALID_CREDENTIALS);
