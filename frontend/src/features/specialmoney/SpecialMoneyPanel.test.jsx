@@ -63,7 +63,9 @@ const TYPES = [
 
 const TYPE_LABEL_BY_VALUE = Object.fromEntries(TYPES.map((type) => [type.requestType, type.thaiLabel]));
 
-function renderPanel(as = user) {
+// `showToast` defaults to a throwaway spy, so every existing call site is unchanged; pass one in
+// to assert on what the panel announced (e.g. that a filed request never raises an error toast).
+function renderPanel(as = user, showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -73,13 +75,13 @@ function renderPanel(as = user) {
 
   const view = render(
     <QueryClientProvider client={queryClient}>
-      <SpecialMoneyPanel user={as} currentEmployee={currentEmployee} showToast={vi.fn()} />
+      <SpecialMoneyPanel user={as} currentEmployee={currentEmployee} showToast={showToast} />
     </QueryClientProvider>,
   );
   // Exposed for tests that need to inspect the cache directly (e.g. counting distinct
   // ['specialMoney','list',...] entries) rather than inferring cache-key separation from fetch
   // call counts, which react-query's own staleness/refetch-on-mount behaviour can make unreliable.
-  return { ...view, queryClient };
+  return { ...view, queryClient, showToast };
 }
 
 const ceoUser = { employeeId: 9, name: 'ซีอีโอ', role: 'ceo', manager: false };
@@ -794,5 +796,104 @@ describe('SpecialMoneyPanel', () => {
 
     await waitFor(() => expect(screen.queryByText('พนักงานยังไม่พ้นทดลองงาน')).toBeNull());
     expect(screen.queryByText('ต้องแนบเอกสารหลักฐาน')).toBeNull();
+  });
+
+  // The submit button fires TWO requests -- POST /special-money, then POST /{id}/attachments --
+  // and they can fail independently. Production 2026-08-31: rows 1 and 2 were filed, audited and
+  // notified while the upload answered 500, and the panel reported "ส่งคำขอไม่สำเร็จ" for both.
+  describe('a request that is filed but whose evidence upload fails', () => {
+    function evidence() {
+      return new File(['x'], 'marriage-cert.pdf', { type: 'application/pdf' });
+    }
+
+    async function submitWeddingWithEvidence() {
+      await selectType('AID_WEDDING');
+      fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+      fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.change(document.getElementById('smr-evidence'), { target: { files: [evidence()] } });
+      fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+    }
+
+    it('reports the request as filed instead of reporting the whole submit as failed', async () => {
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+      const showToast = vi.fn();
+      renderPanel(user, showToast);
+
+      await submitWeddingWithEvidence();
+
+      expect(await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/)).not.toBeNull();
+      expect(screen.getByText(/แต่แนบเอกสารหลักฐานไม่สำเร็จ: เกิดข้อผิดพลาดภายในระบบ/)).not.toBeNull();
+      // The lie this removes: the upload's 500 used to render under "ส่งคำขอไม่สำเร็จ:", telling
+      // the employee nothing had been filed while the row existed.
+      expect(screen.queryByText('ส่งคำขอไม่สำเร็จ:')).toBeNull();
+      expect(showToast.mock.calls.some(([kind]) => kind === 'error')).toBe(false);
+    });
+
+    it('clears the form, so pressing ส่งคำขอ again cannot re-file the accepted payload', async () => {
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+      renderPanel();
+
+      await submitWeddingWithEvidence();
+      await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/);
+
+      // Both halves matter: the notice says "ไม่ต้องส่งคำขอซ้ำ", and the form no longer holds the
+      // data that would make sending it again a single click.
+      expect(screen.getByText(/ไม่ต้องส่งคำขอซ้ำ/)).not.toBeNull();
+      expect(screen.getByLabelText(/เหตุผล/).value).toBe('');
+      expect(api.specialMoney.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries the upload alone, against the request that already exists', async () => {
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+      renderPanel();
+
+      await submitWeddingWithEvidence();
+      await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/);
+
+      api.specialMoney.addAttachment.mockResolvedValueOnce({ attachment: { id: 9001 } });
+      fireEvent.click(screen.getByRole('button', { name: /ลองแนบอีกครั้ง/ }));
+
+      await waitFor(() => expect(api.specialMoney.addAttachment).toHaveBeenCalledTimes(2));
+      const [retriedId, retriedFile] = api.specialMoney.addAttachment.mock.calls[1];
+      expect(retriedId).toBe(3001);
+      // The SAME file the employee already chose -- a retry that made them re-pick it is the
+      // reason re-filing the whole request looked like the shorter path.
+      expect(retriedFile.name).toBe('marriage-cert.pdf');
+      // And no second request was filed to carry it.
+      expect(api.specialMoney.create).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/)).toBeNull());
+    });
+
+    it('keeps the notice up, with the newer reason, when the retry fails too', async () => {
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('เกิดข้อผิดพลาดภายในระบบ'));
+      renderPanel();
+
+      await submitWeddingWithEvidence();
+      await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/);
+
+      api.specialMoney.addAttachment.mockRejectedValueOnce(new Error('ไฟล์มีขนาดใหญ่เกินไป'));
+      fireEvent.click(screen.getByRole('button', { name: /ลองแนบอีกครั้ง/ }));
+
+      expect(await screen.findByText(/แต่แนบเอกสารหลักฐานไม่สำเร็จ: ไฟล์มีขนาดใหญ่เกินไป/)).not.toBeNull();
+      // The request-was-filed fact must survive a failed retry -- a toast alone disappears after
+      // 3.2s and leaves nothing on screen saying the request exists.
+      expect(screen.getByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/)).not.toBeNull();
+    });
+
+    // The other direction, so the change above cannot be satisfied by never reporting a failure.
+    it('still reports a genuine create failure as a failed submit, with the form intact', async () => {
+      api.specialMoney.create.mockRejectedValueOnce(new Error('พนักงานยังไม่พ้นทดลองงาน'));
+      renderPanel();
+
+      await submitWeddingWithEvidence();
+
+      expect(await screen.findByText('ส่งคำขอไม่สำเร็จ:')).not.toBeNull();
+      expect(screen.getByText('พนักงานยังไม่พ้นทดลองงาน')).not.toBeNull();
+      // Nothing was filed, so there is no request to point at and the upload never runs.
+      expect(screen.queryByText(/บันทึกคำขอเลขที่/)).toBeNull();
+      expect(api.specialMoney.addAttachment).not.toHaveBeenCalled();
+      // And what was typed survives, because correcting and resubmitting IS the right move here.
+      expect(screen.getByLabelText(/เหตุผล/).value).toBe('ทดสอบระบบ');
+    });
   });
 });
