@@ -2,7 +2,6 @@ package th.co.glr.hr.attachment;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -72,9 +71,39 @@ public class FileStorageService {
                 Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException exception) {
-            throw new UncheckedIOException(exception);
+            throw storageUnavailable(dir, exception);
         }
         return new StoredFile(validated.originalName(), dest.toString(), validated.mime(), file.getSize());
+    }
+
+    /**
+     * Turns a failed disk write into a 503 that SAYS SO, and logs the path that could not be
+     * written.
+     *
+     * <p>This used to be a bare {@code UncheckedIOException}, which no handler in {@link
+     * th.co.glr.hr.common.ApiExceptionHandler} claims, so it fell through to {@code
+     * handleUnexpected} and the caller was told 500 "เกิดข้อผิดพลาดภายในระบบ" — a message that
+     * describes every unhandled bug in the application equally well and therefore points at
+     * nothing. That is not hypothetical: on 2026-08-31 every welfare evidence upload on production
+     * answered exactly that, and identifying the storage layer as the culprit took reading the
+     * source of a five-call chain and probing the deployed container image, because the response
+     * body and the request itself were both consistent with a dozen other explanations.
+     *
+     * <p>503, not 500, and the same shape as {@code PayrollService}'s unconfigured-employer refusal:
+     * the request is well-formed and the caller can do nothing about it, the server is
+     * misconfigured, and the operation will succeed unchanged once someone fixes the environment.
+     *
+     * <p>The message names {@code APP_UPLOADS_DIR} because that is what an operator must go and
+     * look at, and this is an internal HR/ERP portal, not a public site — the same reasoning that
+     * lets {@code requireEmployerConfiguredForStatutoryExport} list its missing env vars to the
+     * caller. The resolved PATH stays in the log, not in the response.
+     */
+    private ApiException storageUnavailable(Path target, IOException cause) {
+        log.error("Attachment storage is not writable: app.uploads-dir={} target={} — every upload "
+            + "will fail until this path exists and is writable by the runtime user", uploadsDir, target, cause);
+        return new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+            "ไม่สามารถบันทึกไฟล์แนบได้ เนื่องจากที่จัดเก็บไฟล์ของระบบใช้งานไม่ได้ (APP_UPLOADS_DIR) "
+                + "กรุณาติดต่อผู้ดูแลระบบ");
     }
 
     /**
@@ -216,7 +245,14 @@ public class FileStorageService {
         try {
             content = file.getBytes();
         } catch (IOException exception) {
-            throw new UncheckedIOException(exception);
+            // Same reasoning as storageUnavailable(..) above, different cause and therefore a
+            // different message: nothing here touches app.uploads-dir. This path reads the bytes
+            // Spring already spooled for the multipart part, so a failure is a problem with the
+            // servlet container's temp storage, and naming APP_UPLOADS_DIR would send an operator
+            // to the wrong place entirely.
+            log.error("Could not read the uploaded file for domain={} ownerId={}", domain, ownerId, exception);
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "อ่านไฟล์ที่อัปโหลดไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
         }
         return new StoredContent(validated.originalName(), storageKey, validated.mime(), file.getSize(), content);
     }

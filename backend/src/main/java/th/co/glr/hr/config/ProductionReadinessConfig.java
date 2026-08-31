@@ -1,5 +1,7 @@
 package th.co.glr.hr.config;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -198,7 +200,56 @@ public class ProductionReadinessConfig {
         if (!Path.of(uploadsDir).isAbsolute()) {
             return "APP_UPLOADS_DIR must be an absolute persistent path for the prod profile";
         }
-        return null;
+        return uploadsDirWritabilityProblem(Path.of(uploadsDir));
+    }
+
+    /**
+     * Set-and-absolute is not the same as USABLE, and the gap between them is not academic. A value
+     * like {@code /var/data/uploads} — the conventional Render disk path — satisfies both checks
+     * above and then fails every single upload at runtime, because {@code render.yaml} declares no
+     * disk and the container runs as an unprivileged user who cannot create anything under {@code
+     * /var}. That is what happened: welfare evidence uploads answered a generic 500 on production
+     * with a clean boot log, while the two checks written to catch exactly this class of
+     * misconfiguration both passed. A guard that can only see the SPELLING of a path is not a guard.
+     *
+     * <p>Rehearses precisely what {@code FileStorageService#store} will do on the first upload --
+     * {@code createDirectories} then write a file -- rather than asking {@code Files.isWritable},
+     * which answers a narrower question (it inspects an EXISTING path's permission bits, so it says
+     * nothing about a directory that does not exist yet, and on some filesystems its answer and the
+     * actual write disagree). Creating the directory as a side effect is deliberate and harmless:
+     * it is idempotent, {@code store} would create it on first use anyway, and the Dockerfile
+     * already does the same thing for the default path.
+     *
+     * <p>REQUIRED severity, matching the two checks above: hard-fails a real on-prem prod boot and
+     * WARNs under {@code prod,demo} (Render). A dir that is set but unwritable is strictly worse
+     * than an unset one -- unset at least falls back to {@code ./uploads}, which the image makes
+     * writable -- so it would be incoherent to treat it as the milder problem.
+     */
+    private static String uploadsDirWritabilityProblem(Path uploadsDir) {
+        Path probe = null;
+        try {
+            Files.createDirectories(uploadsDir);
+            probe = Files.createTempFile(uploadsDir, "readiness-", ".probe");
+            return null;
+        } catch (IOException | SecurityException exception) {
+            // Narrow on purpose. Catching RuntimeException here would also swallow a genuine bug in
+            // this method and re-label it "your uploads dir is broken", sending an operator to
+            // inspect a perfectly good path. SecurityException is in because a SecurityManager
+            // denial IS the environment refusing the write, which is exactly what this reports.
+            return "APP_UPLOADS_DIR (" + uploadsDir + ") is not writable by the runtime user — "
+                + "every file upload will fail: " + exception;
+        } finally {
+            if (probe != null) {
+                try {
+                    Files.deleteIfExists(probe);
+                } catch (IOException exception) {
+                    // A probe file we could not remove is one stray zero-byte file in the uploads
+                    // dir. Reporting it as a readiness problem would be a lie -- the write itself
+                    // succeeded, which is the whole question this method exists to answer.
+                    log.warn("Could not remove the uploads-dir readiness probe file: {}", probe, exception);
+                }
+            }
+        }
     }
 
     private static String blankProblem(String value, String envVar, String consequence) {

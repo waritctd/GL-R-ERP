@@ -10,10 +10,14 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
 
@@ -41,6 +45,18 @@ import org.springframework.core.env.Environment;
  * REQUIRED-when-set-under-prod" block below.
  */
 class ProductionReadinessConfigTest {
+
+    /**
+     * A REAL, writable directory for every "good uploads dir" case below. These tests used to pass
+     * the literal {@code "/var/lib/glr-hr/uploads"}, which stopped meaning "good" the moment
+     * {@code uploadsDirProblem} began rehearsing the actual write: that path is absolute (so it
+     * still clears the two spelling checks) but is not creatable on a dev machine or a CI runner,
+     * so all eighteen of them would have started reporting the very problem they assert the absence
+     * of. Swapping in a temp dir keeps each test's original intent and makes "good" mean what the
+     * production check now means -- writable.
+     */
+    @TempDir
+    Path writableUploadsDir;
 
     private ListAppender<ILoggingEvent> appender;
     private Logger logbackLogger;
@@ -82,7 +98,7 @@ class ProductionReadinessConfigTest {
     @Test
     void realProdWithoutDemoPassesSilentlyOnAbsoluteUploadsDir() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
 
         ProductionReadinessConfig.validate(environment);
 
@@ -107,7 +123,7 @@ class ProductionReadinessConfigTest {
     @Test
     void prodPlusDemoWithAGoodUploadsDirLogsNothing() {
         Environment environment = environment("prod", "demo");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
 
         ProductionReadinessConfig.validate(environment);
 
@@ -145,7 +161,7 @@ class ProductionReadinessConfigTest {
     @Test
     void degradedOnlyGapWarnsAndDoesNotThrowInRealProd() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         // A DEGRADED gap: environment() below stubs a non-blank default for every property this
         // method reads, so overriding just this one back to blank isolates it the same way the
         // pre-2026-08-Resend-port version of this test isolated spring.mail.username.
@@ -188,7 +204,7 @@ class ProductionReadinessConfigTest {
     @Test
     void resendProviderRequiresFromAppBaseUrlAndApiKey() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("");
@@ -208,7 +224,7 @@ class ProductionReadinessConfigTest {
         // hard-fails on a blank app.mail.smtp.host) -- app.mail.resend-api-key is meaningless here
         // and must not be demanded.
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("smtp");
         when(environment.getProperty("app.mail.from", "")).thenReturn("");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("");
@@ -225,7 +241,7 @@ class ProductionReadinessConfigTest {
         // provider=log (the repo-wide default) never contacts a real inbox, so a blank
         // From/base-url/API key must not block boot -- dev/CI has no mail credentials at all.
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
 
         ProductionReadinessConfig.validate(environment);
@@ -239,7 +255,7 @@ class ProductionReadinessConfigTest {
         // its own Javadoc) -- this is the same path a real, unconfigured deployment takes, where
         // application.yml's ${APP_MAIL_PROVIDER:log} default applies.
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
 
         ProductionReadinessConfig.validate(environment);
 
@@ -249,7 +265,7 @@ class ProductionReadinessConfigTest {
     @Test
     void resendProviderWithEveryMailPropertySetPassesSilently() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -267,7 +283,7 @@ class ProductionReadinessConfigTest {
         // instead of crash-looping the showcase; real on-prem prod (no demo profile) still
         // hard-fails on the identical gap, per resendProviderRequiresFromAppBaseUrlAndApiKey above.
         Environment environment = environment("prod", "demo");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -293,7 +309,7 @@ class ProductionReadinessConfigTest {
     @Test
     void resendProviderUnderRealProdHardFailsWhenOverrideToIsSet() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -312,7 +328,7 @@ class ProductionReadinessConfigTest {
     @Test
     void smtpProviderUnderRealProdHardFailsWhenOverrideToIsSet() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("smtp");
         when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -328,7 +344,7 @@ class ProductionReadinessConfigTest {
         // Same policy as demoProfileWarnsRatherThanThrowsOnAMissingMailFrom above: the Render showcase
         // must not crash-loop, but the gap must still be visible in the logs.
         Environment environment = environment("prod", "demo");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -348,7 +364,7 @@ class ProductionReadinessConfigTest {
         // inert there, not dangerous, and must not block boot. Mirrors logProviderDoesNotRequireAnyMailProperty
         // above for the same reason.
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
         when(environment.getProperty("app.mail.override-to", "")).thenReturn("qa-inbox@example.com");
 
@@ -360,7 +376,7 @@ class ProductionReadinessConfigTest {
     @Test
     void resendProviderUnderRealProdPassesSilentlyWhenOverrideToIsBlank() {
         Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn("/var/lib/glr-hr/uploads");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
         when(environment.getProperty("app.mail.from", "")).thenReturn("hr@glr.co.th");
         when(environment.getProperty("app.mail.app-base-url", "")).thenReturn("https://erp.glr.co.th");
@@ -406,5 +422,76 @@ class ProductionReadinessConfigTest {
         lenient().when(environment.getProperty("app.bot.fx-api-token", "")).thenReturn("fx-token");
         lenient().when(environment.getProperty("app.bot.holiday-api-token", "")).thenReturn("holiday-token");
         return environment;
+    }
+
+    // ---- 2026-08-31: set-and-absolute is not the same as USABLE -------------------------------
+
+    /**
+     * A directory whose PARENT is a regular file. {@code Files.createDirectories} fails on it for
+     * EVERY user including root, which is the point: the obvious fixture -- {@code chmod} a
+     * directory read-only -- is satisfiable by privilege, so it would quietly stop testing anything
+     * the moment the suite ran as root in a container. This one cannot.
+     */
+    private Path uncreatableDir() throws IOException {
+        Path blocker = writableUploadsDir.resolve("not-a-directory");
+        Files.writeString(blocker, "x");
+        return blocker.resolve("uploads");
+    }
+
+    @Test
+    void realProdHardFailsWhenTheUploadsDirIsAbsoluteButCannotBeWritten() throws IOException {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(uncreatableDir().toString());
+
+        // The production failure this exists to catch: /var/data/uploads on Render is absolute and
+        // non-blank, so it cleared both existing checks and then failed every upload at runtime.
+        assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("APP_UPLOADS_DIR")
+            .hasMessageContaining("is not writable");
+    }
+
+    @Test
+    void prodPlusDemoWarnsWhenTheUploadsDirIsAbsoluteButCannotBeWritten() throws IOException {
+        Environment environment = environment("prod", "demo");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(uncreatableDir().toString());
+
+        ProductionReadinessConfig.validate(environment);
+
+        // Render runs prod,demo -- so this is the branch that would actually have fired, and it
+        // must reach the boot log rather than crash-looping the live service.
+        assertThat(appender.list).hasSize(1);
+        assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(appender.list.get(0).getFormattedMessage()).contains("is not writable");
+    }
+
+    /**
+     * The check must not require the directory to exist ALREADY -- {@code FileStorageService#store}
+     * creates it on first use, so demanding it up front would report a problem where there is none
+     * (a fresh volume, a first boot). It creates the path itself and reports nothing.
+     */
+    @Test
+    void anAbsentButCreatableUploadsDirIsNotAProblemAndIsCreated() {
+        Path notYetThere = writableUploadsDir.resolve("nested/uploads");
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(notYetThere.toString());
+
+        ProductionReadinessConfig.validate(environment);
+
+        assertThat(appender.list).isEmpty();
+        assertThat(notYetThere).exists();
+    }
+
+    /** The probe must not leave its own scratch file behind in a real uploads directory. */
+    @Test
+    void theWritabilityProbeCleansUpAfterItself() throws IOException {
+        Environment environment = environment("prod");
+        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
+
+        ProductionReadinessConfig.validate(environment);
+
+        try (var entries = Files.list(writableUploadsDir)) {
+            assertThat(entries).isEmpty();
+        }
     }
 }
