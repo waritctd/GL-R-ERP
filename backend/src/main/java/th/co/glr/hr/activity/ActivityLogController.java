@@ -45,6 +45,17 @@ public class ActivityLogController {
         return service.auditEvents(sessionContext.requireUser(session), from, to, employeeId, limit);
     }
 
+    @GetMapping("/events")
+    List<AppEventDto> events(
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+        @RequestParam(required = false) String kind,
+        @RequestParam(required = false) Integer limit,
+        HttpSession session
+    ) {
+        return service.appEvents(sessionContext.requireUser(session), from, to, kind, limit);
+    }
+
     @GetMapping("/summary")
     List<ActivityLogSummaryDto> summary(
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
