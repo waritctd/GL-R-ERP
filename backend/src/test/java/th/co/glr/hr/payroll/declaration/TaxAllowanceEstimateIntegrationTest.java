@@ -144,15 +144,23 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * THE anti-drift pin: estimate, then actually submit/approve/apply the SAME declaration and run
+     * THE anti-drift pin: estimate, then actually submit and approve the SAME declaration and run
      * a real {@link PayrollService#preview} for the same month — {@code withholdingTax} must be
-     * byte-for-byte equal. If the estimate's private calculation ever diverged from the real
+     * byte-for-byte equal.
+     *
+     * <p>The month is JANUARY on both sides, and deliberately hardcoded rather than derived from the
+     * clock. {@code estimateOwn} simulates {@code WHOLE_YEAR_EFFECTIVE_MONTH} since the whole-year
+     * ruling removed the employee's month choice — which is the same January every blank
+     * "มีผลตั้งแต่งวดเดือน" select already produced before it. This test previewed June while the
+     * fixture explicitly declared month 6; with no month to declare, keeping June would compare a
+     * January-shaped estimate against a June preview and fail for a reason that has nothing to do
+     * with drift. If the estimate's private calculation ever diverged from the real
      * {@code calculateLine} path (a different collaborator wired, a merge-order bug), this is the
      * test that would catch it — no other assertion in this suite compares an estimate against a
      * real run.
      */
     @Test
-    void estimateIsByteForByteEqualToARealApplyAndPreviewForTheSameMonth() {
+    void estimateIsByteForByteEqualToARealApprovalAndPreviewForTheSameMonth() {
         long employeeId = seedEmployee("EST-P", new BigDecimal("50000.00"), "M");
         BigDecimal spouseAllowance = new BigDecimal("60000");
 
@@ -162,18 +170,19 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
         TaxAllowanceDeclarationDto declaration =
             service.submitOwn(submitRequest(spouseAllowance), employeeActor(employeeId));
+        // Approval promotes to payroll on its own since the whole-year ruling (2026-08-31); a
+        // follow-up apply() would 409 on markApplied's applied_at IS NULL guard.
         approveSigned(declaration.declarationId());
-        service.apply(declaration.declarationId(), null, hrActor());
 
         PayrollPeriodDto realPeriod = payrollService.preview(
-            new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrActor());
+            new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of()), hrActor());
         PayrollLineDto realLine = realPeriod.lines().stream()
             .filter(line -> line.employeeId() == employeeId)
             .findFirst()
             .orElseThrow(() -> new AssertionError("no payroll line for employee " + employeeId));
 
         assertThat(estimate.proposedWithholdingTax())
-            .as("the estimate's proposed figure must byte-for-byte match a real preview after apply")
+            .as("the estimate's proposed figure must byte-for-byte match a real preview after approval")
             .isEqualByComparingTo(realLine.withholdingTax());
         assertThat(estimate.proposedTaxAllowanceTotal()).isEqualByComparingTo(realLine.taxAllowanceTotal());
     }
@@ -187,7 +196,6 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
     private TaxAllowanceDeclarationSubmitRequest submitRequest(BigDecimal spouseAllowance) {
         return new TaxAllowanceDeclarationSubmitRequest(
             2026,                     // taxYear
-            6,                        // effectiveMonth
             spouseAllowance,          // spouseAllowance
             null, null, null, null,   // child, parentCare, disabledCare, maternity
             null, null, null,         // life, health, parentHealth

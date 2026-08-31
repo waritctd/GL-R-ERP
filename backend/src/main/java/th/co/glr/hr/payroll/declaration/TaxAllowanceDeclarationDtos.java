@@ -32,6 +32,11 @@ public final class TaxAllowanceDeclarationDtos {
         String employeeCode,
         String employeeName,
         int taxYear,
+        /**
+         * Always 1 on anything written since the whole-year ruling (2026-08-31) — see
+         * {@code TaxAllowanceDeclarationService#WHOLE_YEAR_EFFECTIVE_MONTH}. Kept on the read DTO
+         * because pre-ruling rows still hold months 2-12 and the register must show them honestly.
+         */
         int effectiveMonth,
         PayrollTaxAllowanceInput allowances,
         String documentReference,
@@ -128,8 +133,6 @@ public final class TaxAllowanceDeclarationDtos {
 
     public record TaxAllowanceDeclarationSubmitRequest(
         @NotNull Integer taxYear,
-        // ล.ย.01 ข้อ 2.2: null means "in force from January", same default upsertTaxAllowances uses.
-        Integer effectiveMonth,
         @PositiveOrZero BigDecimal spouseAllowance,
         @PositiveOrZero BigDecimal childAllowance,
         @PositiveOrZero BigDecimal parentCareAllowance,
@@ -163,7 +166,6 @@ public final class TaxAllowanceDeclarationDtos {
     public record TaxAllowanceOnBehalfRequest(
         @NotNull Long employeeId,
         @NotNull Integer taxYear,
-        Integer effectiveMonth,
         @PositiveOrZero BigDecimal spouseAllowance,
         @PositiveOrZero BigDecimal childAllowance,
         @PositiveOrZero BigDecimal parentCareAllowance,
@@ -191,14 +193,6 @@ public final class TaxAllowanceDeclarationDtos {
 
     /** Reject requires a reason (decision #6 / {@code chk_tad_rejected_has_reason}); approve does not. */
     public record TaxAllowanceReviewRequest(String reviewerNote) {}
-
-    /**
-     * Apply body. {@code effectiveMonth} is an optional override of the declaration's own {@code
-     * effectiveMonth} — null means "use what was declared". Either way the resolved month is
-     * checked against {@code findPeriodByMonth}: an already-{@code PROCESSED} month refuses with
-     * 409, since re-running it would change a figure already filed on ภ.ง.ด.1.
-     */
-    public record TaxAllowanceApplyRequest(Integer effectiveMonth) {}
 
     /**
      * What the ล.ย.01 header block is SEEDED with when the employee opens a fillable form — owner

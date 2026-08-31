@@ -17,7 +17,6 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
@@ -121,7 +120,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void theExpirySweepNotifiesEachOwnerExactlyOnce() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
         approveSigned(declaration.declarationId());
-        service.apply(declaration.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         // Backdate the deadline so the sweep considers this row overdue.
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
             Map.of("past", LocalDate.now().minusDays(1), "id", declaration.declarationId()));
@@ -158,7 +156,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     private TaxAllowanceDeclarationDto submit(long employeeId, int taxYear) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
             taxYear,                 // taxYear
-            null,                    // effectiveMonth -> defaults to January
             new BigDecimal("60000"), // spouseAllowance
             null, null, null, null,  // child, parentCare, disabledCare, maternity
             null, null, null,        // life, health, parentHealth
