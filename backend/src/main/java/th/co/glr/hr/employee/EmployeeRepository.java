@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.Period;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -266,7 +267,7 @@ public class EmployeeRepository {
             .addValue("birthDate", request.birthDate())
             .addValue("nationality", defaultText(request.nationality(), "ไทย"))
             .addValue("maritalStatus", defaultText(request.maritalStatus(), "โสด"))
-            .addValue("email", request.email())
+            .addValue("email", normalizeEmail(request.email()))
             .addValue("phone", request.phone())
             .addValue("divisionId", divisionId)
             .addValue("departmentId", departmentId)
@@ -330,7 +331,7 @@ public class EmployeeRepository {
             params.addValue("firstNameEn", parts.first()).addValue("lastNameEn", parts.last());
         }
         addSet(sets, params, "nickname", "nickName", request.nickName());
-        addSet(sets, params, "email", "email", request.email());
+        addSet(sets, params, "email", "email", normalizeEmail(request.email()));
         addSet(sets, params, "phone", "phone", request.phone());
         addSet(sets, params, "date_of_birth", "birthDate", request.birthDate());
         addSet(sets, params, "nationality", "nationality", request.nationality());
@@ -418,7 +419,7 @@ public class EmployeeRepository {
 
     public void updateEmail(long employeeId, String email) {
         jdbc.update("UPDATE hr.employee SET email = :email, updated_at = now() WHERE employee_id = :id",
-            Map.of("id", employeeId, "email", email));
+            Map.of("id", employeeId, "email", normalizeEmail(email)));
     }
 
     public void updateAddressLine(long employeeId, String line1) {
@@ -989,6 +990,33 @@ public class EmployeeRepository {
 
     private static String defaultText(String value, String fallback) {
         return hasText(value) ? value : fallback;
+    }
+
+    /**
+     * Canonicalises an address on its way INTO {@code hr.employee.email} — trim, then lowercase.
+     *
+     * <p>Every write to that column goes through this class ({@link #create}, {@link #update} and
+     * {@link #updateEmail}, the last of which is how {@code ProfileRequestService} applies an
+     * approved email change), so normalising here covers the column rather than covering three call
+     * sites that each have to remember.
+     *
+     * <p><b>Why it matters, given reads already fold case.</b> {@code
+     * EmployeeAuthRepository#findByEmail} matches on {@code LOWER(btrim(e.email))}, so one row with
+     * a mixed-case address logs in fine. The hazard is <em>two</em> rows: {@code V11.1} and {@code
+     * V47} index {@code LOWER(btrim(email))} but do <b>not</b> make it unique, so nothing stopped HR
+     * creating {@code Somchai@glr.co.th} next to an existing {@code somchai@glr.co.th}. Both then
+     * satisfy the login predicate and {@code ORDER BY e.is_active DESC, e.employee_id LIMIT 1}
+     * silently picks one — so the password that works is whichever row happened to sort first, and
+     * the person reports that their email "only works sometimes". Storing one canonical form means
+     * the second row collides visibly at entry instead.
+     *
+     * <p>Blank is passed through unchanged rather than folded to {@code null}: {@code addSet} skips
+     * null values, so folding would quietly turn "clear this employee's email" into a no-op. {@code
+     * findByEmail} already excludes {@code btrim(e.email) = ''}, so an empty string is as good as
+     * absent for login either way.
+     */
+    private static String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }
 
     private static boolean hasText(String value) {
