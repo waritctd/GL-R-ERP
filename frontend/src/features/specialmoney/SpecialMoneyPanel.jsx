@@ -226,6 +226,16 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const [historyPeriod, setHistoryPeriod] = useState('THIS_YEAR');
   const [evidenceFile, setEvidenceFile] = useState(null);
   const [submitViolations, setSubmitViolations] = useState([]);
+  // Set when the request was FILED but its evidence upload failed -- see createMutation. Holds
+  // { requestId, message, file } so the notice can name the request that exists and retry the
+  // upload alone. Deliberately NOT cleared by the requestType effect below, unlike
+  // submitViolations: a violation describes the form on screen and goes stale when the type
+  // changes, whereas this describes a row that is already in the database and stays true.
+  const [evidenceFailure, setEvidenceFailure] = useState(null);
+  // Bumped to remount FileUploadField, which keeps the chosen filename in its OWN state --
+  // clearing evidenceFile alone leaves the previous file's name sitting above an empty form,
+  // reading as "this file is going up with whatever I submit next". It is not.
+  const [evidenceFieldKey, setEvidenceFieldKey] = useState(0);
 
   const employeesQuery = useQuery({
     queryKey: queryKeys.specialMoneyEmployees(),
@@ -447,24 +457,76 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     // Evidence needs a request id, so the file can only go up AFTER create. Chained here rather
     // than left to the user: an evidence-required type cannot be approved without an attachment,
     // so a request filed with the file forgotten is stuck until someone attaches one.
+    //
+    // The upload's failure is CAUGHT and returned, never rethrown. By the time it runs the
+    // request is already committed server-side -- SpecialMoneyService.submit() writes the row,
+    // the audit entry and both notifications in ONE transaction that has already answered 200 --
+    // so a rejection escaping here made the whole mutation fail and the form announce
+    // "ส่งคำขอไม่สำเร็จ" for a request that exists. Observed on production 2026-08-31: rows 1 and
+    // 2 (AID_WEDDING, AID_ORDINATION) were filed, notified and audited while
+    // POST /{id}/attachments answered 500, and the employee -- told nothing had been filed --
+    // filed again. Two independent outcomes need reporting as two facts, not collapsed into one.
     mutationFn: async (payload) => {
       const created = await api.specialMoney.create(payload).then((response) => response.request);
-      if (evidenceFile) {
+      if (!evidenceFile) return { created, attachmentError: null };
+      try {
         await api.specialMoney.addAttachment(created.id, evidenceFile);
+        return { created, attachmentError: null };
+      } catch (error) {
+        return { created, attachmentError: error?.message || 'แนบเอกสารไม่สำเร็จ' };
       }
-      return created;
     },
-    onSuccess: () => {
+    onSuccess: ({ created, attachmentError }) => {
+      // The request was filed either way, so the form is cleared either way. Leaving it populated
+      // under a failure notice is what invites the duplicate: the employee's next move is to press
+      // ส่งคำขอ again on data that has already been accepted once.
       reset(defaultForm(currentEmployee?.id || user.employeeId || ''));
-      setEvidenceFile(null);
       setSubmitViolations([]);
-      showToast('success', 'ส่งคำขอเงินสวัสดิการแล้ว');
+      setEvidenceFieldKey((key) => key + 1);
+      if (attachmentError) {
+        // The file moves OUT of evidenceFile and into the notice. Leaving it in evidenceFile would
+        // silently staple this file to the NEXT request the employee files from the cleared form.
+        setEvidenceFailure({ requestId: created.id, message: attachmentError, file: evidenceFile });
+        setEvidenceFile(null);
+        showToast('info', 'บันทึกคำขอแล้ว แต่แนบเอกสารไม่สำเร็จ — ดูรายละเอียดด้านล่าง');
+      } else {
+        setEvidenceFile(null);
+        setEvidenceFailure(null);
+        showToast('success', 'ส่งคำขอเงินสวัสดิการแล้ว');
+      }
+      // Runs on both branches on purpose: after a failed upload the new request must appear in the
+      // history table below, both as proof it was filed and because that row is where the employee
+      // can attach the evidence themselves.
       invalidateSpecialMoney();
     },
     onError: (error) => {
+      // Only reachable when create() itself failed, so nothing was filed -- the form is
+      // deliberately NOT reset here, because correcting it and resubmitting is the right move.
       const violations = splitViolations(error.message);
       setSubmitViolations(violations);
       showToast('error', violations.length > 1 ? `ส่งคำขอไม่สำเร็จ (${violations.length} ข้อ) — ดูรายละเอียดด้านล่าง` : violations[0]);
+    },
+  });
+
+  // Retries ONLY the upload, against the request that already exists. Without this the sole way
+  // out of a failed upload is the request row's own AttachmentList further down the page, which
+  // means re-picking the file the employee already chose -- and the shorter path back to a filled
+  // form is to file the whole request again.
+  const retryAttachmentMutation = useMutation({
+    mutationFn: ({ requestId, file }) => api.specialMoney.addAttachment(requestId, file),
+    onSuccess: (_result, { requestId }) => {
+      setEvidenceFailure(null);
+      showToast('success', 'แนบเอกสารแล้ว');
+      queryClient.invalidateQueries({ queryKey: queryKeys.specialMoneyAttachments(requestId) });
+      invalidateSpecialMoney();
+    },
+    onError: (error) => {
+      // Keeps the notice (and the file) up with the newer reason, rather than replacing it with a
+      // toast that disappears after 3.2s and leaves nothing on screen about the filed request.
+      setEvidenceFailure((current) => (
+        current ? { ...current, message: error.message || 'แนบเอกสารไม่สำเร็จ' } : current
+      ));
+      showToast('error', error.message || 'แนบเอกสารไม่สำเร็จ');
     },
   });
 
@@ -924,6 +986,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                     : `${evidenceLabel(requestType)} — ไฟล์ PDF, JPG หรือ PNG. คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร`}
                 >
                   <FileUploadField
+                    key={evidenceFieldKey}
                     id="smr-evidence"
                     accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
                     onChange={(event) => setEvidenceFile(event.target.files?.[0] || null)}
@@ -949,6 +1012,42 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </div>
             ) : null}
   
+            {/* The request WAS filed; only its evidence failed. Warning, not danger: nothing here
+                needs redoing, and dressing it as an error is what makes an employee re-file. The
+                request number leads, because "ไม่ต้องส่งซ้ำ" is the one thing that has to land. */}
+            {evidenceFailure ? (
+              <div className={formGridSpan2}>
+                <div className="rounded-md border border-warning-border bg-warning-bg p-3" role="status">
+                  <p className="m-0 text-xs font-bold text-warning-dark">
+                    บันทึกคำขอเลขที่ {evidenceFailure.requestId} เรียบร้อยแล้ว — ไม่ต้องส่งคำขอซ้ำ
+                  </p>
+                  <p className="m-0 mt-1.5 text-sm text-text">
+                    แต่แนบเอกสารหลักฐานไม่สำเร็จ: {evidenceFailure.message}
+                  </p>
+                  <p className="m-0 mt-1.5 text-xs text-text-muted">
+                    คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร — กดปุ่มลองแนบอีกครั้ง
+                    หรือแนบจากคำขอเลขที่ {evidenceFailure.requestId} ในตารางประวัติด้านล่าง
+                  </p>
+                  <RowActions className="mt-2.5">
+                    {evidenceFailure.file ? (
+                      <Button
+                        variant="secondary"
+                        loading={retryAttachmentMutation.isPending}
+                        onClick={() => retryAttachmentMutation.mutate({
+                          requestId: evidenceFailure.requestId,
+                          file: evidenceFailure.file,
+                        })}
+                      >
+                        <Icon name="upload" />
+                        ลองแนบอีกครั้ง
+                      </Button>
+                    ) : null}
+                    <Button variant="text" onClick={() => setEvidenceFailure(null)}>ปิดข้อความนี้</Button>
+                  </RowActions>
+                </div>
+              </div>
+            ) : null}
+
             <RowActions className={formGridSpan2}>
               <Button type="submit" disabled={saving || !requestType || blockingWarning} className="mobile:min-h-11 mobile:w-full">
                 <Icon name="plus" />
