@@ -18,6 +18,8 @@ import th.co.glr.hr.notification.SalesMailRecipientRepository.SalesMailRecipient
  *   <tr><td>sales</td><td>the rep's own address, falling back to their manager's</td></tr>
  *   <tr><td>sales_manager</td><td>each notified manager's own address, falling back to THEIR
  *       manager's — same per-recipient path as {@code sales}, see ruling 4</td></tr>
+ *   <tr><td>hr</td><td>each notified HR employee's own address, falling back to their manager's —
+ *       same per-recipient path as {@code sales}/{@code sales_manager}, see ruling 5</td></tr>
  * </table>
  *
  * <p><b>This is a deliberate contract, and each row of it costs something.</b>
@@ -46,6 +48,12 @@ import th.co.glr.hr.notification.SalesMailRecipientRepository.SalesMailRecipient
  *       hidden:</b> a manager notified this way who has no email on file, and whose own manager also
  *       has none, receives nothing by mail — same gap ruling 3 already accepts for a rep, just one
  *       level up the reporting line. This repo has real rows in that shape today.</li>
+ *   <li><b>{@code hr} (added 2026-08-31, profile-change-request notifications) reuses the same
+ *       per-recipient path for the same reason ruling 4 gives {@code sales_manager}: no shared GL&amp;R
+ *       HR mailbox is known to exist (unlike {@code import}/{@code account}), so routing it to a
+ *       hardcoded shared box would be inventing one and mailing into the void. Same accepted
+ *       limitation as ruling 4, one more time: an HR employee with no address on file, and whose own
+ *       manager also has none, receives nothing by mail.</li>
  * </ol>
  *
  * <p><b>Divergence from {@link NotificationService#notify} worth knowing about.</b> That path
@@ -116,9 +124,11 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
             case "ceo" -> sendToMailbox(CEO_MAILBOX, role, title, message, link);
             // Sales is the one role with no shared box — each rep who got an in-app row gets their
             // own mail, on the same individual path (and the same manager fallback) as a
-            // directly-addressed notification. sales_manager reuses this exact path (ruling 4):
-            // it is not a shared box either, so each notified manager is mailed individually.
-            case "sales", "sales_manager" -> notifiedEmployeeIds.forEach(id -> routeEmployee(id, title, message, link));
+            // directly-addressed notification. sales_manager reuses this exact path (ruling 4), and
+            // hr reuses it again (ruling 5): neither is a shared box, so each notified person is
+            // mailed individually.
+            case "sales", "sales_manager", "hr" ->
+                notifiedEmployeeIds.forEach(id -> routeEmployee(id, title, message, link));
             default -> log.warn("Sales notification email skipped: no mail routing for role={}", role);
         }
     }

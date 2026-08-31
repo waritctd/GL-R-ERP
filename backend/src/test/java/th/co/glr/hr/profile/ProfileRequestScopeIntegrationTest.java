@@ -17,6 +17,8 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
+import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -54,10 +56,15 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
         when(employees.findEmployeeSummariesByIds(any())).thenReturn(Map.of());
 
         profileRequests = new ProfileRequestRepository(jdbc);
+        // Real, not mocked, like profileRequests above: create() now writes an hr.notification row
+        // through this collaborator, and NO_OP keeps the assertions in this class (which is about
+        // request-scoping, not notifications) from depending on mail. See
+        // ProfileRequestNotificationIntegrationTest for the notification-specific coverage.
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         // @Transactional on ProfileRequestService#create is inert without a real AOP proxy (no
         // Spring context here) -- see AbstractPostgresIntegrationTest#transactional's Javadoc.
         // Wrap it so the annotation is actually exercised, matching AttendanceScopeIntegrationTest.
-        service = transactional(new ProfileRequestService(profileRequests, employees, auditService));
+        service = transactional(new ProfileRequestService(profileRequests, employees, auditService, notifications));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         salesEmployeeA = insertEmployee("S001", division);
