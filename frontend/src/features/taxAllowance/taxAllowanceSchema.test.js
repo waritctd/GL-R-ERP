@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   allLawReferencedEntries,
   AUTO_GRANTED_ROWS,
+  buildAllowanceSubmitBody,
   defaultAllowanceValues,
+  emptyAllowanceValues,
   LAW_REF_EXEMPTIONS,
   LAW_SOURCES,
   LOR_YOR_01_ADDRESS_KEYS,
@@ -250,5 +252,24 @@ describe('defaultAllowanceValues — ล.ย.01 header prefill', () => {
     for (const key of LOR_YOR_01_TICK_KEYS) {
       expect(values.lorYor01[key], `${key} must stay a boolean`).toBe(false);
     }
+  });
+});
+
+describe('buildAllowanceSubmitBody — whole tax year, no effective month', () => {
+  // The wire-shape half of the 2026-08-31 ruling. TaxAllowanceDeclarationSubmitRequest and
+  // TaxAllowanceOnBehalfRequest both dropped `effectiveMonth`, and Jackson ignores unknown
+  // properties by default — so a body that still carried one would be accepted, silently discarded,
+  // and look like it worked. Asserting the KEY is absent (not that it is null) is the point.
+  it('omits effectiveMonth entirely from the submitted body', () => {
+    const body = buildAllowanceSubmitBody(emptyAllowanceValues(), { taxYear: 2026 });
+
+    expect(Object.keys(body)).not.toContain('effectiveMonth');
+    expect(body.taxYear).toBe(2026);
+  });
+
+  it('ignores a stray effectiveMonth left on the form values', () => {
+    const values = { ...emptyAllowanceValues(), effectiveMonth: 7 };
+
+    expect(Object.keys(buildAllowanceSubmitBody(values, { taxYear: 2026 }))).not.toContain('effectiveMonth');
   });
 });

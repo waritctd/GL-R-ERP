@@ -26,7 +26,6 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceOnBehalfRequest;
@@ -173,7 +172,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void theExpirySweepNotifiesEachOwnerExactlyOnce() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
         approveSigned(declaration.declarationId());
-        service.apply(declaration.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         // Backdate the deadline so the sweep considers this row overdue.
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
             Map.of("past", LocalDate.now().minusDays(1), "id", declaration.declarationId()));
@@ -204,7 +202,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         // what this test is about.
         verify(emailService).send(eq(employeeA), any(), any(),
             eq("แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ"),
-            eq("ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี 2026 แล้ว"),
+            eq("ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี 2026 แล้ว มีผลกับการหักภาษี ณ ที่จ่ายตลอดทั้งปีภาษีนี้"),
             eq("/tax-allowance"));
     }
 
@@ -272,7 +270,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void reverifyingNotifiesTheEmployeeTheirAllowanceIsActiveAgain() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026);
         approveSigned(declaration.declarationId());
-        service.apply(declaration.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
             Map.of("past", LocalDate.now().minusDays(1), "id", declaration.declarationId()));
         assertThat(service.expireOverdueVerifications()).isEqualTo(1);
@@ -300,7 +297,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     void noNotificationMessageOrTitleEverContainsARawTypeCode() {
         TaxAllowanceDeclarationDto toApprove = submit(employeeA, 2026);
         approveSigned(toApprove.declarationId());
-        service.apply(toApprove.declarationId(), new TaxAllowanceApplyRequest(1), hrActor());
         jdbc.update("UPDATE hr.tax_allowance_declaration SET expires_on = :past WHERE declaration_id = :id",
             Map.of("past", LocalDate.now().minusDays(1), "id", toApprove.declarationId()));
         service.expireOverdueVerifications();
@@ -346,7 +342,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     private TaxAllowanceDeclarationDto submit(long employeeId, int taxYear) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
             taxYear,                 // taxYear
-            null,                    // effectiveMonth -> defaults to January
             new BigDecimal("60000"), // spouseAllowance
             null, null, null, null,  // child, parentCare, disabledCare, maternity
             null, null, null,        // life, health, parentHealth
@@ -363,7 +358,6 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
     private TaxAllowanceOnBehalfRequest onBehalfRequest(long employeeId, int taxYear) {
         return new TaxAllowanceOnBehalfRequest(
             employeeId, taxYear,
-            null,                    // effectiveMonth
             new BigDecimal("60000"), // spouseAllowance
             null, null, null, null,  // child, parentCare, disabledCare, maternity
             null, null, null,        // life, health, parentHealth

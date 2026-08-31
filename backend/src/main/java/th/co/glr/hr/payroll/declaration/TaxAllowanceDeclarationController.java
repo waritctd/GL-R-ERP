@@ -23,7 +23,6 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.MyTaxAllowanceDeclarationsResponse;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceCapsResponse;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
@@ -165,13 +164,16 @@ public class TaxAllowanceDeclarationController {
         return service.reject(id, request, user);
     }
 
+    /**
+      * Backlog drain only — {@link TaxAllowanceDeclarationService#approve} promotes to payroll in its
+      * own transaction since the whole-year ruling (2026-08-31), so nothing new reaches the APPROVED
+      * + not-yet-applied state this clears. Takes NO body: the งวดเดือน it used to accept is gone.
+      */
     @PostMapping("/declarations/{id}/apply")
     @PreAuthorize("hasRole('HR')")
-    public TaxAllowanceDeclarationDto apply(
-        @PathVariable long id, @RequestBody(required = false) TaxAllowanceApplyRequest request, HttpSession session
-    ) {
+    public TaxAllowanceDeclarationDto apply(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return service.apply(id, request, user);
+        return service.apply(id, user);
     }
 
     /** Yearly expiry (decision #10), the mirror of the scheduled sweep: EXPIRED -> APPROVED, new deadline. */

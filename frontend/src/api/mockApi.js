@@ -1912,13 +1912,16 @@ function taxAllowanceLorYor01FromBody(body = {}) {
   };
 }
 
-function newTaxAllowanceDeclarationRow({ employeeId, taxYear, effectiveMonth, allowances, lorYor01, documentReference, status, submittedById, onBehalf }) {
+// `effectiveMonth` is fixed at 1 and is NOT a parameter: a ล.ย.01 covers its whole tax year
+// (owner ruling 2026-08-31). Mirrors TaxAllowanceDeclarationRepository#insert, which writes the
+// same literal for the same reason.
+function newTaxAllowanceDeclarationRow({ employeeId, taxYear, allowances, lorYor01, documentReference, status, submittedById, onBehalf }) {
   const declarationId = Math.max(0, ...db.taxAllowanceDeclarations.map((row) => row.declarationId)) + 1;
   return {
     declarationId,
     employeeId,
     taxYear,
-    effectiveMonth,
+    effectiveMonth: 1,
     allowances,
     lorYor01: lorYor01 ?? taxAllowanceLorYor01FromBody(),
     documentReference,
@@ -1949,6 +1952,54 @@ function supersedeApprovedTaxAllowanceDeclarations(employeeId, taxYear, supersed
       row.status = 'SUPERSEDED';
       row.supersededById = supersededById;
     });
+}
+
+/**
+ * Mirrors TaxAllowanceDeclarationService#promoteToPayrollAllowances — the go-live half of approval
+ * since the whole-year ruling (2026-08-31): stamp the declaration applied, drop this
+ * employee/tax-year's mid-year rows, then write ONE row at effectiveMonth 1.
+ *
+ * <p>Faithful here because it is PLUMBING, not math: the real service's promotion is a
+ * field-for-field copy of the declared amounts into hr.employee_tax_allowance (see
+ * TaxAllowanceDeclarationDtos' header note on why those two field sets are deliberately identical).
+ * No Thai tax figure is computed anywhere in this function — payroll preview/process remain
+ * "not supported in mock mode" stubs, so nothing in mock mode turns these rows into withholding.
+ * A green mock-mode click-through therefore proves the REGISTER reflects the promotion; it proves
+ * nothing about the tax it would produce against the real PayrollCalculator.
+ *
+ * <p>The mid-year delete is not cosmetic — see PayrollRepository#deleteMidYearTaxAllowances: a
+ * month-1 row LOSES `ORDER BY effective_month DESC` to a surviving month-7 row, so without it the
+ * superseded declaration would keep governing the second half of the year.
+ */
+function promoteTaxAllowanceDeclaration(row, actor) {
+  row.appliedAt = new Date().toISOString();
+  row.appliedById = actor.employeeId;
+  row.appliedEffectiveMonth = 1;
+  row.expiresOn = `${row.taxYear}-12-31`;
+
+  const employee = db.employees.find((item) => item.id === row.employeeId);
+  db.employeeTaxAllowances = db.employeeTaxAllowances.filter(
+    (item) => !(item.employeeId === row.employeeId && item.taxYear === row.taxYear && item.effectiveMonth !== 1),
+  );
+  const existing = db.employeeTaxAllowances.find(
+    (item) => item.employeeId === row.employeeId && item.taxYear === row.taxYear && item.effectiveMonth === 1,
+  );
+  const promoted = {
+    employeeId: row.employeeId,
+    employeeCode: employee?.code ?? null,
+    employeeName: employee?.nameTh ?? null,
+    taxYear: row.taxYear,
+    effectiveMonth: 1,
+    allowances: { ...row.allowances },
+    documentReference: row.documentReference ?? null,
+    updatedAt: row.appliedAt,
+    verificationStatus: 'VERIFIED',
+    verifiedById: actor.employeeId,
+    verifiedAt: row.appliedAt,
+    verificationDeadline: row.expiresOn,
+  };
+  if (existing) Object.assign(existing, promoted);
+  else db.employeeTaxAllowances.push(promoted);
 }
 
 function taxAllowanceDeclarationPublic(row) {
@@ -4425,6 +4476,10 @@ export const api = {
     async audit(params = {}) {
       void params;
       throw new Error('activityLog.audit is not supported in mock mode - run against the real backend');
+    },
+    async events(params = {}) {
+      void params;
+      throw new Error('activityLog.events is not supported in mock mode - run against the real backend');
     },
     async summary(params = {}) {
       void params;
@@ -7380,7 +7435,6 @@ export const api = {
       const row = newTaxAllowanceDeclarationRow({
         employeeId: user.employeeId,
         taxYear,
-        effectiveMonth: body.effectiveMonth ?? 1,
         allowances: taxAllowanceAllowancesFromBody(body),
         lorYor01: taxAllowanceLorYor01FromBody(body),
         documentReference: body.documentReference ?? null,
@@ -7445,7 +7499,6 @@ export const api = {
       const row = newTaxAllowanceDeclarationRow({
         employeeId,
         taxYear,
-        effectiveMonth: body.effectiveMonth ?? 1,
         allowances: taxAllowanceAllowancesFromBody(body),
         lorYor01: taxAllowanceLorYor01FromBody(body),
         documentReference: body.documentReference ?? null,
@@ -7458,6 +7511,7 @@ export const api = {
       row.reviewedById = user.employeeId;
       row.reviewedAt = new Date().toISOString();
       row.reviewerNote = 'สร้างและอนุมัติโดยฝ่ายบุคคลในนามพนักงาน';
+      promoteTaxAllowanceDeclaration(row, user);
       db.taxAllowanceDeclarations.push(row);
       return delay(taxAllowanceDeclarationPublic(row));
     },
@@ -7478,6 +7532,10 @@ export const api = {
       row.reviewedById = user.employeeId;
       row.reviewedAt = new Date().toISOString();
       row.reviewerNote = reviewerNote ?? null;
+      // Approval IS go-live (owner ruling 2026-08-31) -- TaxAllowanceDeclarationService#approve
+      // promotes in the same transaction, so a mock that stopped at APPROVED here would leave the
+      // register showing a ยังไม่ใช้กับเงินเดือน queue that production can no longer produce.
+      promoteTaxAllowanceDeclaration(row, user);
       return delay(taxAllowanceDeclarationPublic(row));
     },
     async rejectTaxAllowanceDeclaration(id, reviewerNote) {
@@ -7492,11 +7550,19 @@ export const api = {
       row.reviewerNote = reviewerNote;
       return delay(taxAllowanceDeclarationPublic(row));
     },
-    // Applying promotes into hr.employee_tax_allowance and changes real withholding tax -- not
-    // faked here, same "not supported in mock mode" reasoning as saveTaxAllowances above.
-    async applyTaxAllowanceDeclaration() {
-      hasRole('hr');
-      throw new Error('การนำแบบแจ้งค่าลดหย่อนไปใช้ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    // Backlog drain for rows approved BEFORE the whole-year ruling and never applied. Genuinely
+    // implemented (it was a "not supported in mock mode" stub until 2026-08-31) because it now
+    // shares promoteTaxAllowanceDeclaration with approve, which is a field copy rather than the
+    // tax math the stub existed to refuse -- see that helper's own comment. Mirrors
+    // TaxAllowanceDeclarationService#apply, including both 409 guards and the no-body signature.
+    async applyTaxAllowanceDeclaration(id) {
+      const user = hasRole('hr');
+      const row = db.taxAllowanceDeclarations.find((item) => item.declarationId === Number(id));
+      if (!row) fail('ไม่พบแบบแจ้งค่าลดหย่อนนี้', 404);
+      if (row.status !== 'APPROVED') fail('ต้องได้รับการอนุมัติก่อนจึงจะนำไปใช้ได้', 409);
+      if (row.appliedAt) fail('รายการนี้ถูกนำไปใช้แล้ว', 409);
+      promoteTaxAllowanceDeclaration(row, user);
+      return delay(taxAllowanceDeclarationPublic(row));
     },
     // Yearly expiry (decision #10, 2026-08-01): the mirror of the scheduled expiry sweep.
     // Re-verifying restores hr.employee_tax_allowance's verification_status for the WHOLE year

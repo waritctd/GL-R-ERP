@@ -211,7 +211,6 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
     private long submit(long employeeId) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
             2026,                     // taxYear
-            null,                     // effectiveMonth -> defaults to January
             new BigDecimal("60000"),  // spouseAllowance
             null, null, null, null,   // child, parentCare, disabledCare, maternity
             null, null, null,         // life, health, parentHealth

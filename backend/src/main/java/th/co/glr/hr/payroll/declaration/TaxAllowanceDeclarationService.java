@@ -5,7 +5,6 @@ import java.time.ZoneId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -21,7 +20,6 @@ import th.co.glr.hr.employee.EmployeeRepository.LorYor01HeaderSource;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.payroll.PayrollAllowanceEstimateResult;
-import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -36,7 +34,6 @@ import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
 import th.co.glr.hr.payroll.PayrollTaxAllowanceInput;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.MyTaxAllowanceDeclarationsResponse;
-import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceApplyRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDownload;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceCapsResponse;
@@ -52,9 +49,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
  * {@code PayrollService} for the same idiom) and audits via {@link AuditService}, which
  * deliberately joins the caller's transaction.
  *
- * <p><b>Writes NO SQL against {@code hr.employee_tax_allowance} directly.</b> {@link #apply} is the
- * ONLY method that touches the parent table, and it does so exclusively through three dormant
- * {@link PayrollRepository} methods that had zero callers before this PR:
+ * <p><b>Writes NO SQL against {@code hr.employee_tax_allowance} directly.</b> {@code
+ * #promoteToPayrollAllowances} is the ONLY method that touches the parent table, and it does so
+ * exclusively through {@link PayrollRepository}: {@code deleteMidYearTaxAllowances},
  * {@code upsertTaxAllowances}, {@code markTaxAllowanceVerified}, {@code
  * setTaxAllowanceVerificationDeadline}. {@code PayrollCalculator.java} and
  * {@code PayrollRepository#findTaxAllowancesByEmployee}'s SQL are untouched by this entire class —
@@ -66,6 +63,24 @@ public class TaxAllowanceDeclarationService {
     // (approve/reject/apply/on-behalf): HR only.
     private static final Set<String> REGISTER_VIEW_ROLES = Set.of("hr", "ceo");
     private static final Set<String> EDIT_ROLES = Set.of("hr");
+
+    /**
+     * A ล.ย.01 declares the employee's allowances for a WHOLE TAX YEAR (owner ruling 2026-08-31).
+     * There is no "in force from month N" any more: HR's approval makes the declaration effective
+     * for every payroll month of its {@code tax_year}, so every row this service writes -- both
+     * {@code hr.tax_allowance_declaration.effective_month} and the {@code effective_month} half of
+     * {@code hr.employee_tax_allowance}'s primary key -- is dated 1.
+     *
+     * <p><b>The column stays; only the choice goes.</b> {@code hr.employee_tax_allowance}'s PK is
+     * {@code (employee_id, tax_year, effective_month)} (V93) and rows written before this ruling
+     * still hold months 2-12, so {@code PayrollRepository#findTaxAllowancesByEmployee}'s {@code
+     * effective_month <= :month ORDER BY effective_month DESC} resolution is deliberately left
+     * alone -- re-running an already-filed month still reproduces the figures it was filed on.
+     * What that resolution WOULD do to a fresh whole-year row is the trap {@link
+     * #promoteToPayrollAllowances} exists to close: month 1 loses the {@code DESC} ordering to any
+     * surviving month-7 row, so the new declaration would be silently ignored from July onward.
+     */
+    static final int WHOLE_YEAR_EFFECTIVE_MONTH = 1;
 
     // Real MIME allowlist (2026-08-01 evidence PR) -- AttachmentController#upload passes Set.of(),
     // which disables type checking entirely; deliberately NOT copying that here. ล.ย.01 evidence is
@@ -249,7 +264,6 @@ public class TaxAllowanceDeclarationService {
         }
         long employeeId = actor.employeeId();
         int taxYear = request.taxYear();
-        int effectiveMonth = normalizeEffectiveMonth(request.effectiveMonth());
 
         // uq_tad_one_pending_per_employee_year is a hard DB constraint; check first for a clean 409
         // rather than a raw constraint-violation 500.
@@ -259,7 +273,7 @@ public class TaxAllowanceDeclarationService {
         }
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
-        long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
+        long id = repository.insert(employeeId, taxYear, allowances,
             request.documentReference(), employeeId, false, request.lorYor01());
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
@@ -312,14 +326,13 @@ public class TaxAllowanceDeclarationService {
         }
         long employeeId = request.employeeId();
         int taxYear = request.taxYear();
-        int effectiveMonth = normalizeEffectiveMonth(request.effectiveMonth());
 
         // Clear the way: an employee-submitted PENDING row would otherwise collide with
         // uq_tad_one_pending_per_employee_year. HR's on-behalf action takes precedence.
         repository.withdrawAnyPending(employeeId, taxYear);
 
         PayrollTaxAllowanceInput allowances = toAllowances(request);
-        long id = repository.insert(employeeId, taxYear, effectiveMonth, allowances,
+        long id = repository.insert(employeeId, taxYear, allowances,
             request.documentReference(), actor.employeeId(), true, request.lorYor01());
 
         // Auto-approve, same supersede-first ordering as #approve below.
@@ -328,6 +341,10 @@ public class TaxAllowanceDeclarationService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to auto-approve on-behalf declaration");
         }
+        // Approval IS go-live (owner ruling 2026-08-31) -- an on-behalf row that stopped at
+        // APPROVED here would have been the one path that still needed a second ใช้กับเงินเดือน
+        // click, which is exactly the two-step flow that ruling removed.
+        promoteToPayrollAllowances(id, actor);
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "CREATE_TAX_ALLOWANCE_DECLARATION_ON_BEHALF", "tax_allowance_declaration",
@@ -346,11 +363,18 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * PENDING -> APPROVED. Supersedes any other APPROVED declaration for the same employee/tax-year
-     * FIRST, in this same transaction — {@code uq_tad_one_approved_per_employee_year} is not
-     * deferrable, so approving without superseding first would 500 on the constraint instead of
-     * cleanly retiring the old row (decision #7: "a new submission supersedes the previous once
-     * approved").
+     * PENDING -> APPROVED, <b>and live on payroll in the same transaction</b>. Supersedes any other
+     * APPROVED declaration for the same employee/tax-year FIRST — {@code
+     * uq_tad_one_approved_per_employee_year} is not deferrable, so approving without superseding
+     * first would 500 on the constraint instead of cleanly retiring the old row (decision #7: "a new
+     * submission supersedes the previous once approved").
+     *
+     * <p><b>Approval is go-live</b> (owner ruling 2026-08-31). {@link #promoteToPayrollAllowances}
+     * used to be a separate HR action ({@code POST .../apply}, with its own งวดเดือน picker); it now
+     * runs here, so an approved ล.ย.01 reduces withholding for its whole tax year with no second
+     * click and no month to choose. {@link #apply} survives only to clear the pre-ruling backlog of
+     * rows that are APPROVED with {@code applied_at IS NULL} — nothing this method produces can
+     * land in that state.
      */
     @Transactional
     public TaxAllowanceDeclarationDto approve(long declarationId, TaxAllowanceReviewRequest request, UserPrincipal actor) {
@@ -368,6 +392,7 @@ public class TaxAllowanceDeclarationService {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ได้รับการพิจารณาไปแล้ว");
         }
         promoteHeaderToEmployeeMaster(existing, actor);
+        promoteToPayrollAllowances(declarationId, actor);
 
         TaxAllowanceDeclarationDto updated = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after approve"));
@@ -375,7 +400,8 @@ public class TaxAllowanceDeclarationService {
             declarationId, existing, updated);
         notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_APPROVED",
             "แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ",
-            "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + " แล้ว");
+            "ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear()
+                + " แล้ว มีผลกับการหักภาษี ณ ที่จ่ายตลอดทั้งปีภาษีนี้");
         return updated;
     }
 
@@ -496,21 +522,16 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * Promotes an APPROVED declaration into {@code hr.employee_tax_allowance} (decision #3: go-live
-     * is per-employee Apply). Order of operations matters:
+     * Clears the PRE-RULING BACKLOG: a declaration that was approved back when approval and go-live
+     * were two separate HR actions, and whose second click never came ({@code status = 'APPROVED'
+     * AND applied_at IS NULL} — the register's ยังไม่ใช้กับเงินเดือน queue). Since 2026-08-31
+     * {@link #approve} promotes in its own transaction, so nothing new ever lands in that state and
+     * this endpoint is a one-way drain, not part of the flow.
      *
-     * <ol>
-     *   <li>Refuse an already-{@code PROCESSED} month (read-only check) — re-running it would change
-     *       a figure already filed on ภ.ง.ด.1.</li>
-     *   <li>Conditionally flag the DECLARATION as applied ({@code applied_at IS NULL} in the WHERE
-     *       clause) BEFORE writing the allowance table — this is what makes a concurrent double-apply
-     *       409 on the second caller without needing an {@code @Version} column: the second racer's
-     *       conditional UPDATE simply matches zero rows.</li>
-     *   <li>Only then promote into {@code hr.employee_tax_allowance}, via the three dormant methods.</li>
-     * </ol>
+     * <p>It takes no งวดเดือน. The month picker it used to carry is the thing the ruling removed.
      */
     @Transactional
-    public TaxAllowanceDeclarationDto apply(long declarationId, TaxAllowanceApplyRequest request, UserPrincipal actor) {
+    public TaxAllowanceDeclarationDto apply(long declarationId, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
         TaxAllowanceDeclarationDto existing = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
@@ -520,40 +541,70 @@ public class TaxAllowanceDeclarationService {
         if (existing.appliedAt() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ถูกนำไปใช้แล้ว");
         }
-        int appliedEffectiveMonth = request != null && request.effectiveMonth() != null
-            ? request.effectiveMonth()
-            : existing.effectiveMonth();
-        validateMonth(appliedEffectiveMonth);
-
-        LocalDate periodMonth = LocalDate.of(existing.taxYear(), appliedEffectiveMonth, 1);
-        Optional<PayrollPeriodDto> period = payrollRepository.findPeriodByMonth(periodMonth);
-        if (period.isPresent() && "PROCESSED".equals(period.get().status())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เดือน " + periodMonth + " ได้ประมวลผลเงินเดือนไปแล้ว ไม่สามารถย้อนแก้ค่าลดหย่อนได้");
-        }
-
-        // Open question (plan doc, "expires_on default"), resolved here (2026-08-01, the yearly-
-        // expiry PR): year-end of the declaration's own tax year. Shared verbatim between the
-        // DECLARATION's own expires_on (read by TaxAllowanceExpiryWorker's sweep, via
-        // findExpirySweepCandidates) and the PARENT table's verification_deadline (read by nothing
-        // yet at THIS moment, but restored identically by #reverify) -- one LocalDate computed once
-        // so the two can never independently drift.
-        LocalDate expiresOn = LocalDate.of(existing.taxYear(), 12, 31);
-        int flagged = repository.markApplied(declarationId, actor.employeeId(), appliedEffectiveMonth, expiresOn);
-        if (flagged == 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ถูกนำไปใช้แล้ว หรือยังไม่ได้รับการอนุมัติ");
-        }
-
-        EmployeeTaxAllowanceUpsertRequest upsertRequest = toUpsertRequest(existing, appliedEffectiveMonth);
-        payrollRepository.upsertTaxAllowances(existing.taxYear(), List.of(upsertRequest), actor.employeeId());
-        payrollRepository.markTaxAllowanceVerified(existing.employeeId(), existing.taxYear(), actor.employeeId());
-        payrollRepository.setTaxAllowanceVerificationDeadline(existing.employeeId(), existing.taxYear(), expiresOn);
+        promoteToPayrollAllowances(declarationId, actor);
 
         TaxAllowanceDeclarationDto updated = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after apply"));
         auditService.record(actor, "APPLY_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
         return updated;
+    }
+
+    /**
+     * Promotes an APPROVED declaration into {@code hr.employee_tax_allowance} for the WHOLE tax
+     * year. Called by {@link #approve} (the live path), {@link #createOnBehalf}, and {@link #apply}
+     * (the backlog drain); it is the ONLY place in this class that writes the parent table, and it
+     * does so exclusively through {@link PayrollRepository}. Order of operations matters:
+     *
+     * <ol>
+     *   <li>Conditionally flag the DECLARATION as applied ({@code applied_at IS NULL} in the WHERE
+     *       clause) BEFORE writing the allowance table — this is what makes a concurrent
+     *       double-apply 409 on the second caller without needing an {@code @Version} column: the
+     *       second racer's conditional UPDATE simply matches zero rows.</li>
+     *   <li>Delete this employee/tax-year's mid-year rows — see the trap below.</li>
+     *   <li>Only then promote, via the three {@link PayrollRepository} methods.</li>
+     * </ol>
+     *
+     * <p><b>THE trap, and why step 2 exists.</b> {@code
+     * PayrollRepository#findTaxAllowancesByEmployee} resolves {@code DISTINCT ON (employee_id) ...
+     * WHERE effective_month <= :month ORDER BY effective_month DESC} — the LATEST dated row wins.
+     * A whole-year row is dated month 1, which loses that ordering to any surviving mid-year row:
+     * promote a 2026 declaration over an employee who already has a month-7 row and July through
+     * December would keep computing on the SUPERSEDED figures, silently, with the register showing
+     * the new declaration as applied. Deleting the mid-year rows for this employee/tax-year is what
+     * makes "one approved ล.ย.01 = one row = the whole year" true in the table rather than just in
+     * the UI. Scoped to ONE employee and ONE tax year, and only inside a deliberate HR promotion —
+     * other years and other employees are never touched.
+     *
+     * <p><b>No PROCESSED-month guard.</b> This method used to refuse with 409 when the target
+     * month's {@code hr.payroll_period} was already {@code PROCESSED}, which made sense while HR
+     * picked the month: it stopped a deliberate back-date into a month already filed on ภ.ง.ด.1.
+     * Under the ruling the target month is ALWAYS January, so that guard would refuse every
+     * promotion from February onward — it would not protect anything, it would make the feature
+     * unusable for eleven months of the year. Removing it does not retro-alter a filed month:
+     * nothing here writes {@code hr.payroll_line}, and a PROCESSED period keeps its persisted
+     * figures until someone re-processes that month, which is a separate deliberate HR action.
+     */
+    private void promoteToPayrollAllowances(long declarationId, UserPrincipal actor) {
+        TaxAllowanceDeclarationDto declaration = repository.findById(declarationId)
+            .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found before apply"));
+
+        // Open question (plan doc, "expires_on default"), resolved here (2026-08-01, the yearly-
+        // expiry PR): year-end of the declaration's own tax year. Shared verbatim between the
+        // DECLARATION's own expires_on (read by TaxAllowanceExpiryWorker's sweep, via
+        // findExpirySweepCandidates) and the PARENT table's verification_deadline -- one LocalDate
+        // computed once so the two can never independently drift.
+        LocalDate expiresOn = LocalDate.of(declaration.taxYear(), 12, 31);
+        int flagged = repository.markApplied(declarationId, actor.employeeId(), expiresOn);
+        if (flagged == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ถูกนำไปใช้แล้ว หรือยังไม่ได้รับการอนุมัติ");
+        }
+
+        payrollRepository.deleteMidYearTaxAllowances(declaration.employeeId(), declaration.taxYear());
+        EmployeeTaxAllowanceUpsertRequest upsertRequest = toUpsertRequest(declaration, WHOLE_YEAR_EFFECTIVE_MONTH);
+        payrollRepository.upsertTaxAllowances(declaration.taxYear(), List.of(upsertRequest), actor.employeeId());
+        payrollRepository.markTaxAllowanceVerified(declaration.employeeId(), declaration.taxYear(), actor.employeeId());
+        payrollRepository.setTaxAllowanceVerificationDeadline(declaration.employeeId(), declaration.taxYear(), expiresOn);
     }
 
     // ---- Caps metadata (decision #1: never hardcode caps in the UI) -----------------------
@@ -683,9 +734,12 @@ public class TaxAllowanceDeclarationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุปีภาษี");
         }
         int taxYear = request.taxYear();
-        int effectiveMonth = normalizeEffectiveMonth(request.effectiveMonth());
         PayrollTaxAllowanceInput proposedAllowances = toAllowances(request);
-        return payrollService.estimateAllowanceEffect(actor.employeeId(), taxYear, effectiveMonth, proposedAllowances, actor);
+        // Simulates January, unchanged from before the whole-year ruling: `effectiveMonth` was
+        // optional on the estimate request and defaulted to 1, which is what the form's blank
+        // "มีผลตั้งแต่งวดเดือน" select sent on every estimate the UI has ever made.
+        return payrollService.estimateAllowanceEffect(
+            actor.employeeId(), taxYear, WHOLE_YEAR_EFFECTIVE_MONTH, proposedAllowances, actor);
     }
 
     // ---- Evidence attachments (decision #5: owning employee + HR, server-enforced) ---------
@@ -914,18 +968,6 @@ public class TaxAllowanceDeclarationService {
     private void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (actor == null || !allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
-    }
-
-    private int normalizeEffectiveMonth(Integer effectiveMonth) {
-        int resolved = effectiveMonth == null ? 1 : effectiveMonth;
-        validateMonth(resolved);
-        return resolved;
-    }
-
-    private void validateMonth(int month) {
-        if (month < 1 || month > 12) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "effectiveMonth ต้องอยู่ระหว่าง 1 ถึง 12");
         }
     }
 

@@ -110,6 +110,47 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void refusesTheApplicationEventEndpointForTheSameCallers() {
+        // Fourth entry point, same gate. hr.app_event carries exception messages and job failures,
+        // so an ungated read here would hand an ordinary employee the server's error output.
+        assertThatThrownBy(() -> service.appEvents(principal(hr, "hr"), DAY, DAY, null, null))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> service.appEvents(principal(ceo, "ceo"), DAY, DAY, null, null))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> service.appEvents(principal(plainEmployee, "admin"), DAY, DAY, null, null))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void roundTripsApplicationEventsAndJobRunsThroughRealPostgres() {
+        // Proves the INSERT is actually accepted: `kind` and `level` carry CHECK constraints and
+        // `message` is NOT NULL, none of which a mocked repository would enforce.
+        repository.insertAppEvents(List.of(
+            new AppEvent(at(9, 40), AppEvent.KIND_LOG, "ERROR", "th.co.glr.hr.Example",
+                "upload failed", "java.io.IOException", "disk full",
+                "th.co.glr.hr.Example.save(Example.java:12)", "corr-1", "http-1", null),
+            new AppEvent(at(9, 45), AppEvent.KIND_JOB, "INFO", "BotFxFetchService.fetch",
+                "job completed", null, null, null, null, "scheduler-1", 1234)));
+
+        List<AppEventDto> all = service.appEvents(principal(admin, "sales"), DAY, DAY, null, null);
+        assertThat(all).extracting(AppEventDto::kind)
+            .containsExactly(AppEvent.KIND_JOB, AppEvent.KIND_LOG);   // newest first
+
+        List<AppEventDto> jobsOnly = service.appEvents(principal(admin, "sales"), DAY, DAY, "JOB", null);
+        assertThat(jobsOnly).hasSize(1);
+        assertThat(jobsOnly.get(0).logger()).isEqualTo("BotFxFetchService.fetch");
+        assertThat(jobsOnly.get(0).durationMs()).isEqualTo(1234);
+
+        AppEventDto logRow = all.stream()
+            .filter(row -> AppEvent.KIND_LOG.equals(row.kind())).findFirst().orElseThrow();
+        assertThat(logRow.exceptionType()).isEqualTo("java.io.IOException");
+        assertThat(logRow.correlationId()).isEqualTo("corr-1");
+    }
+
+    @Test
     void refusesACallerClaimingAdminOnTheSessionWhenTheDatabaseSaysOtherwise() {
         // The principal is session state and a stale or forged one must not be believed. The role
         // string is attacker-controlled in the sense that matters here: it is whatever the session

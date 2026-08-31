@@ -126,9 +126,17 @@ public class TaxAllowanceDeclarationRepository {
         return count != null && count > 0;
     }
 
-    /** Inserts a new PENDING declaration and returns its generated id. */
+    /**
+     * Inserts a new PENDING declaration and returns its generated id.
+     *
+     * <p>{@code effective_month} is written as the literal 1 and is NOT a parameter: a ล.ย.01 is a
+     * whole-tax-year declaration (owner ruling 2026-08-31, see {@link
+     * TaxAllowanceDeclarationService#WHOLE_YEAR_EFFECTIVE_MONTH}). The column survives because
+     * {@code hr.employee_tax_allowance}'s primary key still carries it and pre-ruling rows still
+     * hold months 2-12; nothing this method writes ever will again.
+     */
     public long insert(
-        long employeeId, int taxYear, int effectiveMonth, PayrollTaxAllowanceInput allowances,
+        long employeeId, int taxYear, PayrollTaxAllowanceInput allowances,
         String documentReference, long submittedById, boolean onBehalf, LorYor01Details form
     ) {
         LorYor01Details f = form == null ? LorYor01Details.empty() : form;
@@ -159,7 +167,7 @@ public class TaxAllowanceDeclarationRepository {
                 spouse_father_health_insured, spouse_mother_health_insured,
                 provident_fund_allowance, rmf_seller_name, other_donation_note
             ) VALUES (
-                :employeeId, :taxYear, :effectiveMonth,
+                :employeeId, :taxYear, 1,
                 :spouseAllowance, :childAllowance, :parentCareAllowance, :disabledCareAllowance,
                 :maternityAllowance, :lifeInsuranceAllowance, :healthInsuranceAllowance,
                 :parentHealthInsuranceAllowance, :rmfAllowance, :ssfAllowance,
@@ -185,7 +193,6 @@ public class TaxAllowanceDeclarationRepository {
             new MapSqlParameterSource()
                 .addValue("employeeId", employeeId)
                 .addValue("taxYear", taxYear)
-                .addValue("effectiveMonth", effectiveMonth)
                 .addValue("spouseAllowance", money(allowances.spouseAllowance()))
                 .addValue("childAllowance", money(allowances.childAllowance()))
                 .addValue("parentCareAllowance", money(allowances.parentCareAllowance()))
@@ -332,18 +339,17 @@ public class TaxAllowanceDeclarationRepository {
      * idx_tad_expiry_sweep} (V105) exists for: {@link #findExpirySweepCandidates} reads this column
      * directly rather than re-deriving a deadline from the parent table.
      */
-    public int markApplied(long declarationId, long appliedById, int appliedEffectiveMonth, LocalDate expiresOn) {
+    public int markApplied(long declarationId, long appliedById, LocalDate expiresOn) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
                SET applied_at = now(), applied_by_id = :appliedById,
-                   applied_effective_month = :appliedEffectiveMonth,
+                   applied_effective_month = 1,
                    expires_on = :expiresOn
              WHERE declaration_id = :id AND status = 'APPROVED' AND applied_at IS NULL
             """,
             new MapSqlParameterSource()
                 .addValue("id", declarationId)
                 .addValue("appliedById", appliedById)
-                .addValue("appliedEffectiveMonth", appliedEffectiveMonth)
                 .addValue("expiresOn", expiresOn));
     }
 

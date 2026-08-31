@@ -313,7 +313,7 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
 
     private TaxAllowanceDeclarationDto submitWithHeader(long employeeId, LorYor01Details header) {
         return service.submitOwn(new TaxAllowanceDeclarationSubmitRequest(
-            2026, null, new BigDecimal("60000"),
+            2026, new BigDecimal("60000"),
             null, null, null, null,
             null, null, null,
             null, null, null, null,
