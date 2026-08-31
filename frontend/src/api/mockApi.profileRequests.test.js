@@ -32,3 +32,42 @@ describe('mockApi.profileRequests.update reviewerNote persistence', () => {
     expect(approved.reviewerNote).toBeUndefined();
   });
 });
+
+// Guards mockApi.profileRequests.create's widened gate: identity-based (employeeId != null),
+// not role-based — mirrors ProfileRequestController#create / ProfileRequestService#create after
+// the fix. Not authz evidence (CLAUDE.md: the mock is never authoritative for permissions) — this
+// only proves mock-mode QA is not blocked and the mock stays a faithful stand-in for the shape of
+// the real gate. The real evidence is ProfileRequestScopeIntegrationTest (real Postgres).
+
+describe('mockApi.profileRequests.create identity gate', () => {
+  it('lets a non-employee role WITH an employeeId create a request', async () => {
+    // sales_manager was never in the old canSubmitProfileRequests role list. The demo
+    // sales.manager@glr.co.th persona is linked to a real employee (employees[0].id), exactly the
+    // caller this widening is for.
+    await api.auth.login({ role: 'sales_manager' });
+
+    const { profileRequest } = await api.profileRequests.create({
+      fieldKey: 'phone',
+      fieldLabel: 'เบอร์โทรศัพท์',
+      oldValue: '02-000-0000',
+      newValue: '089-999-9999',
+    });
+
+    expect(profileRequest.status).toBe('pending');
+    expect(profileRequest.fieldKey).toBe('phone');
+  });
+
+  it('refuses a caller with no employeeId, matching ProfileRequestService#create', async () => {
+    // sales@glr.co.th is seeded with employeeId: null (see the sales-picker fixture comment
+    // further down this file, ~line 6910) — an account never linked to an employee record, the
+    // case ProfileRequestService#create's own guard exists for.
+    await api.auth.login({ role: 'sales' });
+
+    await expect(api.profileRequests.create({
+      fieldKey: 'phone',
+      fieldLabel: 'เบอร์โทรศัพท์',
+      oldValue: '02-000-0000',
+      newValue: '089-999-9999',
+    })).rejects.toThrow('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล');
+  });
+});
