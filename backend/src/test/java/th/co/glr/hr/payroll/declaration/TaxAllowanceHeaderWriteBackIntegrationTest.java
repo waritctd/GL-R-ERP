@@ -18,6 +18,7 @@ import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
@@ -70,6 +71,9 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
             mock(FileStorageService.class),
             mock(PayrollService.class),
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+            // Not under test here — this class is about the write-BACK path (approve -> employee
+            // master), not the submit-side HR notification.
+            mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TWB-A");
@@ -309,7 +313,7 @@ class TaxAllowanceHeaderWriteBackIntegrationTest extends AbstractPostgresIntegra
 
     private TaxAllowanceDeclarationDto submitWithHeader(long employeeId, LorYor01Details header) {
         return service.submitOwn(new TaxAllowanceDeclarationSubmitRequest(
-            2026, null, new BigDecimal("60000"),
+            2026, new BigDecimal("60000"),
             null, null, null, null,
             null, null, null,
             null, null, null, null,

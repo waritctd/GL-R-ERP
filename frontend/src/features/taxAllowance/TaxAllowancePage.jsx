@@ -51,7 +51,7 @@ const REVISABLE_STATUS_KEYS = new Set(['APPROVED_UNAPPLIED', 'APPLIED']);
 // Status-specific explanation line for the unified status region below (#tax-allowance-ia-hub-review
 // collapses four independent conditional banners into one — see the region's own comment). No entry
 // for APPROVED_UNAPPLIED/APPLIED: `taxAllowanceStatusInfo`'s own badge label is already a complete
-// sentence for those two ("อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน" / "ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน N"),
+// sentence for those two ("อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน" / "ใช้กับเงินเดือนแล้ว ทั้งปีภาษี"),
 // so a second line here would just echo the badge back at the reader.
 //
 // Each line must say something the BADGE BESIDE IT does not. NONE's badge already reads
@@ -360,7 +360,6 @@ export function TaxAllowancePage({ user, showToast }) {
     if (!values) return;
     pdfMutation.mutate(buildAllowanceSubmitBody(values, {
       taxYear,
-      effectiveMonth: values.effectiveMonth,
       documentReference: values.documentReference,
     }));
   }
@@ -466,10 +465,7 @@ export function TaxAllowancePage({ user, showToast }) {
     if (!pendingSubmitValues) return;
     // No `employeeId` field, ever — the server resolves the caller from the session (decision
     // in issue #387's endpoint table: "no employeeId field exists on the body").
-    const body = buildAllowanceSubmitBody(pendingSubmitValues, {
-      taxYear,
-      effectiveMonth: pendingSubmitValues.effectiveMonth,
-    });
+    const body = buildAllowanceSubmitBody(pendingSubmitValues, { taxYear });
     submitMutation.mutate(body);
   }
 

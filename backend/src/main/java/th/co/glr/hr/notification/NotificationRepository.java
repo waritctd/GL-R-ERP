@@ -182,7 +182,13 @@ public class NotificationRepository {
         // notice). ProfileRequestService#update now calls NotificationService#notify directly with
         // its own title constants, so those two entries were deleted rather than left as a stale,
         // unread mirror -- see ProfileRequestService's constructor Javadoc for the full story.
-        Map.entry("PROFILE_REQUEST_SUBMITTED", "มีคำขอแก้ไขข้อมูลพนักงานรออนุมัติ")
+        Map.entry("PROFILE_REQUEST_SUBMITTED", "มีคำขอแก้ไขข้อมูลพนักงานรออนุมัติ"),
+        // payroll/declaration/TaxAllowanceDeclarationService — ล.ย.01 reaches HR's queue
+        // (2026-08-31). The employee-facing APPROVED/REJECTED/EXPIRED events for this same feature
+        // do NOT go through this map: they carry an explicit title straight into
+        // NotificationService#notify, the same call shape leave/overtime/welfare/attendance-
+        // correction use, not the ticket-scoped fan-out this map serves.
+        Map.entry("TAX_ALLOWANCE_SUBMITTED", "มีแบบ ล.ย.01 รอ HR ตรวจสอบ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -247,7 +253,19 @@ public class NotificationRepository {
 
     /** ProfileRequestService#create, notifying HR that a new request is waiting on them. */
     public void notifyHrOfProfileRequest(String type, String message) {
-        notifyByRoleInternal("hr", type, message, "/requests");
+        notifyHrAt(type, message, "/requests");
+    }
+
+    /**
+     * General HR-fan-out entry point, generalized from {@link #notifyHrOfProfileRequest} (2026-08-31)
+     * so a second HR-queue feature (ล.ย.01 submissions, which link to {@code /tax-allowance-review}
+     * rather than {@code /requests}) does not need a second copy of the {@code "hr"} division
+     * predicate. Both callers now share exactly one {@code notifyByRoleInternal("hr", ...)} path —
+     * see that method's Javadoc for the predicate itself (mirrors {@code
+     * DivisionAccessPolicy#roleFor}'s hr branch, not a naive prefix match).
+     */
+    public void notifyHrAt(String type, String message, String link) {
+        notifyByRoleInternal("hr", type, message, link);
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {

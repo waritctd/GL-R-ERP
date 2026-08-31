@@ -1,8 +1,8 @@
 // Shared field/group metadata for the ล.ย.01 tax-allowance declaration (issue #387).
 //
 // The 21 declared controls below are exactly `TaxAllowanceDeclarationSubmitRequest`'s fields
-// (backend/.../declaration/TaxAllowanceDeclarationDtos.java) minus `taxYear`/`effectiveMonth`/
-// `documentReference` — same set `PayrollTaxAllowanceInput` carries. Keeping the key names
+// (backend/.../declaration/TaxAllowanceDeclarationDtos.java) minus `taxYear`/`documentReference`
+// — same set `PayrollTaxAllowanceInput` carries. Keeping the key names
 // identical end to end (mockApi.js's `taxAllowanceAllowancesFromBody` uses the same names) means a
 // value read from `declaration.allowances` can be dropped straight into this form's defaults with
 // no translation step.
@@ -459,9 +459,6 @@ export function defaultAllowanceValues(declaration, headerPrefill = null) {
   for (const key of ALLOWANCE_COUNT_KEYS) values[key] = Number(source[key] || 0);
   values.disabilityCardHolder = Boolean(source.disabilityCardHolder);
   values.documentReference = declaration?.documentReference || '';
-  // `effectiveMonth` IS restored here, unlike the pre-restructure defaults, which silently reverted
-  // a re-prepared declaration to January while restoring documentReference right beside it.
-  values.effectiveMonth = declaration?.effectiveMonth ?? '';
   values.lorYor01 = {};
   for (const key of LOR_YOR_01_DETAIL_KEYS) {
     if (LOR_YOR_01_TICK_KEYS.includes(key)) {
@@ -512,10 +509,9 @@ const blank = (value) => {
  * shape) but have no control, so `values` never carries them. That is the accepted consequence of
  * "strictly the 15 items" — see this file's contract note above.
  */
-export function buildAllowanceSubmitBody(values, { taxYear, effectiveMonth, documentReference }) {
+export function buildAllowanceSubmitBody(values, { taxYear, documentReference }) {
   const body = {
     taxYear,
-    effectiveMonth: effectiveMonth || null,
     documentReference: documentReference?.trim() || values.documentReference?.trim() || null,
   };
   for (const key of ALLOWANCE_MONEY_KEYS) body[key] = Number(values[key] || 0);

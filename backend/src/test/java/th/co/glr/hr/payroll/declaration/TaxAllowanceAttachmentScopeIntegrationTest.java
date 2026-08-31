@@ -18,6 +18,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.payroll.PayrollService;
@@ -73,6 +74,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             // The estimate endpoint is not exercised by this class — a mock is enough.
             mock(PayrollService.class),
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
+            // Not under test here — this class is about the attachment access gate.
+            mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAA-A");
@@ -208,7 +211,6 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
     private long submit(long employeeId) {
         TaxAllowanceDeclarationSubmitRequest request = new TaxAllowanceDeclarationSubmitRequest(
             2026,                     // taxYear
-            null,                     // effectiveMonth -> defaults to January
             new BigDecimal("60000"),  // spouseAllowance
             null, null, null, null,   // child, parentCare, disabledCare, maternity
             null, null, null,         // life, health, parentHealth

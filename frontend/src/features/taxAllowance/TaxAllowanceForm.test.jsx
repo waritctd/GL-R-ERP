@@ -187,3 +187,21 @@ describe('TaxAllowanceForm — read-only', () => {
     expect(screen.getByText('รวมค่าลดหย่อนที่ประกาศ')).toBeTruthy();
   });
 });
+
+describe('TaxAllowanceForm — whole-tax-year, no effective month', () => {
+  /**
+   * Owner ruling 2026-08-31: a ล.ย.01 covers its whole tax year and HR's approval is what makes it
+   * live, so the employee has no งวดเดือน to pick. Pinned as an ABSENCE because that is the shape
+   * of the regression — the select was removed from the form and `effectiveMonth` from
+   * TaxAllowanceDeclarationSubmitRequest in the same change, so a re-added control would send a
+   * field the backend no longer binds and silently do nothing.
+   */
+  it('renders no มีผลตั้งแต่งวดเดือน control anywhere on the form', () => {
+    renderForm();
+    expect(screen.queryByLabelText(/มีผลตั้งแต่งวดเดือน/)).toBeNull();
+    expect(document.querySelector('#ta-effective-month')).toBeNull();
+    // The neighbouring field in the same FormGrid still renders, so this is not passing because
+    // the whole block failed to mount.
+    expect(screen.getByLabelText(/เลขที่เอกสารอ้างอิง/)).toBeTruthy();
+  });
+});
