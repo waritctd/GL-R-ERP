@@ -54,7 +54,17 @@ export function allowedRoute(route, user) {
 // source of truth. `canAccessPath` returns true when `user` may see `path`.
 // Unguarded paths (`/`, `/attendance`) and unknown paths return true — the
 // route table / `*` fallback handles those.
+// Kept as a named helper so the lockdown exemption below and the guard above can never drift
+// apart — the two must agree on exactly which paths this covers.
+function isActivityLogPath(path) {
+  return path === '/activity-log' || path.startsWith('/activity-log/');
+}
+
 const PATH_GUARDS = [
+  // Admin capability, NOT a role — `admin` is orthogonal to roleFor's output and no role grants
+  // it (see V157 and AuthResponse). This only decides whether the route renders; the server
+  // re-reads hr.employee.is_admin on every call, so forging `admin` on the client gains nothing.
+  { test: (p) => isActivityLogPath(p), can: (u) => Boolean(u.admin) },
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
   // Role-scoped views: the bare `/tickets` list is the deal-PIPELINE BROWSER
   // (canViewDealPipeline — sales/sales_manager/ceo only); `/tickets/:id`
@@ -210,7 +220,13 @@ export function canAccessPath(path, user) {
   // Checked BEFORE the guards below, not after: the lockdown has to deny paths
   // the user's role would otherwise pass (a sales rep on /tickets) as well as
   // paths no guard claims at all.
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path)) return false;
+  // The activity log is NOT self-service, so the release lockdown would otherwise hide it from
+  // its only holder — วริศรา is role `sales`, which is not one of SELF_SERVICE_EXEMPT_ROLES.
+  // Exempted per-path rather than by adding `admin` to the exempt roles, because the latter would
+  // unlock the ENTIRE portal (the sales stack, payroll, the HR queues) for her as a side effect of
+  // wanting one page. Narrow exemption, deliberate.
+  const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
   return guard.can(user);

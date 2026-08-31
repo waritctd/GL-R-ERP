@@ -1,0 +1,193 @@
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../api/index.js';
+import { DataTable } from '../../components/common/DataTable.jsx';
+import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { Tabs } from '../../components/common/Tabs.jsx';
+import { actionLabel, actionTone } from './actionLabels.js';
+
+/**
+ * Admin-only view of what everyone has been doing in the portal.
+ *
+ * <p>Three tabs, because there are genuinely three different questions and one table cannot answer
+ * all of them:
+ *
+ * - **สรุป** — who was in the portal at all, and when. Sourced from hr.activity_log, which the
+ *   request filter writes for every /api/ call, so it sees people who only browsed.
+ * - **การดำเนินการ** — who requested what and who approved what. Sourced from hr.audit_log, which
+ *   is semantic: one row per business action, with a readable name.
+ * - **คำขอทั้งหมด** — the raw request stream, for when the other two do not explain something.
+ *
+ * The gate is server-side (ActivityLogService.requireAdmin re-reads hr.employee.is_admin on every
+ * call); `user.admin` here only decides whether the route renders, and a client that forges it
+ * still gets 403 from all three endpoints.
+ */
+
+const TABS = [
+  { value: 'summary', label: 'สรุป' },
+  { value: 'actions', label: 'การดำเนินการ' },
+  { value: 'requests', label: 'คำขอทั้งหมด' },
+];
+
+const TONE_CLASS = {
+  positive: 'text-emerald-700 dark:text-emerald-400',
+  negative: 'text-rose-700 dark:text-rose-400',
+  muted: 'text-text-muted',
+  neutral: 'text-text',
+};
+
+function todayInBangkok() {
+  // The backend windows on Asia/Bangkok, so the default the page sends must agree — a browser in
+  // another timezone would otherwise ask for the wrong day and get a confusingly empty table.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+}
+
+function formatTime(value) {
+  if (!value) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(new Date(value));
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function personLabel(row) {
+  const name = row.name || row.actorName;
+  const code = row.employeeCode || row.actorEmployeeCode;
+  if (name && code) return `${name} (${code})`;
+  return name || code || row.email || row.actorEmail || 'ไม่ทราบผู้ใช้';
+}
+
+export function ActivityLogPage() {
+  const [tab, setTab] = useState('summary');
+  const [from, setFrom] = useState(todayInBangkok);
+  const [to, setTo] = useState(todayInBangkok);
+
+  const range = useMemo(() => ({ from, to }), [from, to]);
+
+  const summaryQuery = useQuery({
+    queryKey: ['activityLog', 'summary', range],
+    queryFn: () => api.activityLog.summary(range),
+    enabled: tab === 'summary',
+  });
+
+  const auditQuery = useQuery({
+    queryKey: ['activityLog', 'audit', range],
+    queryFn: () => api.activityLog.audit(range),
+    enabled: tab === 'actions',
+  });
+
+  const requestsQuery = useQuery({
+    queryKey: ['activityLog', 'requests', range],
+    queryFn: () => api.activityLog.list(range),
+    enabled: tab === 'requests',
+  });
+
+  const summaryColumns = useMemo(() => [
+    { key: 'person', header: 'พนักงาน', render: (row) => personLabel(row) },
+    {
+      key: 'requestCount',
+      header: 'จำนวนการใช้งาน',
+      align: 'right',
+      render: (row) => row.requestCount?.toLocaleString('th-TH') ?? '-',
+    },
+    { key: 'firstSeen', header: 'เข้าใช้ครั้งแรก', render: (row) => formatTime(row.firstSeen) },
+    { key: 'lastSeen', header: 'ล่าสุด', render: (row) => formatTime(row.lastSeen) },
+  ], []);
+
+  const auditColumns = useMemo(() => [
+    { key: 'at', header: 'เวลา', render: (row) => formatDateTime(row.at) },
+    { key: 'actor', header: 'ผู้ดำเนินการ', render: (row) => personLabel(row) },
+    {
+      key: 'action',
+      header: 'การดำเนินการ',
+      render: (row) => (
+        <span className={TONE_CLASS[actionTone(row.action)] || TONE_CLASS.neutral}>
+          {actionLabel(row.action)}
+        </span>
+      ),
+    },
+    {
+      key: 'subject',
+      header: 'เกี่ยวกับ',
+      render: (row) => row.subjectName || (row.entityId ? `${row.entity} #${row.entityId}` : '-'),
+    },
+  ], []);
+
+  const requestColumns = useMemo(() => [
+    { key: 'at', header: 'เวลา', render: (row) => formatDateTime(row.at) },
+    { key: 'person', header: 'พนักงาน', render: (row) => personLabel(row) },
+    { key: 'method', header: 'วิธี', render: (row) => row.method },
+    { key: 'path', header: 'ปลายทาง', render: (row) => <code className="text-xs">{row.path}</code> },
+    {
+      key: 'status',
+      header: 'ผล',
+      align: 'right',
+      render: (row) => (
+        <span className={row.status >= 400 ? TONE_CLASS.negative : TONE_CLASS.muted}>{row.status}</span>
+      ),
+    },
+  ], []);
+
+  const active = tab === 'summary' ? summaryQuery : tab === 'actions' ? auditQuery : requestsQuery;
+  const rows = active.data ?? [];
+  const columns = tab === 'summary' ? summaryColumns : tab === 'actions' ? auditColumns : requestColumns;
+
+  const emptyMessage = tab === 'actions'
+    ? 'ไม่มีการดำเนินการในช่วงเวลานี้'
+    : 'ไม่มีการใช้งานในช่วงเวลานี้';
+
+  return (
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="บันทึกการใช้งานระบบ"
+        subtitle="ดูว่าใครเข้าใช้ระบบ และใครยื่นหรืออนุมัติอะไรบ้าง"
+      />
+
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">ตั้งแต่วันที่</span>
+          <input
+            type="date"
+            value={from}
+            max={to}
+            onChange={(event) => setFrom(event.target.value)}
+            className="rounded-md border border-border bg-surface px-3 py-2"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">ถึงวันที่</span>
+          <input
+            type="date"
+            value={to}
+            min={from}
+            onChange={(event) => setTo(event.target.value)}
+            className="rounded-md border border-border bg-surface px-3 py-2"
+          />
+        </label>
+      </div>
+
+      <Tabs items={TABS} value={tab} onChange={setTab} ariaLabel="มุมมองบันทึกการใช้งาน" idPrefix="activity-log" />
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        getRowKey={(row) => row.id ?? `emp-${row.employeeId}`}
+        loading={active.isLoading}
+        error={active.isError}
+        onRetry={active.refetch}
+        pageSize={25}
+        stickyHeader
+        emptyState={<EmptyState title={emptyMessage} />}
+      />
+    </div>
+  );
+}
+
+export default ActivityLogPage;

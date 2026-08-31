@@ -17,6 +17,14 @@ export const api = {
     me: () => apiRequest(API_ROUTES.auth.me),
     changePassword: (payload) => apiRequest(API_ROUTES.auth.changePassword, { method: 'POST', body: payload }),
   },
+  // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
+  // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request —
+  // a client that fakes `admin` on the session gains nothing.
+  activityLog: {
+    list: (params) => apiRequest(withQuery(API_ROUTES.activityLog.list, params)),
+    audit: (params) => apiRequest(withQuery(API_ROUTES.activityLog.audit, params)),
+    summary: (params) => apiRequest(withQuery(API_ROUTES.activityLog.summary, params)),
+  },
   employees: {
     list: (params) => apiRequest(withQuery(API_ROUTES.employees.list, params)),
     create: (payload) => apiRequest(API_ROUTES.employees.create, { method: 'POST', body: payload }),

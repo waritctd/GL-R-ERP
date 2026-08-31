@@ -128,6 +128,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navLocked = isSelfServiceLocked(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly
+    // one person. Ungrouped and directly under the dashboard because it is a whole-portal view,
+    // not part of any one ฝ่าย's work. Hiding it is cosmetic — ActivityLogService.requireAdmin is
+    // what actually refuses everyone else.
+    { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', show: Boolean(user.admin) },
     // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
     // /employee-requests, /leave, /attendance routes every role already has
     // (they are dual submit+approve pages for anyone with reports; a division
