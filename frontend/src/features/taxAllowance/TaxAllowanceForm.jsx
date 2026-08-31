@@ -23,8 +23,6 @@ import {
 import { capMapFrom, fieldCapCaption } from './taxAllowanceCaps.js';
 import { TaxAllowanceEvidencePanel } from './TaxAllowanceEvidencePanel.jsx';
 
-const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
-
 /** The form's own labels for the 13 address slots, in the order it prints them. */
 const ADDRESS_LABELS = {
   building: 'อาคาร',
@@ -63,10 +61,6 @@ function lorYor01Schema() {
   }
   return z.object({
     ...shape,
-    effectiveMonth: z.preprocess(
-      (value) => (value === '' || value == null ? null : Number(value)),
-      z.number().int().min(1).max(12).nullable().optional(),
-    ),
     documentReference: z.string().optional(),
     lorYor01: z.object({
       taxpayerId: z.string().regex(/^$|^\d{13}$/, 'เลขประจำตัวผู้เสียภาษีอากรต้องมี 13 หลัก').optional(),
@@ -315,15 +309,12 @@ export function TaxAllowanceForm({
     return <span className="text-xs text-text-muted">ไม่ได้ประกาศ</span>;
   };
 
+  // No "มีผลตั้งแต่งวดเดือน" control: a ล.ย.01 is a whole-tax-year declaration (owner ruling
+  // 2026-08-31) and HR's approval is what makes it live, so there is no month for the employee to
+  // choose. The backend dropped `effectiveMonth` from TaxAllowanceDeclarationSubmitRequest in the
+  // same change — sending one would simply not bind.
   const declarationFields = (
     <FormGrid>
-      <FormField label="มีผลตั้งแต่งวดเดือน" htmlFor="ta-effective-month"
-        hint="เว้นว่างไว้ = มีผลตั้งแต่เดือนมกราคม" error={errors.effectiveMonth?.message}>
-        <select id="ta-effective-month" disabled={readOnly} {...register('effectiveMonth')}>
-          <option value="">มกราคม (ค่าเริ่มต้น)</option>
-          {MONTH_OPTIONS.map((month) => <option key={month} value={month}>เดือน {month}</option>)}
-        </select>
-      </FormField>
       <FormField label="เลขที่เอกสารอ้างอิง (ถ้ามี)" htmlFor="ta-document-reference">
         <input id="ta-document-reference" type="text" disabled={readOnly}
           placeholder="เช่น เลขที่ ล.ย.01 กระดาษ" {...register('documentReference')} />

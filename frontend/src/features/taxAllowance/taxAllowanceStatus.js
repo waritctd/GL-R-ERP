@@ -249,7 +249,14 @@ export function taxAllowanceStatusInfo(declaration, payrollResolution) {
   if (status === 'APPROVED') {
     if (appliedAt) {
       return {
-        label: `ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน ${appliedEffectiveMonth ?? '-'}`,
+        // Month 1 is "the whole tax year", not "from January": since the whole-year ruling
+        // (2026-08-31) every promotion writes 1, so naming the month would put a meaningless
+        // "ตั้งแต่เดือน 1" on every current declaration. A pre-ruling row dated 2-12 still names its
+        // month — it really does only apply from there on. Same split as TaxAllowanceBreakdown and
+        // the register's ใช้กับเงินเดือน column.
+        label: Number(appliedEffectiveMonth) === 1
+          ? 'ใช้กับเงินเดือนแล้ว ทั้งปีภาษี'
+          : `ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน ${appliedEffectiveMonth ?? '-'}`,
         // Deliberately NOT the same tone as "approved, not yet applied" — issue #387: "the
         // approved-but-unapplied state must not read as done". `success` here is genuinely
         // terminal-good; the unapplied state below stays `info` so it never reads the same.
