@@ -5,19 +5,24 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
 /**
- * The statutory/HR payroll files HR can generate for a processed period: the three legacy CP874
- * text files (KBank/PND1/SSO), plus the {@link #PAYROLL_DETAIL} xlsx report added alongside them
- * (2026-07-30) — a read-only, per-employee breakdown reproducing the accountant's original
- * workbook layout. See {@code PayrollDetailExporter} for that one; the other three still go
- * through {@code Cp874}, unaffected by this addition.
+ * The statutory/HR payroll files HR can generate for a processed period: the two remaining CP874
+ * text files ({@link #KBANK}/{@link #PND1}), plus two xlsx workbooks — {@link #PAYROLL_DETAIL}
+ * (2026-07-30), a read-only per-employee breakdown reproducing the accountant's original workbook
+ * layout, and {@link #SSO} (2026-08-31), which REPLACED its own CP874 .txt with the branch-per-sheet
+ * workbook GL&amp;R actually files. Only KBANK and PND1 still go through {@code Cp874}.
  */
 public enum PayrollExportKind {
     /** KBank K Cash Connect Plus payroll transfer file (product code PCT). */
     KBANK("kbank", "PCT", "PCT", "txt", "application/octet-stream"),
     /** Revenue Department withholding-tax submission (ภ.ง.ด.1). */
     PND1("pnd1", "PND1", "Pnd1", "txt", "application/octet-stream"),
-    /** Social Security Office contribution submission (สปส.1-10). */
-    SSO("sso", "SPS1-10", "SPS1-10", "txt", "application/octet-stream"),
+    /**
+     * Social Security Office contribution submission (สปส.1-10) — a real xlsx workbook, one sheet
+     * per branch sequence. Was a CP874 fixed-width .txt until 2026-08-31; see {@code SsoExporter}'s
+     * javadoc for why it changed.
+     */
+    SSO("sso", "SPS1-10", "SPS1-10", "xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     /**
      * Detailed monthly payroll workbook (xlsx) for HR — every employee's full breakdown for the
      * period, reproducing (and extending) the accountant's original spreadsheet. Unlike the three
@@ -52,13 +57,13 @@ public enum PayrollExportKind {
 
     /** MIME type for the HTTP response — {@code application/octet-stream} for the CP874 text
      * files (so the raw bytes survive the download intact), the real OOXML spreadsheet type for
-     * {@link #PAYROLL_DETAIL}. */
+     * the two xlsx workbooks ({@link #SSO}, {@link #PAYROLL_DETAIL}). */
     public String contentType() {
         return contentType;
     }
 
-    /** Suggested download filename, e.g. {@code PCT2606.txt} for a 26 Jun transfer, or
-     * {@code PayrollDetail2606.xlsx} for the detail workbook. */
+    /** Suggested download filename, e.g. {@code PCT260626.txt} for a 26 Jun transfer, or
+     * {@code SPS1-10260626.xlsx} for that month's สปส.1-10 workbook. */
     public String fileName(LocalDate effectiveDate) {
         return filePrefix + effectiveDate.format(FILE_STAMP) + "." + extension;
     }

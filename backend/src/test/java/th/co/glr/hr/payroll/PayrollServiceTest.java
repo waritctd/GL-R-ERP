@@ -442,22 +442,6 @@ class PayrollServiceTest {
     }
 
     @Test
-    void ssoExportRefusedWhenEmployerAccountBlank() {
-        AppProperties props = fullyConfiguredEmployerProps();
-        props.getPayroll().getEmployer().setSsoEmployerAccount("");
-        PayrollService serviceUnderTest = serviceWithEmployer(props);
-        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
-
-        assertThatThrownBy(() ->
-                serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser()))
-            .isInstanceOfSatisfying(ApiException.class, exception -> {
-                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-                assertThat(exception.getMessage()).contains("APP_PAYROLL_SSO_EMPLOYER_ACCOUNT");
-            });
-        verify(payrollRepository, never()).findExportRows(anyLong());
-    }
-
-    @Test
     void ssoExportRefusedWhenBranchBlank() {
         AppProperties props = fullyConfiguredEmployerProps();
         props.getPayroll().getEmployer().setSsoBranch("");
@@ -472,29 +456,18 @@ class PayrollServiceTest {
             });
     }
 
+    /**
+     * The SSO workbook (2026-08-31) renders no employer identity at all -- no account number, no
+     * establishment name -- so blanking every one of those fields must NOT block the export. This
+     * is the wrong-way-round half of {@link #ssoExportRefusedWhenBranchBlank}: together they pin
+     * that the guard requires the branch and nothing else.
+     */
     @Test
-    void ssoExportRefusedWhenEstablishmentNameAndCompanyNameBothBlank() {
+    void ssoExportNotBlockedByBlankEmployerAccountOrEstablishmentName() {
         AppProperties props = fullyConfiguredEmployerProps();
+        props.getPayroll().getEmployer().setSsoEmployerAccount("");
         props.getPayroll().getEmployer().setEstablishmentName("");
         props.getPayroll().getEmployer().setCompanyNameTh("");
-        PayrollService serviceUnderTest = serviceWithEmployer(props);
-        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
-
-        assertThatThrownBy(() ->
-                serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser()))
-            .isInstanceOfSatisfying(ApiException.class, exception -> {
-                assertThat(exception.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-                assertThat(exception.getMessage()).contains("APP_PAYROLL_ESTABLISHMENT_NAME");
-                assertThat(exception.getMessage()).contains("APP_PAYROLL_COMPANY_NAME_TH");
-            });
-    }
-
-    @Test
-    void ssoExportNotBlockedWhenEstablishmentNameBlankButCompanyNameSet() {
-        // SsoExporter itself falls back establishment name -> company name; the guard's "at least
-        // one of the two" must mirror that fallback rather than requiring both.
-        AppProperties props = fullyConfiguredEmployerProps();
-        props.getPayroll().getEmployer().setEstablishmentName("");
         PayrollService serviceUnderTest = serviceWithEmployer(props);
         when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
         when(payrollRepository.findExportRows(99L)).thenReturn(List.of(exportRow()));
@@ -502,7 +475,24 @@ class PayrollServiceTest {
         PayrollExportFile file =
             serviceUnderTest.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser());
 
-        assertThat(file.fileName()).isEqualTo("SPS1-10260626.txt");
+        assertThat(file.fileName()).isEqualTo("SPS1-10260626.xlsx");
+    }
+
+    /** The สปส.1-10 export is an xlsx workbook, not the CP874 .txt it was until 2026-08-31. */
+    @Test
+    void ssoExportIsAnXlsxWorkbook() {
+        when(payrollRepository.findPeriodById(99L)).thenReturn(Optional.of(period()));
+        when(payrollRepository.findExportRows(99L)).thenReturn(List.of(exportRow()));
+
+        PayrollExportFile file =
+            service.export(PayrollExportKind.SSO, 99L, LocalDate.of(2026, 6, 26), hrUser());
+
+        assertThat(file.fileName()).isEqualTo("SPS1-10260626.xlsx");
+        assertThat(PayrollExportKind.SSO.contentType())
+            .isEqualTo("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        // PK\x03\x04 -- a real zip container (xlsx), not CP874 text.
+        assertThat(file.content()[0]).isEqualTo((byte) 0x50);
+        assertThat(file.content()[1]).isEqualTo((byte) 0x4B);
     }
 
     @Test
