@@ -222,10 +222,34 @@ export function buildLeaveRequestColumns({
       render: (request) => (
         <span>
           <strong>{request.leaveTypeNameTh || request.leaveTypeCode}</strong>
-          <small>
-            <span className="font-mono">{formatDays(request.totalDays)}</span>
-            {' · เหลือ '}
-            <span className="font-mono">{formatDays(request.quotaRemainingAfter)}</span>
+          {/* Two figures that wrap as whole phrases (2026-08-31).
+
+              This is the cell in the bug report, and it broke in the middle of a value: the sub-line
+              was one inline run, so "0.38 วัน · เหลือ 6.37 วัน" wrapped after "เหลือ" and orphaned
+              "6.37 วัน" onto the next line, reading as a number belonging to nothing. Durations are
+              longer than the decimals they replace, so the wrap point had to become deliberate
+              rather than wherever the text happened to run out of track.
+
+              A `flex-wrap` row makes the FIRST break opportunity the one between the two figures, so
+              "used" and "remaining" separate before either of them does. Each figure then wraps
+              internally only if it still does not fit, and `formatDays`' own no-break spaces keep
+              every number with its unit when it does -- measured on the worst case this data can
+              produce, "1 ชั่วโมง 45 นาที · เหลือ 28 วัน 6 ชั่วโมง 15 นาที", which is wider than
+              this column at every viewport. `min-w-0` is what lets the items shrink to that point
+              instead of holding their min-content width and overflowing the cell's `overflow: clip`.
+
+              The "·" that used to join them is gone with the inline run: a separator glyph is either
+              stranded at the end of a line or orphaned at the start of the next one, and "เหลือ" is
+              already the label that tells the two figures apart. `font-mono` gives way to
+              `tabular-nums` -- mono was there to line the digits up, and it does that to the Thai
+              glyphs too, which now make up most of the string. */}
+          <small className="flex flex-wrap items-baseline gap-x-2 tabular-nums">
+            <span className="min-w-0">{formatDays(request.totalDays)}</span>
+            {/* No-break space after the label, for the same reason `formatDays` puts one after
+                every number: "เหลือ" stranded on one line with its figure on the next is
+                exactly the orphan the bug report showed. Written as an escape, not a literal
+                NBSP, so it survives an editor that normalises whitespace it cannot see. */}
+            <span className="min-w-0">เหลือ{'\u00A0'}{formatDays(request.quotaRemainingAfter)}</span>
           </small>
         </span>
       ),

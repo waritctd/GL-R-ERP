@@ -213,8 +213,8 @@ export function buildDemoLeaveRequests(employees) {
       requestedById: employees[3].id, requestedByName: employees[3].nameTh, requestedAt: at(-1),
     }),
     row({
-      // Sub-day leave (V90): times present, single date, fractional totalDays — the only seeded
-      // row that exercises the expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
+      // Sub-day leave (V90): times present, single date, fractional totalDays — exercises the
+      // expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
       id: 15, employeeId: employees[4].id, leaveTypeCode: 'PERSONAL',
       startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.5, quotaYear: 2026,
       startTime: '13:00', endTime: '17:00',
@@ -222,6 +222,41 @@ export function buildDemoLeaveRequests(employees) {
       purposeCode: 'DRIVING_LICENSE_OR_GOVERNMENT',
       quotaRemainingBefore: 7, quotaRemainingAfter: 6.5,
       requestedById: employees[4].id, requestedByName: employees[4].nameTh, requestedAt: at(-2),
+    }),
+    // The two sub-day rows below (2026-08-31) exist because id 15 above was, until now, the ONLY
+    // fractional day count in the whole seed — and its 0.5 is the one fraction that reads cleanly
+    // in every format ("4 ชั่วโมง", and "6.5" before that). A leave surface driven only by it looks
+    // fine while the awkward cases are the ones users actually reported: quota remainders carry the
+    // fraction into the DAY column too, which is where "0.38 วัน · เหลือ 6.37 วัน" came from.
+    //
+    // Both are ordinary sub-day requests a real employee could file, not inflated fixtures: their
+    // totalDays is exactly what LeaveService#computeTotalDays stores for those clock times
+    // (minutes / (8 * 60), HALF_UP to 2dp), and quotaRemainingAfter is exactly before - total.
+    // They sit on employees[8], the demo employee the quick-login "พนักงาน" button lands on, so
+    // the case is visible on first load rather than hidden behind a role switch.
+    row({
+      // Three flat hours — THE reported row. Renders "3 ชั่วโมง · เหลือ 6 วัน 5 ชั่วโมง".
+      id: 28, employeeId: employees[8].id, leaveTypeCode: 'PERSONAL',
+      startDate: iso(2026, 8, 19), endDate: iso(2026, 8, 19), totalDays: 0.38, quotaYear: 2026,
+      startTime: '08:30', endTime: '11:30',
+      reason: 'ต่อใบขับขี่ที่ขนส่ง ช่วงเช้า', status: 'APPROVED',
+      purposeCode: 'DRIVING_LICENSE_OR_GOVERNMENT',
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6.62,
+      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: at(-20),
+      ...hrReviewer, reviewedAt: at(-19),
+    }),
+    row({
+      // 1:45 against a 30-day quota — the LONGEST string this formatter can produce, and the one
+      // that decides whether the day/quota cell has room: "1 ชั่วโมง 45 นาที · เหลือ 28 วัน
+      // 6 ชั่วโมง 15 นาที". Kept deliberately as the layout's worst case.
+      id: 29, employeeId: employees[8].id, leaveTypeCode: 'SICK',
+      startDate: iso(2026, 8, 21), endDate: iso(2026, 8, 21), totalDays: 0.22, quotaYear: 2026,
+      startTime: '09:00', endTime: '10:45',
+      reason: 'พบแพทย์ตามนัด ช่วงเช้า', status: 'APPROVED',
+      attachmentId: 205, attachmentFileName: 'clinic-note-2026-08-21.pdf',
+      quotaRemainingBefore: 29, quotaRemainingAfter: 28.78,
+      requestedById: employees[8].id, requestedByName: employees[8].nameTh, requestedAt: at(-22),
+      ...hrReviewer, reviewedAt: at(-21),
     }),
     row({
       id: 16, employeeId: employees[25].id, leaveTypeCode: 'VACATION',

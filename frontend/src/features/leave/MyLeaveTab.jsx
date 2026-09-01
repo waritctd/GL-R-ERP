@@ -297,14 +297,6 @@ function OwnRequestsSection({
   );
 }
 
-// QuotaBar's `formatValue` defaults to `formatMoney` (every other current caller is money); leave
-// balances are day counts, so this mirrors the plain-number formatter LeaveRequestPage.jsx's own
-// step-3 QuotaBar already uses -- unit-less, because the caption below spells out "(วัน)" itself.
-const daysNumberFormat = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
-function formatDaysNumber(value) {
-  return daysNumberFormat.format(Number(value) || 0);
-}
-
 /**
  * The "ดูโควตา" select's own option text -- the type name, plus its remaining days for the three
  * everyday types.
@@ -381,12 +373,16 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   return (
     <div className="grid gap-2" data-testid="primary-balance-card">
       <span className="block min-w-0 truncate text-base font-bold text-text-secondary">{name}</span>
+      {/* `formatValue={formatDays}` (2026-08-31): the bar used to print bare decimals ("0.38 / 7")
+          under a caption that supplied the unit -- the same unreadable form the rest of this
+          surface just left behind. The values now carry their own unit as a duration, so the
+          caption drops its "(วัน)" rather than contradicting a value reading "3 ชั่วโมง". */}
       <QuotaBar
         label={name}
-        caption={`โควตา${name} (วัน)`}
+        caption={`โควตา${name}`}
         used={used}
         cap={isEveryday ? balance.annualQuotaDays : null}
-        formatValue={formatDaysNumber}
+        formatValue={formatDays}
         overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจถูกปฏิเสธอัตโนมัติ"
       />
       {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null),
@@ -617,7 +613,10 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
           { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
           { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: formatDays(totals.approvedDays) },
-          { key: 'remaining', label: 'โควตาคงเหลือ', value: formatDays(totals.remainingDays), helper: 'รวมประเภทที่เลือกได้' },
+          // `wrapValue`: this is a SUM across leave types, so it is the one tile that reliably
+          // carries all three units ("39 วัน 3 ชั่วโมง 10 นาที") -- long enough to be ellipsised
+          // by the default truncation at desktop width, never mind a phone. See CompactStatRow.
+          { key: 'remaining', label: 'โควตาคงเหลือ', value: formatDays(totals.remainingDays), helper: 'รวมประเภทที่เลือกได้', wrapValue: true },
         ]}
       />
 
@@ -637,16 +636,25 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         actions={(
           // `whitespace-nowrap`: the Panel header is a flex row and this label was breaking
           // mid-word into "ดู" / "โควตา" stacked above each other next to the select.
-          <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm font-semibold text-text-muted">
+          //
+          // `mobile:` (<=720px) stacks the label above the select and gives the select the full
+          // row. A native <select> clips its own selected-option text with no ellipsis and no
+          // tooltip, so a label it cannot fit is simply lost -- and the option labels grew when
+          // the remaining figure became a duration: the longest ("ลาป่วย · เหลือ 29 วัน 6 ชั่วโมง
+          // 15 นาที") measures 250px of text against the 170px this control had at 390px. Side by
+          // side there is no width to give it there; stacked, the row yields 270px and it fits.
+          // PanelHeader already wraps, so nothing else in the header moves.
+          <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm font-semibold text-text-muted mobile:w-full mobile:flex-col mobile:items-start mobile:gap-1">
             ดูโควตา
-            {/* Fixed width, not content width. The option labels grow by "· เหลือ N วัน" the
-                moment balancesQuery lands, and a content-sized select would jump wider on that
-                first paint -- a layout shift in the panel header, on data load, for no reason.
-                Sized for the longest label ("ลาป่วย · เหลือ 30 วัน"); `min-w-0` on the label lets
-                it shrink inside the flex header rather than push the title at 390px. */}
+            {/* Fixed width, not content width. The option labels grow by "· เหลือ …" the moment
+                balancesQuery lands, and a content-sized select would jump wider on that first
+                paint -- a layout shift in the panel header, on data load, for no reason. Sized
+                (19.5rem) for the longest label a duration can produce -- measured, not guessed:
+                at 18.5rem the 721px..1040px band left the widest option exactly one pixel short; `min-w-0` + `max-w-full` let it shrink inside the flex header rather than
+                push the title, and `mobile:w-full` takes the stacked row above. */}
             <select
               aria-label="เลือกประเภทการลาที่ต้องการดูโควตา"
-              className="w-[13.5rem] min-w-0"
+              className="w-[19.5rem] min-w-0 max-w-full mobile:w-full"
               value={previewTypeCode}
               onChange={(event) => setPreviewTypeCode(event.target.value)}
             >
