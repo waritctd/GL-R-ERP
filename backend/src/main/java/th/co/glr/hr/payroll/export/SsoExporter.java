@@ -1,82 +1,99 @@
 package th.co.glr.hr.payroll.export;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.DataFormat;
+import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.config.AppProperties;
 
 /**
- * Builds the Social Security Office สปส.1-10 contribution file: a fixed-width 135-byte CP874 record
- * layout with a type-{@code 1} header and one type-{@code 2} detail record per insured employee.
+ * Builds the Social Security Office สปส.1-10 contribution submission as an <b>Excel workbook</b>:
+ * one sheet per branch sequence, each holding a row per insured employee under the six columns the
+ * SSO e-service reads — เลขบัตรประชาชน / คำนำหน้า / ชื่อ / สกุล / ค่าจ้าง / เงินสมทบ.
  *
- * <p><b>Branches (ลำดับที่สาขา).</b> The branch code appears ONLY in the header record (positions
- * 12-17); a detail record carries no branch of its own. An employer registered with several branch
- * sequences therefore files them as several header blocks in one file, each immediately followed by
- * its own detail records and totalling only its own employees — that is the ยื่นรวมสาขา (สปส.1-10/1)
- * shape. Emitting a single header for everyone is what the e-service rejects with <i>"จำนวนสาขาที่
- * เลือกทำธุรกรรมไม่ตรงกับจำนวนสาขาที่พบในไฟล์"</i> when more than one branch is selected. Each row's
- * branch is {@code employee.sso_branch_code}, falling back to {@code app.payroll.employer.sso-branch}
- * when unset, and blocks are emitted in ascending branch order so the file is deterministic.
+ * <p><b>This replaced a fixed-width CP874 .txt exporter on 2026-08-31 (owner ruling).</b> Both
+ * formats are accepted by the e-service, but GL&amp;R has always filed the workbook — the .txt was
+ * built from a published spec with no golden sample and was never actually submitted, so it was
+ * pure unvalidated surface area. The layout here is pinned to GL&amp;R's real June 2026 filing
+ * ({@code SSO-twotabjube.xls}: sheets {@code 000000} and {@code 110001}), whose per-branch
+ * contribution totals — ฿13,725.00 and ฿8,863.00 — reconcile to the SSO's own สปส.1-10/1 receipt.
+ * See {@code SsoExporterTest#juneGoldenReconciliation...} and the August companion.
  *
- * <p>Field layout follows the published สปส.1-10 text-file spec (135 chars, header + detail). Unlike
- * the KBank and PND1 files there is <b>no golden sample</b> to pin the exact byte conventions, so the
- * following are best-effort and MUST be validated by uploading to the SSO e-service (which reports
- * format errors) before real submission. They are deliberately isolated here so a fix is a one-line
- * change:
+ * <p><b>Branches (ลำดับที่สาขา).</b> An employer registered with several branch sequences files each
+ * as its own sheet, named for the branch code, containing only that branch's insured — the
+ * ยื่นรวมสาขา (สปส.1-10/1) shape. Each row's branch is {@code employee.sso_branch_code}, falling back
+ * to {@code app.payroll.employer.sso-branch} when unset, and sheets are emitted in ascending branch
+ * order so the file is deterministic. Within a sheet, rows are ordered by เลขบัตรประชาชน ascending,
+ * matching the reference filing.
+ *
+ * <p>Conventions, all pinned to the reference filing rather than to a spec:
  * <ul>
- *   <li><b>Amounts</b> — rendered as satang (baht×100), zero-padded left, no decimal point. This is
- *       an UNCONFIRMED convention (no public spec states it, and there is no golden sample) kept
- *       isolated in {@link Cp874#satang} for exactly this reason — if the SSO e-service actually
- *       wants whole-baht fields, the fix is contained to that one method.</li>
- *   <li><b>Rate</b> — percent×100, e.g. 5% → {@code "0500"}.</li>
- *   <li><b>Wage (เงินค่าจ้างทั้งสิ้น)</b> — the wage actually PAID, uncapped ({@code
- *       payroll_line.sso_wage_gross}, {@code PayrollExportRow#ssoWageGross}), falling back to the
- *       capped {@code sso_wage_base} when gross is {@code null} (rows processed before V123). Fixed
- *       2026-08 — GL&amp;R's actual June 2026 filing reports the uncapped figure (one employee shows
- *       ค่าจ้าง 124,849 with เงินสมทบ 875); the capped base understates every employee at the SSO
- *       ceiling, which is most of the workforce.</li>
- *   <li><b>เงินสมทบ (contribution) rounding</b> — rounded {@link RoundingMode#HALF_UP} to whole baht
- *       PER INSURED PERSON, then summed for the block total — <b>พ.ร.บ.ประกันสังคม พ.ศ. 2533 มาตรา 46
- *       วรรคท้าย</b>: "สำหรับเศษของเงินสมทบที่มีจำนวนตั้งแต่ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท
- *       ถ้าน้อยกว่านั้นให้ปัดทิ้ง" ("...applied per insured person"). The employer portion mirrors the
- *       already-rounded employee portion, matching §33. This is a FILING-ONLY rounding: it does not
- *       touch {@code payroll_line.social_security} or the payslip deduction, which keeps deducting
- *       the unrounded amount (e.g. ฿562.50) while the employer remits the filed whole-baht figure
- *       (฿563) — a known, deliberate divergence; see the PR body.</li>
- *   <li><b>ค่าจ้าง whole-baht rounding</b> — also rounded {@link RoundingMode#HALF_UP} to 0 decimal
- *       places per person. Unlike the contribution rounding above, this is NOT stated by any statute
- *       this codebase has found — it is inferred from GL&amp;R's reference filing, where all 27
- *       ค่าจ้าง figures happened to be integral already (a monthly-salary company rarely pays satang).
- *       If a future wage genuinely carries satang, this rounds it, which is unconfirmed but matches
- *       every observed real filing.</li>
- *   <li><b>Title code</b> — left blank (spaces); no reliable SSO 3-char code map yet.</li>
- *   <li><b>Wage period / pay date year</b> — Gregorian 2-digit.</li>
+ *   <li><b>Amounts</b> — real numeric cells (not text), so the e-service reads values rather than
+ *       parsing strings. No employer/period/rate fields appear anywhere in the workbook: the
+ *       e-service already knows those from the account the file is uploaded under, which is why
+ *       this exporter needs no employer identity beyond the fallback branch code.</li>
+ *   <li><b>ค่าจ้าง (เงินค่าจ้างทั้งสิ้น)</b> — the wage actually PAID, <b>uncapped</b> ({@code
+ *       payroll_line.sso_wage_gross}), falling back to the capped {@code sso_wage_base} when gross
+ *       is {@code null} (rows processed before V123). The capped base understates every employee at
+ *       the ฿17,500 ceiling, which is most of the workforce — GL&amp;R's June filing reports one
+ *       employee at ค่าจ้าง 124,849 against a เงินสมทบ of 875.</li>
+ *   <li><b>เงินสมทบ rounding</b> — {@link RoundingMode#HALF_UP} to whole baht PER INSURED PERSON —
+ *       <b>พ.ร.บ.ประกันสังคม พ.ศ. 2533 มาตรา 46 วรรคท้าย</b>: "สำหรับเศษของเงินสมทบที่มีจำนวนตั้งแต่
+ *       ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท ถ้าน้อยกว่านั้นให้ปัดทิ้ง". <b>Whether this rounding changes
+ *       anything is time-dependent, so do not read it as "filing-only".</b> Until PR #834 (merged
+ *       2026-08-25, backend image {@code v2026-08-25}) it was: the engine stored and deducted the
+ *       unrounded ฿562.50 while the employer remitted the filed ฿563. #834 moved the same rounding
+ *       into {@code PayrollCalculator}, so a period processed on or after that deploy already
+ *       carries whole baht and this rounding is IDEMPOTENT. #834 shipped no backfill, so earlier
+ *       periods keep their unrounded stored contribution and this is what CORRECTS them at export
+ *       time — it never rewrites the stored value. Real prod split (2026-09-01): May/June
+ *       (processed 2026-07) still hold 4 satang-bearing rows each, min ฿82.50; July/August
+ *       (processed 2026-08) are whole baht throughout.</li>
+ *   <li><b>ค่าจ้าง rounding</b> — also HALF_UP to whole baht per person (owner ruling 2026-08-31).
+ *       Unlike the contribution rounding this is NOT stated by any statute this codebase has found;
+ *       it is inferred from the reference filing, where all 27 ค่าจ้าง figures were integral (a
+ *       monthly-salary company rarely pays satang). If a future wage genuinely carries satang this
+ *       rounds it, which is unconfirmed but matches every observed real filing.</li>
+ *   <li><b>คำนำหน้า</b> — the Thai title word ({@code hr.title.name_th}: นาย / นาง / นางสาว) exactly as
+ *       the reference filing spells it, NOT an SSO 3-char code. The .txt format wanted a code and
+ *       had none, so it shipped three spaces; the workbook wants the word, which the ERP has.</li>
  * </ul>
- * Only employees with a positive contribution appear (directors, whose SSO is 0, are excluded).
+ * Only employees with a positive contribution appear — directors, whose SSO is 0, are not insured
+ * under this filing and are excluded.
  */
 @Component
 public class SsoExporter {
-    private static final int RECORD_WIDTH = 135;
-    private static final DateTimeFormatter DDMMYY = DateTimeFormatter.ofPattern("ddMMyy", Locale.US);
-    private static final DateTimeFormatter MMYY = DateTimeFormatter.ofPattern("MMyy", Locale.US);
+    private static final List<String> HEADERS =
+        List.of("เลขบัตรประชาชน", "คำนำหน้า", "ชื่อ", "สกุล", "ค่าจ้าง", "เงินสมทบ");
+    /** Widths copied from the reference filing's own sheet, in POI's 1/256th-of-a-character units. */
+    private static final int[] COLUMN_WIDTHS = {16, 16, 20, 20, 17, 17};
+    private static final String ID_FORMAT = "0000000000000";
+    private static final String MONEY_FORMAT = "0.00";
 
     /**
-     * @param rows         the period's payroll lines
-     * @param employer     employer SSO registration constants
-     * @param payrollMonth the wage period (drives the MMyy field)
-     * @param payDate      the contribution payment date (HR-picked; defaults to the 26th)
+     * @param rows     the period's payroll lines
+     * @param employer employer SSO registration — only {@code ssoBranch} is read, as the fallback
+     *                 sheet for employees with no {@code sso_branch_code} of their own
      */
-    public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer,
-                        LocalDate payrollMonth, LocalDate payDate) {
-        // TreeMap: blocks in ascending branch order. Within a block the ArrayList preserves the
-        // caller's order, which is findExportRows' ORDER BY employee_code.
+    public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer) {
+        // TreeMap: sheets in ascending branch order. Within a branch, order by national id ascending
+        // to match the reference filing (findExportRows' own ORDER BY is employee_code, which is a
+        // different order — the workbook is re-sorted here rather than at the query, so this class
+        // owns its layout end to end).
         Map<String, List<PayrollExportRow>> byBranch = new TreeMap<>();
         for (PayrollExportRow row : rows) {
             if (!isPositive(row.socialSecurity())) {
@@ -85,109 +102,127 @@ public class SsoExporter {
             byBranch.computeIfAbsent(branchOf(row, employer), key -> new ArrayList<>()).add(row);
         }
         if (byBranch.isEmpty()) {
-            // Nobody insured this period. Grouping would otherwise yield a zero-record file; keep the
-            // pre-branch behaviour of one empty header at the employer's own branch.
+            // Nobody insured this period. Emit a single header-only sheet at the employer's own
+            // branch rather than a workbook with no sheets at all, which Excel refuses to open.
             byBranch.put(digits(employer.getSsoBranch()), List.of());
         }
 
-        List<byte[]> records = new ArrayList<>();
-        for (Map.Entry<String, List<PayrollExportRow>> entry : byBranch.entrySet()) {
-            List<PayrollExportRow> insured = entry.getValue();
-            BigDecimal totalWage = BigDecimal.ZERO;
-            BigDecimal totalEmployee = BigDecimal.ZERO;
-            List<byte[]> details = new ArrayList<>();
-            for (PayrollExportRow row : insured) {
-                // Defect 2: ค่าจ้าง is the uncapped wage actually paid, falling back to the capped
-                // base for pre-V123 rows (see this class's javadoc). Defect 3: both figures round to
-                // whole baht PER PERSON before they ever reach a total — the block total below is
-                // therefore the SUM of these already-rounded per-person amounts, not a rounded sum
-                // of raw amounts (see the golden reconciliation test for why that distinction is
-                // load-bearing: the two can differ).
-                BigDecimal wage = wholeBaht(row.ssoWageGross() != null ? row.ssoWageGross() : row.ssoWageBase());
-                BigDecimal contribution = wholeBaht(row.socialSecurity());
-                totalWage = totalWage.add(wage);
-                totalEmployee = totalEmployee.add(contribution);
-                details.add(detail(row, wage, contribution));
-            }
-            // §33: the employer matches the employee's contribution.
-            BigDecimal totalEmployer = totalEmployee;
-            BigDecimal totalContribution = totalEmployee.add(totalEmployer);
+        try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            DataFormat formats = workbook.createDataFormat();
+            CellStyle headerStyle = headerStyle(workbook);
+            CellStyle idStyle = numberStyle(workbook, formats, ID_FORMAT);
+            CellStyle moneyStyle = numberStyle(workbook, formats, MONEY_FORMAT);
 
-            records.add(header(employer, entry.getKey(), payrollMonth, payDate, insured.size(),
-                totalWage, totalContribution, totalEmployee, totalEmployer));
-            records.addAll(details);
+            for (Map.Entry<String, List<PayrollExportRow>> entry : byBranch.entrySet()) {
+                Sheet sheet = workbook.createSheet(sheetName(entry.getKey()));
+                writeHeaderRow(sheet, headerStyle);
+
+                List<PayrollExportRow> insured = new ArrayList<>(entry.getValue());
+                insured.sort(Comparator.comparing(this::ssn));
+
+                int rowIndex = 1;
+                for (PayrollExportRow row : insured) {
+                    // ค่าจ้าง is the uncapped wage actually paid, falling back to the capped base for
+                    // pre-V123 rows; both figures round to whole baht PER PERSON (see the javadoc).
+                    BigDecimal wage =
+                        wholeBaht(row.ssoWageGross() != null ? row.ssoWageGross() : row.ssoWageBase());
+                    BigDecimal contribution = wholeBaht(row.socialSecurity());
+                    writeDetailRow(sheet.createRow(rowIndex++), row, wage, contribution, idStyle, moneyStyle);
+                }
+                for (int column = 0; column < COLUMN_WIDTHS.length; column++) {
+                    sheet.setColumnWidth(column, COLUMN_WIDTHS[column] * 256);
+                }
+            }
+            workbook.write(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to build the สปส.1-10 workbook", e);
         }
-        return Cp874.file(records);
+    }
+
+    private void writeHeaderRow(Sheet sheet, CellStyle headerStyle) {
+        Row header = sheet.createRow(0);
+        for (int column = 0; column < HEADERS.size(); column++) {
+            Cell cell = header.createCell(column);
+            cell.setCellValue(HEADERS.get(column));
+            cell.setCellStyle(headerStyle);
+        }
+    }
+
+    private void writeDetailRow(Row row, PayrollExportRow source, BigDecimal wage,
+                                BigDecimal contribution, CellStyle idStyle, CellStyle moneyStyle) {
+        String id = ssn(source);
+        Cell idCell = row.createCell(0);
+        if (id.isEmpty()) {
+            // No national id AND no social_security_no. Leave the cell blank rather than writing a
+            // fabricated 0, so the e-service rejects the row instead of filing it under id zero.
+            idCell.setBlank();
+        } else {
+            idCell.setCellValue(Double.parseDouble(id));
+        }
+        idCell.setCellStyle(idStyle);
+
+        row.createCell(1).setCellValue(orBlank(source.titleTh()));
+        row.createCell(2).setCellValue(orBlank(source.firstNameTh()));
+        row.createCell(3).setCellValue(orBlank(source.lastNameTh()));
+
+        Cell wageCell = row.createCell(4);
+        wageCell.setCellValue(wage.doubleValue());
+        wageCell.setCellStyle(moneyStyle);
+
+        Cell contributionCell = row.createCell(5);
+        contributionCell.setCellValue(contribution.doubleValue());
+        contributionCell.setCellStyle(moneyStyle);
     }
 
     /**
      * The employee's own SSO branch, falling back to the employer default when unset — so an
-     * installation that has never assigned branches keeps producing exactly one block, as before.
+     * installation that has never assigned branches keeps producing exactly one sheet.
      */
     private String branchOf(PayrollExportRow row, AppProperties.Employer employer) {
         String branch = digits(row.ssoBranchCode());
         return branch.isEmpty() ? digits(employer.getSsoBranch()) : branch;
     }
 
-    private byte[] header(AppProperties.Employer employer, String branch,
-                          LocalDate payrollMonth, LocalDate payDate,
-                          int count, BigDecimal totalWage, BigDecimal totalContribution,
-                          BigDecimal employeePortion, BigDecimal employerPortion) {
-        String establishment = employer.getEstablishmentName() == null || employer.getEstablishmentName().isBlank()
-            ? employer.getCompanyNameTh()
-            : employer.getEstablishmentName();
-        return Cp874.record(RECORD_WIDTH,
-            Cp874.bytes("1"),
-            account(employer.getSsoEmployerAccount(), 10),
-            Cp874.zpad(branch, 6),
-            Cp874.bytes(payDate.format(DDMMYY)),
-            Cp874.bytes(payrollMonth.format(MMYY)),
-            Cp874.rpad(establishment, 45),
-            Cp874.zpad(rateTimes100(employer.getSsoRatePercent()), 4),
-            Cp874.zpad(count, 6),
-            Cp874.satang(totalWage, 15),
-            Cp874.satang(totalContribution, 14),
-            Cp874.satang(employeePortion, 12),
-            Cp874.satang(employerPortion, 12));
-    }
-
-    private byte[] detail(PayrollExportRow row, BigDecimal wage, BigDecimal contribution) {
-        return Cp874.record(RECORD_WIDTH,
-            Cp874.bytes("2"),
-            Cp874.zpad(ssn(row), 13),
-            Cp874.rpad("", 3),                 // title code — left blank pending SSO code map
-            Cp874.rpad(row.firstNameTh(), 30),
-            Cp874.rpad(row.lastNameTh(), 35),
-            Cp874.satang(wage, 14),
-            Cp874.satang(contribution, 12),
-            Cp874.spaces(27));
+    /**
+     * Excel refuses a blank sheet name, so an employer whose fallback branch is itself unset (or
+     * non-numeric) would otherwise blow up here rather than at the export guard. {@code
+     * PayrollService} already refuses the export when {@code sso-branch} is blank; this is the
+     * belt-and-braces so a future caller that skips that guard still produces a valid workbook.
+     */
+    private String sheetName(String branch) {
+        return branch.isEmpty() ? "000000" : branch;
     }
 
     /**
-     * The เลขประจำตัวประกันสังคม field keys on the <b>national id</b> (เลขบัตรประชาชน), falling back to
-     * {@code social_security_no} only when an employee has no national id on file.
+     * The เลขบัตรประชาชน column keys on the <b>national id</b>, falling back to {@code
+     * social_security_no} only when an employee has no national id on file.
      *
-     * <p>This preference was REVERSED on 2026-08-03 (owner ruling). It previously preferred
-     * {@code social_security_no}, but GL&amp;R's accepted สปส.1-10/1 filings key on เลขบัตรประชาชน — for
-     * modern Thai records the two are the same 13 digits, so the old order was usually harmless, but
-     * any employee whose {@code social_security_no} holds something else (a legacy SSO number, or a
-     * stale value) would be filed under a number the SSO cannot match to the person. National id is
-     * the field the SSO actually reconciles against, so it wins.
+     * <p>For modern Thai records the two are the same 13 digits, but any employee whose {@code
+     * social_security_no} holds something else (a legacy SSO number, or a stale value) would be
+     * filed under a number the SSO cannot match to the person. National id is the field the SSO
+     * actually reconciles against, so it wins — owner ruling 2026-08-03, carried over from the .txt
+     * exporter this class replaced.
      */
     private String ssn(PayrollExportRow row) {
         String n = digits(row.nationalId());
         return n.isEmpty() ? digits(row.socialSecurityNo()) : n;
     }
 
-    private long rateTimes100(String ratePercent) {
-        BigDecimal rate = ratePercent == null || ratePercent.isBlank()
-            ? BigDecimal.valueOf(5)
-            : new BigDecimal(ratePercent.trim());
-        return rate.movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact();
+    private CellStyle headerStyle(XSSFWorkbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        style.setAlignment(HorizontalAlignment.CENTER);
+        return style;
     }
 
-    private byte[] account(String account, int width) {
-        return Cp874.zpad(digits(account), width);
+    private CellStyle numberStyle(XSSFWorkbook workbook, DataFormat formats, String pattern) {
+        CellStyle style = workbook.createCellStyle();
+        style.setDataFormat(formats.getFormat(pattern));
+        return style;
+    }
+
+    private String orBlank(String value) {
+        return value == null ? "" : value;
     }
 
     private String digits(String value) {
@@ -199,10 +234,10 @@ public class SsoExporter {
     }
 
     /**
-     * Rounds to whole baht, {@link RoundingMode#HALF_UP} — มาตรา 46 วรรคท้าย for เงินสมทบ (rounding
-     * is explicit in the statute); inferred from the reference filing for ค่าจ้าง (see this class's
-     * javadoc). Applied PER PERSON, before any total accumulates — see the golden reconciliation
-     * test for why summing raw and rounding once is a different, wrong number.
+     * Rounds to whole baht, {@link RoundingMode#HALF_UP} — มาตรา 46 วรรคท้าย for เงินสมทบ (rounding is
+     * explicit in the statute); inferred from the reference filing for ค่าจ้าง (see this class's
+     * javadoc). Applied PER PERSON: the e-service totals the column itself, so what it sums must be
+     * the already-rounded per-person figures, never a rounded grand total — the two can differ.
      */
     private BigDecimal wholeBaht(BigDecimal value) {
         return orZero(value).setScale(0, RoundingMode.HALF_UP);
