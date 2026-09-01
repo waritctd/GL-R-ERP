@@ -43,6 +43,16 @@ import { Skeleton } from './Skeleton.jsx';
  *
  * Values are pass-through content (already formatted by the caller, e.g.
  * `formatMoney`); this component never formats or computes a number itself.
+ *
+ * `item.wrapValue` (2026-08-31) opts one item's value out of that truncation
+ * and lets it wrap instead. Truncate-plus-tooltip is right for the values this
+ * component was built for — a money figure or a count is one unbreakable token,
+ * and clipping it is visibly a clipped number. It is wrong for a value that is
+ * a PHRASE: the leave surface now renders quota as a duration, and
+ * "39 วัน 3 ชั่วโมง 10 นาที" overflowed its column at 1280px (measured: 214px
+ * of content in a 211px track), so the ellipsis ate the minutes and left a
+ * figure that read as complete and was not. Opt-in rather than a blanket
+ * change: every existing caller passes a single token and keeps truncating.
  */
 export function CompactStatRow({
   items,
@@ -97,7 +107,13 @@ export function CompactStatRow({
             {item.helper ? <span className="ml-1 font-normal normal-case">· {item.helper}</span> : null}
           </dt>
           <dd
-            className="m-0 truncate text-lg font-extrabold tabular-nums text-text sm:text-xl"
+            className={cn(
+              'm-0 text-lg font-extrabold tabular-nums text-text sm:text-xl',
+              // Not `cn('truncate', item.wrapValue && 'whitespace-normal')`: tailwind-merge does not
+              // treat a later `whitespace-*` as displacing `truncate`, so both would survive and
+              // which one won would come down to stylesheet order. Branching picks exactly one.
+              item.wrapValue ? 'min-w-0 break-words' : 'truncate',
+            )}
             title={String(item.value)}
           >
             {item.value}

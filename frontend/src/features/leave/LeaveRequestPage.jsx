@@ -923,12 +923,15 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                   {/* MILITARY's annualQuotaDays is a 366 sentinel ("no annual ceiling; the 60-day
                       paid cap is the real rule", V120) -- QuotaBar returns null when cap == null,
                       exactly right for it. The paid cap itself is rendered by hand below instead. */}
+                  {/* `formatValue={formatDays}` (2026-08-31): see MyLeaveTab.jsx's matching
+                      QuotaBar -- the values carry their own unit as a duration now, so the caption
+                      drops the "(วัน)" it used to supply for a bare decimal. */}
                   <QuotaBar
                     label={balance.type.nameTh}
-                    caption={`โควตา${balance.type.nameTh} (วัน)`}
+                    caption={`โควตา${balance.type.nameTh}`}
                     used={step3Preview ? Number(step3Preview.totalDays || 0) : 0}
                     cap={balance.type.code === 'MILITARY' ? null : balance.type.annualQuotaDays}
-                    formatValue={(value) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(Number(value) || 0)}
+                    formatValue={formatDays}
                     overMessage="คำขอนี้เกินโควตาประจำปี ส่วนที่เกินจะไม่รับค่าจ้าง"
                   />
                   {balance.type.code === 'MILITARY' && balance.type.paidDaysCap != null ? (

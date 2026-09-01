@@ -152,7 +152,12 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     // Everyday type: the figure is on the option itself, which is what makes the removed
     // disclosure redundant rather than missed. Re-read inside waitFor -- the labels only gain
     // their "· เหลือ N วัน" suffix once balancesQuery lands, one render after the options exist.
-    await waitFor(() => expect(optionTexts()).toContain('ลาพักร้อน · เหลือ 6 วัน'));
+    //
+    // The space before "วัน" is a NO-BREAK space, not an ordinary one: `formatDays` glues every
+    // number to its unit so a duration can only wrap between units (see leaveFormatting.js). This
+    // assertion is exact about it on purpose -- it is a native <select>, where a label that does
+    // not fit is clipped with no ellipsis and no tooltip, so where it may break is load-bearing.
+    await waitFor(() => expect(optionTexts()).toContain('ลาพักร้อน · เหลือ 6\u00A0วัน'));
     // Rare type: name only, no derived figure.
     expect(optionTexts()).toContain('ลารับราชการทหาร');
     expect(screen.queryByText(/366/)).toBeNull();

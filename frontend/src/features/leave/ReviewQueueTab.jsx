@@ -387,7 +387,9 @@ export function ReviewQueueTab({ user, showToast }) {
         items={[
           { key: 'awaiting', label: 'รอคุณพิจารณา', value: totals.awaitingDecision, helper: 'อนุมัติ / ปฏิเสธได้' },
           { key: 'soon', label: 'เริ่มใน 7 วัน', value: totals.startingSoon, helper: 'ควรพิจารณาก่อน' },
-          { key: 'days', label: 'วันลารวม', value: formatDays(totals.pendingDays), helper: 'ที่รอพิจารณา' },
+          // `wrapValue`: a sum over every pending request, so it carries the same multi-unit
+          // duration MyLeaveTab's own "โควตาคงเหลือ" tile does. See CompactStatRow.
+          { key: 'days', label: 'วันลารวม', value: formatDays(totals.pendingDays), helper: 'ที่รอพิจารณา', wrapValue: true },
           { key: 'people', label: 'พนักงาน', value: totals.people, helper: 'ที่ยื่นคำขอ' },
         ]}
       />
