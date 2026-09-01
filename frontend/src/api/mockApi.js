@@ -3737,6 +3737,17 @@ function leaveTypeByCode(code) {
 // in mock mode is checked against just that one year's remaining quota, not the true per-year split
 // -- "not supported in mock mode" for the multi-year figure, same honesty option already taken for
 // the paid-cap gap.
+//
+// ⚠️ KNOWN DIVERGENCE from the real backend since V160 (2026-09-01): the Mon-Fri arithmetic below
+// is hardcoded and has no concept of hr.work_schedule at all, while the real
+// LeaveRepository#workingDayPredicate resolves a per-employee schedule through
+// TieredWorkScheduleResolver. ฝ่ายขาย is on a SIX-day week from 2026-09-01, so a Saturday-only
+// leave request that the real backend now ACCEPTS for a sales employee still 400s here with
+// "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน". That is the mock being wrong, not the feature —
+// do not file it as a bug, and do not "verify" sales Saturday leave under VITE_USE_MOCKS=true.
+// Left un-mirrored deliberately: reproducing the tier precedence, effective dating and holiday
+// calendar here would be reimplementing a backend computation in the mock, the exact shape
+// CLAUDE.md's "Mock API contract" section warns produces green tests that prove nothing.
 function workingDaysBetween(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
