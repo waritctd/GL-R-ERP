@@ -420,10 +420,27 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
         boolean manager = managesEmployee(existing.employeeId(), user);
-        if (!manager && existing.employeeId() != actorEmployeeId) {
+        // CEO-approval-reach follow-on (2026-09-01 owner ruling): "whoever approves it can also
+        // cancel it". Round 1 excluded a reports-to-an-executive employee's division manager from
+        // `manager` above (correctly -- managesEmployee), but left such a request cancellable by
+        // NOBODY once past SUBMITTED: self-cancel is SUBMITTED-only (see the status guard below),
+        // and the division manager who would ordinarily fill the "manager" role here has no
+        // standing for this employee at all. A ceo actor now gets the SAME manager-equivalent
+        // reach `manager` would have given a division manager, but ONLY when there genuinely is no
+        // manager stage for this employee (hasManagerStage false) -- an employee who DOES have a
+        // reachable division manager is unaffected, so this does not hand the CEO a second,
+        // parallel cancel path for every ordinary request. Self is deliberately excluded (mirrors
+        // managesEmployee's own self-exclusion): a CEO cancelling their OWN overtime is untouched
+        // by this ruling and keeps the ordinary self-cancel (SUBMITTED-only) rule below.
+        boolean ceoActingForManagerlessEmployee = !manager
+            && "ceo".equals(user.role())
+            && existing.employeeId() != actorEmployeeId
+            && !hasManagerStage(existing.employeeId());
+        boolean actingAsManager = manager || ceoActingForManagerlessEmployee;
+        if (!actingAsManager && existing.employeeId() != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        if (!manager && !"SUBMITTED".equals(existing.status())) {
+        if (!actingAsManager && !"SUBMITTED".equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "พนักงานยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังไม่ได้รับการพิจารณาเท่านั้น");
         }
         if (!"SUBMITTED".equals(existing.status())
@@ -432,7 +449,11 @@ public class OvertimeService {
             throw new ApiException(HttpStatus.CONFLICT, "ยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น");
         }
 
-        int updated = overtimeRepository.cancel(id, manager ? actorEmployeeId : null, note(request));
+        // A CEO cancelling via ceoActingForManagerlessEmployee is acting in the (nonexistent)
+        // manager's stead, not as the requester -- record the actor as the canceller like an
+        // ordinary manager-cancel would, not null (null is reserved for the employee's own
+        // self-cancel).
+        int updated = overtimeRepository.cancel(id, actingAsManager ? actorEmployeeId : null, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ไม่สามารถยกเลิกได้แล้ว");
         }
@@ -835,12 +856,24 @@ public class OvertimeService {
 
     /**
      * True when {@code user} manages the given employee: a ฝ่าย manager sharing the employee's
-     * division, excluding self.
+     * division, excluding self, AND the employee does not report to an active executive.
      *
      * <p>{@code reports_to_employee_id} deliberately does NOT grant approval rights. It used to,
      * and was removed on the owner's instruction so that overtime matches
      * {@code AttendanceService.resolveScope}, which has always been division-only. The self
      * exclusion is what sends a ผู้จัดการ's own request straight to the CEO.
+     *
+     * <p><b>CEO-approval-reach follow-on (2026-09-01):</b> {@code reports_to_employee_id} now DOES
+     * feed into this decision, but only to REMOVE a manager, never to grant one -- an employee whose
+     * {@code reports_to_employee_id} points at an active executive (division {@code md}, or a
+     * position containing "กรรมการ") has no manager stage at all, regardless of what their division
+     * manager could otherwise do. This is not a reversal of the paragraph above: {@code reports_to}
+     * still never makes anyone an approver here -- it only ever makes the division manager NOT one,
+     * for this specific employee. {@code false} for this reason affects every caller of this method
+     * (approve/reject at the manager stage via {@code requireManager}, {@code canAccessEmployee},
+     * {@code cancel}'s manager flag, and {@code resolveTargetEmployee}'s submit-on-behalf gate) --
+     * the request routes to the CEO instead for all of them, matching {@code hasManagerStage}
+     * turning false for the same employee (see {@code ManagerApproverRepository}).
      *
      * <p>Must stay in lockstep with {@code ManagerApproverRepository}: that class answers "does any
      * such user exist" in SQL, and the two are pinned to each other by
@@ -854,7 +887,8 @@ public class OvertimeService {
             .map(access -> user.manager()
                 && user.divisionId() != null
                 && user.divisionId().equals(access.divisionId())
-                && employeeId != user.employeeId())
+                && employeeId != user.employeeId()
+                && !access.reportsToExecutive())
             .orElse(false);
     }
 

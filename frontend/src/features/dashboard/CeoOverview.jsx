@@ -178,14 +178,17 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   );
   const otRows = useMemo(() => [...otManagerApproved, ...otDirectToCeo], [otManagerApproved, otDirectToCeo]);
 
-  // ── ลา: SUBMITTED, same manager-less-division FK case (LeaveService has no
-  // MANAGER_APPROVED step at all — canReviewLeave only ever grants hr, or the
-  // employee's literal FK manager, so a CEO-reviewable leave request IS by
-  // definition one whose manager FK is the CEO). ──────────────────────────
-  const leaveRows = useMemo(
-    () => leaveSubmitted.filter((r) => r.managerEmployeeId != null && Number(r.managerEmployeeId) === Number(user?.employeeId)),
-    [leaveSubmitted, user?.employeeId],
-  );
+  // ── ลา: SUBMITTED, all of it. This used to filter to `managerEmployeeId ===
+  // user.employeeId` on the premise that canReviewLeave only ever granted hr, or the
+  // employee's literal FK manager -- so a CEO-reviewable leave request was by definition one
+  // whose manager FK was the CEO. CEO leave-approval reach (2026-09-01 owner ruling,
+  // LeaveService.REVIEW_ALL_ROLES gaining "ceo") invalidates exactly that premise: the CEO can
+  // now review EVERY ใบลา, not just requests whose FK manager happens to be them. leaveSubmitted
+  // itself already comes back company-wide for this actor (api.leave.list is server-scoped by
+  // VIEW_ALL_ROLES, which has included ceo since before this change), so every row here is one
+  // this CEO may act on -- no further client-side filter needed. This component only ever renders
+  // for user.role === 'ceo' (see App.jsx), so there is no other-role case to guard against. ─────
+  const leaveRows = leaveSubmitted;
 
   // ── ผลบริษัทเดือนนี้: no ฿ figure exists on /api/dashboard/summary (it only
   // returns ticket-status counts), so every ฿ number here is derived from the

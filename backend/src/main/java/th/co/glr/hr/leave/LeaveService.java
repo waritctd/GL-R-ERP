@@ -40,7 +40,14 @@ public class LeaveService {
         "image/png"
     );
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
-    private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr");
+    // CEO leave-approval reach (2026-09-01), owner ruling: "make it so that ceo can approve
+    // everyone leaves". Closes a long-standing asymmetry -- VIEW_ALL_ROLES above already let the
+    // CEO see every ใบลา, but REVIEW_ALL_ROLES being hr-only meant they could approve none of them.
+    // Deliberately no self-exclusion here: SELF_SUBMIT_BLOCKED_ROLES already contains "ceo", so a
+    // CEO cannot file their own leave in the first place. The residual edge case -- HR files leave
+    // FOR a CEO, who then approves it themselves via this same blanket reach -- is the same shape
+    // HR already has (HR could always approve leave HR filed for someone else) and is left unruled.
+    private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr", "ceo");
     // Leave HR-submit gate (2026-08-03), owner ruling: "HR and บริหาร oversee leave but do not
     // request it for themselves." Same role bucket as VIEW_ALL_ROLES (`ผู้บริหาร` -> hr,
     // `ผู้บริหารระดับสูง` -> ceo -- see frontend/src/app/roles.js), matching the "CEO/HR are
@@ -1988,10 +1995,12 @@ public class LeaveService {
      * actor's own id.
      *
      * <p>Deliberately role-gated on SELF only, not on role alone: an hr/ceo actor submitting for
-     * SOMEONE ELSE still falls through to the unchanged {@code canReviewEmployee} check below (HR's
-     * blanket {@code REVIEW_ALL_ROLES} reach, or a manager-of-record relationship for anyone else,
-     * ceo included) -- filing a paper form on a report's behalf is a real, still-supported HR
-     * workflow; only filing for THEMSELVES is what the owner ruling blocks.
+     * SOMEONE ELSE still falls through to the unchanged {@code canReviewEmployee} check below.
+     * Both hr and ceo now share the same blanket {@code REVIEW_ALL_ROLES} reach (ceo added
+     * 2026-09-01, CEO leave-approval reach) -- before that, ceo reached {@code canReviewEmployee}
+     * only via a manager-of-record relationship, the same fallback anyone outside
+     * {@code REVIEW_ALL_ROLES} still relies on. Filing a paper form on a report's behalf is a real,
+     * still-supported HR workflow; only filing for THEMSELVES is what the owner ruling blocks.
      */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         long actorEmployeeId = requireEmployeeId(user);
@@ -2211,7 +2220,8 @@ public class LeaveService {
      * THIS {@code user} -- a capability flag ("this actor could act on this employee's requests"),
      * computed from the SAME decision {@link #approve}/{@link #reject} already gate on ({@link
      * #canReviewAll}(user) OR {@link #isDirectManager}), not a role check: {@code REVIEW_ALL_ROLES}
-     * is {@code {hr}} only, but any ฝ่าย manager may review their own direct reports too. Exposed so
+     * is {@code {hr, ceo}} (ceo joined 2026-09-01), but any ฝ่าย manager may review their own
+     * direct reports too. Exposed so
      * the frontend stops inferring "can I approve this" from the actor's own role alone, which would
      * under-report for a department manager. It says nothing about whether THIS PARTICULAR request is
      * actionable right now -- {@link #approve}/{@link #reject} still enforce {@code status ==

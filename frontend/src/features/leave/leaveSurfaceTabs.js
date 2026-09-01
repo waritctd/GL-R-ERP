@@ -132,9 +132,13 @@ export const LEAVE_SURFACE_TABS = [
     // The hr/ceo short-circuit is not just an optimisation, it is a BLANK-PAGE GUARD. `employeeOptions`
     // is `[]` until that query lands, so a purely data-driven check hides this tab on first paint.
     // That was survivable while "กฎการลา" existed (always visible, so the page always had at least
-    // one tab), but the 2026-08-10 restructure removed that tab AND hid "ของฉัน" for hr/ceo. A ceo
-    // is not in ROLE_PERMISSIONS.canReviewLeave either, so "รอพิจารณา" also needs loaded rows --
-    // leaving a ceo with ZERO visible tabs for the duration of the first load, i.e. a blank page.
+    // one tab), but the 2026-08-10 restructure removed that tab AND hid "ของฉัน" for hr/ceo. Before
+    // the 2026-09-01 CEO leave-approval reach, a ceo was not in ROLE_PERMISSIONS.canReviewLeave
+    // either, so "รอพิจารณา" also needed loaded rows -- leaving a ceo with ZERO visible tabs for
+    // the duration of the first load, i.e. a blank page. ceo is in that list now (see `review`'s
+    // isVisible below), so this guard is no longer load-bearing for ceo specifically -- it is kept
+    // unconditional because `team` must still cover hr/any future role added to canViewAllLeave
+    // without canReviewLeave.
     // hr/ceo's own api.leave.employees() response is every active employee (VIEW_ALL_ROLES), so
     // this tab is always genuinely available to them; asserting that from the role rather than
     // waiting for the data to prove it removes both the flicker and the empty state.
@@ -148,13 +152,13 @@ export const LEAVE_SURFACE_TABS = [
     helper: 'คำขอลาที่รอคุณพิจารณา',
     // THE load-bearing rule of this phase. LeaveService.canReviewEmployee =
     // canReviewAll(user) || isDirectManager(employeeId, actorEmployeeId), and
-    // REVIEW_ALL_ROLES = Set.of("hr") server-side -- so ANY direct manager may approve
-    // their own reports' leave, not just HR. ROLE_PERMISSIONS.canReviewLeave (routes.js)
-    // is ['hr'] only: that constant is the coarse "sees a review surface at all,
-    // regardless of whose requests" UI signal the rest of this app uses for route
-    // guarding, NOT the real per-request gate. Gating this TAB on canReviewLeave alone
-    // would hide the queue from every department manager -- exactly the role that uses
-    // it most day to day.
+    // REVIEW_ALL_ROLES = Set.of("hr", "ceo") server-side (ceo added 2026-09-01) -- so ANY
+    // direct manager may ALSO approve their own reports' leave, not just hr/ceo.
+    // ROLE_PERMISSIONS.canReviewLeave (routes.js) is ['hr', 'ceo']: that constant is the
+    // coarse "sees a review surface at all, regardless of whose requests" UI signal the
+    // rest of this app uses for route guarding, NOT the real per-request gate. Gating this
+    // TAB on canReviewLeave alone would hide the queue from every department manager --
+    // exactly the role that uses it most day to day.
     //
     // So: visible when EITHER the role-level permission already says so (hr, an
     // unconditional "always may review something"), OR the currently-loaded request
@@ -252,8 +256,10 @@ export function visibleLeaveSurfaceTabIds(user, requests = [], employeeOptions =
  * <p>`preferredDefaultId` defaults to `DEFAULT_LEAVE_SURFACE_TAB_ID` (unchanged pre-A1
  * behaviour for every existing caller) -- LeaveSurfacePage.jsx passes
  * `defaultLeaveSurfaceTabId(user)` so an hr/ceo actor's own default resolves to "review", but
- * still degrades to "me" for the rare case that tab isn't currently visible to them (e.g. a
- * ceo actor -- not in ROLE_PERMISSIONS.canReviewLeave -- with zero actionable rows loaded yet).
+ * still degrades to "me" for the rare case that tab isn't currently visible to them (e.g. an
+ * hr/ceo actor whose role was somehow removed from ROLE_PERMISSIONS.canReviewLeave, or any
+ * other future queue-only role that lands in LEAVE_QUEUE_ONLY_ROLES without also being added
+ * there).
  *
  * <p>Takes `visibleIds` directly (not `user`/`requests`) so a caller that already computed them
  * via `visibleLeaveSurfaceTabIds` above never pays for the computation twice.

@@ -237,8 +237,12 @@ behaviour worth knowing. All stay recorded so they remain visible.
   nothing about the sales pipeline at all — it is neither run nor skipped-and-reported, just absent
   from that invocation's test count. Every OTHER multi-step flow — leave, a deposit confirmation —
   still has no end-to-end coverage anywhere since the mock suite was removed.
-- **Leave's successful approve transition is still not driven — but the old reason (the service,
-  not the seed) no longer applies.** This entry used to blame the demo seed alone, then was
+- **Leave's successful approve transition is now driven for ONE actor (ceo) but not in general
+  — and the old reason (the service, not the seed) no longer applies.** `write-leave-review.spec.js`
+  drives submit → ceo approve → re-read APPROVED → cancel-to-restore-quota, and the reject
+  direction alongside it, on requests it mints and retires itself (added 2026-09-01 with PR #885,
+  which put ceo in `REVIEW_ALL_ROLES`). The GENERAL case — hr approving, or any other
+  actor/path — is still not driven anywhere. This entry used to blame the demo seed alone, then was
   corrected to blame the service instead. Both were real, in order:
 
   1. *The seed, fixed by V139.* Every demo employee had `hire_date IS NULL`, and

@@ -235,10 +235,12 @@ describe('LeaveSurfacePage', () => {
     expect(screen.queryByRole('button', { name: 'ยื่นคำขอลา' })).toBeNull();
   });
 
-  it('ceo lands on "รอพิจารณา" by default (once visible) and does not see the "ยื่นคำขอลา" CTA', async () => {
+  it('ceo lands on "รอพิจารณา" by default and does not see the "ยื่นคำขอลา" CTA', async () => {
     const ceo = { employeeId: 2, name: 'ผู้บริหารระดับสูง', role: 'ceo', manager: false };
-    // ceo is not in ROLE_PERMISSIONS.canReviewLeave (['hr'] only), so "review" is only visible
-    // once an actionable row loads -- seed one under the ceo's own direct management.
+    // ceo is in ROLE_PERMISSIONS.canReviewLeave (2026-09-01 CEO leave-approval reach), so
+    // "review" is unconditionally visible without waiting on any row to load -- this fixture row
+    // (still under the ceo's own direct management) is kept as a realistic seed rather than
+    // removed, since it also exercises the per-row canReview fallback path.
     api.leave.list.mockResolvedValue({
       requests: [{
         id: 802, employeeId: 10, employeeName: 'ลูกทีมของ CEO', managerEmployeeId: 2, status: 'SUBMITTED',

@@ -108,6 +108,10 @@ function mockAllData() {
             id: 401, employeeName: 'พนักงาน ลาไม่มีผู้จัดการ', leaveTypeNameTh: 'ลากิจ',
             startDate: '2026-07-25', endDate: '2026-07-26', managerEmployeeId: 999,
           },
+          // CEO leave-approval reach (2026-09-01): managerEmployeeId here is someone OTHER than the
+          // CEO (55, not 999) -- kept in the fixture specifically to prove leaveRows no longer
+          // filters by FK-manager match. REVIEW_ALL_ROLES gaining "ceo" means the CEO can review
+          // EVERY ใบลา, so this row renders too now, unlike before this change.
           { id: 402, employeeName: 'พนักงาน ลามีผู้จัดการอื่น', managerEmployeeId: 55 },
         ],
       });
@@ -177,8 +181,9 @@ describe('CeoOverview', () => {
     expect(statCardValue('ตรวจปิดงาน')).toBe('1');
     // ค่าคอม: only MANAGER_APPROVED.
     expect(statCardValue('ค่าคอมรออนุมัติ')).toBe('1');
-    // OT (MANAGER_APPROVED + manager-less-direct-to-CEO) + ลา (manager-less-direct-to-CEO) = 2 + 1.
-    expect(statCardValue('OT·ลา รออนุมัติ')).toBe('3');
+    // OT (MANAGER_APPROVED + manager-less-direct-to-CEO) + ลา (ALL of it, CEO leave-approval reach,
+    // 2026-09-01) = 2 + 2.
+    expect(statCardValue('OT·ลา รออนุมัติ')).toBe('4');
     // ยอดขายเดือนนี้: sum of amountPaid for tickets closed this month (only TK-702).
     expect(statCardValue('ยอดขายเดือนนี้')).toBe('฿50,000.00');
 
@@ -209,8 +214,12 @@ describe('CeoOverview', () => {
     expect(screen.getByTestId('worklist-row-ot-202')).not.toBeNull();
     expect(screen.queryByTestId('worklist-row-ot-203')).toBeNull();
 
+    // Both leave rows now render (CEO leave-approval reach, 2026-09-01) -- 402's managerEmployeeId
+    // (55) is not the CEO's, but the CEO can review every ใบลา now, not just ones whose FK manager
+    // happens to be them. This is the one domain where "excludes rows the CEO cannot act on" (this
+    // test's title) no longer excludes anything -- there is no longer such a row for leave.
     expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
-    expect(screen.queryByTestId('worklist-row-leave-402')).toBeNull();
+    expect(screen.getByTestId('worklist-row-leave-402')).not.toBeNull();
   });
 
   it('deep-links the ราคา CTA to the pricing-request detail page instead of mutating inline', async () => {

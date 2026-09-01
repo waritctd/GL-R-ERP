@@ -51,16 +51,25 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //     isDirectManager). Asserting HR sees `canReview: true` where a peer sees `false` therefore
 //     exercises the real gate, without spending the one reviewable row in the database.
 //
-// This is the counterpart to #199: LeaveService.REVIEW_ALL_ROLES is {hr}, so HR is a leave
-// reviewer while OvertimeService refuses HR an overtime approval outright — two adjacent HR
-// surfaces with opposite answers for the same actor, which is precisely what an approximating mock
-// gets wrong.
+// This is the counterpart to #199: LeaveService.REVIEW_ALL_ROLES is {hr, ceo} (ceo joined
+// 2026-09-01, PR #885) — hr is a leave reviewer while OvertimeService refuses hr an overtime
+// approval outright, two adjacent HR surfaces with opposite answers for the same actor, which is
+// precisely what an approximating mock gets wrong. ceo's leave-reviewer reach is new, INTENDED
+// behaviour, not a divergence to guard against — "ceo can now approve and reject someone else's
+// leave" below pins it with a real mutation, on requests this file mints and retires itself, and
+// the denied-roles loop further down shrank to `['import', 'sales']` accordingly: asserting ceo
+// gets 403 there would now be pinning the OLD rule.
 //
-// STILL NOT COVERED here: the successful approve → APPROVED transition. The blocker recorded
-// above is gone — #submit can produce a reviewable row on demand now, the same way the
-// create-then-cancel test below does. Driving submit → approve → verify APPROVED → reconcile
-// quota end-to-end has simply not been built in this file; it is a real gap, not a technical
-// impossibility, and stays recorded in e2e-real/README.md as a follow-up rather than faked here.
+// STILL NOT FULLY COVERED here: the successful approve → APPROVED transition now has ONE driven
+// case — "ceo can now approve and reject someone else's leave" below, added alongside ceo joining
+// REVIEW_ALL_ROLES. It submits its own request, has ceo approve it, re-reads APPROVED off the
+// server (never the write response), and cancels through HR to give the quota back — then repeats
+// the same shape for reject, on a second request of its own. REJECTED needs no such cleanup: it
+// sits outside ACTIVE_QUOTA_STATUSES, and LeaveService#cancel refuses anything that is not
+// SUBMITTED or APPROVED (409), so a REJECTED row is already inert, the same way a CANCELLED one
+// is. What is NOT built is the GENERAL case — hr approving, or any actor/path other than this
+// one — so the broader submit → approve → reconcile-quota story stays recorded in
+// e2e-real/README.md as a follow-up rather than faked here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OWNER = 'employee'; // DEMO-EMP01 — the employee V21's SUBMITTED row belongs to.
@@ -119,6 +128,21 @@ async function seededSubmittedRequest(hrSession) {
       'is consumable: if an earlier run approved or cancelled it, re-seed before relying on this file'
   ).toBeTruthy();
   return pending;
+}
+
+/**
+ * Re-reads one request by id, through `session`, regardless of its current status — used to
+ * prove a mutation actually landed rather than trusting the write response. Unlike
+ * `seededSubmittedRequest`, this does not filter by status: the whole point of calling it is
+ * finding out what status the row is in NOW.
+ */
+async function requestById(session, id) {
+  const response = await session.get('/api/leave');
+  expect(response.status(), 'GET /api/leave').toBe(200);
+  const { requests } = await response.json();
+  const found = requests.find((request) => request.id === id);
+  expect(found, `leave request ${id} not found in the default list window`).toBeTruthy();
+  return found;
 }
 
 test.describe('leave quota and review authorization (real LeaveService)', () => {
@@ -193,12 +217,25 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     }
   });
 
-  test('HR is a leave reviewer while an unrelated peer is not', async () => {
+  test("HR and CEO are leave reviewers while an unrelated peer is not", async () => {
     // The positive half, read off the flag #approve/#reject themselves gate on.
     const pending = await seededSubmittedRequest(sessions.hr);
     expect(
       pending.canReview,
-      'LeaveService.REVIEW_ALL_ROLES is {hr} — the same role OvertimeService refuses outright (#199)'
+      'LeaveService.REVIEW_ALL_ROLES is {hr, ceo} — hr is also the role OvertimeService refuses ' +
+        'outright (#199)'
+    ).toBe(true);
+
+    // ceo joined REVIEW_ALL_ROLES on 2026-09-01 (PR #885) — same flag, same non-mutating read, so
+    // this reads V21's shared row without spending it, exactly like the hr check just above.
+    const ceoView = await sessions.ceo.get('/api/leave?status=SUBMITTED');
+    expect(ceoView.status()).toBe(200);
+    const { requests: ceoRequests } = await ceoView.json();
+    const ceoSees = ceoRequests.find((request) => request.id === pending.id);
+    expect(ceoSees, "ceo can see the pending request too").toBeTruthy();
+    expect(
+      ceoSees.canReview,
+      'ceo is now in REVIEW_ALL_ROLES and must see canReview: true, same as hr'
     ).toBe(true);
 
     // The owner is not a reviewer of their own request, which is the easy thing to get wrong.
@@ -210,16 +247,134 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     expect(sameRequest.canReview, 'an employee may not review their own leave').toBe(false);
   });
 
+  test("ceo can now approve and reject someone else's leave", async () => {
+    // Unlike the capability check above, this MUTATES — so unlike seededSubmittedRequest's
+    // callers, it cannot read V21's shared row: consuming it here would starve the denied-roles
+    // loop below (see this file's header). Each half below mints, acts on, and disposes of its
+    // OWN request, on its own date, so the run leaves the database exactly as it found it and the
+    // spec stays re-runnable — the same discipline `submitting VACATION now succeeds` uses above.
+
+    // ── approve ──────────────────────────────────────────────────────────────────────────────
+    const approveDay = workingDayFromToday(50);
+    const approveCreate = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
+      leaveTypeCode: 'VACATION',
+      startDate: approveDay,
+      endDate: approveDay,
+      reason: 'e2e-real: ceo review-gate, approve path (PR #885)',
+    });
+    const approveCreateBody = await approveCreate.text();
+    expect(
+      approveCreate.status(),
+      `POST /api/leave expected 200, got ${approveCreate.status()}: ${approveCreateBody}`
+    ).toBe(200);
+    const { request: toApprove } = JSON.parse(approveCreateBody);
+    expect(toApprove.status).toBe('SUBMITTED');
+
+    try {
+      const approveResult = await apiWrite(
+        sessions.ceo,
+        'post',
+        `/api/leave/${toApprove.id}/approve`,
+        {}
+      );
+      expect(
+        approveResult.status(),
+        "ceo joined REVIEW_ALL_ROLES (PR #885) and must now be able to approve someone else's " +
+          'leave'
+      ).toBe(200);
+
+      // Re-read rather than trust the write response — proves the mutation actually landed, the
+      // same discipline the denied-roles loop below applies to a refusal NOT mutating.
+      const approved = await requestById(sessions.hr, toApprove.id);
+      expect(approved.status, "ceo's approve must actually move the row to APPROVED").toBe(
+        'APPROVED'
+      );
+    } finally {
+      // APPROVED sits inside ACTIVE_QUOTA_STATUSES (see this file's header) — cancel gives the
+      // quota back, the same cleanup `submitting VACATION now succeeds` uses above. It works
+      // whether approve above succeeded (row is APPROVED) or failed (row is still SUBMITTED):
+      // LeaveService#cancel accepts a reviewer's cancel from either status.
+      const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${toApprove.id}/cancel`, {});
+      expect(
+        cleanup.status(),
+        'cleanup cancel must succeed or this spec is not re-runnable'
+      ).toBe(200);
+    }
+
+    // ── reject ───────────────────────────────────────────────────────────────────────────────
+    // Reject travels the same gate as approve; asserting only approve would leave the
+    // cheaper-to-get-wrong direction untested — the same reasoning the denied-roles loop below
+    // states for its own two calls. A SEPARATE request, not the one just approved-and-cancelled
+    // above: LeaveService#approve/#reject both require status == SUBMITTED, so reusing the
+    // already-CANCELLED row here would 409 for a reason that has nothing to do with what this
+    // half tests.
+    const rejectDay = workingDayFromToday(60);
+    const rejectCreate = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
+      leaveTypeCode: 'VACATION',
+      startDate: rejectDay,
+      endDate: rejectDay,
+      reason: 'e2e-real: ceo review-gate, reject path (PR #885)',
+    });
+    const rejectCreateBody = await rejectCreate.text();
+    expect(
+      rejectCreate.status(),
+      `POST /api/leave expected 200, got ${rejectCreate.status()}: ${rejectCreateBody}`
+    ).toBe(200);
+    const { request: toReject } = JSON.parse(rejectCreateBody);
+    expect(toReject.status).toBe('SUBMITTED');
+
+    // NOT a try/finally with an unconditional cancel like the approve half above: once reject
+    // succeeds the row is REJECTED, and LeaveService#cancel refuses anything that is not
+    // SUBMITTED or APPROVED (409 "ยกเลิกได้เฉพาะคำขอลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น") — an
+    // unconditional cancel would 409 on the happy path. REJECTED needs no rescue anyway: it sits
+    // outside ACTIVE_QUOTA_STATUSES, so leaving it behind leaks no quota, and it is not SUBMITTED
+    // so seededSubmittedRequest's `.find` above can never pick it up. The flag below exists only
+    // to cover the OTHER path: reject failing outright and leaking a quota-holding SUBMITTED row.
+    let rejectSucceeded = false;
+    try {
+      const rejectResult = await apiWrite(
+        sessions.ceo,
+        'post',
+        `/api/leave/${toReject.id}/reject`,
+        {}
+      );
+      expect(rejectResult.status(), 'ceo must be able to reject too, not only approve').toBe(200);
+      rejectSucceeded = true;
+
+      const rejected = await requestById(sessions.hr, toReject.id);
+      expect(rejected.status, "ceo's reject must actually move the row to REJECTED").toBe(
+        'REJECTED'
+      );
+    } finally {
+      if (!rejectSucceeded) {
+        const cleanup = await apiWrite(
+          sessions.hr,
+          'post',
+          `/api/leave/${toReject.id}/cancel`,
+          {}
+        );
+        expect(
+          cleanup.status(),
+          'best-effort cleanup of a leaked SUBMITTED row after an unexpected reject failure'
+        ).toBe(200);
+      }
+    }
+  });
+
   // The assertions that matter, written wrong-way-round. Each role gets its own test so one
   // failure does not hide the others. None of these mutates: a 403 is refused before it writes,
   // and the status is re-read afterwards to prove it.
-  for (const role of ['ceo', 'import', 'sales']) {
+  //
+  // ceo is deliberately NOT in this list any more: REVIEW_ALL_ROLES gained ceo on 2026-09-01
+  // (PR #885), so asserting 403 for ceo here would pin the OLD rule. Its positive coverage is
+  // the "ceo can now approve and reject someone else's leave" test above.
+  for (const role of ['import', 'sales']) {
     test(`${role} can neither approve nor reject someone else's leave`, async () => {
       const pending = await seededSubmittedRequest(sessions.hr);
 
       expect(
         (await apiWrite(sessions[role], 'post', `/api/leave/${pending.id}/approve`, {})).status(),
-        `${role} is neither in REVIEW_ALL_ROLES ({hr}) nor this employee's manager of record`
+        `${role} is neither in REVIEW_ALL_ROLES ({hr, ceo}) nor this employee's manager of record`
       ).toBe(403);
       // Reject travels the same gate; asserting only approve would leave the cheaper-to-get-wrong
       // direction untested.
