@@ -2220,7 +2220,8 @@ public class LeaveService {
      * THIS {@code user} -- a capability flag ("this actor could act on this employee's requests"),
      * computed from the SAME decision {@link #approve}/{@link #reject} already gate on ({@link
      * #canReviewAll}(user) OR {@link #isDirectManager}), not a role check: {@code REVIEW_ALL_ROLES}
-     * is {@code {hr}} only, but any ฝ่าย manager may review their own direct reports too. Exposed so
+     * is {@code {hr, ceo}} (ceo joined 2026-09-01), but any ฝ่าย manager may review their own
+     * direct reports too. Exposed so
      * the frontend stops inferring "can I approve this" from the actor's own role alone, which would
      * under-report for a department manager. It says nothing about whether THIS PARTICULAR request is
      * actionable right now -- {@link #approve}/{@link #reject} still enforce {@code status ==
