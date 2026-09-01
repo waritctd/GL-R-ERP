@@ -244,7 +244,7 @@ class OvertimeServiceTest {
             null,
             "Urgent delivery"
         );
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         when(holidayCalendar.isHoliday(workDate)).thenReturn(true);
         when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.HOLIDAY), eq(workDate.withDayOfMonth(1)), isNull()))
@@ -269,7 +269,7 @@ class OvertimeServiceTest {
         OffsetDateTime startAt = workDate.atTime(18, 0).atOffset(java.time.ZoneOffset.ofHours(7));
         SubmitOvertimeRequest request = new SubmitOvertimeRequest(
             10L, workDate, startAt, startAt.plusHours(2), null, "Urgent delivery");
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         // No holidayCalendar stub: Mockito's boolean default (false) means "not a holiday".
         when(overtimeRepository.create(eq(10L), eq(99L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY), eq(workDate.withDayOfMonth(1)), isNull()))
@@ -530,7 +530,7 @@ class OvertimeServiceTest {
     void managerApprovalIntoProcessedPayrollMonthIsRejected() {
         OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
         when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
         assertThatThrownBy(() -> overtimeService.approve(78L, new ApproveOvertimeRequest("ok", null), manager(99L, 5L)))
@@ -584,7 +584,7 @@ class OvertimeServiceTest {
     void managerApprovalIntoASeedCoveredPayrollMonthIsRejected() {
         OvertimeRequestDto submitted = requestDto(78L, 10L, "SUBMITTED");
         when(overtimeRepository.findById(78L)).thenReturn(Optional.of(submitted));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.payrollMonthProcessed(submitted.workDate().withDayOfMonth(1))).thenReturn(false);
         when(overtimeRepository.payrollMonthSeedCovered(submitted.workDate().withDayOfMonth(1))).thenReturn(true);
 
@@ -616,7 +616,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(managerApproved));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.of(new OvertimeAttendanceBounds(
                 OffsetDateTime.parse("2026-07-15T08:05:00+07:00"),
@@ -678,7 +678,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(rejected));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.reject(77L, 99L, "no budget")).thenReturn(1);
         UserPrincipal manager = manager(99L, 5L);
 
@@ -721,7 +721,7 @@ class OvertimeServiceTest {
     @Test
     void employeesCannotApproveOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
 
         assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest(null, null), user("employee", 10L)))
             .isInstanceOf(ApiException.class)
@@ -737,7 +737,7 @@ class OvertimeServiceTest {
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(managerApproved));
         // Employee 10 is in division 5 with no reports-to link; the actor is a division-5 manager.
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true, false)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.empty());
         when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
@@ -754,6 +754,61 @@ class OvertimeServiceTest {
             eq(77L), eq(88L), any(OvertimeCalculation.class), any(BigDecimal.class), eq("ok"));
     }
 
+    /**
+     * CEO-approval-reach follow-on (2026-09-01): decision-level twin of
+     * {@link #divisionManagerCanApproveOvertimeForDivisionPeer} with {@code reportsToExecutive}
+     * flipped true -- same division, same manager, only the new flag differs, so a mutation to the
+     * {@code && !access.reportsToExecutive()} term in {@code managesEmployee} fails exactly this
+     * test (plus its {@code cancel} twin below) and not the positive-control test above.
+     *
+     * <p>{@code hasManagerApprover} is deliberately left at this class's default {@code true} (see
+     * {@link #assumeAManagerStageExists}) rather than also stubbed false: {@code
+     * managerApproverRepository} and {@code overtimeRepository.findEmployeeAccess} are independent
+     * mocks here, so this isolates {@code managesEmployee}'s own decision (reached via {@code
+     * approve()}'s dispatch into {@code managerApprove} -&gt; {@code requireManager}) from {@code
+     * approve()}'s separate {@code hasManagerStage} branch -- see {@code
+     * OvertimeReportsToExecutiveIntegrationTest} for the real-DB proof that the two move together in
+     * production and {@code approve()} actually dispatches straight to {@code ceoDirectApprove} in
+     * that case.
+     */
+    @Test
+    void divisionManagerCannotApproveOvertimeForAnEmployeeReportingToAnExecutive() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
+        // Same division-5 shape as divisionManagerCanApproveOvertimeForDivisionPeer -- only
+        // reportsToExecutive differs.
+        when(overtimeRepository.findEmployeeAccess(10L))
+            .thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true, true)));
+
+        assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest("ok", null), manager(88L, 5L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+
+        verify(overtimeRepository, never()).managerApprove(
+            anyLong(), anyLong(), any(OvertimeCalculation.class), any(BigDecimal.class), anyString());
+    }
+
+    /**
+     * Same flag, a different {@code managesEmployee} caller: {@code cancel()} never goes through the
+     * {@code hasManagerStage} dispatch {@code approve()}/{@code reject()} do, so this is the most
+     * direct unit-level proof that the bypassed employee's division manager loses ALL of
+     * {@code managesEmployee}'s reach, not just the approval branch -- matching the plan's "the
+     * ผู้จัดการ cannot approve, list, cancel or submit-on-behalf for the bypassed employee".
+     */
+    @Test
+    void divisionManagerCannotCancelOvertimeForAnEmployeeReportingToAnExecutive() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
+        when(overtimeRepository.findEmployeeAccess(10L))
+            .thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 5L, true, true)));
+
+        assertThatThrownBy(() -> overtimeService.cancel(77L, new ReviewOvertimeRequest(null), manager(88L, 5L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+
+        verify(overtimeRepository, never()).cancel(anyLong(), any(), any());
+    }
+
     @Test
     void managerCannotCeoApproveManagerApprovedOvertime() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "MANAGER_APPROVED")));
@@ -767,7 +822,7 @@ class OvertimeServiceTest {
     @Test
     void divisionManagerCannotApproveOvertimeForOtherDivision() {
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "SUBMITTED")));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 7L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, null, 7L, true, false)));
 
         assertThatThrownBy(() -> overtimeService.approve(77L, new ApproveOvertimeRequest(null, null), manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
@@ -783,7 +838,7 @@ class OvertimeServiceTest {
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(cancelled));
         when(overtimeRepository.findEmployeeAccess(10L))
-            .thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+            .thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.cancel(77L, null, "owner cancel")).thenReturn(1);
 
         OvertimeRequestDto result = overtimeService.cancel(77L, new ReviewOvertimeRequest(" owner cancel "), user("employee", 10L));
@@ -821,6 +876,96 @@ class OvertimeServiceTest {
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /**
+     * CEO-approval-reach follow-on (2026-09-01 owner ruling): "whoever approves it can also cancel
+     * it". Headline case: round 1 left an APPROVED request for a manager-less employee cancellable
+     * by NOBODY (self-cancel is SUBMITTED-only; the division manager was correctly excluded by
+     * managesEmployee, but nothing else stood in for them). A ceo actor now gets manager-equivalent
+     * reach here. The actor is recorded as the canceller (not null) -- the CEO is acting in the
+     * manager's stead, not as the requester, same as an ordinary manager-cancel would record.
+     */
+    @Test
+    void ceoCanCancelApprovedOvertimeForAnEmployeeWithNoManagerStage() {
+        OvertimeRequestDto approved = requestDto(77L, 10L, "APPROVED");
+        OvertimeRequestDto cancelled = requestDto(77L, 10L, "CANCELLED");
+        when(overtimeRepository.findById(77L))
+            .thenReturn(Optional.of(approved))
+            .thenReturn(Optional.of(cancelled));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.empty());
+        // Overrides this class's assumeAManagerStageExists default (true) for employee 10L only --
+        // the manager-less case this owner ruling is about.
+        when(managerApproverRepository.hasManagerApprover(10L)).thenReturn(false);
+        when(overtimeRepository.cancel(77L, 500L, "ceo cancel")).thenReturn(1);
+
+        OvertimeRequestDto result = overtimeService.cancel(
+            77L, new ReviewOvertimeRequest("ceo cancel"), user("ceo", 500L));
+
+        assertThat(result.status()).isEqualTo("CANCELLED");
+        verify(overtimeRepository).cancel(77L, 500L, "ceo cancel");
+    }
+
+    /**
+     * Wrong-way-round #1 for the ruling above: the new reach is conditioned on
+     * {@code !hasManagerStage}, not on role alone. An employee who DOES have a reachable division
+     * manager must not also be cancellable by a ceo actor who is neither that manager nor the
+     * requester -- otherwise this ruling would have quietly handed the CEO a second, parallel
+     * cancel path for every ordinary request, not just the manager-less ones it was ruled for.
+     */
+    @Test
+    void ceoCannotCancelOvertimeForAnEmployeeWhoHasAManagerStage() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "APPROVED")));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.empty());
+        // hasManagerApprover(10L) stays at this class's default true (assumeAManagerStageExists) --
+        // this employee DOES have a manager stage, unlike the positive-control test above.
+
+        assertThatThrownBy(() -> overtimeService.cancel(
+                77L, new ReviewOvertimeRequest(null), user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(overtimeRepository, never()).cancel(anyLong(), any(), any());
+    }
+
+    /**
+     * Wrong-way-round #2: the ruling names {@code ceo} specifically, not "any reviewer-ish role".
+     * hr has broad reach over LEAVE (REVIEW_ALL_ROLES) but, per OvertimeService's own long-standing
+     * rule, NONE over overtime (see managesEmployee's Javadoc -- no hr bypass exists here at all) --
+     * an hr actor must still be refused for a manager-less employee they neither manage nor are.
+     */
+    @Test
+    void nonCeoActorCannotCancelManagerlessOvertimeEvenWithNoManagerStage() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 10L, "APPROVED")));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.empty());
+        when(managerApproverRepository.hasManagerApprover(10L)).thenReturn(false);
+
+        assertThatThrownBy(() -> overtimeService.cancel(
+                77L, new ReviewOvertimeRequest(null), user("hr", 600L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(overtimeRepository, never()).cancel(anyLong(), any(), any());
+    }
+
+    /**
+     * Regression control: self is deliberately excluded from ceoActingForManagerlessEmployee (see
+     * OvertimeService#cancel's own comment), so a ceo cancelling their OWN manager-less overtime
+     * keeps the ordinary, unwidened self-cancel rule -- SUBMITTED only. This ruling is about the CEO
+     * acting in a manager's stead for SOMEONE ELSE, not about widening CEO self-service.
+     */
+    @Test
+    void ceoCancellingTheirOwnManagerlessApprovedOvertimeStillGetsSelfCancelConflict() {
+        when(overtimeRepository.findById(77L)).thenReturn(Optional.of(requestDto(77L, 500L, "APPROVED")));
+        when(overtimeRepository.findEmployeeAccess(500L)).thenReturn(Optional.empty());
+        when(managerApproverRepository.hasManagerApprover(500L)).thenReturn(false);
+
+        assertThatThrownBy(() -> overtimeService.cancel(
+                77L, new ReviewOvertimeRequest(null), user("ceo", 500L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.CONFLICT);
+        verify(overtimeRepository, never()).cancel(anyLong(), any(), any());
     }
 
     // -------------------------------------------------------------------------------------------
@@ -898,7 +1043,7 @@ class OvertimeServiceTest {
         when(overtimeRepository.findById(77L))
             .thenReturn(Optional.of(submitted))
             .thenReturn(Optional.of(managerApproved));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
         when(overtimeRepository.findAttendanceBounds(eq(10L), any(OffsetDateTime.class), any(OffsetDateTime.class)))
             .thenReturn(Optional.empty());
         when(overtimeRepository.findSalaryBasisAsOf(10L, LocalDate.parse("2026-07-15")))
@@ -922,7 +1067,7 @@ class OvertimeServiceTest {
     void managerApprovalWithAMalformedDayTypeOverrideIsRejected() {
         OvertimeRequestDto submitted = requestDto(77L, 10L, "SUBMITTED");
         when(overtimeRepository.findById(77L)).thenReturn(Optional.of(submitted));
-        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true)));
+        when(overtimeRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new OvertimeEmployeeAccess(10L, 99L, 5L, true, false)));
 
         assertThatThrownBy(() -> overtimeService.approve(
                 77L, new ApproveOvertimeRequest("ok", "TUESDAY"), manager(99L, 5L)))

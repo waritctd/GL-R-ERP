@@ -75,15 +75,26 @@ public class OvertimeRepository {
     }
 
     public Optional<OvertimeEmployeeAccess> findEmployeeAccess(long employeeId) {
-        return jdbc.query("""
-            SELECT employee_id, reports_to_employee_id, division_id, is_active
-              FROM hr.employee
-             WHERE employee_id = :employeeId
-            """, Map.of("employeeId", employeeId), (rs, rowNum) -> new OvertimeEmployeeAccess(
+        return jdbc.query(
+                """
+                SELECT e.employee_id, e.reports_to_employee_id, e.division_id, e.is_active,
+                """
+                // CEO-approval-reach follow-on (2026-09-01): the SAME fragment
+                // ManagerApproverRepository splices into its own hasManagerApproverSql, so this
+                // column and the routing decision can never drift -- see
+                // OvertimeEmployeeAccess#reportsToExecutive's Javadoc.
+                + ManagerApproverRepository.reportsToExecutiveSql("e") + " AS reports_to_executive"
+                + """
+
+                  FROM hr.employee e
+                 WHERE e.employee_id = :employeeId
+                """,
+                Map.of("employeeId", employeeId), (rs, rowNum) -> new OvertimeEmployeeAccess(
                 rs.getLong("employee_id"),
                 nullableLong(rs, "reports_to_employee_id"),
                 nullableLong(rs, "division_id"),
-                rs.getBoolean("is_active")
+                rs.getBoolean("is_active"),
+                rs.getBoolean("reports_to_executive")
             ))
             .stream()
             .findFirst();
@@ -91,13 +102,20 @@ public class OvertimeRepository {
 
     public List<OvertimeEmployeeOption> findEmployeeOptions(
             Long managerEmployeeId, Long managerDivisionId, boolean includeAll) {
-        StringBuilder sql = new StringBuilder("""
+        StringBuilder sql = new StringBuilder(
+            """
             SELECT e.employee_id,
                    e.employee_code,
                    concat_ws(' ', e.first_name_th, e.last_name_th) AS employee_name,
                    dep.name_th AS department_name,
                    e.reports_to_employee_id,
-                   e.division_id
+                   e.division_id,
+            """
+            // CEO-approval-reach follow-on (2026-09-01): the SAME fragment findEmployeeAccess
+            // splices in, so this column and the routing decision can never drift.
+            + ManagerApproverRepository.reportsToExecutiveSql("e") + " AS reports_to_executive"
+            + """
+
               FROM hr.employee e
               LEFT JOIN hr.department dep ON dep.department_id = e.department_id
              WHERE e.is_active = TRUE
@@ -120,8 +138,15 @@ public class OvertimeRepository {
             long employeeId = rs.getLong("employee_id");
             Long divisionId = nullableLong(rs, "division_id");
             boolean self = managerEmployeeId != null && employeeId == managerEmployeeId;
-            boolean directReport =
-                managerDivisionId != null && managerDivisionId.equals(divisionId) && !self;
+            // CEO-approval-reach follow-on (2026-09-01): an employee reporting straight to an active
+            // executive is never a directReport for THIS division manager's picker either -- their
+            // submit-on-behalf gate (OvertimeService.resolveTargetEmployee -> managesEmployee)
+            // already refuses this manager for that employee, so offering them here (submitEmployee
+            // Options filters on self || directReport, see OvertimePanel.jsx) would be a picker
+            // choice that then 403s, the exact failure this method's own comment above exists to
+            // prevent.
+            boolean directReport = managerDivisionId != null && managerDivisionId.equals(divisionId)
+                && !self && !rs.getBoolean("reports_to_executive");
             return new OvertimeEmployeeOption(
                 employeeId,
                 rs.getString("employee_code"),
@@ -198,14 +223,23 @@ public class OvertimeRepository {
         }
         if (filter.managerEmployeeId() != null) {
             StringBuilder scope = new StringBuilder(
-                // Own requests, plus the whole ฝ่าย for a ผู้จัดการ. reports_to is deliberately not
-                // a disjunct here: it no longer grants approval rights (see
-                // OvertimeService.managesEmployee), and a list that showed rows the viewer cannot
-                // act on is how a reviewer ends up staring at a request with no buttons.
+                // Own requests, plus the whole ฝ่าย for a ผู้จัดการ -- MINUS anyone in that ฝ่าย who
+                // reports straight to an active executive (CEO-approval-reach follow-on,
+                // 2026-09-01): that employee's manager stage does not exist (see
+                // ManagerApproverRepository's rule 3 / reportsToExecutiveSql), so scoping them into
+                // this list would show the manager a row with no buttons they can press -- exactly
+                // the failure the paragraph below already warns about; rule 3 is the same shape as
+                // rule 2 (a ผู้จัดการ's own request), just not previously reflected in this SQL
+                // scope. reports_to is deliberately not a disjunct here: it no longer grants
+                // approval rights (see OvertimeService.managesEmployee), and a list that showed rows
+                // the viewer cannot act on is how a reviewer ends up staring at a request with no
+                // buttons.
                 " AND (o.employee_id = :managerEmployeeId");
             params.addValue("managerEmployeeId", filter.managerEmployeeId());
             if (filter.managerDivisionId() != null) {
-                scope.append(" OR e.division_id = :managerDivisionId");
+                scope.append(" OR (e.division_id = :managerDivisionId AND NOT ")
+                    .append(ManagerApproverRepository.reportsToExecutiveSql("e"))
+                    .append(")");
                 params.addValue("managerDivisionId", filter.managerDivisionId());
             }
             scope.append(")");

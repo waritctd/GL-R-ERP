@@ -3525,13 +3525,25 @@ function dashboardPending(user, ticketSummary) {
   // #199). Both still match `status = 'SUBMITTED'` only; MANAGER_APPROVED is
   // deliberately NOT counted for either — it is awaiting the CEO, not the
   // viewer, and the Java query excludes it — counting it here would make the
-  // mock read higher than production. canReviewLeave has no ceo bypass (only
-  // hr) — it does not need one: the isHr||manager||employeeSelf gate above is
-  // already false for ceo (canViewCompany short-circuits both `manager` and
+  // mock read higher than production. canReviewLeave gained a ceo bypass too
+  // (CEO leave-approval reach, 2026-09-01), but this line does not depend on
+  // it either way: the isHr||manager||employeeSelf gate above is already
+  // false for ceo (canViewCompany short-circuits both `manager` and
   // `employeeSelf` on the Java side — see DashboardService#pendingVisibility),
-  // so this line is never reached for ceo, unchanged by this fix.
+  // so canReviewLeave is never reached for ceo here regardless of its own
+  // bypass list.
+  // CEO-approval-reach follow-on (2026-09-01): when this is the DIVISION-manager scope, exclude a
+  // request from an employee reporting straight to an active executive -- mirrors
+  // DashboardRepository#countOvertime's own new exclusion (that manager cannot act on it, see
+  // OvertimeRepository#findRequests). Deliberately NOT applied to the isHr/employeeSelf branches,
+  // matching the Java scoping: hr's badge is company-wide (isAll(), unaffected -- hr genuinely has
+  // no OT-approval reach at all, see canReviewOvertime's own comment, so this scope was never about
+  // "can act on"), and employeeSelf is the viewer's own outstanding items regardless of who can
+  // approve them.
   const overtime = isHr || manager || employeeSelf
-    ? db.overtimeRequests.filter((request) => employeeIds.has(request.employeeId) && request.status === 'SUBMITTED').length
+    ? db.overtimeRequests.filter((request) => employeeIds.has(request.employeeId)
+        && request.status === 'SUBMITTED'
+        && (!manager || !reportsToActiveExecutive(request.employeeId))).length
     : 0;
   const leave = isHr || manager || employeeSelf
     ? db.leaveRequests.filter((request) => request.status === 'SUBMITTED'
@@ -3584,12 +3596,12 @@ function managerIdForEmployee(employee) {
   return employee?.managerId ?? null;
 }
 
-// Mirrors LeaveService.canReviewEmployee()/isDirectManager() — hr bypass, else
-// stored-FK match on an *active* target employee. No division fallback: unlike
-// overtime, a ฝ่าย manager cannot review a colleague's leave just by sharing a
-// division.
+// Mirrors LeaveService.canReviewEmployee()/isDirectManager() — hr/ceo bypass
+// (REVIEW_ALL_ROLES, CEO leave-approval reach 2026-09-01), else stored-FK match
+// on an *active* target employee. No division fallback: unlike overtime, a
+// ฝ่าย manager cannot review a colleague's leave just by sharing a division.
 function canReviewLeave(user, employeeId) {
-  if (user.role === 'hr') return true;
+  if (user.role === 'hr' || user.role === 'ceo') return true;
   const employee = findEmployee(employeeId);
   return Boolean(employee?.active && user.employeeId
     && managerIdForEmployee(employee) === user.employeeId);
@@ -3608,25 +3620,62 @@ function canReviewLeave(user, employeeId) {
 // Mirrors OvertimeService.managesEmployee(): ฝ่าย manager sharing the division, self excluded.
 // reports_to is deliberately NOT a branch here any more -- it stopped granting approval rights when
 // overtime moved to the division-only rule AttendanceService.resolveScope already used.
+//
+// CEO-approval-reach follow-on (2026-09-01): reports_to is back, but ONLY to REMOVE a manager,
+// never to grant one -- see reportsToActiveExecutive's own comment. This is not a reversal of the
+// paragraph above; it mirrors OvertimeService.managesEmployee's own "removes, never grants" nuance.
 function canReviewOvertime(user, employeeId) {
   if (!user.employeeId || employeeId === user.employeeId) return false;
   const employee = findEmployee(employeeId);
   return Boolean(dashboardManager(user)
     && dashboardDivisionId(user) != null
+    && !reportsToActiveExecutive(employeeId)
     && dashboardDivisionId(user) === employee.divisionId);
 }
 
-// Mirrors ManagerApproverRepository.hasManagerApproverSql(). Two rules: a ผู้จัดการ's own request
-// has no manager stage, and otherwise there must be an ACTIVE ผู้จัดการ in the same ฝ่าย.
-// Position matching mirrors DivisionAccessPolicy.isManager -- strip whitespace, substring-match.
+// Mirrors ManagerApproverRepository.hasManagerApproverSql(). Three rules: a ผู้จัดการ's own
+// request has no manager stage, reporting to an active executive ALSO has no manager stage (CEO-
+// approval-reach follow-on, 2026-09-01 -- see reportsToActiveExecutive below), and otherwise there
+// must be an ACTIVE ผู้จัดการ in the same ฝ่าย. Position matching mirrors
+// DivisionAccessPolicy.isManager -- strip whitespace, substring-match.
 function isManagerPosition(employee) {
   return String(employee?.positionTh || '').replace(/\s+/g, '').includes('ผู้จัดการ');
+}
+
+// CEO-approval-reach follow-on (2026-09-01): substring-match "กรรมการ", the SAME style
+// isManagerPosition uses for "ผู้จัดการ" -- mirrors DivisionAccessPolicy's isExecutive helper.
+function isExecutivePosition(employee) {
+  return String(employee?.positionTh || '').replace(/\s+/g, '').includes('กรรมการ');
+}
+
+// Mirrors ManagerApproverRepository's REPORTS_TO_EXECUTIVE rule -- POSITION-based disjunct only.
+// KNOWN GAP, not an oversight: the real SQL is ALSO true for a boss in division source_code 'md'
+// regardless of position; this function only implements the "กรรมการ" position disjunct, not the
+// division-code one. (Corrected 2026-09-01: this comment used to justify the gap by claiming
+// db.employees carries no division source_code -- "only a numeric divisionId". That is false --
+// employee.divisionId here IS a string CODE, one of SAL/WHL/PRC/FIN/HRD/IT, see the `divisions`
+// array in demoData.js -- so a source_code-style match is possible in principle. The gap is simply
+// that it is not implemented, not that the data shape forbids it; 'md' is not one of demoData's six
+// codes regardless, so it would never fire against this fixture set even if it were.)
+//
+// UNREACHABLE IN MOCK MODE, not just under-covered: no demo employee's managerId ever points at a
+// กรรมการ-titled employee. demoData.js sets managerId to null for every ผู้จัดการฝ่าย ("Division
+// managers have no row above them in this seed (no MD employee row)") and to their own division's
+// ผู้จัดการฝ่าย for everyone else -- never to an executive. So this function always returns false
+// under VITE_USE_MOCKS=true; it is dead code in mock mode, not dev/QA coverage for the
+// executive-bypass rule. That rule is verified only by the real-DB integration test
+// (OvertimeReportsToExecutiveIntegrationTest), never by clicking through the mock.
+function reportsToActiveExecutive(employeeId) {
+  const employee = findEmployee(employeeId);
+  const boss = employee?.managerId ? db.employees.find((item) => item.id === employee.managerId) : null;
+  return Boolean(boss && boss.isActive !== false && isExecutivePosition(boss));
 }
 
 function hasManagerApproverFor(employeeId) {
   const employee = findEmployee(employeeId);
   if (!employee) return true; // fail closed: withhold the CEO bypass rather than grant it
   if (isManagerPosition(employee)) return false;
+  if (reportsToActiveExecutive(employeeId)) return false;
   if (employee.divisionId == null) return false;
   return db.employees.some((peer) => peer.divisionId === employee.divisionId
     && peer.isActive !== false
@@ -5939,8 +5988,14 @@ export const api = {
           || (managerDivisionId != null && employee.divisionId === managerDivisionId))
         .map((employee) => {
           const self = employee.id === user.employeeId;
-          const directReport = managerIdForEmployee(employee) === user.employeeId
-            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self);
+          // CEO-approval-reach follow-on (2026-09-01): an employee reporting straight to an active
+          // executive is never a directReport, mirroring OvertimeRepository.findEmployeeOptions'
+          // own fix -- offering them in submitEmployeeOptions (OvertimePanel.jsx filters on
+          // self || directReport) would be a picker choice create() then refuses (canReviewOvertime
+          // already excludes them, see this file's own comment on that function).
+          const directReport = (managerIdForEmployee(employee) === user.employeeId
+            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self))
+            && !reportsToActiveExecutive(employee.id);
           return {
             employeeId: employee.id,
             employeeCode: employee.code,
@@ -6136,7 +6191,16 @@ export const api = {
       const user = requireSession();
       const request = db.overtimeRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
-      const approver = canReviewOvertime(user, request.employeeId);
+      const managerApprover = canReviewOvertime(user, request.employeeId);
+      // CEO-approval-reach follow-on (2026-09-01 owner ruling): "whoever approves it can also
+      // cancel it" -- mirrors OvertimeService.cancel's ceoActingForManagerlessEmployee branch. Self
+      // is deliberately excluded here too (canReviewOvertime already excludes self for the manager
+      // branch; this mirrors that same shape): a ceo cancelling their OWN overtime is untouched by
+      // this ruling.
+      const ceoForManagerless = user.role === 'ceo'
+        && request.employeeId !== user.employeeId
+        && !hasManagerApproverFor(request.employeeId);
+      const approver = managerApprover || ceoForManagerless;
       if (!approver && request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!approver && request.status !== 'SUBMITTED') fail('พนักงานยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
       if (!['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)) fail('ยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น', 409);

@@ -68,9 +68,13 @@ public final class PendingApproverSql {
      *
      * <p>Excludes anyone whose position carries "กรรมการ", mirroring {@code roleFor}'s precedence:
      * {@code md}/executive is checked BEFORE {@code hr}, so an hr-division employee who is also an
-     * executive resolves to role {@code ceo} in Java, not {@code hr} -- {@code REVIEW_ALL_ROLES}
-     * for leave is {@code {"hr"}} only, so naming such a person here would point at someone who
-     * cannot actually approve (review #pending-approver-info).
+     * executive resolves to role {@code ceo} in Java, not {@code hr}. Naming such a person here
+     * would mislabel who is waiting on the request -- "HR (คุณX)" for someone whose actual role is
+     * {@code ceo} -- which is wrong regardless of approval reach: since {@code REVIEW_ALL_ROLES}
+     * gained {@code ceo} alongside {@code hr} (CEO leave-approval reach, 2026-09-01), this person
+     * can approve either way, so the exclusion was never really about "cannot approve" -- it is,
+     * and always was, purely about which role label is the correct one to show (review
+     * #pending-approver-info).
      */
     public static final String SINGLE_ACTIVE_HR_NAME_SQL = """
         (SELECT CASE WHEN COUNT(*) = 1

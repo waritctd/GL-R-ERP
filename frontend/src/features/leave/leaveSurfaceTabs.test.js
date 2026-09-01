@@ -67,8 +67,9 @@ describe('visibleLeaveSurfaceTabIds', () => {
   });
 
   it('a non-HR manager (not in ROLE_PERMISSIONS.canReviewLeave) DOES see "review" once a report\'s request loads', () => {
-    // THE load-bearing case: canReviewLeave is ['hr'] only, but LeaveService.canReviewEmployee
-    // grants ANY direct manager review rights over their own reports.
+    // THE load-bearing case: canReviewLeave is ['hr', 'ceo'] (ceo added 2026-09-01, the CEO
+    // leave-approval reach), but a plain division manager is in neither -- LeaveService.
+    // canReviewEmployee grants ANY direct manager review rights over their own reports regardless.
     expect(visibleLeaveSurfaceTabIds(nonHrManager, [submittedRequestUnderNonHrManager]))
       .toEqual(['me', 'review']);
   });
@@ -100,9 +101,13 @@ describe('visibleLeaveSurfaceTabIds', () => {
     });
 
     // THE case the "กฎการลา" removal created, and the reason `team` short-circuits on role.
-    // A ceo is NOT in ROLE_PERMISSIONS.canReviewLeave, so 'review' needs loaded rows to appear;
-    // 'me' is hidden for them; 'rules' no longer exists. Before the guard, that combination left a
-    // ceo with an EMPTY tab list on first paint -- every panel inactive, i.e. a blank page.
+    // Before the 2026-09-01 CEO leave-approval reach, a ceo was NOT in
+    // ROLE_PERMISSIONS.canReviewLeave, so 'review' needed loaded rows to appear; 'me' is hidden
+    // for them; 'rules' no longer exists. Before the guard, that combination left a ceo with an
+    // EMPTY tab list on first paint -- every panel inactive, i.e. a blank page. ceo is in
+    // canReviewLeave now, so 'review' is unconditionally visible too -- this test still holds
+    // (and still guards a future role that regains the old "queue-only, not in canReviewLeave"
+    // shape).
     it('a ceo mid-first-load (no requests, no employeeOptions) still has at least one visible tab', () => {
       const visible = visibleLeaveSurfaceTabIds(ceo, [], []);
       expect(visible.length).toBeGreaterThan(0);
@@ -195,8 +200,10 @@ describe('resolveLeaveSurfaceTab', () => {
   });
 
   it('degrades to DEFAULT_LEAVE_SURFACE_TAB_ID when preferredDefaultId is not currently visible', () => {
-    // e.g. a ceo actor -- not in ROLE_PERMISSIONS.canReviewLeave -- with zero actionable rows
-    // loaded yet, so "review" itself is hidden.
+    // e.g. a queue-only role not in ROLE_PERMISSIONS.canReviewLeave (hr/ceo both are, as of the
+    // 2026-09-01 CEO leave-approval reach) with zero actionable rows loaded yet, so "review"
+    // itself is hidden. Exercised directly against a hand-built visibleIds list rather than a
+    // real role, so this test does not depend on which roles are currently in that array.
     expect(resolveLeaveSurfaceTab(null, ['me'], 'review')).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
   });
 

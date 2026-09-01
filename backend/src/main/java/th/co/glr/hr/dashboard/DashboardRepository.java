@@ -9,6 +9,7 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.employee.ManagerApproverRepository;
 
 @Repository
 public class DashboardRepository {
@@ -392,13 +393,42 @@ public class DashboardRepository {
             """, scope);
     }
 
+    /**
+     * Division scope gets one extra exclusion CEO-approval-reach follow-on (2026-09-01) added:
+     * an employee who reports straight to an active executive has no manager stage at all (see
+     * {@code ManagerApproverRepository}'s rule 3 / {@code OvertimeRepository#findRequests}, which
+     * this badge must agree with -- it links to {@code /overtime}), so a division manager cannot
+     * act on their request and it must not inflate the manager's badge either. This does NOT
+     * reopen the "countOvertime stays division-scoped on purpose" ruling (PR #846): the counter
+     * stays division-scoped, just minus rows with no manager stage in that division.
+     *
+     * <p>Deliberately scoped to {@code scope.isDivision()} only -- {@code whereEmployeeScope} is
+     * shared by every {@code countEmployeeScoped} caller (leave, profile requests, commissions
+     * too), so the exclusion is spliced into THIS method's own SQL text rather than into that
+     * shared helper, or it would incorrectly narrow those unrelated counters as well. hr/ceo's
+     * {@code isAll()} scope (both share {@code employeeScope} with {@link #countProfileRequests},
+     * which hr genuinely does act on -- see {@link DashboardService#pendingEmployeeScope}) is left
+     * untouched on purpose, but the two roles get there for DIFFERENT reasons and it is worth
+     * knowing which: ceo genuinely can act on a manager-less request directly ({@code
+     * OvertimeService#ceoDirectApprove}), so excluding it would undercount their real queue. hr has
+     * NO overtime-approval reach at all ({@code OvertimeService} has no hr bypass -- see {@code
+     * canReviewOvertime}'s mirror in {@code mockApi.js}); hr's overtime badge has only ever been
+     * informational, matching their {@code VIEW_ALL_ROLES} read-only visibility into the full list,
+     * so this exclusion would not "correct" anything for hr either way -- left alone because
+     * scoping it division-only would be the wrong shape for a badge that was never division-scoped
+     * to begin with, not because hr has a stake in the executive-bypass rule.
+     */
     private long countOvertime(DashboardQueryScope scope) {
-        return countEmployeeScoped("""
+        String sql = """
             SELECT COUNT(*)
               FROM hr.overtime_request r
               JOIN hr.employee e ON e.employee_id = r.employee_id
              WHERE r.status = 'SUBMITTED'
-            """, scope);
+            """;
+        if (scope.isDivision()) {
+            sql += " AND NOT " + ManagerApproverRepository.reportsToExecutiveSql("e");
+        }
+        return countEmployeeScoped(sql, scope);
     }
 
     /**
@@ -417,8 +447,12 @@ public class DashboardRepository {
      * (defect D3), and why this predicate deliberately includes the caller's OWN requests (defect
      * D4) even though {@code LeaveRepository#countReviewableSubmitted} -- the reviewer-eligibility
      * count, a different question -- deliberately excludes them. See
-     * {@link DashboardService#leaveScope} for why ceo still lands in the {@code all()} branch
-     * despite {@code LeaveService#canReviewAll} being hr-only.
+     * {@link DashboardService#leaveScope} for why ceo still lands in the {@code all()} branch --
+     * that branch is {@code DashboardService}'s OWN {@code HR_APPROVAL_ROLES} constant (still
+     * {@code {"hr"}} only) needing an explicit extra ceo disjunct alongside it, a decision
+     * independent of {@code LeaveService#canReviewAll}. (That method itself is no longer hr-only
+     * either -- {@code REVIEW_ALL_ROLES} gained {@code ceo} on 2026-09-01 -- but this class does not
+     * read from it, so the two facts are unrelated.)
      */
     private long countLeave(DashboardQueryScope scope) {
         return countEmployeeScoped("""

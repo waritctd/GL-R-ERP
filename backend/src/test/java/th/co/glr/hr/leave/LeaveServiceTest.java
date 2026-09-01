@@ -596,6 +596,47 @@ class LeaveServiceTest {
             .isEqualTo(HttpStatus.FORBIDDEN);
     }
 
+    /**
+     * CEO leave-approval reach (2026-09-01): REVIEW_ALL_ROLES gained "ceo" alongside "hr". Same
+     * fixture shape as {@link #hrCanApproveLeave}, role swapped, so a mutation that reverted the
+     * constant would fail exactly this test (and the mirroring integration test) without touching
+     * hrCanApproveLeave.
+     */
+    @Test
+    void ceoCanApproveLeave() {
+        LeaveRequestDto submitted = requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        LeaveRequestDto approved = requestDto(77L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00");
+        when(leaveRepository.findById(77L))
+            .thenReturn(Optional.of(submitted))
+            .thenReturn(Optional.of(approved));
+        when(leaveRepository.approve(77L, 30L, "ok")).thenReturn(1);
+        UserPrincipal ceo = user("ceo", 30L);
+
+        LeaveRequestDto result = leaveService.approve(77L, new ReviewLeaveRequest("ok"), ceo);
+
+        assertThat(result.status()).isEqualTo("APPROVED");
+        verify(leaveRepository).approve(77L, 30L, "ok");
+        verify(auditService).record(ceo, "APPROVE_LEAVE_REQUEST", "leave_request", 77L, submitted, approved);
+    }
+
+    /**
+     * Wrong-way-round for the same change: REVIEW_ALL_ROLES must not have widened past "hr"/"ceo".
+     * Employee 10's request has a DIFFERENT manager of record (99L), so a "sales" actor who is
+     * neither in REVIEW_ALL_ROLES nor employee 10's direct manager must still 403 -- proves the
+     * reach stops at ceo rather than becoming "any role".
+     */
+    @Test
+    void aNonReviewerRoleCannotApproveSomeoneElsesLeave() {
+        when(leaveRepository.findById(77L)).thenReturn(Optional.of(
+            requestDto(77L, 10L, "SUBMITTED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "2.00", "0.00")));
+        when(leaveRepository.findEmployeeAccess(10L)).thenReturn(Optional.of(new LeaveEmployeeAccess(10L, 99L, true)));
+
+        assertThatThrownBy(() -> leaveService.approve(77L, new ReviewLeaveRequest(null), user("sales", 55L)))
+            .isInstanceOf(ApiException.class)
+            .extracting(exception -> ((ApiException) exception).getStatus())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
     @Test
     void leaveRequestsCanNowSpanQuotaYears() {
         // V118 cross-year quota fix (2026-08-02): this used to 400 (leaveRequestsCannotSpanQuotaYears,

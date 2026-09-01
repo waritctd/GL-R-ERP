@@ -455,7 +455,8 @@ export const ROLE_PERMISSIONS = {
   // request; everyone else is scoped to self + managed employees, same shape as overtime.
   canViewAllSpecialMoney: ['hr', 'ceo'],
   canViewAllLeave: ['hr', 'ceo'],
-  canReviewLeave: ['hr'],
+  // CEO leave-approval reach (2026-09-01), mirrors LeaveService.REVIEW_ALL_ROLES gaining "ceo".
+  canReviewLeave: ['hr', 'ceo'],
   // Sales module
   // sales_manager is read+comment oversight ONLY (a project-manager-style
   // follow-up role for the sales team) — it must never be added to

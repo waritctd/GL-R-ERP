@@ -519,10 +519,16 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
-  // A ฝ่าย manager's list is already scoped server-side to their division, so any request they see
-  // (other than their own) is one they may review. reports_to is NOT consulted: it stopped granting
-  // approval rights when overtime moved to the division-only rule attendance already used, and a
-  // button shown on the strength of it would just 403.
+  // A ฝ่าย manager's list is scoped server-side to their division (OvertimeRepository.findRequests),
+  // but that scoping alone does NOT mean "this manager may review this request" -- a fellow
+  // ผู้จัดการ's own request, or (CEO-approval-reach follow-on, 2026-09-01) one from an employee who
+  // reports straight to an active executive, can still have no manager stage at all even though it
+  // is in this manager's division. managesRequest only answers "same division, not my own row";
+  // hasManagerStage(request) below is what actually decides whether THIS manager -- as opposed to
+  // nobody, or the CEO -- may act on it. Callers must AND the two together (see canManagerApprove/
+  // canManagerCancel below), never trust managesRequest alone. reports_to is NOT otherwise
+  // consulted here: it stopped granting approval rights when overtime moved to the division-only
+  // rule attendance already used, and a button shown on the strength of it would just 403.
   function managesRequest(request) {
     return Boolean(user.manager && Number(request.employeeId) !== Number(user.employeeId));
   }
@@ -548,8 +554,18 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     return canManagerApprove(request) || canCeoApprove(request);
   }
 
+  // Gated the same way as canManagerApprove above (Opus review finding B, 2026-09-01): this used to
+  // check only managesRequest, so a fellow ผู้จัดการ's own request, or an employee reporting to an
+  // active executive, could render a ยกเลิก button for a manager whose cancel() call would then 403.
+  // Fixing the server-side list scope (OvertimeRepository.findRequests) already keeps the
+  // executive-report row out of this manager's `requests` in the first place, but this gate is kept
+  // in step regardless -- canManagerApprove and canManagerCancel are siblings and must read the same
+  // way, and a request reached by any other means (e.g. a stale client cache) must not show a button
+  // the server will refuse.
   function canManagerCancel(request) {
-    return ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status) && managesRequest(request);
+    return ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'].includes(request.status)
+      && hasManagerStage(request)
+      && managesRequest(request);
   }
 
   // Always confirm before cancelling -- matches the self-cancel pattern in
