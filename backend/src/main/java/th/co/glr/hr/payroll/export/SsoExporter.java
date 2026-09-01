@@ -53,9 +53,16 @@ import th.co.glr.hr.config.AppProperties;
  *       employee at ค่าจ้าง 124,849 against a เงินสมทบ of 875.</li>
  *   <li><b>เงินสมทบ rounding</b> — {@link RoundingMode#HALF_UP} to whole baht PER INSURED PERSON —
  *       <b>พ.ร.บ.ประกันสังคม พ.ศ. 2533 มาตรา 46 วรรคท้าย</b>: "สำหรับเศษของเงินสมทบที่มีจำนวนตั้งแต่
- *       ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท ถ้าน้อยกว่านั้นให้ปัดทิ้ง". This is FILING-ONLY: it does not touch
- *       {@code payroll_line.social_security} or the payslip deduction, which keep the unrounded
- *       amount (e.g. ฿562.50) while the employer remits the filed whole-baht ฿563.</li>
+ *       ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท ถ้าน้อยกว่านั้นให้ปัดทิ้ง". <b>Whether this rounding changes
+ *       anything is time-dependent, so do not read it as "filing-only".</b> Until PR #834 (merged
+ *       2026-08-25, backend image {@code v2026-08-25}) it was: the engine stored and deducted the
+ *       unrounded ฿562.50 while the employer remitted the filed ฿563. #834 moved the same rounding
+ *       into {@code PayrollCalculator}, so a period processed on or after that deploy already
+ *       carries whole baht and this rounding is IDEMPOTENT. #834 shipped no backfill, so earlier
+ *       periods keep their unrounded stored contribution and this is what CORRECTS them at export
+ *       time — it never rewrites the stored value. Real prod split (2026-09-01): May/June
+ *       (processed 2026-07) still hold 4 satang-bearing rows each, min ฿82.50; July/August
+ *       (processed 2026-08) are whole baht throughout.</li>
  *   <li><b>ค่าจ้าง rounding</b> — also HALF_UP to whole baht per person (owner ruling 2026-08-31).
  *       Unlike the contribution rounding this is NOT stated by any statute this codebase has found;
  *       it is inferred from the reference filing, where all 27 ค่าจ้าง figures were integral (a
