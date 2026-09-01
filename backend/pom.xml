@@ -102,7 +102,7 @@
         <dependency>
             <groupId>com.resend</groupId>
             <artifactId>resend-java</artifactId>
-            <version>4.13.0</version>
+            <version>4.22.0</version>
         </dependency>
         <!-- Provides JavaMailSenderImpl + Jakarta Mail for SmtpMailer (app.mail.provider=smtp).
              SmtpMailer builds its own sender from app.mail.smtp.*; no spring.mail.* auto-config bean
