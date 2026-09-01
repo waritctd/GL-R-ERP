@@ -12,22 +12,55 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeDto;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 
 @Service
 public class ProfileRequestService {
     private static final Set<String> SUPPORTED_FIELDS = Set.of("phone", "email", "address", "emergency");
 
+    // Byte-identical to the PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED entries that used to
+    // live in NotificationRepository#TICKET_EVENT_TITLES. That map is read only by the sales-style
+    // notifyEmployeeAt/notifyByRoleInternal transport (NotificationRepository#ticketEventTitle) --
+    // now that update() below calls NotificationService#notify directly, which takes its subject as
+    // an explicit parameter rather than resolving one from a type code, the title has to live here
+    // instead. See this class's constructor Javadoc for why the transport changed.
+    private static final String APPROVED_TITLE = "อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว";
+    private static final String REJECTED_TITLE = "คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ";
+
     private final ProfileRequestRepository profileRequests;
     private final EmployeeRepository employees;
     private final AuditService auditService;
     private final NotificationRepository notifications;
+    private final NotificationService notificationService;
 
+    /**
+     * {@code notifications} ({@link NotificationRepository}) is still used directly for {@link
+     * #create}'s HR fan-out ({@code notifyHrOfProfileRequest} -&gt; {@code notifyByRoleInternal}) --
+     * that path is unaffected by this constructor's new argument and stays exactly as #860 shipped
+     * it.
+     *
+     * <p>{@code notificationService} is new (regression fix, 2026-08-31): {@link #update} used to
+     * notify the requesting employee through {@code notifications.notifyEmployeeOfProfileRequest},
+     * which -- like every other {@code NotificationRepository#notifyEmployee*} method -- ultimately
+     * routes through {@code SalesNotificationMailRouter#routeResolved}. That router deliberately
+     * redirects anyone in an {@code AC}- or {@code PCIM}-coded division to a SHARED departmental
+     * mailbox ({@code account@glr.co.th} / {@code import@glr.co.th}) instead of their own address --
+     * correct for a sales/deal notification, but wrong for a personal HR one: verified against
+     * production, employee 72 (ฝ่ายบัญชี, {@code source_code = 'AC'}) would have her "your email was
+     * updated" notice land in the shared accounting inbox instead of reaching her, and the message
+     * itself names her new personal email address. {@link NotificationService#notify} is the plain
+     * per-employee transport every other HR domain (leave, overtime, welfare, attendance-correction)
+     * already uses -- it resolves the employee's own address with no shared-box branch, so it is the
+     * right transport for a request that is fundamentally about one person's own data.
+     */
     public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees,
-                                 AuditService auditService, NotificationRepository notifications) {
+                                 AuditService auditService, NotificationRepository notifications,
+                                 NotificationService notificationService) {
         this.profileRequests = profileRequests;
         this.employees = employees;
         this.auditService = auditService;
         this.notifications = notifications;
+        this.notificationService = notificationService;
     }
 
     public List<ProfileRequestDto> list(UserPrincipal user) {
@@ -90,12 +123,18 @@ public class ProfileRequestService {
         String action = approved ? "APPROVE_PROFILE_REQUEST" : "REJECT_PROFILE_REQUEST";
         auditService.record(reviewer, action, "profile_request", id, existing, reviewed);
 
-        // Tell the requesting employee what happened to their own request -- ProfileRequestService
-        // emitted zero notifications before this change, so this and the notifyHrOfProfileRequest
-        // call in create() above are both new.
-        notifications.notifyEmployeeOfProfileRequest(reviewed.employeeId(),
+        // Tell the requesting employee what happened to their own request, addressed to THEM --
+        // never to a shared departmental mailbox. notificationService.notify(...) is the plain
+        // per-employee transport (see this class's constructor Javadoc for why it replaced
+        // notifications.notifyEmployeeOfProfileRequest here). The link stays "/profile" and the
+        // type codes stay PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED, unchanged from #860 --
+        // rows with those values already exist in production and the frontend renders them.
+        notificationService.notify(reviewed.employeeId(),
             approved ? "PROFILE_REQUEST_APPROVED" : "PROFILE_REQUEST_REJECTED",
-            approved ? approvedMessage(reviewed) : rejectedMessage(reviewed, request.reviewerNote()));
+            approved ? APPROVED_TITLE : REJECTED_TITLE,
+            approved ? approvedMessage(reviewed) : rejectedMessage(reviewed, request.reviewerNote()),
+            "/profile",
+            true);
 
         return toDto(reviewed);
     }

@@ -29,12 +29,16 @@ const PANEL_CLASS = 'bg-surface border border-border rounded-md p-5';
 
 // The payroll export files HR can generate for a processed period. `value` is the backend export
 // slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob; `extension`
-// matches PayrollExportKind's own file extension (the three statutory kinds are CP874 .txt,
-// payroll-detail is a real xlsx workbook -- see PayrollController#export's javadoc).
+// MIRRORS PayrollExportKind's own file extension and is not derived from it -- kbank/pnd1 are
+// CP874 .txt, sso and payroll-detail are real xlsx workbooks. NOTHING enforces that this list
+// stays in step with the enum: the server sends the bytes and its own Content-Type, but the
+// downloaded filename is built here, so a backend-side extension change that is not mirrored here
+// saves the right bytes under the wrong suffix. Change both together (sso moved .txt -> .xlsx on
+// 2026-08-31; PayrollServiceTest#ssoExportIsAnXlsxWorkbook pins the backend half).
 const EXPORT_KINDS = [
   { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT', extension: 'txt' },
   { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1', extension: 'txt' },
-  { value: 'sso', label: 'ประกันสังคม (สปส.1-10)', filePrefix: 'SPS1-10', extension: 'txt' },
+  { value: 'sso', label: 'ประกันสังคม (สปส.1-10) (Excel)', filePrefix: 'SPS1-10', extension: 'xlsx' },
   { value: 'payroll-detail', label: 'รายละเอียดเงินเดือนรายเดือน (Excel)', filePrefix: 'PayrollDetail', extension: 'xlsx' },
 ];
 const MOBILE_PROCESS_CONFIRM_PHRASE = 'ประมวลผล';
@@ -1472,10 +1476,10 @@ export function PayrollPage({ user, showToast }) {
     if (isDetailKind ? !(period?.lineCount > 0) : !period?.id) return;
     setSaving(true);
     try {
-      // The three statutory kinds return raw CP874 bytes; payroll-detail returns a real xlsx
-      // workbook. Either way the result is fetched as a binary blob so the bytes survive the
-      // download intact. payDate is the salary pay/transfer date (payroll-detail just stamps it
-      // into the filename).
+      // kbank/pnd1 return raw CP874 bytes; sso and payroll-detail return real xlsx workbooks.
+      // Either way the result is fetched as a binary blob so the bytes survive the download intact.
+      // payDate is the salary pay/transfer date (sso ignores it -- the workbook carries no dates --
+      // and payroll-detail just stamps it into the filename).
       const blob = period?.id
         ? await api.payroll.exportFile(period.id, kind.value, payDate || undefined)
         // No persisted period (a fresh, unprocessed month) -- POST the same payrollMonth/inputs

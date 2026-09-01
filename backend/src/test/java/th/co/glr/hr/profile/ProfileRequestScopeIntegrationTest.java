@@ -18,6 +18,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -61,10 +62,14 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
         // request-scoping, not notifications) from depending on mail. See
         // ProfileRequestNotificationIntegrationTest for the notification-specific coverage.
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        // Mocked: this class exercises #create only (see the class-level comment above), and
+        // #update -- the only method that calls notificationService -- is never invoked here.
+        NotificationService notificationService = mock(NotificationService.class);
         // @Transactional on ProfileRequestService#create is inert without a real AOP proxy (no
         // Spring context here) -- see AbstractPostgresIntegrationTest#transactional's Javadoc.
         // Wrap it so the annotation is actually exercised, matching AttendanceScopeIntegrationTest.
-        service = transactional(new ProfileRequestService(profileRequests, employees, auditService, notifications));
+        service = transactional(
+            new ProfileRequestService(profileRequests, employees, auditService, notifications, notificationService));
 
         division = insertDivision("SLS", "ฝ่ายขาย");
         salesEmployeeA = insertEmployee("S001", division);

@@ -172,12 +172,23 @@ public class NotificationRepository {
         // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
         // routine pipeline noise; the whole point of this notification is that it is not.
         Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง"),
-        // profile/ProfileRequestService — profile-change-request notifications (2026-08-31).
-        // ProfileRequestService emitted zero notifications before this; these three cover
-        // submit (to HR) and approve/reject (to the requesting employee).
+        // profile/ProfileRequestService#create — the HR-facing submit notification only.
+        // ProfileRequestService emitted zero notifications before #860. #860 also added
+        // PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED entries here for the employee-facing
+        // approve/reject notification, but that notification no longer reads this map: it regressed
+        // through notifyEmployeeOfProfileRequest -> notifyEmployeeAt -> SalesNotificationMailRouter,
+        // which redirects AC/PCIM-division employees to a shared mailbox instead of their own
+        // address (correct for the sales domain this router exists for; wrong for a personal HR
+        // notice). ProfileRequestService#update now calls NotificationService#notify directly with
+        // its own title constants, so those two entries were deleted rather than left as a stale,
+        // unread mirror -- see ProfileRequestService's constructor Javadoc for the full story.
         Map.entry("PROFILE_REQUEST_SUBMITTED", "มีคำขอแก้ไขข้อมูลพนักงานรออนุมัติ"),
-        Map.entry("PROFILE_REQUEST_APPROVED", "อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว"),
-        Map.entry("PROFILE_REQUEST_REJECTED", "คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ")
+        // payroll/declaration/TaxAllowanceDeclarationService — ล.ย.01 reaches HR's queue
+        // (2026-08-31). The employee-facing APPROVED/REJECTED/EXPIRED events for this same feature
+        // do NOT go through this map: they carry an explicit title straight into
+        // NotificationService#notify, the same call shape leave/overtime/welfare/attendance-
+        // correction use, not the ticket-scoped fan-out this map serves.
+        Map.entry("TAX_ALLOWANCE_SUBMITTED", "มีแบบ ล.ย.01 รอ HR ตรวจสอบ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -186,11 +197,6 @@ public class NotificationRepository {
 
     public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
         notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
-    }
-
-    /** ProfileRequestService#update, notifying the employee whose own request was reviewed. */
-    public void notifyEmployeeOfProfileRequest(long employeeId, String type, String message) {
-        notifyEmployeeAt(employeeId, type, message, "/profile");
     }
 
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
@@ -247,7 +253,19 @@ public class NotificationRepository {
 
     /** ProfileRequestService#create, notifying HR that a new request is waiting on them. */
     public void notifyHrOfProfileRequest(String type, String message) {
-        notifyByRoleInternal("hr", type, message, "/requests");
+        notifyHrAt(type, message, "/requests");
+    }
+
+    /**
+     * General HR-fan-out entry point, generalized from {@link #notifyHrOfProfileRequest} (2026-08-31)
+     * so a second HR-queue feature (ล.ย.01 submissions, which link to {@code /tax-allowance-review}
+     * rather than {@code /requests}) does not need a second copy of the {@code "hr"} division
+     * predicate. Both callers now share exactly one {@code notifyByRoleInternal("hr", ...)} path —
+     * see that method's Javadoc for the predicate itself (mirrors {@code
+     * DivisionAccessPolicy#roleFor}'s hr branch, not a naive prefix match).
+     */
+    public void notifyHrAt(String type, String message, String link) {
+        notifyByRoleInternal("hr", type, message, link);
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {

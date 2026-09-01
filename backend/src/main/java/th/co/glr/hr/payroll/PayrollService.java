@@ -407,8 +407,9 @@ public class PayrollService {
     }
 
     /**
-     * Generate one of HR's payroll export files for a period: the three statutory CP874 text files
-     * (KBank PCT, PND1, SSO สปส.1-10), or the {@link PayrollExportKind#PAYROLL_DETAIL} xlsx
+     * Generate one of HR's payroll export files for a period: the two statutory CP874 text files
+     * (KBank PCT, PND1), the SSO สปส.1-10 xlsx workbook, or the {@link
+     * PayrollExportKind#PAYROLL_DETAIL} xlsx
      * workbook. HR/CEO only; reads PDPA-restricted PII for PND1/SSO (and, for the detail workbook,
      * bank account + every payroll_line figure), so every call is audited with the specific fields
      * exposed. {@code effectiveDate} is the HR-picked transfer/pay date (or, for the detail
@@ -450,8 +451,11 @@ public class PayrollService {
                 auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
             }
             case SSO -> {
-                content = ssoExporter.export(payrollRepository.findExportRows(periodId), employer, payrollMonth, payDate);
-                auditFields = "social_security_no,sso_wage_base,social_security";
+                // The workbook carries no employer/period/rate fields (the e-service knows those
+                // from the account it is uploaded under), so unlike the .txt it replaced this needs
+                // neither payrollMonth nor payDate -- only the fallback branch off `employer`.
+                content = ssoExporter.export(payrollRepository.findExportRows(periodId), employer);
+                auditFields = "national_id,title,name,sso_wage_gross,social_security";
             }
             case PAYROLL_DETAIL -> {
                 PayrollPeriodDto detailPeriod;
@@ -491,10 +495,11 @@ public class PayrollService {
      * <p>Required per kind -- fields with no safe fallback in the exporter itself: {@code KBANK}
      * needs {@code kbankDebitAccount} + {@code companyNameTh} ({@code kbankBatchRef} falls back to
      * the effective date -- not required); {@code PND1} needs {@code companyTaxId} + {@code
-     * pnd1Branch}; {@code SSO} needs {@code ssoEmployerAccount} + {@code ssoBranch} and at least one
-     * of {@code establishmentName}/{@code companyNameTh} ({@link SsoExporter} already falls back
-     * establishment -> company name itself, so only their joint absence is a problem; {@code
-     * ssoRatePercent} has a default -- not required).
+     * pnd1Branch}; {@code SSO} needs only {@code ssoBranch}, the sheet an employee with no {@code
+     * sso_branch_code} of their own falls back to -- a blank there would name a sheet Excel refuses
+     * to open. It no longer needs {@code ssoEmployerAccount} or {@code establishmentName}/{@code
+     * companyNameTh}: {@link SsoExporter} became a workbook on 2026-08-31 and renders no employer
+     * identity at all.
      */
     private void requireEmployerConfiguredForStatutoryExport(PayrollExportKind kind, AppProperties.Employer employer) {
         List<String> missing = new ArrayList<>();
@@ -507,13 +512,11 @@ public class PayrollService {
                 requireConfigured(missing, employer.getCompanyTaxId(), "APP_PAYROLL_COMPANY_TAX_ID");
                 requireConfigured(missing, employer.getPnd1Branch(), "APP_PAYROLL_PND1_BRANCH");
             }
-            case SSO -> {
-                requireConfigured(missing, employer.getSsoEmployerAccount(), "APP_PAYROLL_SSO_EMPLOYER_ACCOUNT");
-                requireConfigured(missing, employer.getSsoBranch(), "APP_PAYROLL_SSO_BRANCH");
-                if (isBlank(employer.getEstablishmentName()) && isBlank(employer.getCompanyNameTh())) {
-                    missing.add("APP_PAYROLL_ESTABLISHMENT_NAME or APP_PAYROLL_COMPANY_NAME_TH");
-                }
-            }
+            // SSO needs only the fallback branch. The employer account and establishment name were
+            // required while this kind rendered a CP874 header that carried them; the workbook that
+            // replaced it (2026-08-31) has no employer fields at all, so continuing to demand them
+            // would 503 an export that cannot be affected by their absence.
+            case SSO -> requireConfigured(missing, employer.getSsoBranch(), "APP_PAYROLL_SSO_BRANCH");
             default -> { }
         }
         if (!missing.isEmpty()) {
