@@ -20,6 +20,13 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * ruling -- they stay on OFFICE_5D -- so this class deliberately asserts they are UNCHANGED by the
  * migration rather than asserting they moved.
  *
+ * <p><b>V160 later moved Sales Support to a six-day week anyway</b> (all of ฝ่ายขาย, effective
+ * 2026-09-01 -- see {@code V160__sales_division_saturday_workday.sql} and
+ * {@link SalesDivisionSaturdayWorkdayIntegrationTest}). That does not weaken anything asserted here:
+ * this class replays V121 in isolation and its {@code SATURDAY} constant is 2026-08-01, before
+ * V160's effective date, so "Sales Support stays OFFICE_5D" remains true of the window V121 governs.
+ * Read the claim as scoped to V121, not as the current state of the schedule table.
+ *
  * <p>Same technique as {@code LeaveApproverOrgNormalizationIntegrationTest} and
  * {@code PayrollComponentTaxTreatmentBackfillIntegrationTest}: V121's own SQL text is read verbatim
  * from the classpath and replayed against fixture rows carrying the real production codes ('SALES',
