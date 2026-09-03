@@ -19,11 +19,11 @@ import { QuotaBar } from '../../components/common/QuotaBar.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
-import { addDaysIso } from '../../utils/format.js';
+import { addDaysIso, formatThaiDate } from '../../utils/format.js';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
-import { formatDate, formatDays, todayIso } from './leaveFormatting.js';
+import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
 
 // Leave-request composer, Phase A2 (#485). The owner's own framing of the problem this closes:
 // "employee if rejected, or when requesting, the rules should also be restated to them so they
@@ -99,6 +99,12 @@ function defaultForm({
     contactPhone: '',
     purposeCode: '',
     requestedAsEmergency: false,
+    // §5.3.5 pool choice (V161): defaults to carry-in first -- see QuotaPoolPreferenceField's own
+    // comment on why, and LeaveQuotaPoolPreference.orDefault on the backend for the same default.
+    // Set unconditionally (not only when a carry-in balance is known to exist): this is a form
+    // field like any other, and its value is only ever ACTED on -- rendered as a real choice, sent
+    // as something other than the default -- once showQuotaPoolSelector is true.
+    quotaPoolPreference: 'CARRIED_IN_FIRST',
   };
 }
 
@@ -119,6 +125,12 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     contactPhone: z.string().optional(),
     purposeCode: z.string().optional(),
     requestedAsEmergency: z.boolean().optional(),
+    // §5.3.5 pool choice (V161): always one of the two enum names once touched (the radio group
+    // only ever writes 'CARRIED_IN_FIRST'/'OWN_FIRST'), but left as a bare optional string rather
+    // than z.enum([...]) -- this schema only validates what a human can mistype into a text/date/
+    // select field; a radio group's own `value` attributes are the real constraint here, and this
+    // field is never rendered, let alone required, for a type with nothing to choose between.
+    quotaPoolPreference: z.string().optional(),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['employeeId'], message: 'กรุณาเลือกพนักงาน' });
@@ -222,6 +234,53 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   );
 }
 
+// §5.3.5 pool choice (V161): which of the employee's two quota pools -- last year's unused amount
+// carried into this one, or this year's own annual grant -- a request should draw down FIRST. Only
+// ever rendered when the caller (LeaveRequestPage's showQuotaPoolSelector) has already confirmed
+// BOTH `carriesForward` (the TYPE can have a second pool at all) AND `carriedInRemainingDays > 0`
+// (THIS employee's balance actually has one right now) -- this component itself does not re-check
+// either, it only ever receives a `balance` it is safe to render a real choice for.
+//
+// NOT to be confused with the "ปี {split.quotaYear}" line step 3 renders from quotaYearSplits
+// below: that is the V118 CALENDAR split (which year a request's own [startDate, endDate] dates
+// fall in, for a request that happens to straddle 31 Dec) -- a different axis entirely from which
+// POOL within one year's balance gets charged first. Neither option label here ever leads with a
+// bare "ปี {number}" for that reason; each names WHAT the pool is (สะสม / ปีนี้) before its year.
+function QuotaPoolPreferenceField({ register, balance }) {
+  // Both years are derived from carriedInFromYear alone (never "today"): the Javadoc on
+  // LeaveBalanceDto ties carriedInExpiresOn to `31 Dec of carriedInFromYear + 1` by construction
+  // (hr.leave_carryover's own earned_year/usable_year columns), so re-deriving from the clock could
+  // only ever disagree with the balance this control is actually describing.
+  const carriedInYearBe = Number(balance.carriedInFromYear) + 543;
+  const ownYearBe = Number(balance.carriedInFromYear) + 1 + 543;
+  return (
+    <fieldset className="grid gap-2.5 rounded-md border border-border-input bg-surface p-3">
+      <legend className="px-1 text-sm font-bold text-text">
+        มี{balance.leaveTypeNameTh}สะสมจากปีก่อน — เลือกโควตาที่จะหักก่อน
+      </legend>
+      <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+        <input type="radio" className="mt-0.5 h-4 w-4 shrink-0" value="CARRIED_IN_FIRST" {...register('quotaPoolPreference')} />
+        <span className="grid gap-0.5">
+          <span className="font-semibold text-text">หักจากโควตาสะสม (ปี {carriedInYearBe}) ก่อน</span>
+          <span className="text-xs text-text-muted">
+            เหลือ {formatDays(balance.carriedInRemainingDays)} · หมดอายุ {formatThaiDate(balance.carriedInExpiresOn)}
+            {' '}— แนะนำ เพราะสิทธิ์นี้ใช้ไม่ทันจะหมดอายุไปเปล่าๆ
+          </span>
+        </span>
+      </label>
+      <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+        <input type="radio" className="mt-0.5 h-4 w-4 shrink-0" value="OWN_FIRST" {...register('quotaPoolPreference')} />
+        <span className="grid gap-0.5">
+          <span className="font-semibold text-text">หักจากโควตาปีนี้ (ปี {ownYearBe}) ก่อน</span>
+          <span className="text-xs text-text-muted">
+            เหลือ {formatDays(balance.ownQuotaRemainingDays)} · เก็บโควตาสะสมไว้ใช้ภายหลัง
+          </span>
+        </span>
+      </label>
+    </fieldset>
+  );
+}
+
 export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -289,9 +348,13 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   });
   const [
     employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
+    quotaPoolPreference,
   ] = useWatch({
     control,
-    name: ['employeeId', 'leaveTypeCode', 'startDate', 'endDate', 'subDay', 'purposeCode', 'requestedAsEmergency'],
+    name: [
+      'employeeId', 'leaveTypeCode', 'startDate', 'endDate', 'subDay', 'purposeCode', 'requestedAsEmergency',
+      'quotaPoolPreference',
+    ],
   });
   const startDateInPast = Boolean(startDate && startDate < todayIso());
   const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
@@ -333,10 +396,48 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     // A different type invalidates whatever purpose/emergency choice belonged to the old one.
     setValue('purposeCode', '', { shouldValidate: true });
     setValue('requestedAsEmergency', false, { shouldValidate: true });
+    // Same reasoning for §5.3.5's pool choice (V161): a different type has its own (possibly
+    // absent) carry-in balance, so a leftover OWN_FIRST pick from a previous type must not silently
+    // carry over as this type's answer to a question it may not even ask.
+    setValue('quotaPoolPreference', 'CARRIED_IN_FIRST', { shouldValidate: true });
   }
 
   const step1Blocking = leaveTypeCode ? (eligibilityByCode.get(leaveTypeCode)?.data?.blocking ?? null) : null;
   const canAdvanceStep1 = Boolean(leaveTypeCode) && !step1Blocking && (!hasMultipleSubmitOptions || Boolean(employeeId));
+
+  // --- §5.3.5 pool choice (V161): the acting employee's real per-type balance, so the composer
+  // can tell whether there is a real carry-in to choose between at all (see showQuotaPoolSelector
+  // below) and can label/caption the two pools with real numbers -- QuotaPoolPreferenceField never
+  // fabricates them. Nothing before this queried balances(): step 3's own QuotaBar further down
+  // only ever compares the requested days against the TYPE's flat annualQuotaDays, never this
+  // employee's actual balance, so this is a new read, not a reuse of an existing one.
+  //
+  // Scoped to whatever calendar year `startDate` currently falls in (`yearFrom`, the same helper
+  // MyLeaveTab.jsx's own balancesQuery uses) rather than always "this year": a leave request dated
+  // into a different year must read THAT year's own carry-in figures. `enabled` waits for a leave
+  // type too -- nothing on step 1 needs this yet, and firing it per-type would be wasted work
+  // mirroring eligibilityQueries above for no reason (this is one call, not one per type). ---
+  const balancesQuery = useQuery({
+    queryKey: queryKeys.leaveBalances(employeeId, yearFrom(startDate)),
+    queryFn: () => api.leave.balances({
+      employeeId: Number(employeeId),
+      year: yearFrom(startDate),
+    }).then((r) => r.balances || []),
+    enabled: Boolean(employeeId) && Boolean(leaveTypeCode),
+  });
+  const balances = useMemo(() => balancesQuery.data ?? [], [balancesQuery.data]);
+  const selectedTypeBalance = useMemo(
+    () => balances.find((b) => b.leaveTypeCode === leaveTypeCode),
+    [balances, leaveTypeCode],
+  );
+  // The render gate itself: BOTH the type's own metadata (carriesForward -- can this type ever
+  // have a second pool) AND this employee's actual balance (carriedInRemainingDays > 0 -- does one
+  // exist right now). carriesForward alone is not enough -- it is true for every VACATION request
+  // regardless of whether this employee has anything left in the carry-in pool (already spent, or
+  // this is their first year) -- and showing the control anyway would ask a choice with only one
+  // honest answer. See CLAUDE.md's "no dead control" instruction for this exact feature.
+  const showQuotaPoolSelector = Boolean(selectedLeaveType?.carriesForward)
+    && Number(selectedTypeBalance?.carriedInRemainingDays || 0) > 0;
 
   // --- Step 2: debounced QUICK preview (department coverage skipped -- coverageEvaluated will
   // read false, and that is shown honestly rather than as a clean pass). ---
@@ -351,8 +452,16 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       requestedAsEmergency: leaveTypeCode === 'PERSONAL' ? Boolean(requestedAsEmergency) : undefined,
       hasAttachment: Boolean(attachmentFile),
       depth: 'QUICK',
+      // §5.3.5 pool choice (V161): sent unconditionally, even when showQuotaPoolSelector is false
+      // for the currently-selected type -- LeaveQuotaPoolPreference's own Javadoc says the backend
+      // "ignores it entirely" for a type with no second pool, so there is no need to strip it back
+      // out here just because this particular type/employee has nothing to choose between.
+      quotaPoolPreference,
     };
-  }, [employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency, attachmentFile]);
+  }, [
+    employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
+    attachmentFile, quotaPoolPreference,
+  ]);
   const debouncedStep2Params = useDebouncedValue(step2Params, 400);
   const step2PreviewQuery = useQuery({
     queryKey: queryKeys.leavePreview(debouncedStep2Params ?? {}),
@@ -425,8 +534,13 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       requestedAsEmergency: leaveTypeCode === 'PERSONAL' ? Boolean(requestedAsEmergency) : undefined,
       hasAttachment: Boolean(attachmentFile),
       depth: 'FULL',
+      // Same "always send, backend ignores it when inapplicable" reasoning as step2Params above.
+      quotaPoolPreference,
     };
-  }, [step, employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency, attachmentFile]);
+  }, [
+    step, employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
+    attachmentFile, quotaPoolPreference,
+  ]);
   const step3PreviewQuery = useQuery({
     queryKey: queryKeys.leavePreview(step3Params ?? {}),
     queryFn: ({ signal }) => api.leave.preview(step3Params, { signal }).then((r) => r.preview),
@@ -503,6 +617,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       contactPhone: values.contactPhone?.trim() || null,
       purposeCode: values.leaveTypeCode === 'PERSONAL' && values.purposeCode ? values.purposeCode : null,
       requestedAsEmergency: values.leaveTypeCode === 'PERSONAL' ? Boolean(values.requestedAsEmergency) : null,
+      // §5.3.5 pool choice (V161): same "always send" reasoning as step2Params/step3Params above.
+      // Falls back to the CARRIED_IN_FIRST default defensively -- defaultForm() already seeds this,
+      // so values.quotaPoolPreference should never actually be empty, but a submission must never
+      // go out with NO stated preference when the backend's own null-default reads identically.
+      quotaPoolPreference: values.quotaPoolPreference || 'CARRIED_IN_FIRST',
       attachmentFile: preparedAttachment,
     });
   }
@@ -772,6 +891,18 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                       required
                     />
                   </FormField>
+                </div>
+              ) : null}
+
+              {/* §5.3.5 pool choice (V161): sits with the other "mechanics of this request" fields
+                  (dates, sub-day), above เหตุผลการลา -- same field-order reasoning as the note
+                  right below: this is part of WHAT is being asked for, not WHY. Gated on
+                  showQuotaPoolSelector alone (computed once, above) rather than re-checking
+                  carriesForward/carriedInRemainingDays inline here, so there is exactly one place
+                  that decides whether this control exists at all. */}
+              {showQuotaPoolSelector ? (
+                <div className={formGridSpan2}>
+                  <QuotaPoolPreferenceField register={register} balance={selectedTypeBalance} />
                 </div>
               ) : null}
 

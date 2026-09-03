@@ -3849,11 +3849,25 @@ function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
 function leaveBalance(employeeId, type, quotaYear) {
   const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
   const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
-  // §5.3.5 VACATION carry-forward (V127): carriedInDays is SHAPE parity only, always 0 in mock
-  // mode -- see the db.leaveTypes carriesForward comment above for why (the real grant needs
-  // hr.leave_carryover's year-end memoization, a business computation this mock does not
-  // reimplement). remainingDays below is therefore also always the un-boosted figure in mock mode,
+  const remainingDays = Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays);
+  // §5.3.5 VACATION carry-forward (V127, widened V161): carriedInDays/carriedInFromYear/
+  // carriedInExpiresOn/carriedInRemainingDays/ownQuotaRemainingDays are SHAPE parity only, always
+  // the "nothing carried in" reading in mock mode -- see the db.leaveTypes carriesForward comment
+  // above for why (the real grant needs hr.leave_carryover's year-end memoization,
+  // LeaveService#ensureCarryoverGrant, a business computation this mock deliberately does not
+  // reimplement -- a mirrored computation is never independent evidence, see this file's own
+  // header note). remainingDays above is therefore also always the un-boosted figure in mock mode,
   // never reflecting a real carry-in even for VACATION.
+  //
+  // carriedInFromYear/carriedInExpiresOn stay `null` (not e.g. `quotaYear - 1`/a fabricated date)
+  // for the same reason: the real DTO's Javadoc ties both to whether a carry-in grant actually
+  // exists, and inventing values here would assert a grant this mock never computed. Consequently
+  // carriedInRemainingDays is always 0 and ownQuotaRemainingDays always equals remainingDays (there
+  // is only ever one pool in mock mode) -- LeaveRequestPage.jsx's pool-choice control keys its
+  // render gate on carriedInRemainingDays > 0, so it can never appear under VITE_USE_MOCKS=true.
+  // Anyone testing the carry-in pool choice itself must do so against the real backend, or by
+  // injecting a fixture directly in a component test (see LeaveRequestPage.test.jsx) -- not by
+  // driving this mock harder.
   return {
     leaveTypeCode: type.code,
     leaveTypeNameTh: type.nameTh,
@@ -3861,9 +3875,13 @@ function leaveBalance(employeeId, type, quotaYear) {
     annualQuotaDays: type.annualQuotaDays,
     approvedDays,
     pendingDays,
-    remainingDays: Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays),
+    remainingDays,
     requiresAttachment: type.requiresAttachment,
     carriedInDays: 0,
+    carriedInFromYear: null,
+    carriedInExpiresOn: null,
+    carriedInRemainingDays: 0,
+    ownQuotaRemainingDays: remainingDays,
   };
 }
 

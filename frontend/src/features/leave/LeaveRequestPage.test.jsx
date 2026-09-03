@@ -104,31 +104,49 @@ async function goToStep2ForVacation() {
   return utils;
 }
 
+// Shared baseline fixture, called from every describe block's own `beforeEach` below --
+// including the sibling "implicit submission" block at the bottom of this file. Before this was
+// extracted, that sibling block had NO beforeEach of its own and silently relied on whatever
+// mock state the PREVIOUS describe block's last-run test happened to leave behind (`vi.fn()`
+// implementations set via `mockResolvedValue` persist across tests; only `vi.clearAllMocks()`
+// -- called here, not globally -- resets call HISTORY). That "worked" only because the main
+// describe's own last test ("cancel from step 1...") never called create(), leaving its call
+// count at 0 by accident of file order -- not because anything guaranteed it. Adding a nested
+// describe block whose OWN last test DOES call create() (quota-pool preference's "the chosen
+// preference reaches create() at submit") broke that accidental handoff: the "implicit
+// submission" tests started seeing a stale `create()` call recorded by a test that never ran
+// under them. Each describe block calling this itself, and clearing mocks itself, makes every
+// block correct regardless of what ran immediately before it in the file -- test ORDER must never
+// be load-bearing for isolation.
+function installDefaultLeaveMocks() {
+  vi.clearAllMocks();
+  api.leave.employees.mockResolvedValue({
+    employees: [{
+      employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
+    }],
+  });
+  api.leave.types.mockResolvedValue({
+    leaveTypes: [
+      { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation', annualQuotaDays: 6 },
+      { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick', annualQuotaDays: 30 },
+      { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal', annualQuotaDays: 7 },
+    ],
+  });
+  api.leave.balances.mockResolvedValue({ balances: [] });
+  api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
+  api.leave.create.mockResolvedValue({ request: { id: 2001, status: 'SUBMITTED' } });
+  api.leave.preview.mockImplementation((payload) => Promise.resolve(
+    payload?.startDate ? approvedPreview(payload) : dateless_ok_preview,
+  ));
+  // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง
+  // panel and the "all working days" calendar-context note, uninvolved with what each test
+  // actually asserts on. The holiday-visibility cases below override this per-test.
+  api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
+}
+
 describe('LeaveRequestPage (Phase A2, #485)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    api.leave.employees.mockResolvedValue({
-      employees: [{
-        employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false,
-      }],
-    });
-    api.leave.types.mockResolvedValue({
-      leaveTypes: [
-        { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation', annualQuotaDays: 6 },
-        { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick', annualQuotaDays: 30 },
-        { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal', annualQuotaDays: 7 },
-      ],
-    });
-    api.leave.balances.mockResolvedValue({ balances: [] });
-    api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    api.leave.create.mockResolvedValue({ request: { id: 2001, status: 'SUBMITTED' } });
-    api.leave.preview.mockImplementation((payload) => Promise.resolve(
-      payload?.startDate ? approvedPreview(payload) : dateless_ok_preview,
-    ));
-    // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง
-    // panel and the "all working days" calendar-context note, uninvolved with what each test
-    // actually asserts on. The holiday-visibility cases below override this per-test.
-    api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
+    installDefaultLeaveMocks();
   });
 
   it('step 1: a categorically-blocked type is disabled and shows the real backend reason', async () => {
@@ -328,6 +346,11 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       contactPhone: null,
       purposeCode: null,
       requestedAsEmergency: null,
+      // §5.3.5 pool choice (V161): always sent, defaulting to CARRIED_IN_FIRST -- this fixture's
+      // balances() resolves to `[]` (beforeEach), so the selector never renders and the value here
+      // is untouched defaultForm() state, not a user choice. See the "quota pool preference (V161)"
+      // describe block below for the selector's own render-gate/default/toggle coverage.
+      quotaPoolPreference: 'CARRIED_IN_FIRST',
       attachmentFile: null,
     });
   });
@@ -478,6 +501,131 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิก' }));
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
   });
+
+  // §5.3.5 pool choice (V161): the carry-in/own-quota selector. Nested here (not a sibling
+  // describe) so it inherits the outer beforeEach's employees/contactDefaults/create/preview/
+  // calendarContext mocks -- only leaveTypes (VACATION gains carriesForward: true below) and
+  // balances (a real carry-in fixture) differ per test.
+  describe('quota-pool preference (§5.3.5, V161)', () => {
+    beforeEach(() => {
+      api.leave.types.mockResolvedValue({
+        leaveTypes: [
+          { code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation', annualQuotaDays: 6, carriesForward: true },
+          { code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick', annualQuotaDays: 30 },
+          { code: 'PERSONAL', nameTh: 'ลากิจ', nameEn: 'Personal', annualQuotaDays: 7 },
+        ],
+      });
+    });
+
+    function carryInBalance(overrides = {}) {
+      return {
+        balances: [{
+          leaveTypeCode: 'VACATION',
+          leaveTypeNameTh: 'ลาพักร้อน',
+          annualQuotaDays: 6,
+          approvedDays: 0,
+          pendingDays: 0,
+          remainingDays: 8,
+          carriedInDays: 2,
+          carriedInFromYear: 2025,
+          carriedInExpiresOn: '2026-12-31',
+          carriedInRemainingDays: 2,
+          ownQuotaRemainingDays: 6,
+          ...overrides,
+        }],
+      };
+    }
+
+    it('does NOT render when the type carries forward but this employee has nothing left in the carry-in pool', async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance({ carriedInRemainingDays: 0 }));
+      await goToStep2ForVacation();
+
+      // Let the resolved balances promise's state update actually commit before asserting the
+      // negative -- otherwise "absent" would be trivially true before the query even settles,
+      // proving nothing about the gate itself (the vacuous-test shape CLAUDE.md warns about).
+      await waitFor(() => expect(api.leave.balances).toHaveBeenCalled());
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      expect(screen.queryByText(/เลือกโควตาที่จะหักก่อน/)).toBeNull();
+    });
+
+    // Wrong-way-round on purpose: this SICK balance carries a positive carriedInRemainingDays (a
+    // figure real SICK data would never have), so this test only passes for the right reason if
+    // the render gate genuinely checks carriesForward -- a gate that dropped that check (leaving
+    // only carriedInRemainingDays > 0) would make this test fail loudly instead of passing by
+    // accident, the way a fixture that also zeroed carriedInRemainingDays could.
+    it('does NOT render for a type that does not carry forward, even when its balance carries a positive carriedInRemainingDays', async () => {
+      api.leave.balances.mockResolvedValue({
+        balances: [{
+          leaveTypeCode: 'SICK', leaveTypeNameTh: 'ลาป่วย', annualQuotaDays: 30, approvedDays: 0, pendingDays: 0,
+          remainingDays: 32, carriedInDays: 2, carriedInFromYear: 2025, carriedInExpiresOn: '2026-12-31',
+          carriedInRemainingDays: 2, ownQuotaRemainingDays: 30,
+        }],
+      });
+      renderComposer();
+      fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+      await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+      await waitFor(() => expect(api.leave.balances).toHaveBeenCalled());
+      await new Promise((resolve) => { setTimeout(resolve, 50); });
+      expect(screen.queryByText(/เลือกโควตาที่จะหักก่อน/)).toBeNull();
+    });
+
+    it('renders with carry-in selected by default, naming each pool\'s BE year/remaining days and the carry-in expiry', async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance());
+      await goToStep2ForVacation();
+
+      const carriedInRadio = await screen.findByRole('radio', { name: /หักจากโควตาสะสม/ });
+      const ownRadio = screen.getByRole('radio', { name: /หักจากโควตาปีนี้/ });
+      expect(carriedInRadio.checked).toBe(true);
+      expect(ownRadio.checked).toBe(false);
+
+      // BE years are derived from carriedInFromYear alone (2025 -> 2568 carry-in pool, 2026 ->
+      // 2569 own pool -- see QuotaPoolPreferenceField's own comment on why never "today").
+      expect(carriedInRadio.closest('label').textContent).toMatch(/ปี 2568/);
+      expect(carriedInRadio.closest('label').textContent).toMatch(/เหลือ 2\u00A0วัน/);
+      expect(carriedInRadio.closest('label').textContent).toMatch(/หมดอายุ 31 ธ\.ค\. 2569/);
+      expect(ownRadio.closest('label').textContent).toMatch(/ปี 2569/);
+      expect(ownRadio.closest('label').textContent).toMatch(/เหลือ 6\u00A0วัน/);
+
+      await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
+        expect.objectContaining({ quotaPoolPreference: 'CARRIED_IN_FIRST' }),
+        expect.anything(),
+      ));
+    });
+
+    it('switching to "หักจากโควตาปีนี้ก่อน" flips the checked radio and the next preview call reflects it', async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance());
+      await goToStep2ForVacation();
+      const ownRadio = await screen.findByRole('radio', { name: /หักจากโควตาปีนี้/ });
+
+      fireEvent.click(ownRadio);
+      expect(ownRadio.checked).toBe(true);
+
+      await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
+        expect.objectContaining({ quotaPoolPreference: 'OWN_FIRST' }),
+        expect.anything(),
+      ));
+    });
+
+    it('the chosen preference reaches create() at submit', async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance());
+      await goToStep2ForVacation();
+      fireEvent.click(await screen.findByRole('radio', { name: /หักจากโควตาปีนี้/ }));
+
+      const futureDate = '2099-12-31';
+      fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+      await screen.findByText(/ขั้นตอนที่ 3\/3/);
+      const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+      await waitFor(() => expect(submitButton.disabled).toBe(false));
+      fireEvent.click(submitButton);
+
+      await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+      expect(api.leave.create.mock.calls[0][0].quotaPoolPreference).toBe('OWN_FIRST');
+    });
+  });
 });
 
 // HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
@@ -504,6 +652,13 @@ function submitWithSubmitter(form) {
 }
 
 describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
+  // Own beforeEach (not inherited -- this is a SIBLING describe, not nested inside the one above)
+  // -- see installDefaultLeaveMocks' own comment for why this must not depend on whatever the
+  // previous describe block's last test happened to leave behind.
+  beforeEach(() => {
+    installDefaultLeaveMocks();
+  });
+
   // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
   // gated step 1/2 never even calls `handleSubmit`, let alone awaits anything — but an assertion
   // that only checks SYNCHRONOUSLY, right after the submit dispatch, proves nothing about whether

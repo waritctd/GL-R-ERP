@@ -211,7 +211,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
 
         LeavePreviewDto quickPreview = leaveService.preview(new LeavePreviewRequest(
             "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), requester,
-            null, false, false, LeavePreviewDepth.QUICK), employee(requester));
+            null, false, false, LeavePreviewDepth.QUICK, null), employee(requester));
 
         assertThat(quickPreview.blocking()).as("QUICK depth must not surface the coverage rejection").isNull();
         assertThat(quickPreview.coverageEvaluated()).as("must explicitly say the gate did not run").isFalse();
@@ -235,7 +235,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         long employeeId = insertEmployee("PREV-NODATES-001", LocalDate.parse("2026-06-26"), null);
 
         LeavePreviewDto preview = leaveService.preview(
-            new LeavePreviewRequest("PERSONAL", null, null, employeeId, null, false, false, LeavePreviewDepth.FULL),
+            new LeavePreviewRequest("PERSONAL", null, null, employeeId, null, false, false, LeavePreviewDepth.FULL, null),
             employee(employeeId));
 
         assertThat(preview.datesEvaluated()).isFalse();
@@ -260,7 +260,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             String purposeCode, boolean requestedAsEmergency, String expectedCode) {
         LeavePreviewDto preview = leaveService.preview(new LeavePreviewRequest(
             leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate), employeeId,
-            purposeCode, requestedAsEmergency, false, LeavePreviewDepth.FULL), employee(employeeId));
+            purposeCode, requestedAsEmergency, false, LeavePreviewDepth.FULL, null), employee(employeeId));
         String previewCode = preview.blocking() == null ? null : preview.blocking().code().name();
 
         LeaveRequestDto submitted = leaveService.submit(new SubmitLeaveRequest(

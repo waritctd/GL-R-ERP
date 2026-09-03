@@ -43,10 +43,16 @@ export const queryKeys = {
   // actually branches on (see LeaveService#preview's Javadoc) so distinct inputs never share a
   // cache entry -- `depth` is included because a QUICK and FULL call for the identical
   // employee/type/dates can legitimately return different `coverageEvaluated`/`blocking`.
+  //
+  // `quotaPoolPreference` (V161, §5.3.5 pool choice): appended last so existing callers that never
+  // pass it keep the exact key they always had, aside from this one new trailing entry. Without it
+  // in the key, switching the composer's carry-in/own-quota toggle would refetch the SAME cache
+  // entry the old preference already populated -- the split shown would silently stay pinned to
+  // whichever pool order was previewed first, never updating to reflect the new choice.
   leavePreview: (params = {}) => ['leave', 'preview',
     params.employeeId ?? '', params.leaveTypeCode ?? '', params.startDate ?? '', params.endDate ?? '',
     params.purposeCode ?? '', params.requestedAsEmergency ?? false, params.hasAttachment ?? false,
-    params.depth ?? 'FULL'],
+    params.depth ?? 'FULL', params.quotaPoolPreference ?? 'CARRIED_IN_FIRST'],
   // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
   leavePolicyDocumentAvailable: () => ['leave', 'policyDocumentAvailable'],
   // Leave-request composer, Phase C (#leave-calendar-context): keyed on the exact { from, to }

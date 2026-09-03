@@ -276,6 +276,99 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
 
     // --- helpers ------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    // §5.3.5 pool choice (V161): the split is now RECORDED per request, and the requester picks
+    // the order. Fixture shared by the three tests below: 2025 uses 4 of its 6, carrying 2.00 into
+    // 2026, which also has its own fresh 6.00 -- 8.00 available in 2026.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void theDefaultCarriedInFirstOrderIsRecordedOnTheRequestNotJustInferredAtYearEnd() {
+        // Same numbers as #carryInDaysAreConsumedBeforeTheYearsOwnQuotaWhenComputingWhatCarriesForwardNext
+        // above, but asserting the thing that test CANNOT see: before V161 the carry-in-first order
+        // existed only as arithmetic inside the year-end carry-out formula, with nothing on the
+        // request itself saying which pool paid for it. Now it is a recorded fact.
+        long employeeId = insertEmployee("V161-DEFAULT-001");
+        serviceAt("2025-05-01").submit(
+            submitRequest(employeeId, "VACATION", "2025-06-02", "2025-06-05"), employee(employeeId));
+
+        // Mon 2026-08-03 .. Mon 2026-08-10 = 6 working days (3,4,5,6,7,10; 8-9 is the weekend).
+        LeaveRequestDto taken = serviceAt("2026-07-01").submit(
+            submitRequest(employeeId, "VACATION", "2026-08-03", "2026-08-10"), employee(employeeId));
+        assertThat(taken.totalDays()).isEqualByComparingTo("6.00");
+
+        List<LeaveQuotaYearSplit> splits = leaveRepository().findQuotaYearSplits(taken.id());
+        assertThat(splits).hasSize(1);
+        // The 2.00 carry-in is spent FIRST, then 4.00 of 2026's own quota -- recorded, not inferred.
+        assertThat(splits.get(0).carriedInDays()).isEqualByComparingTo("2.00");
+        assertThat(splits.get(0).ownQuotaDays()).isEqualByComparingTo("4.00");
+    }
+
+    @Test
+    void ownFirstSpendsTheRenewableQuotaAndLetsTheCarryInExpireUnused() {
+        // THE test for V161's formula change. Identical numbers to the default-order test above, so
+        // the ONLY difference is the requester's choice.
+        //
+        // Under OWN_FIRST the employee burns all 6.00 of 2026's own quota and never touches the
+        // 2.00 carry-in, which then expires unused (§5.3.5 forbids re-carrying it). So NOTHING
+        // carries into 2027.
+        //
+        // MUTATION-CHECK TARGET: reverting LeaveService#ensureCarryoverGrant to the OLD inference
+        // `min(ownQuota, max(0, ownQuota + carriedIn - used))` computes min(6, max(0, 6+2-6)) =
+        // 2.00 here -- silently granting 2.00 days that were never actually left over. This
+        // assertion (0.00) is what catches that; it is the whole reason the formula had to stop
+        // inferring and start reading own_quota_days.
+        long employeeId = insertEmployee("V161-OWNFIRST-001");
+        serviceAt("2025-05-01").submit(
+            submitRequest(employeeId, "VACATION", "2025-06-02", "2025-06-05"), employee(employeeId));
+        assertThat(vacationBalance(serviceAt("2026-07-01"), employeeId, 2026).carriedInDays())
+            .isEqualByComparingTo("2.00");
+
+        LeaveRequestDto taken = serviceAt("2026-07-01").submit(
+            submitRequest(employeeId, "VACATION", "2026-08-03", "2026-08-10",
+                LeaveQuotaPoolPreference.OWN_FIRST),
+            employee(employeeId));
+        assertThat(taken.totalDays()).isEqualByComparingTo("6.00");
+
+        List<LeaveQuotaYearSplit> splits = leaveRepository().findQuotaYearSplits(taken.id());
+        assertThat(splits.get(0).ownQuotaDays()).isEqualByComparingTo("6.00");
+        assertThat(splits.get(0).carriedInDays()).isEqualByComparingTo("0.00");
+
+        BigDecimal grantInto2027 = leaveRepository()
+            .findCarryover(employeeId, "VACATION", 2026)
+            .orElseGet(() -> vacationBalance(serviceAt("2027-06-01"), employeeId, 2027).carriedInDays());
+        assertThat(grantInto2027).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void aRequestLargerThanTheChosenPoolSpillsIntoTheOtherOneRatherThanBeingRejected() {
+        // Spillover is the intended behaviour, explicitly NOT a rejection -- see
+        // LeaveQuotaPoolPreference's Javadoc. 7 working days against OWN_FIRST: 2026's own 6.00 is
+        // exhausted, and the remaining 1.00 falls to the carry-in pool rather than going unpaid.
+        // Mon 2026-08-03 .. Tue 2026-08-11 = 7 working days (3,4,5,6,7,10,11).
+        long employeeId = insertEmployee("V161-SPILL-001");
+        serviceAt("2025-05-01").submit(
+            submitRequest(employeeId, "VACATION", "2025-06-02", "2025-06-05"), employee(employeeId));
+
+        LeaveRequestDto taken = serviceAt("2026-07-01").submit(
+            submitRequest(employeeId, "VACATION", "2026-08-03", "2026-08-11",
+                LeaveQuotaPoolPreference.OWN_FIRST),
+            employee(employeeId));
+        assertThat(taken.totalDays()).isEqualByComparingTo("7.00");
+        // Fully paid: 7.00 fits inside the 8.00 both pools hold together.
+        assertThat(taken.paidDays()).isEqualByComparingTo("7.00");
+        assertThat(taken.unpaidDays()).isEqualByComparingTo("0.00");
+
+        LeaveQuotaYearSplit split = leaveRepository().findQuotaYearSplits(taken.id()).get(0);
+        assertThat(split.ownQuotaDays()).isEqualByComparingTo("6.00");
+        assertThat(split.carriedInDays()).isEqualByComparingTo("1.00");
+        // chk_lrqy_pool_matches_consumed, restated as an assertion: the two pools sum to exactly the
+        // quota this row consumed. The DB would have rejected the INSERT otherwise, but asserting it
+        // here names the invariant rather than relying on a constraint failing somewhere far away.
+        assertThat(split.carriedInDays().add(split.ownQuotaDays()))
+            .isEqualByComparingTo(split.quotaRemainingBefore().subtract(split.quotaRemainingAfter()));
+    }
+
     private LeaveBalanceDto vacationBalance(LeaveService service, long employeeId, int year) {
         return balanceFor(service, employeeId, year, "VACATION");
     }
@@ -289,6 +382,16 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
 
     private SubmitLeaveRequest submitRequest(long employeeId, String leaveTypeCode, String startDate, String endDate) {
         return new SubmitLeaveRequest(employeeId, leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate), "Carry-forward integration test leave");
+    }
+
+    /** §5.3.5 pool choice (V161): same request, with an explicit pool preference. */
+    private SubmitLeaveRequest submitRequest(
+            long employeeId, String leaveTypeCode, String startDate, String endDate,
+            LeaveQuotaPoolPreference preference) {
+        return new SubmitLeaveRequest(
+            employeeId, leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate),
+            "Carry-forward integration test leave", null, null, null, null, null, null, null, null, null,
+            preference);
     }
 
     private UserPrincipal employee(long employeeId) {

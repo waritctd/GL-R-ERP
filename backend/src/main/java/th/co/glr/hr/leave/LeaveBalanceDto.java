@@ -28,6 +28,25 @@ import java.time.LocalDate;
  * that date regardless of whether it was ever actually consumed. No new query, no migration -- see
  * this phase's PR body for the confirmation that {@code hr.leave_carryover} already has the columns
  * this derivation relies on.
+ *
+ * <p>{@code carriedInRemainingDays}/{@code ownQuotaRemainingDays} (V161, §5.3.5 pool choice,
+ * 2026-09-03): the SAME combined {@code remainingDays} figure above, split by pool -- how much of
+ * THIS year's carry-in grant / THIS year's own annual quota specifically remains, after every
+ * ACTIVE-status ({@code SUBMITTED}/{@code APPROVED}) request's already-recorded {@code
+ * carried_in_days}/{@code own_quota_days} (see {@link LeaveQuotaYearSplit}). Exposed so the leave
+ * composer can render a real, per-pool-aware choice ({@link
+ * SubmitLeaveRequest#quotaPoolPreference()}) instead of the single merged figure -- e.g. only offer
+ * the choice at all when {@code carriedInRemainingDays > 0}. Deliberately ADDITIVE: {@code
+ * remainingDays} above keeps its existing meaning and computation (the combined {@code annualQuotaDays
+ * + carriedInDays - approvedDays - pendingDays}, unchanged by this addition) -- do not repurpose it.
+ * {@code carriedInRemainingDays + ownQuotaRemainingDays} equals {@code remainingDays} in the common
+ * case but CAN exceed it: {@code remainingDays}' own {@code used} figure sums a request's whole {@code
+ * total_days} (see {@link LeaveRepository#sumUsedDays}), which includes any UNPAID days beyond what
+ * quota covered, while the two pool figures here sum only {@code carried_in_days}/{@code
+ * own_quota_days} -- the strictly-smaller amount that actually consumed a pool (see {@link
+ * LeaveQuotaYearSplit}'s Javadoc). Both are always {@code ZERO}/{@code annualQuotaDays} respectively
+ * (i.e. {@code carriedInRemainingDays} is always {@code ZERO}) for a type where {@link
+ * LeaveTypeDto#carriesForward()} is FALSE.
  */
 public record LeaveBalanceDto(
     String leaveTypeCode,
@@ -40,6 +59,8 @@ public record LeaveBalanceDto(
     boolean requiresAttachment,
     BigDecimal carriedInDays,
     Integer carriedInFromYear,
-    LocalDate carriedInExpiresOn
+    LocalDate carriedInExpiresOn,
+    BigDecimal carriedInRemainingDays,
+    BigDecimal ownQuotaRemainingDays
 ) {
 }

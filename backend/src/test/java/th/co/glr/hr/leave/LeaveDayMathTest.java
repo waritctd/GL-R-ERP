@@ -189,9 +189,9 @@ class LeaveDayMathTest {
         // wrong month AND the wrong year. That divergence is exactly what this test guards against.
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("9.00"), new BigDecimal("7.00"), new BigDecimal("2.00"),
-                new BigDecimal("9.00"), new BigDecimal("2.00")),
+                new BigDecimal("9.00"), new BigDecimal("2.00"), BigDecimal.ZERO, new BigDecimal("7.00")),
             new LeaveQuotaYearSplit(2027, new BigDecimal("3.00"), new BigDecimal("3.00"), BigDecimal.ZERO,
-                new BigDecimal("98.00"), new BigDecimal("95.00"))
+                new BigDecimal("98.00"), new BigDecimal("95.00"), BigDecimal.ZERO, new BigDecimal("3.00"))
         );
 
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
@@ -293,9 +293,9 @@ class LeaveDayMathTest {
         // Sun, 1/4 Mon), 1 paid -> 3 unpaid, ALL of them counted even though two are a weekend.
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("1.00"), new BigDecimal("1.00"), BigDecimal.ZERO,
-                new BigDecimal("98.00"), new BigDecimal("97.00")),
+                new BigDecimal("98.00"), new BigDecimal("97.00"), BigDecimal.ZERO, new BigDecimal("1.00")),
             new LeaveQuotaYearSplit(2027, new BigDecimal("4.00"), new BigDecimal("1.00"), new BigDecimal("3.00"),
-                new BigDecimal("98.00"), new BigDecimal("97.00"))
+                new BigDecimal("98.00"), new BigDecimal("97.00"), BigDecimal.ZERO, new BigDecimal("1.00"))
         );
 
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
@@ -308,7 +308,7 @@ class LeaveDayMathTest {
     void unpaidWorkingDaysByMonthAcrossYearsWithNoBasisArgumentIsByteIdenticalToExplicitWorkingDays() {
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), BigDecimal.ZERO, new BigDecimal("2.00"),
-                new BigDecimal("6.00"), new BigDecimal("6.00"))
+                new BigDecimal("6.00"), new BigDecimal("6.00"), BigDecimal.ZERO, BigDecimal.ZERO)
         );
         LocalDate start = LocalDate.parse("2026-07-13");
         LocalDate end = LocalDate.parse("2026-07-14");
@@ -324,9 +324,9 @@ class LeaveDayMathTest {
         // skipped rather than throwing.
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2025, new BigDecimal("1.00"), BigDecimal.ZERO, new BigDecimal("1.00"),
-                BigDecimal.ZERO, BigDecimal.ZERO),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
             new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), BigDecimal.ZERO, new BigDecimal("2.00"),
-                new BigDecimal("6.00"), new BigDecimal("6.00"))
+                new BigDecimal("6.00"), new BigDecimal("6.00"), BigDecimal.ZERO, BigDecimal.ZERO)
         );
 
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(

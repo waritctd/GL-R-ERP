@@ -68,6 +68,17 @@ class LeaveServiceTest {
         // "schedule/holiday-aware" section near the bottom of this file) re-stub this per test.
         when(leaveRepository.workingDayPredicate(anyLong(), any(), any()))
             .thenReturn(LeaveDayMath::isWorkingDay);
+        // §5.3.5 pool split (V161): LeaveService#carriedInRemaining/#ownQuotaRemaining subtract
+        // these from a pool's size, and Mockito defaults an unstubbed BigDecimal-returning method to
+        // NULL -- which NPEs inside BigDecimal.subtract for EVERY test that reaches
+        // #computeQuotaSplit, not just the pool-aware ones. The real methods can never return null
+        // (both COALESCE in SQL and null-guard in Java), so defaulting them to ZERO here is the
+        // faithful stand-in for "this employee has no recorded pool consumption yet", not a
+        // convenience fiction. Tests that DO care about pool arithmetic re-stub these per test.
+        when(leaveRepository.sumCarriedInDaysUsed(anyLong(), any(), org.mockito.ArgumentMatchers.anyInt(), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumOwnQuotaDaysUsed(anyLong(), any(), org.mockito.ArgumentMatchers.anyInt(), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
     }
 
     @Test
@@ -736,7 +747,7 @@ class LeaveServiceTest {
         // single year here, carrying the same paid/total figures the parent DTO above does.
         when(leaveRepository.findQuotaYearSplits(80L)).thenReturn(List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), new BigDecimal("1.00"), new BigDecimal("1.00"),
-                BigDecimal.ZERO, BigDecimal.ZERO)));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2.00"))));
         when(leaveRepository.findProcessedPayrollMonths(any(Collection.class)))
             .thenReturn(java.util.Set.of(LocalDate.parse("2026-07-01")));
         UserPrincipal hr = user("hr", 20L);

@@ -62,8 +62,19 @@ function rareLeaveConditionText(leaveType) {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+// §5.3.5 carry-forward (V127 field, wired through here 2026-09-03): `annualQuotaDays` is
+// deliberately THIS year's own quota only (LeaveBalanceDto's own Javadoc), while `remainingDays`
+// already has any carry-in folded in (annualQuotaDays + carriedInDays - approved - pending). This
+// used to print `สิทธิ์ {annualQuotaDays}` with no acknowledgement of that gap -- an employee with
+// a carry-over saw e.g. "สิทธิ์ 6" here and "· เหลือ 7" on the "ดูโควตา" select's own option label
+// (balanceOptionLabel, which already read the correct merged remainingDays), two numbers that look
+// contradictory side by side even though both were individually correct. Naming the carried-in
+// days right here, and adding "เหลือ" so the reconciled figure appears on THIS card too (not only
+// in the select), is what makes the two agree instead of one silently dropping a term.
 function everydayBalanceSummary(balance) {
-  return `ใช้แล้ว ${formatDays(balance.approvedDays)} · รออนุมัติ ${formatDays(balance.pendingDays)} · สิทธิ์ ${formatDays(balance.annualQuotaDays)}`;
+  const carriedInDays = Number(balance.carriedInDays || 0);
+  const carryNote = carriedInDays > 0 ? ` (+ สะสมจากปีก่อน ${formatDays(balance.carriedInDays)})` : '';
+  return `ใช้แล้ว ${formatDays(balance.approvedDays)} · รออนุมัติ ${formatDays(balance.pendingDays)} · สิทธิ์ ${formatDays(balance.annualQuotaDays)}${carryNote} · เหลือ ${formatDays(balance.remainingDays)}`;
 }
 
 // Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's
@@ -369,6 +380,13 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
   // Same arithmetic mockApi.js used to derive balance.remainingDays -- see the doc comment above.
   const used = Number(balance.approvedDays || 0) + Number(balance.pendingDays || 0);
   const summary = isEveryday ? everydayBalanceSummary(balance) : rareBalanceSummary(balance, leaveType);
+  // §5.3.5 carry-forward: `cap` used to be the bare annualQuotaDays, so a carry-over let `used`
+  // (approved+pending, which legitimately draws on the carried-in pool too) exceed it -- the bar
+  // pinned at 100% red and `overMessage` fired a false "exceeded your annual quota" warning for an
+  // employee who still had real carried-in days left. Folding carriedInDays into the cap is the
+  // same fix as everydayBalanceSummary's own reconciliation above: the bar's 100% now means "used
+  // everything actually available this year", not "used more than the flat annual figure alone".
+  const cap = Number(balance.annualQuotaDays || 0) + Number(balance.carriedInDays || 0);
 
   return (
     <div className="grid gap-2" data-testid="primary-balance-card">
@@ -381,7 +399,7 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
         label={name}
         caption={`โควตา${name}`}
         used={used}
-        cap={isEveryday ? balance.annualQuotaDays : null}
+        cap={isEveryday ? cap : null}
         formatValue={formatDays}
         overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจถูกปฏิเสธอัตโนมัติ"
       />

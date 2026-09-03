@@ -29,10 +29,33 @@ public record SubmitLeaveRequest(
     // should be considered under the "อนุโลมให้ได้ไม่เกินเดือนละ 3 ครั้ง" tolerance. Only consulted
     // when the type's own advance-notice gate would otherwise reject -- see
     // LeaveService#autoRejectNote. null/false are equivalent (treated as "not requested").
-    Boolean requestedAsEmergency
+    Boolean requestedAsEmergency,
+    // §5.3.5 pool choice (V161): which quota pool (carried-in vs this year's own) to draw from
+    // first, for a leave type that carries forward -- see LeaveQuotaPoolPreference's Javadoc. null
+    // means CARRIED_IN_FIRST (LeaveQuotaPoolPreference#orDefault); ignored entirely for a type where
+    // LeaveTypeDto#carriesForward() is FALSE, since there is no second pool to choose between.
+    LeaveQuotaPoolPreference quotaPoolPreference
 ) {
     /** Convenience constructor for the pre-sub-day/contact call sites (whole-day leave only). */
     public SubmitLeaveRequest(Long employeeId, String leaveTypeCode, LocalDate startDate, LocalDate endDate, String reason) {
-        this(employeeId, leaveTypeCode, startDate, endDate, reason, null, null, null, null, null, null, null, null, null);
+        this(employeeId, leaveTypeCode, startDate, endDate, reason, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    /**
+     * Convenience constructor for the pre-quota-pool-preference call sites (V161) -- the FULL
+     * pre-existing shape (sub-day times, contact block, purpose, emergency filing), minus the new
+     * trailing field. Exists purely so the many existing callers (mostly tests) that already
+     * construct the full 14-argument form keep compiling unchanged; every one of them gets
+     * {@code quotaPoolPreference = null}, i.e. the CARRIED_IN_FIRST default -- see
+     * LeaveQuotaPoolPreference#orDefault.
+     */
+    public SubmitLeaveRequest(
+            Long employeeId, String leaveTypeCode, LocalDate startDate, LocalDate endDate, String reason,
+            LocalTime startTime, LocalTime endTime,
+            String contactHouseNo, String contactSubdistrict, String contactDistrict, String contactProvince,
+            String contactPhone, String purposeCode, Boolean requestedAsEmergency) {
+        this(employeeId, leaveTypeCode, startDate, endDate, reason, startTime, endTime,
+            contactHouseNo, contactSubdistrict, contactDistrict, contactProvince, contactPhone,
+            purposeCode, requestedAsEmergency, null);
     }
 }

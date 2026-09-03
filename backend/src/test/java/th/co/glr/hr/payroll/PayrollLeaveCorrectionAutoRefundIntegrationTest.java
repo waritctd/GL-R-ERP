@@ -295,9 +295,17 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         jdbc.update("""
             INSERT INTO hr.leave_request_quota_year (
                 leave_request_id, quota_year, total_days, paid_days, unpaid_days,
-                quota_remaining_before, quota_remaining_after
+                quota_remaining_before, quota_remaining_after,
+                -- §5.3.5 pool split (V161): chk_lrqy_pool_matches_consumed requires these two to sum
+                -- to quota_remaining_before - quota_remaining_after (6.00 here). Charging the whole
+                -- 6.00 to OWN quota is not just constraint-satisfying, it is what makes this helper
+                -- still NEUTRALIZE the carry-forward: ensureCarryoverGrant now computes
+                -- carryOut = ownQuota - ownUsed, so own_quota_days = 6.00 gives 6 - 6 = 0 carried
+                -- out. Splitting it the other way would grant a full 6.00 and silently undo the
+                -- very thing this method exists to prevent.
+                carried_in_days, own_quota_days
             )
-            VALUES (:leaveRequestId, 2025, 6.00, 6.00, 0.00, 6.00, 0.00)
+            VALUES (:leaveRequestId, 2025, 6.00, 6.00, 0.00, 6.00, 0.00, 0.00, 6.00)
             """, new MapSqlParameterSource("leaveRequestId", leaveRequestId));
     }
 

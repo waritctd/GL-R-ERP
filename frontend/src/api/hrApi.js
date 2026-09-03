@@ -164,6 +164,13 @@ export const api = {
       if (payload.contactDistrict) formData.append('contactDistrict', payload.contactDistrict);
       if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
       if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
+      // §5.3.5 pool choice (V161): LeaveController's multipart endpoint resolves this the same way
+      // as every other query param here -- Spring binds the string to LeaveQuotaPoolPreference via
+      // Enum.valueOf. This is the branch every real submission actually takes (see the comment
+      // below on `hasOwnProperty('attachmentFile')` always being true), so this is where the field
+      // has to travel for it to reach the backend at all -- the JSON branch above already forwards
+      // whatever is in `payload` verbatim and needs no separate handling.
+      if (payload.quotaPoolPreference) formData.append('quotaPoolPreference', payload.quotaPoolPreference);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
       // Real-backend regression (found via a live click-through, not caught under mocks, which
       // never enforce CSRF at all): every submission from LeaveRequestPage.jsx's payload object

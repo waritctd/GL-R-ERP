@@ -321,9 +321,13 @@ public class LeaveService {
         // therefore unaffected: findUnpaidLeaveDaysByEmployeeForMonth still only reads APPROVED rows,
         // so a SUBMITTED request's already-correct unpaid_days simply sits inert until #approve flips
         // the status -- no recomputation, nothing to drift.
+        // §5.3.5 pool choice (V161): the requester's own declaration, resolved to its concrete
+        // default here (once, outside computeQuotaSplit's per-year loop, since the choice is a
+        // whole-request property, not a per-year one) -- see LeaveQuotaPoolPreference#orDefault.
+        LeaveQuotaPoolPreference quotaPoolPreference = LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference());
         QuotaSplitResult quotaSplit = computeQuotaSplit(
             employeeId, leaveType, request.startDate(), request.endDate(), totalDays, isWorkingDay,
-            quotaYear, outcome == null);
+            quotaYear, outcome == null, quotaPoolPreference);
         List<LeaveQuotaYearSplit> quotaYearSplits = quotaSplit.quotaYearSplits();
         BigDecimal paidDays = quotaSplit.paidDays();
         BigDecimal unpaidDays = quotaSplit.unpaidDays();
@@ -489,8 +493,13 @@ public class LeaveService {
         LeaveRuleOutcome outcome = autoReject.blocking();
         boolean approved = outcome == null;
         int quotaYear = startDate.getYear();
+        // §5.3.5 pool choice (V161): same resolve-once-per-request reasoning as #submit above, so a
+        // previewed split and what #submit would actually persist for the SAME preference can never
+        // drift apart (matching this method's own "identical arguments" guarantee -- see its Javadoc).
+        LeaveQuotaPoolPreference quotaPoolPreference = LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference());
         QuotaSplitResult split = computeQuotaSplit(
-            employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved);
+            employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved,
+            quotaPoolPreference);
 
         return new LeavePreviewDto(
             outcome, true, autoReject.coverageEvaluated(),
@@ -780,6 +789,13 @@ public class LeaveService {
         // just zero.
         Integer carriedInFromYear = type.carriesForward() ? year - 1 : null;
         LocalDate carriedInExpiresOn = type.carriesForward() ? LocalDate.of(year, 12, 31) : null;
+        // §5.3.5 pool choice (V161): the SAME `remaining` above, split by pool -- see
+        // LeaveBalanceDto's Javadoc for why the two do not always sum to exactly `remaining`, and
+        // #carriedInRemaining/#ownQuotaRemaining for the underlying reads. `asOf = LocalDate.now(clock)`
+        // for the own-quota figure, matching `annualQuota` two lines above (both read "today's"
+        // accrued entitlement, not `year`'s -- see the existing pro-ration comment on annualQuota).
+        BigDecimal carriedInRemainingDays = carriedInRemaining(employeeId, type, year);
+        BigDecimal ownQuotaRemainingDays = ownQuotaRemaining(employeeId, type, year, LocalDate.now(clock));
         return new LeaveBalanceDto(
             type.code(),
             type.nameTh(),
@@ -791,10 +807,28 @@ public class LeaveService {
             type.requiresAttachment(),
             carriedIn,
             carriedInFromYear,
-            carriedInExpiresOn
+            carriedInExpiresOn,
+            carriedInRemainingDays,
+            ownQuotaRemainingDays
         );
     }
 
+    /**
+     * The COMBINED (both-pools-merged) remaining balance for {@code quotaYear} -- annual quota plus
+     * any carry-in, less every ACTIVE-status request's whole {@code total_days} (via {@link
+     * LeaveRepository#sumUsedDays}). Unchanged by V161's pool split: this is still the single figure
+     * {@link #computeQuotaSplit} bounds a year's total quota consumption by, and still what {@link
+     * LeaveBalanceDto#remainingDays()} reports.
+     *
+     * <p>§5.3.5 pool split (V161): {@link #carriedInRemaining}/{@link #ownQuotaRemaining} describe the
+     * SAME balance split by pool, but do not always sum to exactly this method's result -- {@code
+     * used} here sums a request's WHOLE {@code total_days}, including any unpaid days beyond what a
+     * pool covered, while the two pool-specific sums ({@link LeaveRepository#sumCarriedInDaysUsed}/
+     * {@link LeaveRepository#sumOwnQuotaDaysUsed}) sum only {@code carried_in_days}/{@code
+     * own_quota_days} -- the strictly-smaller amount that actually consumed a pool (see {@link
+     * LeaveQuotaYearSplit}'s Javadoc). The two therefore always sum to AT LEAST this method's result,
+     * equal in the common case (no request that year ever ran past what remained).
+     */
     private BigDecimal remainingDays(long employeeId, LeaveTypeDto leaveType, int quotaYear, LocalDate asOf) {
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), quotaYear, ACTIVE_QUOTA_STATUSES);
         BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf)
@@ -827,10 +861,28 @@ public class LeaveService {
      * see that method's Javadoc) with identical arguments for identical inputs, so a previewed figure
      * and the figure {@link #submit} would actually persist can never drift apart through two separate
      * copies of this arithmetic.
+     *
+     * <p><b>§5.3.5 pool split (V161, 2026-09-03):</b> within each year's {@code approved} branch, the
+     * quota-consuming amount -- {@code quotaBoundedPaidDaysYear}, NOT {@code daysInYear}/{@code
+     * totalDays} (unpaid days consume no quota) and NOT {@code paidDaysYear} (narrowed a second time
+     * by {@link #boundByPaidCap}, independently of quota) -- is split across the carry-in and
+     * this-year's-own-quota pools in {@code preference}'s order: the chosen pool is drawn down first,
+     * bounded by its own remaining balance ({@link #carriedInRemaining}/{@link #ownQuotaRemaining});
+     * whatever the chosen pool cannot cover spills into the other pool, also bounded by ITS own
+     * remaining. This can never leave a genuine shortfall for a rule-passing request to spill
+     * beyond both pools -- {@code quotaBoundedPaidDaysYear <= remainingBeforeYear <=
+     * carriedInRemaining + ownQuotaRemaining} always (the last inequality holds because the two
+     * pool-specific "used" sums this method reads can never exceed the aggregate "used" {@link
+     * #remainingDays} itself reads -- see {@link LeaveRepository#sumCarriedInDaysUsed}/{@link
+     * LeaveRepository#sumOwnQuotaDaysUsed}'s Javadoc and {@code chk_lrqy_pool_matches_consumed},
+     * V161, which is what keeps that inequality true for every row, including the V161-migration
+     * backfilled ones). A rule chain that would reject a request for not fitting in ONE pool was
+     * explicitly NOT approved -- spillover is the intended behaviour, not a fallback for an error.
      */
     private QuotaSplitResult computeQuotaSplit(
             long employeeId, LeaveTypeDto leaveType, LocalDate startDate, LocalDate endDate,
-            BigDecimal totalDays, Predicate<LocalDate> isWorkingDay, int quotaYear, boolean approved) {
+            BigDecimal totalDays, Predicate<LocalDate> isWorkingDay, int quotaYear, boolean approved,
+            LeaveQuotaPoolPreference preference) {
         Map<Integer, BigDecimal> requestedDaysByYear = LeaveDayMath.totalDaysByYear(
             startDate, endDate, totalDays, leaveType.dayCountBasis(), isWorkingDay);
         List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
@@ -850,6 +902,8 @@ public class LeaveService {
             BigDecimal paidDaysYear;
             BigDecimal unpaidDaysYear;
             BigDecimal remainingAfterYear;
+            BigDecimal carriedInDaysYear;
+            BigDecimal ownQuotaDaysYear;
             if (approved) {
                 // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
                 // order, reset per year): the only ordering an aggregate paid/unpaid split can
@@ -867,15 +921,25 @@ public class LeaveService {
                 // for the full "98-45=53 lies about quota left" rationale, which applies identically
                 // per year here.
                 remainingAfterYear = remainingBeforeYear.subtract(quotaBoundedPaidDaysYear).max(BigDecimal.ZERO);
+                // §5.3.5 pool split (V161): see this method's own Javadoc paragraph above.
+                PoolAllocation poolAllocation = splitAcrossPools(
+                    quotaBoundedPaidDaysYear, preference,
+                    carriedInRemaining(employeeId, leaveType, year),
+                    ownQuotaRemaining(employeeId, leaveType, year, startDate));
+                carriedInDaysYear = poolAllocation.carriedIn();
+                ownQuotaDaysYear = poolAllocation.ownQuota();
             } else {
                 paidDaysYear = BigDecimal.ZERO;
                 unpaidDaysYear = BigDecimal.ZERO;
                 remainingAfterYear = remainingBeforeYear;
+                carriedInDaysYear = BigDecimal.ZERO;
+                ownQuotaDaysYear = BigDecimal.ZERO;
             }
             paidDays = paidDays.add(paidDaysYear);
             unpaidDays = unpaidDays.add(unpaidDaysYear);
             quotaYearSplits.add(new LeaveQuotaYearSplit(
-                year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear));
+                year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear,
+                carriedInDaysYear, ownQuotaDaysYear));
         }
         // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the
         // request's nominal start year (quotaYear) -- see that table's V118 column comments. In the
@@ -902,6 +966,67 @@ public class LeaveService {
         List<LeaveQuotaYearSplit> quotaYearSplits,
         BigDecimal remainingBefore,
         BigDecimal remainingAfter) {
+    }
+
+    /** §5.3.5 pool split (V161): what {@link #splitAcrossPools} charged to each pool for one year. */
+    private record PoolAllocation(BigDecimal carriedIn, BigDecimal ownQuota) {
+    }
+
+    /**
+     * §5.3.5 pool split (V161): divides {@code amount} (a single year's {@code
+     * quotaBoundedPaidDaysYear} -- see {@link #computeQuotaSplit}'s Javadoc) between the carry-in and
+     * own-quota pools in {@code preference}'s order. The chosen (first) pool is drawn down up to its
+     * own {@code firstRemaining}; whatever {@code amount} still needs beyond that spills into the
+     * second pool, ALSO bounded by its own remaining ({@code .min(secondRemaining)}) rather than left
+     * unbounded -- both pools are real, finite balances, never an assumed-infinite fallback.
+     *
+     * <p>{@code fromFirst + fromSecond == amount} is guaranteed whenever {@code amount <=
+     * firstRemaining + secondRemaining} (proven true for every real call site -- see {@link
+     * #computeQuotaSplit}'s Javadoc); if that ever failed to hold (a data anomaly, not a reachable
+     * code path today), the two allocations would under-sum instead of over-drawing either pool, and
+     * {@code chk_lrqy_pool_matches_consumed} (V161) would then reject the resulting INSERT/UPDATE
+     * loudly rather than silently persisting an inconsistent split.
+     */
+    private PoolAllocation splitAcrossPools(
+            BigDecimal amount, LeaveQuotaPoolPreference preference,
+            BigDecimal carriedInRemaining, BigDecimal ownQuotaRemaining) {
+        boolean carriedInFirst = preference != LeaveQuotaPoolPreference.OWN_FIRST;
+        BigDecimal firstRemaining = carriedInFirst ? carriedInRemaining : ownQuotaRemaining;
+        BigDecimal secondRemaining = carriedInFirst ? ownQuotaRemaining : carriedInRemaining;
+        BigDecimal fromFirst = firstRemaining.min(amount).max(BigDecimal.ZERO);
+        BigDecimal fromSecond = secondRemaining.min(amount.subtract(fromFirst)).max(BigDecimal.ZERO);
+        return carriedInFirst
+            ? new PoolAllocation(fromFirst, fromSecond)
+            : new PoolAllocation(fromSecond, fromFirst);
+    }
+
+    /**
+     * §5.3.5 pool split (V161): how much of {@code year}'s carry-in grant ({@link #carryInDays})
+     * remains after every ACTIVE-status ({@link #ACTIVE_QUOTA_STATUSES}) request's already-recorded
+     * {@code carried_in_days} for that year (see {@link LeaveRepository#sumCarriedInDaysUsed}).
+     * Always {@code ZERO} when {@link LeaveTypeDto#carriesForward()} is FALSE, since {@link
+     * #carryInDays} itself is ({@code carryInDays} short-circuits before ever consulting the grant).
+     */
+    private BigDecimal carriedInRemaining(long employeeId, LeaveTypeDto leaveType, int year) {
+        BigDecimal grant = carryInDays(employeeId, leaveType, year);
+        BigDecimal used = leaveRepository.sumCarriedInDaysUsed(employeeId, leaveType.code(), year, ACTIVE_QUOTA_STATUSES);
+        return grant.subtract(used).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * §5.3.5 pool split (V161): how much of {@code year}'s OWN annual quota ({@link
+     * #employeeAnnualQuota}, evaluated {@code asOf} the same start date every other per-year quota
+     * figure in {@link #computeQuotaSplit} uses) remains after every ACTIVE-status request's
+     * already-recorded {@code own_quota_days} for that year (see {@link
+     * LeaveRepository#sumOwnQuotaDaysUsed}). The counterpart to {@link #carriedInRemaining} above --
+     * together the two describe the SAME combined balance {@link #remainingDays} already computes,
+     * just split by pool instead of merged (see that method's own Javadoc note on why the two do not
+     * always sum to exactly {@link #remainingDays}' figure).
+     */
+    private BigDecimal ownQuotaRemaining(long employeeId, LeaveTypeDto leaveType, int year, LocalDate asOf) {
+        BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf);
+        BigDecimal used = leaveRepository.sumOwnQuotaDaysUsed(employeeId, leaveType.code(), year, ACTIVE_QUOTA_STATUSES);
+        return quota.subtract(used).max(BigDecimal.ZERO);
     }
 
     /**
@@ -943,26 +1068,49 @@ public class LeaveService {
      * </ul>
      *
      * <p><b>Consumption order (the decision with the largest effect on what an employee keeps):
-     * carry-IN is spent BEFORE the year's own quota.</b> This is the employee-favouring
+     * carry-IN is spent BEFORE the year's own quota, BY DEFAULT.</b> This is the employee-favouring
      * "use-it-or-lose-it" reading -- the pool that is about to expire unconditionally is drawn down
      * first, preserving as much of the renewable annual quota as possible for the NEXT
-     * carry-forward. Consequence, worked: employee has a 6.00 own quota for {@code earnedYear} plus
-     * a 2.00 carry-in from {@code earnedYear - 1} (8.00 total available) and takes exactly 6.00
-     * days during {@code earnedYear}.
+     * carry-forward. Consequence, worked (requester used the CARRIED_IN_FIRST default throughout --
+     * see the V161 paragraph below for what changes when they do not): employee has a 6.00 own quota
+     * for {@code earnedYear} plus a 2.00 carry-in from {@code earnedYear - 1} (8.00 total available)
+     * and takes exactly 6.00 days during {@code earnedYear}.
      * <pre>
-     * carry-in-first (chosen):  2.00 carry-in exhausted first, then 4.00 of own quota ->
+     * carry-in-first (default): 2.00 carry-in exhausted first, then 4.00 of own quota ->
      *                           2.00 of own quota left unused -> grants 2.00 into earnedYear+1.
-     * own-quota-first (rejected): 6.00 of own quota exhausted first, carry-in untouched (and lost,
+     * own-quota-first (opt-in): 6.00 of own quota exhausted first, carry-in untouched (and lost,
      *                           §5.3.5 forbids re-carrying it) -> 0.00 of own quota left unused ->
      *                           grants 0.00 into earnedYear+1.
      * </pre>
-     * The formula below computes this WITHOUT needing to track which specific request drew from
-     * which pool: the total unused pool ({@code ownQuota + carriedIn - used}) is, under
-     * carry-in-first consumption, exactly how much of OWN quota survives, up to a ceiling of
-     * {@code ownQuota} itself (once unused exceeds a full own quota, that means carry-in was barely
-     * touched -- but a grant can never exceed a full year's own entitlement regardless, per
-     * §5.3.5's non-accumulation clause):
-     * <pre>carryOut = min(ownQuota, max(0, ownQuota + carriedIn - used))</pre>
+     *
+     * <p><b>§5.3.5 pool choice (V161, 2026-09-03): carryOut is now RECORDED, not INFERRED.</b> Before
+     * this change, carry-in-first was the ONLY possible consumption order, so the two worked cases
+     * above could be told apart purely by ARITHMETIC, with no need to know which specific request
+     * drew from which pool: {@code carryOut = min(ownQuota, max(0, ownQuota + carriedIn - used))}
+     * (where {@code used} is the aggregate {@link LeaveRepository#sumUsedDays}) happened to give the
+     * right answer for BOTH cases above, because under a carry-in-first-ONLY world "how much was
+     * used in total" and "how much of OWN quota was used" always implied each other via that formula.
+     * {@link LeaveQuotaPoolPreference#OWN_FIRST} (this same change) breaks that implication: now that
+     * an employee can genuinely choose to spend OWN quota first and leave carry-in sitting unused,
+     * the old formula silently ASSUMES carry-in-first happened regardless of what the requester
+     * actually chose. Worked counter-example, same 6.00-own/2.00-carried-in/6.00-taken numbers as
+     * above but under {@code OWN_FIRST}: the employee's OWN 6.00 quota is exhausted by the 6.00 taken
+     * (the 2.00 carry-in sits completely untouched, and is simply lost at year-end -- §5.3.5's own
+     * non-accumulation clause). The OLD formula still computes {@code min(6, max(0, 6+2-6)) = 2.00}
+     * -- WRONG, since nothing is left of the OWN quota to grant; the correct {@code carryOut} is
+     * {@code 0.00}. The fix: read what {@link LeaveService#computeQuotaSplit} ACTUALLY recorded for
+     * this year's own pool ({@code hr.leave_request_quota_year.own_quota_days}, summed via {@link
+     * LeaveRepository#sumOwnQuotaDaysUsed}) instead of inferring it from the aggregate:
+     * <pre>carryOut = min(ownQuota, max(0, ownQuota - ownUsed))</pre>
+     * Re-run against BOTH worked cases: carry-in-first default (ownUsed = 4.00, since 2.00 of the
+     * 6.00 taken was recorded against the carry-in pool) gives {@code min(6, max(0, 6-4)) = 2.00} --
+     * the SAME answer as before for the common (default-preference) case. OWN_FIRST (ownUsed = 6.00,
+     * the full 6.00 taken was recorded against the own pool) gives {@code min(6, max(0, 6-6)) = 0.00}
+     * -- now correct. {@code carriedIn} is still computed and still persisted into {@code
+     * hr.leave_carryover.carried_in_days}/{@code used_days} below (audit-trail inputs, unread by any
+     * query -- see that column's V127 comment), and the recursive call still walks the chain backward
+     * so every earlier year's grant is memoized before this one needs it; only the {@code carryOut}
+     * FORMULA itself changed, not what triggers or persists a grant.
      *
      * <p><b>Pro-rated first year (V120) DOES carry forward.</b> §5.3.5 says "ปีใด" ("whatever
      * year"), with no carve-out for a first, pro-rated year, and V120's own parenthetical extends
@@ -993,10 +1141,18 @@ public class LeaveService {
         if (LocalDate.now(clock).getYear() <= earnedYear) {
             return BigDecimal.ZERO;
         }
+        // carriedIn/used are still computed and persisted as the audit-trail inputs
+        // hr.leave_carryover.carried_in_days/used_days always were (see that table's V127 column
+        // comments) -- and the recursive call still walks the chain backward, memoizing every earlier
+        // year's grant. Neither drives carryOut itself any more; see this method's own "RECORDED, not
+        // INFERRED" Javadoc paragraph for why.
         BigDecimal carriedIn = ensureCarryoverGrant(employeeId, leaveType, earnedYear - 1);
         BigDecimal ownQuota = employeeAnnualQuota(leaveType, employeeId, LocalDate.of(earnedYear, 12, 31));
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), earnedYear, ACTIVE_QUOTA_STATUSES);
-        BigDecimal carryOut = ownQuota.add(carriedIn).subtract(used).max(BigDecimal.ZERO).min(ownQuota);
+        // §5.3.5 pool choice (V161): carryOut now reads the RECORDED consumption of THIS year's own
+        // pool specifically (ownUsed), not the aggregate `used` above -- see this method's Javadoc.
+        BigDecimal ownUsed = leaveRepository.sumOwnQuotaDaysUsed(employeeId, leaveType.code(), earnedYear, ACTIVE_QUOTA_STATUSES);
+        BigDecimal carryOut = ownQuota.subtract(ownUsed).max(BigDecimal.ZERO).min(ownQuota);
         leaveRepository.insertCarryoverIfAbsent(
             employeeId, leaveType.code(), earnedYear, earnedYear + 1, ownQuota, used, carriedIn, carryOut);
         return carryOut;

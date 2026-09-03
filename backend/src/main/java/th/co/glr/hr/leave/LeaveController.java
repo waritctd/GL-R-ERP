@@ -110,13 +110,17 @@ public class LeaveController {
             @RequestParam(value = "contactPhone", required = false) String contactPhone,
             @RequestParam(value = "purposeCode", required = false) String purposeCode,
             @RequestParam(value = "requestedAsEmergency", required = false) Boolean requestedAsEmergency,
+            // §5.3.5 pool choice (V161): Spring resolves this String query param to the enum via
+            // Enum.valueOf against LeaveQuotaPoolPreference's constant names -- an unrecognized value
+            // fails request binding (400), same as any other malformed param on this endpoint.
+            @RequestParam(value = "quotaPoolPreference", required = false) LeaveQuotaPoolPreference quotaPoolPreference,
             @RequestParam(value = "attachment", required = false) MultipartFile attachment,
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             employeeId, leaveTypeCode, startDate, endDate, reason,
             startTime, endTime, contactHouseNo, contactSubdistrict, contactDistrict, contactProvince, contactPhone,
-            purposeCode, requestedAsEmergency);
+            purposeCode, requestedAsEmergency, quotaPoolPreference);
         return new LeaveDetailResponse(leaveService.submit(request, attachment, user));
     }
 

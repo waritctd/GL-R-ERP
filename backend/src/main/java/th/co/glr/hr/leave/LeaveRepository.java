@@ -558,6 +558,61 @@ public class LeaveRepository {
     }
 
     /**
+     * §5.3.5 pool choice (V161): sum of {@code carried_in_days} already charged against this (employee,
+     * leave type, quota year)'s carry-in pool -- i.e. how much of {@code
+     * LeaveService#carryInDays}'s grant is already spoken for by other ACTIVE-status requests, before
+     * a new one is computed. Mirrors {@link #sumUsedDays}'s child-table read and status scoping
+     * exactly, summing {@code carried_in_days} instead of {@code total_days}. Always {@code ZERO} for
+     * a leave type where {@link LeaveTypeDto#carriesForward()} is FALSE, since {@code
+     * LeaveService#computeQuotaSplit} never writes a nonzero {@code carried_in_days} for one (see
+     * {@link LeaveQuotaYearSplit}'s Javadoc).
+     */
+    public BigDecimal sumCarriedInDaysUsed(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(sum(lrqy.carried_in_days), 0)::numeric(5,2)
+              FROM hr.leave_request_quota_year lrqy
+              JOIN hr.leave_request lr ON lr.leave_request_id = lrqy.leave_request_id
+             WHERE lr.employee_id = :employeeId
+               AND lr.leave_type_code = :leaveTypeCode
+               AND lrqy.quota_year = :quotaYear
+               AND lr.status IN (:statuses)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("quotaYear", quotaYear)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
+     * §5.3.5 pool choice (V161): sum of {@code own_quota_days} already charged against this
+     * (employee, leave type, quota year)'s OWN annual quota -- the counterpart to {@link
+     * #sumCarriedInDaysUsed} above, and the figure {@code LeaveService#ensureCarryoverGrant} now
+     * subtracts from that year's own quota to compute its carry-OUT (replacing the old
+     * aggregate-{@code sumUsedDays}-based inference -- see that method's Javadoc for why). Mirrors
+     * {@link #sumUsedDays}'s child-table read and status scoping exactly, summing {@code
+     * own_quota_days} instead of {@code total_days}.
+     */
+    public BigDecimal sumOwnQuotaDaysUsed(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
+        BigDecimal value = jdbc.queryForObject("""
+            SELECT COALESCE(sum(lrqy.own_quota_days), 0)::numeric(5,2)
+              FROM hr.leave_request_quota_year lrqy
+              JOIN hr.leave_request lr ON lr.leave_request_id = lrqy.leave_request_id
+             WHERE lr.employee_id = :employeeId
+               AND lr.leave_type_code = :leaveTypeCode
+               AND lrqy.quota_year = :quotaYear
+               AND lr.status IN (:statuses)
+            """, new MapSqlParameterSource()
+            .addValue("employeeId", employeeId)
+            .addValue("leaveTypeCode", leaveTypeCode)
+            .addValue("quotaYear", quotaYear)
+            .addValue("statuses", statuses.stream().map(LeaveStatus::name).toList()),
+            BigDecimal.class);
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /**
      * §5.1 SICK no-certificate monthly tolerance (V124): counts EXISTING certificate-less
      * ({@code attachment_id IS NULL}) requests of this type, in the given status set, whose {@code
      * start_date} falls within {@code [monthStart, monthEndInclusive]} -- the SAME start_date-only
@@ -592,17 +647,23 @@ public class LeaveRepository {
      * computed for a just-created leave request -- one row per year in {@code splits}, always at
      * least one (every request touches at least its own start year). Called in the same transaction
      * as {@link #create}, right after it returns the new id.
+     *
+     * <p>V161 §5.3.5 pool attribution: also persists {@code carriedInDays}/{@code ownQuotaDays} --
+     * see {@link LeaveQuotaYearSplit}'s Javadoc. {@code chk_lrqy_pool_matches_consumed} (V161) is the
+     * DB-level backstop that these two always sum to exactly {@code quotaRemainingBefore -
+     * quotaRemainingAfter}; this method does not itself verify that, it only persists what {@link
+     * LeaveService#computeQuotaSplit} computed.
      */
     public void insertQuotaYearSplits(long leaveRequestId, List<LeaveQuotaYearSplit> splits) {
         for (LeaveQuotaYearSplit split : splits) {
             jdbc.update("""
                 INSERT INTO hr.leave_request_quota_year (
                     leave_request_id, quota_year, total_days, paid_days, unpaid_days,
-                    quota_remaining_before, quota_remaining_after
+                    quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days
                 )
                 VALUES (
                     :leaveRequestId, :quotaYear, :totalDays, :paidDays, :unpaidDays,
-                    :quotaRemainingBefore, :quotaRemainingAfter
+                    :quotaRemainingBefore, :quotaRemainingAfter, :carriedInDays, :ownQuotaDays
                 )
                 """, new MapSqlParameterSource()
                 .addValue("leaveRequestId", leaveRequestId)
@@ -611,7 +672,9 @@ public class LeaveRepository {
                 .addValue("paidDays", split.paidDays())
                 .addValue("unpaidDays", split.unpaidDays())
                 .addValue("quotaRemainingBefore", split.quotaRemainingBefore())
-                .addValue("quotaRemainingAfter", split.quotaRemainingAfter()));
+                .addValue("quotaRemainingAfter", split.quotaRemainingAfter())
+                .addValue("carriedInDays", split.carriedInDays())
+                .addValue("ownQuotaDays", split.ownQuotaDays()));
         }
     }
 
@@ -621,11 +684,16 @@ public class LeaveRepository {
      * which needs each year's own (paidDays, totalDays) to correctly re-derive which calendar months
      * were unpaid via {@link LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears}. Ordered by quota_year
      * so the earliest (start) year is always first.
+     *
+     * <p>V161: also reads back {@code carried_in_days}/{@code own_quota_days} -- unused by the
+     * cancel-after-close reversal above (that reversal only ever needs paidDays/totalDays/basis, per
+     * its own Javadoc), but this is the ONE place {@code hr.leave_request_quota_year} rows are mapped
+     * back to {@link LeaveQuotaYearSplit}, so every column the record now carries is read here.
      */
     public List<LeaveQuotaYearSplit> findQuotaYearSplits(long leaveRequestId) {
         return jdbc.query("""
             SELECT quota_year, total_days, paid_days, unpaid_days,
-                   quota_remaining_before, quota_remaining_after
+                   quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days
               FROM hr.leave_request_quota_year
              WHERE leave_request_id = :leaveRequestId
              ORDER BY quota_year
@@ -636,7 +704,9 @@ public class LeaveRepository {
                 rs.getObject("paid_days", BigDecimal.class),
                 rs.getObject("unpaid_days", BigDecimal.class),
                 rs.getObject("quota_remaining_before", BigDecimal.class),
-                rs.getObject("quota_remaining_after", BigDecimal.class)
+                rs.getObject("quota_remaining_after", BigDecimal.class),
+                rs.getObject("carried_in_days", BigDecimal.class),
+                rs.getObject("own_quota_days", BigDecimal.class)
             ));
     }
 
@@ -966,7 +1036,7 @@ public class LeaveRepository {
                 quota_year, reason, status, quota_remaining_before,
                 quota_remaining_after, system_note, requested_by_id,
                 contact_house_no, contact_subdistrict, contact_district, contact_province, contact_phone,
-                purpose_code
+                purpose_code, quota_pool_preference
             )
             VALUES (
                 :employeeId, :leaveTypeCode, :startDate, :endDate, :startTime, :endTime,
@@ -974,7 +1044,7 @@ public class LeaveRepository {
                 :quotaYear, :reason, :status, :quotaRemainingBefore,
                 :quotaRemainingAfter, :systemNote, :requestedById,
                 :contactHouseNo, :contactSubdistrict, :contactDistrict, :contactProvince, :contactPhone,
-                :purposeCode
+                :purposeCode, :quotaPoolPreference
             )
             RETURNING leave_request_id
             """, new MapSqlParameterSource()
@@ -1004,7 +1074,13 @@ public class LeaveRepository {
             // was ever called, so no re-validation happens here (matches leaveTypeCode's own split of
             // concerns: Java validates, the repository just persists the normalized form).
             .addValue("purposeCode", request.purposeCode() == null || request.purposeCode().isBlank()
-                ? null : request.purposeCode().trim().toUpperCase()),
+                ? null : request.purposeCode().trim().toUpperCase())
+            // §5.3.5 pool choice (V161): resolved (null -> CARRIED_IN_FIRST) BEFORE binding --
+            // hr.leave_request.quota_pool_preference is NOT NULL, and an explicit bound NULL would
+            // override its column DEFAULT rather than fall back to it (a DEFAULT only applies when
+            // the column is omitted from the INSERT entirely, not when NULL is passed for it). See
+            // LeaveQuotaPoolPreference#orDefault.
+            .addValue("quotaPoolPreference", LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference()).name()),
             Long.class);
         return id == null ? 0 : id;
     }

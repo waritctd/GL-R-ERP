@@ -21,6 +21,11 @@ import java.time.LocalDate;
  * endpoint, so this cannot be verified server-side the way {@link LeaveService#submit}'s actual
  * {@code MultipartFile} presence is. A caller previewing a SICK request should pass this truthfully
  * to get an accurate certificate-gate verdict.
+ *
+ * <p>{@code quotaPoolPreference} (V161): same meaning and same {@code null} default as {@link
+ * SubmitLeaveRequest#quotaPoolPreference()} -- see {@link LeaveQuotaPoolPreference}'s Javadoc. Lets a
+ * preview show the split ({@link LeavePreviewDto#quotaYearSplits()}) the requester would actually get
+ * for either pool order, before they submit.
  */
 public record LeavePreviewRequest(
     @NotBlank @Size(max = 30) String leaveTypeCode,
@@ -30,6 +35,7 @@ public record LeavePreviewRequest(
     @Size(max = 30) String purposeCode,
     Boolean requestedAsEmergency,
     Boolean hasAttachment,
-    LeavePreviewDepth depth
+    LeavePreviewDepth depth,
+    LeaveQuotaPoolPreference quotaPoolPreference
 ) {
 }

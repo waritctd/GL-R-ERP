@@ -226,6 +226,44 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     expect(card.textContent).toMatch(/\b60\b/);
     expect(card.textContent).toMatch(/ใช้แล้ว.*10.*วัน/);
   });
+
+  // §5.3.5 carry-forward reconciliation (V161 wiring, 2026-09-03): before this fix, a carry-over
+  // made the primary card show two numbers that quietly contradicted the "ดูโควตา" select right
+  // above it -- e.g. this fixture would have read "สิทธิ์ 6" here against "· เหลือ 8" on the select
+  // option (balanceOptionLabel already read the correct merged remainingDays; only this card
+  // dropped the carriedInDays term). It ALSO let QuotaBar's `used` (7, legitimately drawing on the
+  // carry-in pool) exceed its `cap` (the bare annualQuotaDays, 6) -- the bar pinned red at 100% and
+  // fired a false "เกินโควตาประจำปีแล้ว" warning for an employee who still had a real day left.
+  it('reconciles สิทธิ์/เหลือ and the QuotaBar cap when a carry-over is present, instead of a false "over quota" warning', async () => {
+    api.leave.balances.mockResolvedValue({
+      balances: [
+        {
+          leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', annualQuotaDays: 6,
+          approvedDays: 7, pendingDays: 0, remainingDays: 1, carriedInDays: 2,
+        },
+      ],
+    });
+
+    renderMyLeaveTab();
+
+    const card = await screen.findByTestId('primary-balance-card');
+    await waitFor(() => expect(card.textContent).toMatch(/ลาพักร้อน/));
+
+    // The reconciled figures: annual quota (6) named alongside the carry-in (2) and the merged
+    // remaining figure (1) -- 6 + 2 - 7 = 1, so all three numbers now agree with each other and
+    // with the select option's own "· เหลือ 1 วัน" above it.
+    expect(card.textContent).toMatch(/สิทธิ์ 6\u00A0วัน/);
+    expect(card.textContent).toMatch(/สะสมจากปีก่อน 2\u00A0วัน/);
+    expect(card.textContent).toMatch(/เหลือ 1\u00A0วัน/);
+
+    // The QuotaBar itself: cap is annualQuotaDays + carriedInDays (8), not the bare 6 -- used (7)
+    // no longer exceeds it, so this must NOT read as an over-quota bar.
+    expect(card.textContent).toMatch(/7\u00A0วัน \/ 8\u00A0วัน/);
+    expect(screen.queryByText(/เกินโควตาประจำปีแล้ว/)).toBeNull();
+    const progressBar = card.querySelector('[role="progressbar"]');
+    expect(progressBar).not.toBeNull();
+    expect(progressBar.getAttribute('aria-valuenow')).toBe('88');
+  });
 });
 
 describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)', () => {

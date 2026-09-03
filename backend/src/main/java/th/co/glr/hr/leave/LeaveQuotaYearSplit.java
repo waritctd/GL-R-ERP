@@ -28,6 +28,19 @@ import java.math.BigDecimal;
  * figures (mirroring {@code hr.leave_request}'s own columns of the same name, which now reflect only
  * the request's START year -- see that table's column comments).
  *
+ * <p>{@code carriedInDays}/{@code ownQuotaDays} (V161, §5.3.5 pool attribution, 2026-09-03): how this
+ * year's quota-consuming amount (i.e. {@code quotaRemainingBefore - quotaRemainingAfter} -- NOT
+ * {@code totalDays}, which can overstate it when a request runs past what remained, and NOT {@code
+ * paidDays}, which can understate it for a paid-days-capped type -- see
+ * {@link LeaveService#computeQuotaSplit}'s Javadoc) was split across the two quota pools, per the
+ * requester's {@link SubmitLeaveRequest#quotaPoolPreference()}/{@link
+ * LeavePreviewRequest#quotaPoolPreference()} (or its CARRIED_IN_FIRST default). Both are always {@code
+ * ZERO} for a leave type where {@link LeaveTypeDto#carriesForward()} is FALSE -- there is only ever
+ * one pool for such a type, and it is {@code ownQuotaDays}. {@code
+ * carriedInDays + ownQuotaDays = quotaRemainingBefore - quotaRemainingAfter} always (structurally
+ * enforced by {@code chk_lrqy_pool_matches_consumed}, V161) -- this is the SAME figure the two pool
+ * fields split, just not summed a second time.
+ *
  * <p>{@code public} (Phase A0b, was package-private): {@code LeavePreviewDto} now carries a {@code
  * List<LeaveQuotaYearSplit>} in the {@code POST /api/leave/preview} response, so this needs to be
  * visible outside the package for Jackson to serialize it reliably. No other change.
@@ -38,6 +51,8 @@ public record LeaveQuotaYearSplit(
     BigDecimal paidDays,
     BigDecimal unpaidDays,
     BigDecimal quotaRemainingBefore,
-    BigDecimal quotaRemainingAfter
+    BigDecimal quotaRemainingAfter,
+    BigDecimal carriedInDays,
+    BigDecimal ownQuotaDays
 ) {
 }
