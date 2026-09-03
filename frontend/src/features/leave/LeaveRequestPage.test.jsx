@@ -625,6 +625,83 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
       expect(api.leave.create.mock.calls[0][0].quotaPoolPreference).toBe('OWN_FIRST');
     });
+
+    // §5.3.5 carry-forward, step-3 QuotaBar (V161 wiring, 2026-09-03) -- the LeaveRequestPage.jsx
+    // counterpart to MyLeaveTab.test.jsx's "reconciles สิทธิ์/เหลือ and the QuotaBar cap when a
+    // carry-over is present" test. This fixture is the exact scenario from the bug report: a
+    // 6-day annual VACATION quota plus a 2-day carry-in, one request for 7 days. 7 > 6 (the bare
+    // annualQuotaDays alone) but sits well inside 6 + 2 = 8 (the combined pool), so the bar must
+    // read the request as fitting, not as over-quota.
+    it("step 3's QuotaBar cap folds in carriedInDays, so a request within the combined pool does not fire the over-quota warning", async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance());
+      // Overrides the default installDefaultLeaveMocks() preview (fixed totalDays: 1) -- both
+      // the step-2 QUICK and step-3 FULL calls resolve through this, but only step 3's FULL
+      // result reaches the QuotaBar (`step3Preview.totalDays`), which is all this test reads.
+      api.leave.preview.mockImplementation((payload) => Promise.resolve({
+        preview: {
+          blocking: null,
+          datesEvaluated: true,
+          coverageEvaluated: payload?.depth === 'FULL',
+          totalDays: 7,
+          paidDays: 7,
+          unpaidDays: 0,
+          quotaYearSplits: [],
+          counters: NO_COUNTERS,
+        },
+      }));
+      await goToStep2ForVacation();
+
+      const futureDate = '2099-12-20';
+      fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+      await screen.findByText(/ขั้นตอนที่ 3\/3/);
+
+      const progressBar = await screen.findByRole('progressbar');
+      // cap is annualQuotaDays (6) + carriedInDays (2) = 8, not the bare 6 -- used (7, this
+      // request's own totalDays) no longer exceeds it. Read via the raw DOM textContent, not
+      // screen.findByText/getByText -- their default normalizer collapses the NBSP formatDays
+      // puts between a number and its unit into a plain space, so a pattern containing a literal
+      // \u00A0 never matches through them (same reason MyLeaveTab.test.jsx's equivalent
+      // assertion reads card.textContent directly instead of querying through screen).
+      const quotaBarRoot = progressBar.parentElement;
+      expect(quotaBarRoot.textContent).toMatch(/7\u00A0วัน \/ 8\u00A0วัน/);
+      expect(quotaBarRoot.textContent).not.toMatch(/เกินโควตาประจำปี/);
+      expect(screen.queryByText(/เกินโควตาประจำปี/)).toBeNull();
+      expect(progressBar.getAttribute('aria-valuenow')).toBe('88');
+      expect(progressBar.getAttribute('aria-valuemax')).toBe('100');
+    });
+
+    // Wrong-way-round, on purpose: a request that genuinely exceeds the COMBINED pool
+    // (annualQuotaDays + carriedInDays = 8) must still warn -- proves the carry-in fold-in only
+    // narrows the false positive above and does not silently disable the real check.
+    it("step 3's QuotaBar still fires the over-quota warning once a request exceeds annualQuotaDays + carriedInDays", async () => {
+      api.leave.balances.mockResolvedValue(carryInBalance());
+      api.leave.preview.mockImplementation((payload) => Promise.resolve({
+        preview: {
+          blocking: null,
+          datesEvaluated: true,
+          coverageEvaluated: payload?.depth === 'FULL',
+          totalDays: 9,
+          paidDays: 8,
+          unpaidDays: 1,
+          quotaYearSplits: [],
+          counters: NO_COUNTERS,
+        },
+      }));
+      await goToStep2ForVacation();
+
+      const futureDate = '2099-12-20';
+      fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+      await screen.findByText(/ขั้นตอนที่ 3\/3/);
+
+      const progressBar = await screen.findByRole('progressbar');
+      expect(progressBar.parentElement.textContent).toMatch(/9\u00A0วัน \/ 8\u00A0วัน/);
+      expect(screen.getByText(/เกินโควตาประจำปี/)).not.toBeNull();
+      expect(progressBar.getAttribute('aria-valuenow')).toBe('100');
+    });
   });
 });
 

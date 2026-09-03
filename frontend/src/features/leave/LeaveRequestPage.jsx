@@ -1057,11 +1057,32 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                   {/* `formatValue={formatDays}` (2026-08-31): see MyLeaveTab.jsx's matching
                       QuotaBar -- the values carry their own unit as a duration now, so the caption
                       drops the "(วัน)" it used to supply for a bare decimal. */}
+                  {/* §5.3.5 carry-forward (V161 wiring, 2026-09-03): `cap` used to be the bare
+                      balance.type.annualQuotaDays, so a request legitimately drawing on BOTH the
+                      carry-in pool and this year's own quota -- exactly what the quota-pool
+                      preference above makes possible -- could have `step3Preview.totalDays` (one
+                      request's own day count) exceed the flat annual figure alone even though it
+                      never touched the combined pool. The bar then pinned at 100% red and fired a
+                      false "เกินโควตาประจำปี" warning for a request well inside it. Same fix as
+                      MyLeaveTab.jsx's own PrimaryLeaveBalanceCard (`cap = annualQuotaDays +
+                      carriedInDays`) -- folding carriedInDays in makes the bar's cap mean
+                      "everything actually available this year", not "this year's flat figure
+                      alone". Reads `selectedTypeBalance` (the employee's real per-type balance
+                      from balancesQuery, above), NOT `balance` here -- `balance` is only `{ type
+                      }`, the flat leave-type record, and carries no carriedInDays field at all.
+                      Uses carriedInDays (the year's full grant), not carriedInRemainingDays
+                      (what's left to spend) -- same choice MyLeaveTab makes, keeping this bar's
+                      existing semantics of "measured against the year's entitlement". The MILITARY
+                      branch stays untouched: every type but VACATION (the only carriesForward:true
+                      type) has carriedInDays === 0 anyway, but the guard is kept structural rather
+                      than resting on that incidentally. */}
                   <QuotaBar
                     label={balance.type.nameTh}
                     caption={`โควตา${balance.type.nameTh}`}
                     used={step3Preview ? Number(step3Preview.totalDays || 0) : 0}
-                    cap={balance.type.code === 'MILITARY' ? null : balance.type.annualQuotaDays}
+                    cap={balance.type.code === 'MILITARY'
+                      ? null
+                      : Number(balance.type.annualQuotaDays || 0) + Number(selectedTypeBalance?.carriedInDays || 0)}
                     formatValue={formatDays}
                     overMessage="คำขอนี้เกินโควตาประจำปี ส่วนที่เกินจะไม่รับค่าจ้าง"
                   />
