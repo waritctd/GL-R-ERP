@@ -9360,6 +9360,37 @@ export const api = {
         const exists = mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.factoryName === factoryName && q.current);
         if (exists) continue;
         const quoteId = mockFactoryQuoteSeq++;
+        const projectOrCustomer = pr.projectName || pr.customerName || '';
+        // Mirrors backend FactoryQuoteService.emailBody: list the sales-requested products for THIS
+        // factory so Import can copy the generated draft straight into an email.
+        const emailLines = [
+          `Dear ${factoryName} Team,`, '',
+          'We would like to request your best price, currency, MOQ and lead time for the following item(s):', '',
+          projectOrCustomer
+            ? `Reference: ${pr.requestCode}    Project/Customer: ${projectOrCustomer}`
+            : `Reference: ${pr.requestCode}`,
+          '',
+        ];
+        items.forEach((item, i) => {
+          const name = [item.catalogBrand, item.catalogCollection, item.catalogModel].filter(Boolean).join(' ')
+            || [item.brand, item.model, item.productDescription].filter(Boolean).join(' ')
+            || '(unspecified item)';
+          emailLines.push(`${i + 1}. ${name}${item.catalogProductCode ? `  [Code: ${item.catalogProductCode}]` : ''}`);
+          const spec = [
+            item.color ? `Color: ${item.color}` : null,
+            item.texture ? `Surface: ${item.texture}` : null,
+            item.size ? `Size: ${item.size}` : null,
+          ].filter(Boolean).join(' | ');
+          if (spec) emailLines.push(`   ${spec}`);
+          let qtyLine = `   Qty: ${item.requestedQty ?? '-'} ${item.requestedUnit ?? ''}`.trimEnd();
+          if (item.requestedQtySqm != null) qtyLine += ` (${item.requestedQtySqm} sqm)`;
+          emailLines.push(qtyLine);
+          if (item.specialRequirement) emailLines.push(`   Requirement: ${item.specialRequirement}`);
+          emailLines.push('');
+        });
+        if (pr.note) emailLines.push(`Additional note from sales: ${pr.note}`, '');
+        emailLines.push('Thank you and best regards.');
+        const generatedEmailBody = emailLines.join('\n');
         mockFactoryQuotes.push({
           id: quoteId,
           quoteCode: `FQ-2026-${String(quoteId).padStart(4, '0')}`,
@@ -9368,8 +9399,8 @@ export const api = {
           factoryName,
           status: 'DRAFT',
           emailTo: null,
-          emailSubject: `Pricing request ${pr.requestCode}`,
-          emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
+          emailSubject: projectOrCustomer ? `Pricing request ${pr.requestCode} - ${projectOrCustomer}` : `Pricing request ${pr.requestCode}`,
+          emailBody: generatedEmailBody,
           emailSentAt: null,
           sentBy: null,
           supplierQuoteRef: null,

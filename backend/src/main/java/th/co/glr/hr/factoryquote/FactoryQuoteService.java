@@ -1,5 +1,6 @@
 package th.co.glr.hr.factoryquote;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -851,24 +852,102 @@ public class FactoryQuoteService {
         notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
+    /**
+     * Builds the factory price-request email body from the sales-requested items. {@code items} is
+     * already the single factory's slice (see {@link #groupByFactory}), so one body lists only that
+     * factory's products. Each line pulls the catalog-linked identity (code/brand/collection/model)
+     * first and falls back to the sales free-text fields, then the physical spec (color, surface,
+     * size) and the requested quantity, so the factory can quote against an unambiguous line. English
+     * on purpose — the recipient is a foreign supplier.
+     */
     private String emailBody(PricingRequestSummaryDto summary, String factoryName, List<PricingRequestItemDto> items) {
         StringBuilder body = new StringBuilder();
-        body.append("Pricing request ").append(summary.requestCode()).append("\n");
-        body.append("Factory: ").append(factoryName).append("\n\n");
+        body.append("Dear ").append(factoryName).append(" Team,\n\n");
+        body.append("We would like to request your best price, currency, MOQ and lead time ")
+            .append("for the following item(s):\n\n");
+        body.append("Reference: ").append(summary.requestCode());
+        String project = firstText(summary.projectName(), summary.customerName());
+        if (project != null) {
+            body.append("    Project/Customer: ").append(project);
+        }
+        body.append("\n\n");
+
+        int no = 1;
         for (PricingRequestItemDto item : items) {
-            body.append("- ")
-                .append(safe(item.brand(), ""))
-                .append(" ")
-                .append(safe(item.model(), item.productDescription()))
-                .append(" ")
-                .append(safe(item.size(), ""))
-                .append(" qty ").append(item.requestedQty()).append(" ").append(item.requestedUnit())
-                .append("\n");
+            String name = firstText(
+                joinNonBlank(item.catalogBrand(), item.catalogCollection(), item.catalogModel()),
+                joinNonBlank(item.brand(), item.model(), item.productDescription()));
+            body.append(no++).append(". ").append(safe(name, "(unspecified item)"));
+            String code = firstText(item.catalogProductCode(), null);
+            if (code != null) {
+                body.append("  [Code: ").append(code).append("]");
+            }
+            body.append("\n");
+
+            String spec = joinWithBar(
+                labelled("Color", item.color()),
+                labelled("Surface", item.texture()),
+                labelled("Size", item.size()));
+            if (!spec.isBlank()) {
+                body.append("   ").append(spec).append("\n");
+            }
+
+            body.append("   Qty: ").append(formatQty(item.requestedQty()))
+                .append(" ").append(safe(item.requestedUnit(), "").trim());
+            if (item.requestedQtySqm() != null) {
+                body.append(" (").append(formatQty(item.requestedQtySqm())).append(" sqm)");
+            }
+            body.append("\n");
+
+            if (item.specialRequirement() != null && !item.specialRequirement().isBlank()) {
+                body.append("   Requirement: ").append(item.specialRequirement().trim()).append("\n");
+            }
+            body.append("\n");
         }
+
         if (summary.note() != null && !summary.note().isBlank()) {
-            body.append("\nSales note: ").append(summary.note()).append("\n");
+            body.append("Additional note from sales: ").append(summary.note().trim()).append("\n\n");
         }
+        body.append("Thank you and best regards.\n");
         return body.toString();
+    }
+
+    /** Join non-blank parts with a single space; null when everything is blank. */
+    private String joinNonBlank(String... parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part != null && !part.isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append(' ');
+                }
+                sb.append(part.trim());
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /** Join non-blank parts with " | " for the spec line; empty string when all blank. */
+    private String joinWithBar(String... parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part != null && !part.isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append(" | ");
+                }
+                sb.append(part);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** "{label}: {value}" or null when value is blank (so it drops out of the spec line). */
+    private String labelled(String label, String value) {
+        return value == null || value.isBlank() ? null : label + ": " + value.trim();
+    }
+
+    /** Quantity without noisy trailing zeros (12.0000 -> 12, 1.50 -> 1.5). */
+    private String formatQty(BigDecimal qty) {
+        return qty == null ? "-" : qty.stripTrailingZeros().toPlainString();
     }
 
     private String safe(String first, String fallback) {
