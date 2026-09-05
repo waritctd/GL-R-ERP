@@ -557,7 +557,7 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending }) {
         <div className="grid gap-3">
           <div className="rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs">
             <div>
-              ราคาขายที่คำนวณอัตโนมัติ:{' '}
+              ราคาขายที่คำนวณอัตโนมัติ (ก่อน VAT):{' '}
               <code className="text-info">{formatCurrency(item.proposedSellingPricePerRequestedUnit, decision.currency)}</code>
             </div>
             {hasOverride ? (
@@ -741,14 +741,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
     navigate(-1);
   };
 
-  function useActionMutation(fn, successMessage) {
+  // `options.onError` / `options.onSuccess` are an opt-in escape hatch for the two costing
+  // mutations below (startCeoReview, recalculateDecisionCost) — everything else in this file
+  // calls useActionMutation with only (fn, successMessage) and gets EXACTLY the same
+  // toast-only behaviour as before this change. Scoped this way (rather than editing the
+  // default onError itself) so the ~10 other call sites are provably untouched.
+  function useActionMutation(fn, successMessage, options = {}) {
     return useMutation({
       mutationFn: fn,
       onSuccess: () => {
         showToast?.('success', successMessage);
         invalidate();
+        options.onSuccess?.();
       },
-      onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+      onError: options.onError ?? ((error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ')),
     });
   }
 
@@ -845,6 +851,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 3: CEO Selling Price Decision.
   const [decisionDefaultMargin, setDecisionDefaultMargin] = useState('0.20');
   const [startReviewClientRequestId] = useState(() => generateClientRequestId());
+  // P0 fix follow-up (2026-09): startCeoReview/recalculateDecisionCost are the two costing calls
+  // that hit LandedCostCalculator, whose 422 is now a multi-line "one heading + one bullet per
+  // problem" message (see aggregateProblems in LandedCostCalculator.java) or FxResolver's own
+  // staleness/missing-rate message. A 3.2s toast that collapses '\n' to a space (Toast.jsx renders
+  // it in a plain <span>) cannot carry that — see the inline block rendered from this state, near
+  // whichever of the two controls is on screen. Shared by both mutations rather than one state per
+  // mutation: their trigger controls are mutually exclusive (recalculate only renders once
+  // currentDecision exists; start-review only while it does not), so only one can ever be relevant
+  // at a time.
+  const [ceoCostingError, setCeoCostingError] = useState(null);
   // Phase 1 UI simplification: the per-item margin/minimum/ceiling draft grid is gone (the main
   // view "asks for nothing" — see the CEO panel below). The only remaining CEO-typed input on a
   // decision item is "ปรับราคาเอง", which opens PriceOverrideModal per item — no draft state is
@@ -870,6 +886,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
       clientRequestId: startReviewClientRequestId,
     }),
     'เริ่มพิจารณาราคาขายแล้ว',
+    {
+      onSuccess: () => setCeoCostingError(null),
+      // Rendered inline (role="alert", whitespace-pre-line, dismissible) in the CEO panel below —
+      // NOT the toast: LandedCostCalculator's 422 here is a multi-line "heading + one bullet per
+      // problem" message, and the toast both collapses newlines to a space and auto-dismisses
+      // after 3.2s (Toast.jsx / useToast.js) — exactly wrong for a list the CEO needs to act on.
+      onError: (error) => setCeoCostingError(error.message || 'เริ่มพิจารณาราคาขายไม่สำเร็จ'),
+    },
   );
   // "ปรับราคาเอง" (Phase 1 UI simplification) — reuses PUT /pricing-decisions/{id} (the same
   // endpoint the old per-item margin/minimum/ceiling grid called) rather than a new route: the
@@ -896,6 +920,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const recalculateDecisionCost = useActionMutation(
     (decision) => api.pricingRequests.recalculatePricingDecisionCost(decision.id),
     'คำนวณต้นทุนใหม่แล้ว',
+    {
+      onSuccess: () => setCeoCostingError(null),
+      // Same reasoning as startCeoReview's onError above — inline, not the toast.
+      onError: (error) => setCeoCostingError(error.message || 'คำนวณต้นทุนใหม่ไม่สำเร็จ'),
+    },
   );
   // V141 (PR #702): a per-line manual cost override, sitting BESIDE the computed figure (which is
   // never destroyed). `reason` is mandatory in both directions — the modal refuses to call this at
@@ -1854,8 +1883,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
               type="button"
               variant="icon"
               size="sm"
-              title="คำนวณต้นทุนใหม่ — ดึงต้นทุนและอัตราแลกเปลี่ยนล่าสุด (ไม่ลบค่าที่ปรับเองไว้)"
-              disabled={recalculateDecisionCost.isPending}
+              title={recalculateDecisionCost.isPending
+                ? 'กำลังคำนวณต้นทุนใหม่…'
+                : 'คำนวณต้นทุนใหม่ — ดึงต้นทุนและอัตราแลกเปลี่ยนล่าสุด (ไม่ลบค่าที่ปรับเองไว้)'}
+              loading={recalculateDecisionCost.isPending}
               onClick={() => recalculateDecisionCost.mutate(currentDecision)}
               data-testid="pcr-ceo-recalculate-cost"
             >
@@ -1864,6 +1895,42 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ) : null}
         >
           <div className="flex flex-col gap-3 p-4">
+            {/* P2 fix (2026-09): PricingDecisionService.computeSellingPrice has no VAT term at
+                all — VAT 7% is added later, only on the customer quotation. This was previously
+                only hinted at inside the per-item "วิธีคำนวณราคานี้" disclosure (about the
+                multiplier, not about the price itself), so state it plainly and visibly here
+                first, matching the "(ก่อน VAT)" convention the ใบเสนอราคา summary below already
+                uses for ยอดรวม. */}
+            <p className="m-0 flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
+              <Icon name="info" size={15} className="mt-0.5 shrink-0" />
+              ราคาขายทุกรายการในหน้านี้เป็นราคาก่อน VAT — ใบเสนอราคาจะบวก VAT 7% แยกอีกชั้นหนึ่ง
+            </p>
+            {/* P0/P1a fix (2026-09): startCeoReview/recalculateDecisionCost's error is rendered
+                here — inline, persistent, whitespace-pre-line — instead of (or in addition to,
+                see the mutations' own comments) the toast. See ceoCostingError's declaration for
+                why one block covers both controls. */}
+            {ceoCostingError ? (
+              <div
+                role="alert"
+                data-testid="pcr-ceo-costing-error"
+                className="flex items-start gap-2.5 rounded-md border border-danger-border bg-danger-bg p-3"
+              >
+                <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0 text-danger" />
+                <p className="m-0 min-w-0 flex-1 whitespace-pre-line text-sm font-bold text-danger">
+                  {ceoCostingError}
+                </p>
+                <Button
+                  type="button"
+                  variant="icon"
+                  size="sm"
+                  className="shrink-0 border-transparent bg-transparent text-danger"
+                  title="ปิดข้อความนี้"
+                  onClick={() => setCeoCostingError(null)}
+                >
+                  <Icon name="close" size={16} />
+                </Button>
+              </div>
+            ) : null}
             {!currentDecision && canStartCeoReview(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-text-muted">
@@ -1875,8 +1942,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     placeholder="0.20"
                   />
                 </label>
-                <Button type="button" variant="primary" disabled={startCeoReview.isPending} onClick={() => startCeoReview.mutate()} data-testid="pcr-ceo-start-review">
-                  เริ่มพิจารณาราคาขาย
+                <Button
+                  type="button"
+                  variant="primary"
+                  loading={startCeoReview.isPending}
+                  onClick={() => startCeoReview.mutate()}
+                  data-testid="pcr-ceo-start-review"
+                >
+                  {startCeoReview.isPending ? 'กำลังคำนวณ…' : 'เริ่มพิจารณาราคาขาย'}
                 </Button>
               </div>
             ) : null}
@@ -1956,7 +2029,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                               )}
                             </span>
                             <span className="text-[length:var(--text-base)] font-bold text-text">
-                              ราคาขาย: {formatCurrency(effectivePrice, decision.currency)}
+                              ราคาขาย (ก่อน VAT): {formatCurrency(effectivePrice, decision.currency)}
                             </span>
                           </div>
                           {costingItem?.uncostableReason ? (
@@ -2145,12 +2218,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {!canSeeRawPricingDecision(user) && canSeePricingDecisionSalesView(user, summary) && decisionSalesView ? (
         <Panel flush title="ราคาขายที่อนุมัติ">
           <div className="flex flex-col gap-2 p-4">
+            {/* P2 fix (2026-09): this is the price the rep quotes to the customer, so the ก่อน
+                VAT label matters most here — see the CEO panel's identical note for the same
+                reasoning (PricingDecisionService.computeSellingPrice has no VAT term). */}
+            <p className="m-0 flex items-start gap-2 rounded-lg border border-info-border bg-info-bg px-3 py-2.5 text-xs text-info-dark">
+              <Icon name="info" size={15} className="mt-0.5 shrink-0" />
+              ราคาขายทุกรายการในหน้านี้เป็นราคาก่อน VAT — ใบเสนอราคาจะบวก VAT 7% แยกอีกชั้นหนึ่ง
+            </p>
             {decisionSalesView.items.map((item) => (
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
                 <strong>{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
-                  <span>ราคาขาย: {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
+                  <span>ราคาขาย (ก่อน VAT): {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
                 </div>
               </div>
             ))}
@@ -2482,7 +2562,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
           : 'ส่งอีเมลถึงโรงงาน'}
         message={confirmAction?.type === 'approveDecision'
-          ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก'
+          ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก (ราคานี้เป็นราคาก่อน VAT — ยังไม่รวมภาษีมูลค่าเพิ่ม 7%)'
           : confirmAction?.type === 'returnDecision'
             ? 'ระบุเหตุผลที่ตีกลับให้ฝ่ายนำเข้าคำนวณต้นทุนใหม่'
             : confirmAction?.type === 'issueQuotation'

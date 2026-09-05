@@ -3,15 +3,22 @@ package th.co.glr.hr.catalog;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * {@code CatalogRepository#findThicknessMm} is the single seam through which the landed-cost
- * engine learns a product's thickness, and thickness selects the freight band — a band that can
- * differ by ฿50,000 per shipment. These tests pin what that seam does and does not resolve.
+ * {@code CatalogRepository#findPricingKeys} is the seam through which the landed-cost engine now
+ * learns a product's thickness (F1, 2026-09 review — it replaced the single-row
+ * {@code findThicknessMm} this class used to call, once that method's only remaining caller was
+ * its own test; {@code findThicknessMm} has since been deleted and this class repointed at
+ * {@code findPricingKeys} instead). Thickness selects the freight band — a band that can differ by
+ * ฿50,000 per shipment. These tests pin what that seam does and does not resolve; a SEPARATE test,
+ * {@code CatalogRepositoryFindPricingKeysIntegrationTest}, covers the batched method's own concerns
+ * that have no single-row analogue: the origin-country pairing/asymmetry, absent-id and
+ * duplicate-id map semantics, and the {@code PRICE_ID_CHUNK_SIZE} boundary.
  *
  * <p>The interesting case is the middle one. Four of the nine factory workbooks carry no thickness
  * column at all, so 9,411 catalogue rows have a NULL {@code thickness_mm} that no parser can
@@ -23,6 +30,11 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
 
     private CatalogRepository catalog() {
         return new CatalogRepository(jdbc);
+    }
+
+    /** Resolves thickness through the SAME batched method the engine now uses — see class Javadoc. */
+    private BigDecimal resolvedThickness(long priceId) {
+        return catalog().findPricingKeys(List.of(priceId)).get(priceId).thicknessMm();
     }
 
     private long factoryOf(long priceId) {
@@ -55,7 +67,7 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
 
         // isEqualByComparingTo, not contains(): Optional.contains uses BigDecimal.equals, which is
         // SCALE-sensitive — 9 and 9.00 are unequal there, which would fail on a true value.
-        assertThat(catalog().findThicknessMm(id).orElseThrow()).isEqualByComparingTo("9");
+        assertThat(resolvedThickness(id)).isEqualByComparingTo("9");
     }
 
     /** The whole point of the repoint: a CEO-entered default now reaches the engine. */
@@ -67,16 +79,16 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
         setCollection(id, "ALTEA");
 
         // Before: product_prices.thickness_mm is NULL, so costing failed permanently.
-        assertThat(catalog().findThicknessMm(id))
+        assertThat(resolvedThickness(id))
             .as("nothing entered yet — must still refuse, never guess")
-            .isEmpty();
+            .isNull();
 
         jdbc.update("""
             INSERT INTO price_catalog.collection_thickness_default (factory_id, collection, thickness_mm)
             VALUES (:f, 'ALTEA', 8.5)
             """, new MapSqlParameterSource().addValue("f", factoryOf(id)));
 
-        assertThat(catalog().findThicknessMm(id).orElseThrow()).isEqualByComparingTo("8.5");
+        assertThat(resolvedThickness(id)).isEqualByComparingTo("8.5");
     }
 
     @Test
@@ -86,7 +98,7 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
         clearOwnThickness(id);
         setCollection(id, "UNCOVERED");
 
-        assertThat(catalog().findThicknessMm(id)).isEmpty();
+        assertThat(resolvedThickness(id)).isNull();
     }
 
     /**
@@ -101,13 +113,13 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
         jdbc.update("UPDATE price_catalog.product_prices SET thickness_mm = 9 WHERE price_id = :id",
             Map.of("id", id));
 
-        assertThat(catalog().findThicknessMm(id))
+        assertThat(resolvedThickness(id))
             .as("a stale version's thickness must not price a live deal")
-            .isEmpty();
+            .isNull();
     }
 
     @Test
     void anUnknownPriceIdResolvesToEmptyRatherThanThrowing() {
-        assertThat(catalog().findThicknessMm(-1L)).isEmpty();
+        assertThat(resolvedThickness(-1L)).isNull();
     }
 }

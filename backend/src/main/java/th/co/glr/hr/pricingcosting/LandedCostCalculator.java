@@ -5,9 +5,13 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.catalog.CatalogRepository;
@@ -77,6 +81,54 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * per-item {@code product_type} override — different duty rates. This class therefore returns one
  * landed-cost row per {@link PricingRequestItemDto}, never one blended shipment-wide figure applied
  * uniformly to every item it contains.
+ *
+ * <h2>P1a/P1b fixes (2026-09, authorised sales-pricing-workflow changes): aggregate the two
+ * problem-sources below into one 422 each, and stop re-fetching the same rows per item.</h2>
+ * <b>P1a — aggregate, don't abort on the first problem — but NOT every problem in this class; see
+ * the correction below.</b> {@link #resolveSources} and {@link #resolveItemPhysicals} used to
+ * throw on the FIRST missing factory/quote/price/conversion-factor they met, so a CEO with three
+ * bad lines fixed one, re-ran, and met the next — one round trip per defect instead of one round
+ * trip total. Both now collect every problem across every item (the former within its own loop;
+ * the latter via a single accumulating pass in {@link #calculate} across ALL shipments, not just
+ * one) and throw exactly ONE 422 listing all of them. {@link #missingFactor} additionally now
+ * names the item by its human label (never the bare id) and the missing factor in Thai alongside
+ * its technical identifier, plus where it is entered ({@code sales.factory_quote_item}), so the
+ * CEO knows what to fix and who to ask without a second guess. {@link #isFullyResolvable}'s
+ * semantics are unchanged by this — it still wraps only {@link #resolveSources}, exactly as
+ * before.
+ *
+ * <p><b>F2 correction — what this class does NOT aggregate, and a masking change that came free
+ * with the restructure.</b> An earlier version of this Javadoc's headline claimed the calculator
+ * "reports every problem at once". That overstates what shipped: aggregation covers exactly
+ * {@link #resolveSources} and the physicals-resolution pass in {@link #calculate} described
+ * above — nothing else. Four 422 clusters inside {@link #costShipment} still abort on the FIRST
+ * problem, unaggregated: {@code factoryConfigs.findByName}, and {@code
+ * PricingFormulaEngine#selectFreightRate}/{@code #selectClearanceFee}/{@code #selectDutyRate}.
+ * Extending aggregation to those four is a separate, larger change, tracked as a known limitation
+ * in this branch's PR body rather than done here.
+ *
+ * <p>The restructure also changed which error wins when more than one kind of problem exists in
+ * the same request. Before the restructure, the old per-shipment loop called {@code costShipment}
+ * — factory-config check included — immediately for each shipment in turn, so a factory-config
+ * problem in an EARLIER shipment could surface and 422 before a physicals problem in a LATER one
+ * was ever reached. Now, because {@link #calculate} resolves physicals for EVERY shipment before
+ * ANY {@link #costShipment} call runs (P1a.4 below), the ordering is reversed unconditionally: a
+ * physicals problem in ANY shipment always surfaces before a factory-config or formula-lookup
+ * problem in ANY shipment, even one that used to win the race. A physicals problem therefore now
+ * masks a factory-config problem that used to surface first; both are still real defects the CEO
+ * must fix, just not reported in the same order release-to-release.
+ *
+ * <p><b>P1b — the same rows were being re-fetched once per item.</b> {@link #resolveSources} used
+ * to call {@code FactoryQuoteRepository#findCurrentByFactory} once per pricing-request item (a
+ * 4-query round trip each — the quote row plus {@code findItems}/{@code findAttachments}/{@code
+ * findLatestDispatch}), so N items from the same factory re-fetched the identical quote N times;
+ * it now memoizes that lookup by factory name in a call-local map. {@link #resolveItemPhysicals}
+ * used to call {@code CatalogRepository#findThicknessMm} (deleted, F1)/the old per-row
+ * origin-country lookup (also deleted) once per item (2 more round trips each); {@link #calculate}
+ * now prefetches both, for every source's price id, in {@link CatalogRepository#findPricingKeys}
+ * — ONE batched round trip per field, regardless of item count. Neither change alters what
+ * resolves or does not: a null/absent value still becomes an {@code uncostableReason} (V156) or a
+ * thrown 422 exactly as before — see each method's own Javadoc.
  */
 @Component
 public class LandedCostCalculator {
@@ -107,14 +159,44 @@ public class LandedCostCalculator {
         PricingFormulaConfigDto formulaConfig = formulaEngine.requireCurrentConfig();
         List<ResolvedSource> sources = resolveSources(summary);
 
-        Map<Long, List<ResolvedSource>> byShipment = new LinkedHashMap<>();
+        // P1b.2: one batched catalog round trip per field, for every source's price id, instead of
+        // the 2 x N (findThicknessMm + the old findOriginCountryCode) round trips
+        // resolveItemPhysicals used to make below. See CatalogRepository#findPricingKeys.
+        Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys = prefetchCatalogKeys(sources);
+
+        // P1a.4: resolve EVERY item's physicals up front, in one accumulating pass across ALL
+        // shipments/factories in this request — not per shipment, and not aborting on the first
+        // problem. costShipment below receives the already-resolved list for its shipment and
+        // never re-resolves it (also removes the duplicated work the old per-shipment call did).
+        List<ItemPhysicals> allPhysicals = new ArrayList<>();
+        Set<String> problems = new LinkedHashSet<>();
         for (ResolvedSource source : sources) {
-            byShipment.computeIfAbsent(source.quote().id(), key -> new ArrayList<>()).add(source);
+            try {
+                allPhysicals.add(resolveItemPhysicals(source, formulaConfig, catalogKeys));
+            } catch (ApiException e) {
+                // F4 hardening: every throw reachable on this path is a 422 today (see
+                // resolveItemPhysicals and its callees), so this rethrow is currently inert — but
+                // folding a problem into the aggregated bullet list below is only safe for a 422.
+                // A future nested call that 409s or 500s must propagate as itself, not be silently
+                // downgraded into a "costing problem" bullet the CEO would misread as a 422.
+                if (e.getStatus() != HttpStatus.UNPROCESSABLE_CONTENT) {
+                    throw e;
+                }
+                problems.add(e.getMessage());
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw aggregateProblems(problems);
+        }
+
+        Map<Long, List<ItemPhysicals>> byShipment = new LinkedHashMap<>();
+        for (ItemPhysicals physicals : allPhysicals) {
+            byShipment.computeIfAbsent(physicals.source().quote().id(), key -> new ArrayList<>()).add(physicals);
         }
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
         Instant calculatedAt = Instant.now();
-        for (List<ResolvedSource> shipment : byShipment.values()) {
+        for (List<ItemPhysicals> shipment : byShipment.values()) {
             writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt));
         }
 
@@ -131,10 +213,50 @@ public class LandedCostCalculator {
         return new CalculationResult(writeItems, money4(total));
     }
 
-    /** See the class Javadoc for the grouping/allocation rules this implements. */
-    private List<PricingCostingWriteItem> costShipment(List<ResolvedSource> shipment,
+    /**
+     * Every problem collected during {@link #resolveSources} or the physicals-resolution pass in
+     * {@link #calculate}, as ONE 422 — never the first problem alone. A heading line then one
+     * bullet per problem (a {@link Set} so an identical message from more than one item, e.g. "no
+     * factory quote yet" affecting every item sourced from the same unresolved factory, collapses
+     * to a single bullet instead of repeating itself once per affected item).
+     */
+    private ApiException aggregateProblems(Set<String> problems) {
+        StringBuilder message = new StringBuilder("ไม่สามารถคำนวณต้นทุนได้ เนื่องจากพบปัญหาดังนี้:");
+        for (String problem : problems) {
+            message.append("\n- ").append(problem);
+        }
+        return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, message.toString());
+    }
+
+    /** Every distinct catalog price id referenced by {@code sources}, resolved in ONE batched
+     * call — see {@link CatalogRepository#findPricingKeys} (P1b.2). */
+    private Map<Long, CatalogRepository.CatalogPricingKey> prefetchCatalogKeys(List<ResolvedSource> sources) {
+        Set<Long> priceIds = new LinkedHashSet<>();
+        for (ResolvedSource source : sources) {
+            Long priceId = catalogPriceId(source.requestItem());
+            if (priceId != null) {
+                priceIds.add(priceId);
+            }
+        }
+        return catalog.findPricingKeys(priceIds);
+    }
+
+    /** The catalog link a pricing-request item resolves through — the submit-time snapshot when
+     * one was taken, falling back to the live product id (see {@link #resolveThicknessMm}'s
+     * Javadoc for why both point at the same {@code price_catalog.product_prices.price_id}). */
+    private Long catalogPriceId(PricingRequestItemDto requestItem) {
+        return requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
+    }
+
+    /**
+     * See the class Javadoc for the grouping/allocation rules this implements. {@code allItems} is
+     * ALREADY resolved (P1a.4) — by {@link #calculate}'s own accumulating pass, across every
+     * shipment in the request, not just this one — so this method never calls {@link
+     * #resolveItemPhysicals} itself any more; it only groups/allocates/costs what it is handed.
+     */
+    private List<PricingCostingWriteItem> costShipment(List<ItemPhysicals> allItems,
                                                         PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
-        FactoryQuoteDto quote = shipment.get(0).quote();
+        FactoryQuoteDto quote = allItems.get(0).source().quote();
         String factoryName = quote.factoryName();
         // Existence check only, now — V151 moved the freight lookup's origin-country input to the
         // catalog link (see resolveOriginCountryCode / the class Javadoc's V151 section), so this
@@ -145,11 +267,6 @@ public class LandedCostCalculator {
             .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบ factory config สำหรับโรงงาน: " + factoryName));
         String shipmentLabel = "ใบเสนอราคาโรงงาน " + factoryName + " (" + quote.quoteCode() + ")";
-
-        List<ItemPhysicals> allItems = new ArrayList<>();
-        for (ResolvedSource source : shipment) {
-            allItems.add(resolveItemPhysicals(source, formulaConfig));
-        }
 
         // V156: an item whose catalogue row carries no freight-lookup key (thickness or origin
         // country) cannot be costed at all. It is set ASIDE here rather than aborting the whole
@@ -352,7 +469,8 @@ public class LandedCostCalculator {
         );
     }
 
-    private ItemPhysicals resolveItemPhysicals(ResolvedSource source, PricingFormulaConfigDto formulaConfig) {
+    private ItemPhysicals resolveItemPhysicals(ResolvedSource source, PricingFormulaConfigDto formulaConfig,
+                                               Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
         BigDecimal sqmPerPiece = resolveSqmPerPiece(source.quoteItem(), source.requestItem());
         BigDecimal piecesPerBox = source.quoteItem().piecesPerBox();
         BigDecimal linearMPerUnit = source.quoteItem().linearMPerUnit();
@@ -370,8 +488,8 @@ public class LandedCostCalculator {
         // end to recover a per-sqm unit cost).
         BigDecimal goodsCostThb = money4(goodsCostPerPiece.multiply(qtyPieces));
         BigDecimal insuranceThb = formulaEngine.insurance(goodsCostThb, formulaConfig);
-        BigDecimal thicknessMm = resolveThicknessMm(source.requestItem());
-        String originCountryCode = resolveOriginCountryCode(source.requestItem());
+        BigDecimal thicknessMm = resolveThicknessMm(source.requestItem(), catalogKeys);
+        String originCountryCode = resolveOriginCountryCode(source.requestItem(), catalogKeys);
         String productType = resolveProductType(source.requestItem());
         return new ItemPhysicals(source, sqmPerPiece, qtyPieces, qtySqm, goodsCostPerPiece, goodsCostThb,
             insuranceThb, thicknessMm, originCountryCode, productType, fx);
@@ -396,10 +514,22 @@ public class LandedCostCalculator {
      * and the route to it was blocked. A null now marks the item UNCOSTABLE, it persists with a
      * stated reason, and {@code approve()} is what refuses to let it through un-resolved. Nothing
      * is ever priced on a guessed thickness — the guarantee moved, it did not weaken.
+     *
+     * <p><b>P1b.2:</b> reads {@code catalogKeys}, a map {@link #calculate} prefetches ONCE per
+     * request via {@link CatalogRepository#findPricingKeys} (batched over every source's price
+     * id), rather than calling {@code CatalogRepository#findThicknessMm} (F1: deleted — its only
+     * caller was its own test, repointed at {@code findPricingKeys}) here per item. Resolution
+     * semantics are byte-identical to that deleted single-row method (same view, same
+     * ACTIVE-version filter) — only the round-trip count changed.
      */
-    private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem) {
-        Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
-        return priceId == null ? null : catalog.findThicknessMm(priceId).orElse(null);
+    private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem,
+                                          Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
+        Long priceId = catalogPriceId(requestItem);
+        if (priceId == null) {
+            return null;
+        }
+        CatalogRepository.CatalogPricingKey key = catalogKeys.get(priceId);
+        return key == null ? null : key.thicknessMm();
     }
 
     /**
@@ -411,10 +541,22 @@ public class LandedCostCalculator {
      * sales.factory_config.country}, a different table's free-text field, is never read for
      * pricing). An item with no resolvable catalog link fails costing LOUDLY here, naming the
      * item, for the same reason a missing thickness does.
+     *
+     * <p><b>P1b.2:</b> reads the SAME prefetched {@code catalogKeys} map {@link
+     * #resolveThicknessMm} does — see that method's own P1b.2 note. Resolution semantics are
+     * byte-identical to the single-row lookup this replaced (the base {@code product_prices}/
+     * {@code factories} join, deliberately with NO active-version filter — see {@link
+     * CatalogRepository#findPricingKeys}'s Javadoc for why that must stay a SEPARATE query from
+     * thickness's, not a shared one over the ACTIVE-filtered view).
      */
-    private String resolveOriginCountryCode(PricingRequestItemDto requestItem) {
-        Long priceId = requestItem.catalogPriceId() != null ? requestItem.catalogPriceId() : requestItem.productId();
-        return priceId == null ? null : catalog.findOriginCountryCode(priceId).orElse(null);
+    private String resolveOriginCountryCode(PricingRequestItemDto requestItem,
+                                            Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
+        Long priceId = catalogPriceId(requestItem);
+        if (priceId == null) {
+            return null;
+        }
+        CatalogRepository.CatalogPricingKey key = catalogKeys.get(priceId);
+        return key == null ? null : key.originCountryCode();
     }
 
     /**
@@ -501,32 +643,58 @@ public class LandedCostCalculator {
             + ",\"normalizedQuantityPieces\":\"" + item.qtyPieces() + "\"}";
     }
 
+    /**
+     * P1a.1: accumulates every problem across every item and throws ONE 422 listing all of them,
+     * rather than exiting on the first — see the class Javadoc. P1b.1: memoizes the
+     * factory-quote lookup by factory name in a map LOCAL to this call (never cached across
+     * calls) — {@code FactoryQuoteRepository#findCurrentByFactory} is a 4-query round trip (the
+     * quote row plus {@code findItems}/{@code findAttachments}/{@code findLatestDispatch}), so N
+     * items sourced from the SAME factory used to repeat all 4 N times; now it runs once per
+     * DISTINCT factory in the request.
+     */
     public List<ResolvedSource> resolveSources(PricingRequestSummaryDto summary) {
         List<ResolvedSource> result = new ArrayList<>();
+        Set<String> problems = new LinkedHashSet<>();
+        Map<String, Optional<FactoryQuoteDto>> quotesByFactory = new HashMap<>();
         for (PricingRequestItemDto item : pricingRequests.findItems(summary.id())) {
             String factoryName = firstText(item.resolvedFactoryName(), item.factory());
             if (factoryName == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการที่ " + item.id() + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
+                problems.add(itemLabel(item) + " ในคำขอราคายังไม่ได้ระบุโรงงาน");
+                continue;
             }
-            FactoryQuoteDto quote = factoryQuotes.findCurrentByFactory(summary.id(), factoryName)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "ยังไม่มีใบเสนอราคาโรงงานสำหรับ " + factoryName));
+            Optional<FactoryQuoteDto> maybeQuote = quotesByFactory.computeIfAbsent(
+                factoryName, name -> factoryQuotes.findCurrentByFactory(summary.id(), name));
+            if (maybeQuote.isEmpty()) {
+                problems.add("ยังไม่มีใบเสนอราคาโรงงานสำหรับ " + factoryName);
+                continue;
+            }
+            FactoryQuoteDto quote = maybeQuote.get();
             if (!FactoryQuoteStatus.READY_FOR_COSTING.equals(quote.status())) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "ใบเสนอราคาของโรงงาน " + factoryName + " ยังไม่พร้อมสำหรับการคำนวณต้นทุน");
+                problems.add("ใบเสนอราคาของโรงงาน " + factoryName + " ยังไม่พร้อมสำหรับการคำนวณต้นทุน");
+                continue;
             }
-            FactoryQuoteItemDto quoteItem = quote.items().stream()
+            Optional<FactoryQuoteItemDto> maybeQuoteItem = quote.items().stream()
                 .filter(candidate -> candidate.pricingRequestItemId() == item.id())
-                .findFirst()
-                .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "ใบเสนอราคาของโรงงาน " + factoryName + " ไม่ครอบคลุมรายการที่ " + item.id()));
+                .findFirst();
+            if (maybeQuoteItem.isEmpty()) {
+                problems.add("ใบเสนอราคาของโรงงาน " + factoryName + " ไม่ครอบคลุม" + itemLabel(item));
+                continue;
+            }
+            FactoryQuoteItemDto quoteItem = maybeQuoteItem.get();
             if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null
                     || quoteItem.quotedUnit() == null || quoteItem.unitBasis() == null) {
-                throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการที่ " + quoteItem.id() + " ในใบเสนอราคาโรงงานยังไม่มีราคา สกุลเงิน หรือหน่วยนับ");
+                // F5: this used to name quoteItem.id() (sales.factory_quote_item) here; it now
+                // names the pricing-request-item id via itemLabel(item) instead, matching every
+                // other message in this class. Consistency improvement, but a real change: anyone
+                // looking an id up from THIS message now lands on sales.pricing_request_item, not
+                // sales.factory_quote_item as before.
+                problems.add(itemLabel(item) + " ในใบเสนอราคาโรงงานยังไม่มีราคา สกุลเงิน หรือหน่วยนับ");
+                continue;
             }
             result.add(new ResolvedSource(item, quote, quoteItem));
+        }
+        if (!problems.isEmpty()) {
+            throw aggregateProblems(problems);
         }
         return result;
     }
@@ -628,11 +796,32 @@ public class LandedCostCalculator {
         return value;
     }
 
-    /** Names both the item and the missing factor, per the financial-integrity review's requirement. */
+    /**
+     * Thai label for a physical conversion-factor field, alongside its own technical identifier
+     * so the message stays greppable back to the code/schema for an engineer while still reading
+     * naturally for the CEO. Falls back to the bare identifier for any factor name not in this
+     * map (defensive only — every caller today passes one of the three below).
+     */
+    private String factorLabelTh(String factorName) {
+        return switch (factorName) {
+            case "sqmPerUnit" -> "ตร.ม. ต่อหน่วย (sqmPerUnit)";
+            case "piecesPerBox" -> "จำนวนแผ่นต่อกล่อง (piecesPerBox)";
+            case "linearMPerUnit" -> "ความยาว (เมตร) ต่อหน่วย (linearMPerUnit)";
+            default -> factorName;
+        };
+    }
+
+    /**
+     * Names the item by its human label (never the bare id), the missing factor in Thai alongside
+     * its technical identifier ({@link #factorLabelTh}), and where it is entered — the factory
+     * quote item Import recorded ({@code sales.factory_quote_item}) — so the CEO knows both what
+     * to fix and who to ask. Per the financial-integrity review's requirement.
+     */
     private ApiException missingFactor(PricingRequestItemDto requestItem, String factorName) {
         return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-            "รายการที่ " + requestItem.id()
-                + " ในคำขอราคายังไม่มีค่าแปลงหน่วย " + factorName + " ที่จำเป็นสำหรับคำนวณราคา/จำนวน");
+            itemLabel(requestItem) + " ยังไม่มีค่า " + factorLabelTh(factorName)
+                + " ในใบเสนอราคาโรงงานที่ฝ่ายนำเข้าบันทึกไว้ (sales.factory_quote_item)"
+                + " — กรุณาตรวจสอบกับฝ่ายนำเข้า");
     }
 
     private BigDecimal money4(BigDecimal value) {

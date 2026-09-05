@@ -34,6 +34,14 @@ full subtotal) means these cannot cleanly share one row shape.
   `DocumentRepository` hardwiring `nextDocNumber("DEPOSIT_NOTICE", …)`, and
   `DepositNoticeRenderer` bound to `deposit_notice_template.xlsx`. Nothing switched on
   `doc_type` except the running-number sequence. The "generic engine" was never realized.
+
+  > **Correction (2026-09-05):** the `.xlsx` binding above describes only the state as of
+  > this doc's 2026-07-05 date. PR #258 (`c79137e5`, 2026-07-21) rebuilt all three
+  > renderers — including `DepositNoticeRenderer` — onto the real company `.xls`
+  > templates via POI + LibreOffice; `deposit_notice_template.xlsx` was a stale duplicate
+  > left beside it and has since been deleted. Current binding is
+  > `templates/deposit_notice_template.xls`. See
+  > `backend/src/main/resources/templates/README.md`.
 - `sales.quotation` (migration V6) was a separate, flat legacy table (number, total,
   currency, pdf path), later given versioning fields in V26/V27.
 

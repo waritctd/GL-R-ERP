@@ -244,6 +244,70 @@ describe('CeoSettingsPage', () => {
     expect(api.fxRates.upsert).not.toHaveBeenCalled();
   });
 
+  // P0 support fix (2026-09): FxResolver no longer requires source === 'BOT', so a non-THB rate's
+  // ONLY remaining refusal-by-age path is staleness (effectiveDate more than
+  // FxResolver.MAX_RATE_AGE_DAYS days old). This flags that here, before it ever blocks costing on
+  // a pricing request.
+  describe('FX rate staleness badge (P0 support fix)', () => {
+    // Deliberately PURE UTC day arithmetic (setUTCDate + toISOString), matching exactly how
+    // isFxRateStale() itself computes "today" (`new Date().toISOString().slice(0, 10)`) — so this
+    // helper's "n days ago" and the component's own age-in-days computation can never disagree by
+    // a day depending on the test runner's TZ, unlike a local-calendar-day helper would (see this
+    // repo's own Bangkok-timezone test-flake history).
+    function isoDaysAgo(n) {
+      const date = new Date();
+      date.setUTCDate(date.getUTCDate() - n);
+      return date.toISOString().slice(0, 10);
+    }
+
+    // Both sides asserted on the SAME render/fixture (CLAUDE.md's own testing rule) — a badge
+    // that always renders, or one that never does, fails this either way.
+    it('flags a non-THB row older than 7 days as stale and leaves a fresher one, and THB itself, unflagged', async () => {
+      api.fxRates.list.mockResolvedValue({
+        fxRates: [
+          // THB is exempt from the check entirely (FxResolver.resolve short-circuits it before
+          // ever looking at effectiveDate) — deliberately given a very old date to prove that,
+          // not just one that happens to be fresh.
+          { currency: 'THB', rateToThb: 1, effectiveDate: isoDaysAgo(400), source: 'MANUAL' },
+          { currency: 'USD', rateToThb: 36.5, effectiveDate: isoDaysAgo(8), source: 'MANUAL' },
+          { currency: 'EUR', rateToThb: 39.2, effectiveDate: isoDaysAgo(3), source: 'BOT' },
+        ],
+      });
+      renderCeoSettingsPage();
+
+      await screen.findByText('USD');
+      expect(screen.getByTestId('fx-rate-stale-USD')).not.toBeNull();
+      expect(screen.queryByTestId('fx-rate-stale-EUR')).toBeNull();
+      expect(screen.queryByTestId('fx-rate-stale-THB')).toBeNull();
+    });
+
+    // Mirrors FxResolver.resolve()'s own `isBefore` (strict) rather than `isBefore`-or-equal — a
+    // rate dated EXACTLY on the 7-day boundary is still accepted, so it must not be flagged.
+    it('does not flag a row exactly on the 7-day boundary', async () => {
+      api.fxRates.list.mockResolvedValue({
+        fxRates: [
+          { currency: 'THB', rateToThb: 1, effectiveDate: isoDaysAgo(0), source: 'MANUAL' },
+          { currency: 'USD', rateToThb: 36.5, effectiveDate: isoDaysAgo(7), source: 'MANUAL' },
+        ],
+      });
+      renderCeoSettingsPage();
+
+      await screen.findByText('USD');
+      expect(screen.queryByTestId('fx-rate-stale-USD')).toBeNull();
+    });
+  });
+
+  // P0 support fix (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึง
+  // อัตราอัตโนมัติ", implying the CEO had to wait on an admin before costing would work — no
+  // longer true now that a MANUAL rate is fully usable on its own.
+  it('rewords the FX panel subheading so a manually entered rate reads as fully usable, not gated on an admin', async () => {
+    renderCeoSettingsPage();
+    await screen.findByText('USD');
+
+    expect(screen.queryByText(/ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน/)).toBeNull();
+    expect(screen.getByText(/ใช้คำนวณต้นทุนได้ตามปกติทันที/)).not.toBeNull();
+  });
+
   // UX-08: the config editor is now built on the shared Modal — real dialog
   // semantics, and Escape closes it (was: hand-rolled overlay with none of
   // this).

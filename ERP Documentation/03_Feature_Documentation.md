@@ -140,7 +140,7 @@ stateDiagram-v2
 - **Customer directory** (`sales.customer`): searchable read-only list feeding tickets/deposit notices (PR #56).
 - **Note templates** (`sales.document_note_template`): reusable standard clauses (table name kept generic — not renamed in V29).
 - **Deposit notices:** drafted from a ticket → line items copied/edited (`sales.deposit_notice_item`) → previewed → **issued** with a number from `sales.document_sequence` → file downloadable via `GET /api/deposit-notices/{id}/file`.
-- **Issued as XLSX**, rendered from the `deposit_notice_template.xlsx` workbook (`?format=xlsx`). A `?format=pdf` branch exists but is a placeholder text stub — real PDF output is on the roadmap, not shipped.
+- **Issued as `.xls`**, rendered from the real company `deposit_notice_template.xls` workbook via Apache POI (`WorkbookFactory.create` → `HSSFWorkbook`). `?format=pdf` is the default and does real work, not a stub: `DepositNoticeRenderer.toPdf()` converts that same workbook to PDF via headless LibreOffice (`LibreOfficePdfConverter`, shipped in PR #258). The `?format=xlsx` request parameter is unchanged, but since PR #891 the response is honestly served as `.xls` + `application/vnd.ms-excel` (it previously claimed `.xlsx` + the OOXML content type while actually sending BIFF8 bytes — corrected 2026-09-05).
 - V29 renamed `sales.document`→`sales.deposit_notice` and `document_item`→`deposit_notice_item` (behavior-preserving); the deposit-notice API paths moved to `/api/deposit-notices/...` and `/api/tickets/{id}/deposit-notice/draft`. Quotation and invoice get their own tables.
 - Document types/plans originate from `docs/QUOTATION_AND_REVISION_PLAN` and the quotation template workbook (`docs/quotation_template_source.xlsx`).
 

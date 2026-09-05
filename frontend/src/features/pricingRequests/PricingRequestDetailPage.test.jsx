@@ -1002,7 +1002,11 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'อนุมัติราคาขาย' });
-    expect(within(dialog).getByText('เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก')).not.toBeNull();
+    // P2 fix (2026-09): now also states the approved price is ex-VAT — see the "selling price is
+    // stated as ก่อน VAT" describe block below for the dedicated coverage of that copy change.
+    expect(within(dialog).getByText(
+      'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก (ราคานี้เป็นราคาก่อน VAT — ยังไม่รวมภาษีมูลค่าเพิ่ม 7%)',
+    )).not.toBeNull();
     expect(within(dialog).getByRole('button', { name: 'อนุมัติ' })).not.toBeNull();
     expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
   });
@@ -1625,6 +1629,186 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
     await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
     expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
+  });
+
+  // P0/P1a fix (2026-09): LandedCostCalculator now aggregates every problem across every item
+  // into ONE 422 whose message is a heading line + one bullet per problem (see
+  // LandedCostCalculator#aggregateProblems), and FxResolver's own staleness/missing-rate messages
+  // are similarly meant to be read in full, not truncated. Both startCeoReview and
+  // recalculateDecisionCost render that error inline in this panel instead of the toast — see
+  // ceoCostingError's own comment in the page for why the toast is wrong for this (collapses '\n'
+  // to a space in Toast.jsx, auto-dismisses after 3200ms in useToast.js).
+  describe('CEO costing error surfaced inline, not the toast (P0/P1a fix)', () => {
+    const multiLineError = [
+      'ไม่สามารถคำนวณต้นทุนได้ เนื่องจากพบปัญหาดังนี้:',
+      '- รายการที่ 8001 (SCG A1) ในคำขอราคายังไม่ได้ระบุโรงงาน',
+      '- อัตราแลกเปลี่ยน USD มีผล ณ วันที่ 2026-01-01 ซึ่งเก่าเกิน 7 วัน — กรุณาปรับปรุงที่ ตั้งค่า CEO → อัตราแลกเปลี่ยน ก่อนคำนวณต้นทุน',
+    ].join('\n');
+
+    async function renderReadyForRecalculate() {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      const utils = renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      return utils;
+    }
+
+    it("renders recalculateDecisionCost's multi-line 422 inline with every line intact, and never calls showToast for it", async () => {
+      api.pricingRequests.recalculatePricingDecisionCost.mockRejectedValueOnce(new Error(multiLineError));
+      const { showToast } = await renderReadyForRecalculate();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+
+      const alert = await screen.findByTestId('pcr-ceo-costing-error');
+      expect(alert.getAttribute('role')).toBe('alert');
+      // All three lines survive as distinct lines, not one run-on sentence — the '\n' in the
+      // server's message is still literally '\n' in the DOM (only CSS decides how it wraps).
+      expect(alert.textContent.split('\n')).toEqual(multiLineError.split('\n'));
+      // The element that actually renders it preserves line breaks via the Tailwind utility the
+      // task calls for — not Toast.jsx's plain <span>, which has no such class and collapses '\n'
+      // to a space.
+      const messageEl = alert.querySelector('p');
+      expect(messageEl.className).toContain('whitespace-pre-line');
+      // The toast-regression guard: every OTHER useActionMutation call site still reports its
+      // error via showToast('error', ...) — these two must not, or this flips true.
+      expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
+    });
+
+    it('does not auto-dismiss — it outlives the toast\'s own 3.2s window (real timers, deliberately)', async () => {
+      api.pricingRequests.recalculatePricingDecisionCost.mockRejectedValueOnce(new Error(multiLineError));
+      await renderReadyForRecalculate();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+      await screen.findByTestId('pcr-ceo-costing-error');
+
+      // Real timers on purpose (fake timers stall @testing-library's own setTimeout-based
+      // polling — see the repo's other date/timer test comments) — long enough that
+      // useToast.js's 3200ms auto-dismiss would already have fired had this gone through the
+      // toast instead.
+      await new Promise((resolve) => { setTimeout(resolve, 3300); });
+
+      expect(screen.getByTestId('pcr-ceo-costing-error')).not.toBeNull();
+    }, 10000);
+
+    it('lets the CEO dismiss the inline costing error manually', async () => {
+      api.pricingRequests.recalculatePricingDecisionCost.mockRejectedValueOnce(new Error(multiLineError));
+      await renderReadyForRecalculate();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+      const alert = await screen.findByTestId('pcr-ceo-costing-error');
+
+      fireEvent.click(within(alert).getByRole('button', { name: 'ปิดข้อความนี้' }));
+
+      expect(screen.queryByTestId('pcr-ceo-costing-error')).toBeNull();
+    });
+
+    it('clears the inline error once a retry succeeds', async () => {
+      api.pricingRequests.recalculatePricingDecisionCost.mockRejectedValueOnce(new Error(multiLineError));
+      await renderReadyForRecalculate();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+      await screen.findByTestId('pcr-ceo-costing-error');
+
+      api.pricingRequests.recalculatePricingDecisionCost.mockResolvedValueOnce({});
+      fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
+
+      await waitFor(() => expect(screen.queryByTestId('pcr-ceo-costing-error')).toBeNull());
+    });
+
+    it("renders startPricingDecision's error inline the same way, before any decision exists", async () => {
+      const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      api.pricingRequests.startPricingDecision.mockRejectedValueOnce(new Error(multiLineError));
+      const { showToast } = renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'เริ่มพิจารณาราคาขาย' }));
+
+      const alert = await screen.findByTestId('pcr-ceo-costing-error');
+      expect(alert.textContent.split('\n')).toEqual(multiLineError.split('\n'));
+      expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
+    });
+  });
+
+  // P1b fix (2026-09): the backend batching means costing is faster than before, but it is still
+  // a multi-second round trip — these two controls must SHOW that, not just go `disabled` with no
+  // other signal (issue: "รีเฟรชใช้เวลานานนิดนึง" read as broken, not slow).
+  describe('costing pending state (P1b fix)', () => {
+    it('busies the recalculate icon button and reflects it in the accessible name while in flight', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      let resolveRecalc;
+      api.pricingRequests.recalculatePricingDecisionCost.mockReturnValue(
+        new Promise((resolve) => { resolveRecalc = resolve; }),
+      );
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const button = screen.getByTestId('pcr-ceo-recalculate-cost');
+      fireEvent.click(button);
+
+      await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'));
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('aria-label')).toBe('กำลังคำนวณต้นทุนใหม่…');
+
+      resolveRecalc({});
+      await waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
+    });
+
+    it('busies the start-review button and shows "กำลังคำนวณ…" while in flight', async () => {
+      const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      let resolveStart;
+      api.pricingRequests.startPricingDecision.mockReturnValue(
+        new Promise((resolve) => { resolveStart = resolve; }),
+      );
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+
+      const button = await screen.findByTestId('pcr-ceo-start-review');
+      fireEvent.click(button);
+
+      await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'));
+      expect(button.disabled).toBe(true);
+      // Button's `loading` hides the children visually (opacity), not from the accessibility
+      // tree, so the accessible name reflects the in-progress state too.
+      expect(button.textContent).toContain('กำลังคำนวณ…');
+
+      resolveStart({});
+      await waitFor(() => expect(button.getAttribute('aria-busy')).toBeNull());
+    });
+  });
+
+  // P2 fix (2026-09): PricingDecisionService.computeSellingPrice is roundUp(cost x (1 + margin) x
+  // sellingBuffer) with NO VAT term — VAT 7% is only ever added later, on the customer quotation.
+  // Every place a CEO or sales rep reads a selling price on this page must say so.
+  describe('selling price is stated as ก่อน VAT (P2 fix)', () => {
+    it('shows a persistent ก่อน VAT note in the CEO panel without expanding anything, and labels the per-item line', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      // Visible without expanding "วิธีคำนวณราคานี้" — this assertion runs before any
+      // expandDerivation() call in this test, unlike the collapsible-only mention of the
+      // multiplier elsewhere in this panel.
+      expect(screen.getByText(/ราคาขายทุกรายการในหน้านี้เป็นราคาก่อน VAT/)).not.toBeNull();
+      expect(screen.getByText(/ราคาขาย \(ก่อน VAT\).*฿72\.00/)).not.toBeNull();
+    });
+
+    it('labels the sales-facing approved price ก่อน VAT — the figure the rep quotes to the customer', async () => {
+      const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+      api.pricingRequests.getPricingDecisionSalesView.mockResolvedValue({ decision: buildSalesView() });
+      renderDetailPage({ user: salesOwner, request });
+      await waitForLoaded(request);
+
+      expect(await screen.findByText(/ราคาขายทุกรายการในหน้านี้เป็นราคาก่อน VAT/)).not.toBeNull();
+      expect(screen.getByText(/ราคาขาย \(ก่อน VAT\).*฿72\.00/)).not.toBeNull();
+      // Design correction 2 still holds — no cost/margin field leaks into this sales-facing view.
+      expect(screen.queryByText(/ต้นทุน/)).toBeNull();
+      expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
+    });
   });
 });
 
