@@ -60,16 +60,41 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // right there, at setup, instead of the real assertion later failing for a reason that looks
 // unrelated to the actual defect.
 //
-// SECOND PRECONDITION, NEW IN THIS BRANCH: demo.sales's division (ฝ่ายขาย) is OFFICE_5D (V115
-// seed) -- an ordinary Mon-Fri schedule, no weekend assignment. That means whether "today" reads
-// as an ordinary workday or a weekend-suggested-HOLIDAY now depends on which day of the week the
-// suite happens to run on, which this file's own "always use today" design (below) cannot avoid.
-// isWeekendInBangkok/expectedSuggestionFor compute the RIGHT answer for whichever day it is,
-// rather than assuming one -- see their own comments. Two cases (the over-claim-disagreement case
-// and the "frozen at approval" case) instead need a genuinely ORDINARY day to isolate what they
-// are testing from the weekend rule; those use nearestWeekdayOnOrBefore, documented at its
-// definition, which accepts a small, LOUD (409, never silent) residual risk of crossing a
-// payroll-month boundary rather than adding more complexity to dodge it entirely.
+// SECOND PRECONDITION: whether "today" reads as an ordinary workday or a non-workday-suggested
+// HOLIDAY depends on which day of the week the suite runs on AND on which WorkSchedule the OWNER
+// persona resolves that day -- which this file's own "always use today" design (below) cannot
+// avoid. expectedSuggestionFor/expectedMultiplierFor compute the RIGHT answer for whichever day
+// it is; nearestScheduledWorkdayOnOrBefore steps back to a genuinely ORDINARY day for the two
+// cases (the over-claim-disagreement case and the "frozen at approval" case) that need one to
+// isolate what they are testing from the non-workday rule. All three read the persona's schedule
+// from the BACKEND rather than assuming it -- see their definitions inside the describe block.
+//
+// THAT INDIRECTION IS THE FIX FOR A REAL FAILURE, not decoration. These helpers used to hardcode
+// "Saturday and Sunday are non-working" (an `isWeekendInBangkok` predicate). That is a claim about
+// COMPANY POLICY, which does not live in this file: it lives in hr.work_schedule_assignment, it is
+// DATA, and the row deciding it has been rewritten twice for this persona already. V115 seeded
+// ฝ่ายขาย (division 'SA') on OFFICE_5D; V117 moved it to SALES_5D -- the same Mon-Fri day set, so
+// the hardcode survived and only the comment above it went stale; V160 moved it to SALES_6D,
+// Mon-SATURDAY, effective 2026-09-01. From that date the real backend correctly derives
+// WORKDAY/1.50 for a sales Saturday while this file still expected HOLIDAY/3.00, so the two cases
+// below that assert the SUGGESTION for today's date (Cases 4 and 6 -- the others either create a
+// holiday on it, which wins regardless, or read the suggestion back as their own baseline) failed
+// on Saturdays and ONLY on Saturdays -- first red on Sat
+// 2026-09-05 (CI run 33966932264), on a PR touching nothing in this area. develop's last green run
+// was Tue 2026-09-01, which is why merging V160 did not catch it.
+//
+// WHAT READING THE SCHEDULE BACK DOES AND DOES NOT PROVE, stated plainly rather than left for the
+// next reader to work out: it makes this file AGREE with whatever TieredWorkScheduleResolver
+// resolves instead of independently proving it -- the "a test that mirrors the computation is not
+// evidence about that computation" shape CLAUDE.md warns about. That trade is deliberate and
+// narrow. The resolver's own correctness has real-Postgres proof of its own, written wrong-way-
+// round: SalesDivisionSaturdayWorkdayIntegrationTest pins ฝ่ายขาย's Saturday AND that Sunday did
+// not move, that a date before 2026-09-01 still resolves the five-day schedule, and that a
+// five-day division was left alone; OrgNormalizationScheduleIntegrationTest does the same for
+// V121. What THIS file is for is the OT pipeline built ON TOP of that resolution -- suggestion,
+// employee claim, approver override, and their JSON serialization over the real HTTP layer.
+// Keeping a second, hardcoded copy of company working-time policy here bought no extra evidence
+// about any of that, and cost a red suite the next time the owner ruled on working hours.
 //
 // SAFETY / RE-RUNNABILITY, same rules as write-overtime.spec.js (this file mutates a real,
 // possibly shared database too):
@@ -104,8 +129,16 @@ function todayInBangkok() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
+/** ISO-8601 day-of-week numbering, 1 = Monday .. 7 = Sunday -- what `schedule.workdays` speaks. */
+const ISO_DAY_OF_WEEK = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+
 /**
- * True when `dateIso` (a Bangkok CALENDAR date, e.g. "2026-08-08") falls on a Saturday or Sunday.
+ * The ISO day-of-week number (1 = Monday .. 7 = Sunday) that `dateIso` (a Bangkok CALENDAR date,
+ * e.g. "2026-09-05") falls on. That numbering is not arbitrary: it is exactly what
+ * LeaveCalendarWorkScheduleDto.workdays carries (`DayOfWeek::getValue`), so the two compare
+ * directly with no translation on either side -- the same reasoning that DTO's own javadoc gives
+ * for mirroring WorkScheduleSummaryDto.
+ *
  * Built by constructing the instant of NOON Bangkok time on that date (`T12:00:00+07:00`, an
  * explicit offset, never a bare/UTC parse) and reading the weekday back out formatted in the SAME
  * timezone -- so the answer is correct regardless of what timezone the machine running this suite
@@ -113,11 +146,20 @@ function todayInBangkok() {
  * warn about for the identical problem (bangkokTodayIso): a naive `new Date(dateIso).getDay()`
  * parses the bare string as UTC midnight, which is the PREVIOUS Bangkok-local day whenever the
  * runner's zone is west of UTC+0 for part of the day -- silently computing the wrong weekday.
+ *
+ * This REPLACES an `isWeekendInBangkok` predicate. The timezone care above survives unchanged; the
+ * "Sat/Sun are non-working" assumption layered on top of it did not -- see this file's header.
+ * Throwing on an unrecognised weekday rather than returning a falsy 0 is the same discipline: an
+ * Intl locale-data change would otherwise silently make every date resolve as a non-workday.
  */
-function isWeekendInBangkok(dateIso) {
+function isoDayOfWeekInBangkok(dateIso) {
   const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', weekday: 'short' })
     .format(new Date(`${dateIso}T12:00:00+07:00`));
-  return weekday === 'Sat' || weekday === 'Sun';
+  const isoDay = ISO_DAY_OF_WEEK[weekday];
+  if (!isoDay) {
+    throw new Error(`Unrecognised Bangkok weekday '${weekday}' for ${dateIso} -- Intl locale data changed?`);
+  }
+  return isoDay;
 }
 
 /** Shifts a Bangkok calendar date by `days` (may be negative), in pure calendar arithmetic (no timezone involved). */
@@ -125,42 +167,6 @@ function shiftDateIso(dateIso, days) {
   const date = new Date(`${dateIso}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
-}
-
-/**
- * demo.sales's division (ฝ่ายขาย) is OFFICE_5D (V115 seed) -- Mon-Fri, no weekend assignment --
- * so this is the suggestion OvertimeService#suggestDayType actually produces for this persona
- * on an ordinary day with no hr.holiday row: WORKDAY on a weekday, HOLIDAY on a weekend.
- */
-function expectedSuggestionFor(workDate) {
-  return isWeekendInBangkok(workDate) ? 'HOLIDAY' : 'WORKDAY';
-}
-
-function expectedMultiplierFor(workDate) {
-  return isWeekendInBangkok(workDate) ? 3 : 1.5;
-}
-
-/**
- * The nearest date on/before `dateIso` that is NOT a Saturday/Sunday -- nudges back at most 2
- * days. Used ONLY by the two cases below that specifically need a genuinely ORDINARY (non-
- * weekend) day to isolate what they are testing (a claim disagreeing with the suggestion; a
- * calendar change picked up between submit and approval) from the weekend-suggests-HOLIDAY rule
- * feat/ot-nonworkday-rate-suggestion adds -- every other case in this file uses todayInBangkok()
- * unmodified, per this file's header ("always use today", the payroll-month-open reason). Nudging
- * BACKWARD, not forward, keeps the date retroactive rather than risking one that has not arrived
- * yet; capping at 2 days means this only risks crossing a payroll-month boundary when the 1st or
- * 2nd of a month lands on a Saturday/Sunday -- a rare combination this file accepts as a residual,
- * LOUD (409 "already processed", never a silent wrong answer) risk rather than a reason to add
- * more machinery here.
- */
-function nearestWeekdayOnOrBefore(dateIso) {
-  let candidate = dateIso;
-  let guard = 0;
-  while (isWeekendInBangkok(candidate) && guard < 2) {
-    candidate = shiftDateIso(candidate, -1);
-    guard += 1;
-  }
-  return candidate;
 }
 
 /**
@@ -284,16 +290,140 @@ test.describe('overtime day type: system suggestion, employee request, approver 
     ).toContain(date);
   }
 
+  // ── schedule helpers: the expected SUGGESTION comes from the backend's own resolver ────────
+
+  /**
+   * Per-DATE memo of the OWNER's resolved workday set. Keyed by date rather than cached once for
+   * the whole run, because a work-schedule assignment is EFFECTIVE-DATED: V160 closes ฝ่ายขาย's
+   * five-day rows at 2026-08-31 and opens the six-day ones at 2026-09-01, and
+   * ScheduleAssignment#covers honours that boundary per call. Observed, not assumed -- this
+   * backend answers workdays [1..5] for 2026-08-29 and [1..6] for 2026-09-05. Dates a couple of
+   * days apart genuinely can resolve different schedules, which is exactly the window
+   * nearestScheduledWorkdayOnOrBefore steps across, so caching one answer for all of them would
+   * reintroduce a smaller version of the bug this whole change removes.
+   */
+  const ownWorkdaysByDate = new Map();
+
+  /**
+   * The ISO day-of-week numbers (1 = Monday .. 7 = Sunday) that the OWNER's OWN resolved
+   * WorkSchedule counts as working days ON `dateIso`, read from the real backend.
+   *
+   * GET /api/leave/calendar-context is the right source and, for this persona, the only one:
+   * LeaveCalendarContextService calls LeaveRepository#resolveOwnSchedule, which is the SAME
+   * TieredWorkScheduleResolver#resolve (EMPLOYEE > DEPARTMENT > DIVISION, effective-dated) that
+   * OvertimeService#suggestDayType consults, evaluated at the SAME date. WorkScheduleController
+   * would answer the same question about an arbitrary employee but is hr/ceo-gated, and OWNER is
+   * `sales`; this endpoint is self-scoped by construction (no employeeId parameter at all), so it
+   * always returns the schedule of the very session submitting the overtime below.
+   *
+   * NOT `nonWorkingDates`, deliberately, even though it sits in the same response: that field
+   * folds hr.holiday rows in with the schedule, and every case in this file manages its own
+   * holiday rows. Reading it here would make "is this day a scheduled workday" quietly depend on
+   * the calendar state the test is itself manipulating.
+   */
+  async function ownWorkdaysOn(dateIso) {
+    const cached = ownWorkdaysByDate.get(dateIso);
+    if (cached) {
+      return cached;
+    }
+
+    const response = await sessions[OWNER].get(
+      `/api/leave/calendar-context?from=${dateIso}&to=${dateIso}`
+    );
+    expect(
+      response.status(),
+      `resolving ${OWNER}'s own work schedule on ${dateIso}: ${await response.text()}`
+    ).toBe(200);
+    const { calendarContext } = await response.json();
+    const workdays = calendarContext?.schedule?.workdays;
+
+    // Non-degenerate, asserted at the point of reading. Without this a backend that answered an
+    // empty or missing workday set would make EVERY date below resolve as a non-workday, and this
+    // file would go green asserting HOLIDAY/3.00 everywhere -- in perfect agreement with itself
+    // and with nothing real. Fails loudly here, at setup, instead.
+    expect(
+      workdays,
+      `GET /api/leave/calendar-context must carry schedule.workdays for ${dateIso}`
+    ).toEqual(expect.any(Array));
+    expect(
+      workdays.length,
+      'a resolved schedule with no working days at all is not a schedule -- refusing to derive expectations from it'
+    ).toBeGreaterThan(0);
+
+    ownWorkdaysByDate.set(dateIso, workdays);
+    return workdays;
+  }
+
+  /**
+   * The suggestion OvertimeService#suggestDayType actually produces for the OWNER on `workDate`
+   * when no hr.holiday row exists for it -- WORKDAY when their resolved schedule counts that
+   * day-of-week as a working day, HOLIDAY otherwise. That is the Java expression verbatim
+   * (`schedule.isWorkday(workDate) ? WORKDAY : HOLIDAY`), with the schedule read back from the
+   * service rather than restated here.
+   *
+   * WHOSE schedule this is matters and is worth pinning down once: OWNER is demo.sales, whose
+   * division IS ฝ่ายขาย -- 'SA' in V21's demo seed -- with no department_id and no employee-scope
+   * assignment, so the DIVISION-tier row is what reaches them, and V160 moves exactly that row.
+   */
+  async function expectedSuggestionFor(workDate) {
+    const workdays = await ownWorkdaysOn(workDate);
+    return workdays.includes(isoDayOfWeekInBangkok(workDate)) ? 'WORKDAY' : 'HOLIDAY';
+  }
+
+  /** The pay multiplier that goes with expectedSuggestionFor's answer: 3.00 HOLIDAY, 1.50 WORKDAY. */
+  async function expectedMultiplierFor(workDate) {
+    return (await expectedSuggestionFor(workDate)) === 'HOLIDAY' ? 3 : 1.5;
+  }
+
+  /**
+   * The nearest date on/before `dateIso` that the OWNER's own resolved schedule counts as a
+   * WORKING day -- nudges back at most 2 days. Used ONLY by the two cases below that specifically
+   * need a genuinely ORDINARY day to isolate what they are testing (a claim disagreeing with the
+   * suggestion; a calendar change picked up between submit and approval) from the
+   * non-workday-suggests-HOLIDAY rule feat/ot-nonworkday-rate-suggestion adds -- every other case
+   * in this file uses todayInBangkok() unmodified, per this file's header ("always use today", the
+   * payroll-month-open reason).
+   *
+   * Nudging BACKWARD, not forward, keeps the date retroactive rather than risking one that has not
+   * arrived yet; capping at 2 days means this only risks crossing a payroll-month boundary when
+   * the 1st or 2nd of a month is a non-working day -- a rare combination this file accepts as a
+   * residual, LOUD (409 "already processed", never a silent wrong answer) risk rather than a
+   * reason to add more machinery here.
+   *
+   * Two days is enough for every schedule in hr.work_schedule today: the five-day ones break
+   * Sat+Sun, the six-day ones only Sun. It THROWS rather than returning the last candidate if that
+   * ever stops being true. The predecessor of this helper returned it, which is a different and
+   * worse failure: it would hand these two cases a NON-working date and fail them in the
+   * assertion, looking like an OT defect rather than a stale helper.
+   */
+  async function nearestScheduledWorkdayOnOrBefore(dateIso) {
+    let candidate = dateIso;
+    for (let nudged = 0; nudged <= 2; nudged += 1) {
+      const workdays = await ownWorkdaysOn(candidate);
+      if (workdays.includes(isoDayOfWeekInBangkok(candidate))) {
+        return candidate;
+      }
+      candidate = shiftDateIso(candidate, -1);
+    }
+    throw new Error(
+      `No scheduled working day for ${OWNER} within 2 days on or before ${dateIso}. Their resolved ` +
+        'schedule has three or more consecutive non-working days, which no hr.work_schedule row had ' +
+        'when this helper was written -- widen the cap here and re-check the payroll-month boundary ' +
+        'risk documented above.'
+    );
+  }
+
   // -------------------------------------------------------------------------------------------
   // Case 1: THE row this branch changes. A HOLIDAY claim the calendar can actively disprove --
   // the year is loaded (a sentinel proves it) but the work date specifically is not in it, AND
-  // the work date is an ordinary weekday (nearestWeekdayOnOrBefore, so the weekend rule cannot
-  // also explain a HOLIDAY suggestion here) -- used to be refused outright (400, no row). Owner
-  // ruling 2026-08-08: accepted and flagged instead. Wrong-way-round through to a full approval
-  // with NO override: the claimed 3.00 must never reach pay_rate_multiplier.
+  // the work date is one the OWNER's own schedule counts as a working day
+  // (nearestScheduledWorkdayOnOrBefore, so the non-workday rule cannot also explain a HOLIDAY
+  // suggestion here) -- used to be refused outright (400, no row). Owner ruling 2026-08-08:
+  // accepted and flagged instead. Wrong-way-round through to a full approval with NO override:
+  // the claimed 3.00 must never reach pay_rate_multiplier.
   // -------------------------------------------------------------------------------------------
   test('a HOLIDAY claim contradicted by the calendar is accepted, flagged, and never becomes pay', async () => {
-    const workDate = nearestWeekdayOnOrBefore(todayInBangkok());
+    const workDate = await nearestScheduledWorkdayOnOrBefore(todayInBangkok());
     const sentinelDate = sentinelDateInSameYear(workDate);
     let created = null;
 
@@ -325,7 +455,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
       const after = await countOwnOvertime();
       expect(after, 'the claim is accepted -- exactly one new row').toBe(before + 1);
 
-      expect(created.suggestedDayType, 'the suggestion is WORKDAY -- an ordinary weekday, no holiday').toBe('WORKDAY');
+      expect(created.suggestedDayType, 'the suggestion is WORKDAY -- a scheduled working day, no holiday').toBe('WORKDAY');
       expect(created.dayType, 'the stored day_type is the SUGGESTION, never the claim').toBe('WORKDAY');
       expect(created.payRateMultiplier).toBe(1.5);
       expect(created.calculationNote, 'the disagreement is flagged for the approver').toContain('ไม่ตรงกับที่ระบบแนะนำ');
@@ -435,10 +565,10 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   // Case 4: the base case -- no claim at all, calendar genuinely LOADED for the year (a sentinel,
   // same technique as Case 1). Asserts the SCHEDULE-AWARE suggestion for whichever day today
   // happens to be, rather than assuming a weekday -- expectedSuggestionFor/expectedMultiplierFor
-  // compute the answer demo.sales's real OFFICE_5D schedule actually produces. Asserting the note
-  // too (not just the multiplier) is what tells "genuinely unflagged" apart from "the flag
-  // silently regressed to always-false" -- and, on a weekday specifically, from "the calendar-
-  // unverified flag silently regressed to always-true".
+  // read demo.sales's own resolved schedule back out of the service and derive the answer from
+  // that. Asserting the note too (not just the multiplier) is what tells "genuinely unflagged"
+  // apart from "the flag silently regressed to always-false" -- and, on a scheduled working day
+  // specifically, from "the calendar-unverified flag silently regressed to always-true".
   // -------------------------------------------------------------------------------------------
   test('a day with no claim stores the schedule-derived suggestion, unflagged when the calendar is loaded', async () => {
     const workDate = todayInBangkok();
@@ -460,10 +590,10 @@ test.describe('overtime day type: system suggestion, employee request, approver 
       expect(response.status(), await response.text()).toBe(200);
       ({ request: created } = await response.json());
 
-      const expectedDayType = expectedSuggestionFor(workDate);
+      const expectedDayType = await expectedSuggestionFor(workDate);
       expect(created.suggestedDayType).toBe(expectedDayType);
       expect(created.dayType).toBe(expectedDayType);
-      expect(created.payRateMultiplier).toBe(expectedMultiplierFor(workDate));
+      expect(created.payRateMultiplier).toBe(await expectedMultiplierFor(workDate));
       expect(
         created.calculationNote,
         'the year IS loaded (sentinel above): a WORKDAY suggestion must not carry the calendar-unverified flag, and a schedule-derived HOLIDAY suggestion never needs the calendar at all'
@@ -479,14 +609,15 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   // -------------------------------------------------------------------------------------------
   // Case 5: day_type is re-derived and FROZEN at the approval stage that first leaves SUBMITTED
   // (OvertimeService#calculate, called from managerApprove) -- never trusted from whatever was
-  // stored at submit. Needs a genuinely ORDINARY (non-weekend) work date to isolate "a holiday
-  // added after submit" from the weekend rule -- nearestWeekdayOnOrBefore, see its own comment.
+  // stored at submit. Needs a work date the OWNER's own schedule counts as ORDINARY to isolate
+  // "a holiday added after submit" from the non-workday rule -- nearestScheduledWorkdayOnOrBefore,
+  // see its own comment.
   // Mirrors
   // OvertimeDayTypeDerivedFromCalendarIntegrationTest#aHolidayAddedToTheCalendarAfterSubmitIsPickedUpAndFrozenAtManagerApproval
   // at the HTTP layer, through the real HolidayController instead of a direct INSERT.
   // -------------------------------------------------------------------------------------------
   test('day_type is frozen at approval: a holiday HR adds after submit is picked up at manager approval', async () => {
-    const workDate = nearestWeekdayOnOrBefore(todayInBangkok());
+    const workDate = await nearestScheduledWorkdayOnOrBefore(todayInBangkok());
     let created = null;
 
     await deleteHolidayBestEffort(workDate);
@@ -501,7 +632,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
       );
       expect(submitResponse.status(), await submitResponse.text()).toBe(200);
       ({ request: created } = await submitResponse.json());
-      expect(created.dayType, 'must start out WORKDAY -- an ordinary weekday, no holiday exists yet at submit time').toBe('WORKDAY');
+      expect(created.dayType, 'must start out WORKDAY -- a scheduled working day, no holiday exists yet at submit time').toBe('WORKDAY');
       expect(created.suggestedDayType).toBe('WORKDAY');
       // hasManagerApprover is what routes this to managerApprove (rather than ceoDirectApprove),
       // which is the stage this case needs -- see write-overtime.spec.js for why this OWNER/
@@ -542,7 +673,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   // -------------------------------------------------------------------------------------------
   test("the approver's explicit dayType overrides the suggestion", async () => {
     const workDate = todayInBangkok();
-    const suggested = expectedSuggestionFor(workDate);
+    const suggested = await expectedSuggestionFor(workDate);
     const override = suggested === 'HOLIDAY' ? 'WORKDAY' : 'HOLIDAY';
     let created = null;
 
