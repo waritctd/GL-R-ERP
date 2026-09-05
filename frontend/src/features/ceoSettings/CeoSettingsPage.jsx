@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
@@ -782,6 +783,44 @@ function DeleteFreightRateModal({ rate, deleting, onClose, onConfirm }) {
   );
 }
 
+// P0 fix follow-up (2026-09): FxResolver no longer requires source === 'BOT', so a non-THB rate's
+// ONLY remaining refusal-by-age path is staleness. This constant mirrors
+// `FxResolver.MAX_RATE_AGE_DAYS` (backend/src/main/java/th/co/glr/hr/pricing/FxResolver.java) so
+// the CEO can see, on THIS page, which rows will 422 before ever clicking "เริ่มพิจารณาราคาขาย" /
+// "คำนวณต้นทุนใหม่" on a pricing request. Per CLAUDE.md's own note on mock-constant drift, nothing
+// automatically fails if these two numbers diverge — there is no shared source and no test spanning
+// both languages — so keep them in sync by hand if FxResolver's value ever changes.
+const FX_RATE_MAX_AGE_DAYS = 7;
+
+// Mirrors FxResolver.resolve()'s own comparison exactly:
+// `rate.effectiveDate().isBefore(LocalDate.now().minusDays(MAX_RATE_AGE_DAYS))` — i.e. STRICTLY
+// more than FX_RATE_MAX_AGE_DAYS days old. A rate dated exactly on the boundary is still accepted
+// (isBefore is false when the dates are equal), so this stays a strict `>`, never `>=`. Both dates
+// are normalized to UTC midnight before differencing — NOT because a browser in a negative UTC
+// offset could otherwise misread "today" (browser-local walltime plays no part here at all:
+// `new Date().toISOString()` is always UTC, regardless of the viewer's timezone). The real reason
+// is what this mirrors: FxResolver#resolve compares against the BACKEND's `LocalDate.now()`, which
+// runs in the JVM's default time zone, and this server runs in UTC — no `TZ` is set in
+// render.yaml or backend/Dockerfile, and EmployeeService:29 states outright that "now" for the
+// server itself is UTC (Bangkok is only the business zone payroll/leave/OT explicitly convert
+// into, never the server's own default). Normalizing to UTC here is what keeps this badge's
+// "today" matching the backend's.
+//
+// Consequence worth knowing: if the container ever gets `TZ=Asia/Bangkok`, this badge would
+// UNDER-report staleness by one day during 00:00–07:00 ICT — Bangkok's calendar day rolls over 7
+// hours before UTC's does, so the backend's `LocalDate.now()` would already be a day ahead of what
+// this UTC-based badge computes in that window. This badge is advisory only, for the CEO's benefit
+// before they click through; FxResolver's own staleness gate on the backend is authoritative
+// regardless of what this badge shows.
+function isFxRateStale(effectiveDate) {
+  if (!effectiveDate) return false;
+  const effectiveMs = Date.parse(`${effectiveDate}T00:00:00Z`);
+  if (Number.isNaN(effectiveMs)) return false;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const ageDays = Math.round((Date.parse(`${todayIso}T00:00:00Z`) - effectiveMs) / 86400000);
+  return ageDays > FX_RATE_MAX_AGE_DAYS;
+}
+
 export function CeoSettingsPage({ showToast }) {
   const queryClient = useQueryClient();
 
@@ -934,9 +973,14 @@ export function CeoSettingsPage({ showToast }) {
 
       {/* FX Rates */}
       <Panel flush title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)">
-        <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle flex gap-3">
-          <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย)</span>
-          <span className="text-text-muted">• ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึงอัตราอัตโนมัติ</span>
+        {/* P0 fix follow-up (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน
+            การดึงอัตราอัตโนมัติ", which implied the CEO had to wait on an admin before costing
+            would work at all. That is no longer true — FxResolver no longer requires source ===
+            'BOT' (see its own class Javadoc), so a "กรอกเอง" rate below is fully usable for
+            costing right now; the daily BOT fetch is only ever a convenience on top of that. */}
+        <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle flex flex-wrap gap-x-3 gap-y-1">
+          <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย) เป็นความสะดวกเสริมเท่านั้น</span>
+          <span>• อัตราที่กรอกเอง (กรอกเอง) ใช้คำนวณต้นทุนได้ตามปกติทันที ไม่ต้องรอเปิดใช้งานการดึงอัตราอัตโนมัติ</span>
         </div>
         <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
@@ -954,8 +998,11 @@ export function CeoSettingsPage({ showToast }) {
               const fxError = fxErrors[fx.currency];
               const fxInputId = `fx-rate-${fx.currency}`;
               const fxErrorId = `${fxInputId}-error`;
+              // THB never needs a sales.fx_rates row at all (FxResolver.resolve short-circuits it
+              // to rate 1) — only a non-THB row can ever hit the staleness refusal.
+              const stale = fx.currency !== 'THB' && isFxRateStale(fx.effectiveDate);
               return (
-                <tr key={fx.currency} className="border-b border-surface-subtle">
+                <tr key={fx.currency} className={`border-b border-surface-subtle${stale ? ' bg-warning-bg-soft' : ''}`}>
                   <td className="px-4 py-2 font-bold">
                     <code className="bg-surface-subtle px-1.5 py-0.5 rounded-[4px]">{fx.currency}</code>
                   </td>
@@ -998,7 +1045,25 @@ export function CeoSettingsPage({ showToast }) {
                       <strong>{fx.currency === 'THB' ? '1.0000' : moneyDisplay(fx.rateToThb)}</strong>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-text-muted text-xs">{fx.effectiveDate}</td>
+                  <td className="px-4 py-2 text-text-muted text-xs">
+                    <div className="flex flex-col items-start gap-1">
+                      <span>{fx.effectiveDate}</span>
+                      {stale ? (
+                        // whitespace-nowrap: this table's wrapper already scrolls horizontally
+                        // (overflow-x-auto) at narrow widths — without it, the browser's default
+                        // table layout wraps this longer badge one word per line into a tall
+                        // stack instead, which is worse than the horizontal scroll.
+                        <span
+                          className="inline-flex items-center gap-1 whitespace-nowrap rounded-[10px] bg-warning-bg px-2 py-0.5 text-2xs font-semibold text-warning-dark"
+                          title={`อัตรานี้มีผลมาแล้วเกิน ${FX_RATE_MAX_AGE_DAYS} วัน — ระบบจะปฏิเสธการคำนวณต้นทุนด้วยอัตรานี้จนกว่าจะปรับปรุงวันที่มีผล`}
+                          data-testid={`fx-rate-stale-${fx.currency}`}
+                        >
+                          <Icon name="triangleAlert" size={12} />
+                          เก่าเกิน {FX_RATE_MAX_AGE_DAYS} วัน — จะบล็อกการคำนวณต้นทุน
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="px-4 py-2">
                     {isBot
                       ? <span className="bg-info-bg text-info px-2 py-0.5 rounded-[10px] text-2xs font-semibold">ธปท. อัตโนมัติ</span>
