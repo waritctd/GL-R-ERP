@@ -9,15 +9,13 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 
 class RemainingInvoiceRendererTest {
     private final RemainingInvoiceRenderer renderer = new RemainingInvoiceRenderer();
 
-    @BeforeEach
-    void requireLibreOffice() {
+    private void requireLibreOffice() {
         // toXlsx() output is converted to PDF via LibreOffice for this test; skip (don't fail)
         // where it isn't installed — same policy as the repo's Testcontainers-on-Docker gating.
         // CI installs libreoffice-calc.
@@ -26,7 +24,24 @@ class RemainingInvoiceRendererTest {
     }
 
     @Test
+    void xlsxOutputIsRealBiff8OleBytesNotOoxmlZip() throws Exception {
+        // Pins the byte format and the advertised content type together:
+        // DepositNoticeController's /tickets/{id}/remaining-invoice/file endpoint serves this
+        // exact output as "application/vnd.ms-excel" + ".xls".
+        // WorkbookFactory.create(templates/remaining_invoice_template.xls) returns an
+        // HSSFWorkbook, so wb.write(out) always emits OLE2/Compound File Binary bytes
+        // ([MS-CFB], BIFF8 .xls) — never the ZIP "PK\x03\x04" local-file-header magic an OOXML
+        // .xlsx would start with. If this ever drifts to XSSF, this assertion catches it before
+        // the response headers do (or don't).
+        byte[] xlsx = renderer.toXlsx(document());
+
+        assertThat(xlsx).startsWith((byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+            (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1);
+    }
+
+    @Test
     void rendersWithoutFormulaErrorsAsASinglePageWithTheCorrectTotal() throws Exception {
+        requireLibreOffice();
         // Regression test for the bugs this branch fixed: the renderer used to leave #REF!/
         // #VALUE! in the amount cells. Item 66 × 979.40 = 64,640.40; deposit 32,320.20 is
         // deducted → remainder 32,320.20; VAT 7% = 2,262.41; total payable = 34,582.61.

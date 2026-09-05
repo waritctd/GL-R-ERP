@@ -126,8 +126,8 @@ public class CustomerQuotationController {
         if ("xlsx".equalsIgnoreCase(format)) {
             byte[] bytes = quotations.renderXlsx(id, user);
             return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + id + ".xlsx\"")
-                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"quotation-" + id + ".xls\"")
+                .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
                 .body(bytes);
         }
         if (!"pdf".equalsIgnoreCase(format)) {

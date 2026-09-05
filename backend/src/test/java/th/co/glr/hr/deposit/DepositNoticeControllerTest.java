@@ -24,6 +24,11 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
 class DepositNoticeControllerTest {
+    // OLE2/Compound File Binary magic (BIFF8 .xls, per [MS-CFB]) — real HSSFWorkbook output
+    // starts with these bytes, never the ZIP "PK\x03\x04" of an OOXML .xlsx.
+    private static final byte[] OLE2_MAGIC_BYTES =
+        {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
+
     private final DepositNoticeService service = mock(DepositNoticeService.class);
     private final MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new DepositNoticeController(service, new SessionContext()))
@@ -43,21 +48,47 @@ class DepositNoticeControllerTest {
     }
 
     @Test
-    void fileStillSupportsExplicitXlsxDownload() throws Exception {
+    void fileWithFormatXlsxParamReturnsHonestXlsContentTypeAndFilename() throws Exception {
+        // DepositNoticeRenderer fills a real BIFF8 (.xls) company template via
+        // WorkbookFactory/HSSFWorkbook (see its TEMPLATE constant) — wb.write(out) emits OLE2
+        // .xls bytes, never OOXML .xlsx. The ?format=xlsx REQUEST param is the existing wire
+        // contract and stays as-is (frontend + mockApi both send it); only the RESPONSE
+        // filename/content-type must advertise what the bytes actually are, or Excel warns
+        // "the file format and extension don't match". Regression test for that mismatch.
         when(service.getById(eq(99L), any(UserPrincipal.class))).thenReturn(document());
-        when(service.getXlsx(eq(99L), any(UserPrincipal.class))).thenReturn(new byte[] {'P', 'K', 3, 4});
+        when(service.getXlsx(eq(99L), any(UserPrincipal.class))).thenReturn(OLE2_MAGIC_BYTES);
 
         mvc.perform(get("/api/deposit-notices/99/file?format=xlsx").session(session()))
             .andExpect(status().isOk())
-            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"GLRD69001.xlsx\""))
-            .andExpect(content().contentType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-            .andExpect(content().bytes(new byte[] {'P', 'K', 3, 4}));
+            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"GLRD69001.xls\""))
+            .andExpect(content().contentType("application/vnd.ms-excel"))
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
     }
 
     @Test
     void fileRequiresAuthentication() throws Exception {
         mvc.perform(get("/api/deposit-notices/99/file"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void remainingInvoiceFileReturnsHonestXlsContentTypeAndFilename() throws Exception {
+        // Same BIFF8-template mismatch as above, but for RemainingInvoiceRenderer
+        // (templates/remaining_invoice_template.xls) via
+        // GET /api/tickets/{ticketId}/remaining-invoice/file.
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class))).thenReturn(OLE2_MAGIC_BYTES);
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename=\"remaining-invoice-10.xls\""))
+            .andExpect(content().contentType("application/vnd.ms-excel"))
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    }
+
+    @Test
+    void remainingInvoiceFileRequiresAuthentication() throws Exception {
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file"))
             .andExpect(status().isUnauthorized());
     }
 
