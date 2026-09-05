@@ -2418,7 +2418,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     </Button>
                     <Button type="button" variant="secondary" disabled={downloadingQuotationFormat === 'xlsx'}
                       onClick={() => handleDownloadCustomerQuotation(quotation, 'xlsx')}>
-                      ดูตัวอย่าง XLSX
+                      ดูตัวอย่าง Excel
                     </Button>
                     {editable ? (
                       <Fragment key={`quotation-actions-${quotation.id}`}>
