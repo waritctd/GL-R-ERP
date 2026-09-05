@@ -683,9 +683,13 @@ public class CustomerQuotationService {
         BigDecimal lineTotal = lineSubtotal.add(vat);
         String description = firstText(item.productDescription(),
             (firstText(item.brand(), "") + " " + firstText(item.model(), "")).trim());
+        // brand/model/color/texture/size all flow straight from the sales-view DTO into the
+        // legacy render columns — see NewItem's own field comment and V74's migration comment
+        // for why these five (and only these five) exist on quotation_item.
         return new NewItem(item.pricingRequestItemId(), item.pricingDecisionItemId(), description,
             item.requestedUnitBasis(), item.requestedQuantity(), approvedUnitPrice, discount, finalUnitPrice,
-            lineSubtotal, vat, lineTotal, item.brand(), unitLabel(item.requestedUnitBasis()));
+            lineSubtotal, vat, lineTotal, item.brand(), item.model(), item.color(), item.texture(), item.size(),
+            unitLabel(item.requestedUnitBasis()));
     }
 
     private String unitLabel(String unitBasis) {

@@ -237,6 +237,49 @@ class QuotationRendererTest {
             "สำนักงานใหญ่", "02-000-0000");
     }
 
+    /**
+     * buildDesc's model/color/size/texture branches went uncovered for years because every
+     * fixture here passed null for the last three — which is exactly how a Step 4 quotation
+     * shipped a bare "กระเบื้อง" to customers (see V162 and
+     * CustomerQuotationIntegrationTest#create_populatesLegacyRenderColumnsForModelColorTextureSize).
+     * Both size shapes the product actually produces are pinned here: a bare catalog numeric,
+     * which must GAIN " cm.", and a hand-typed value already carrying its unit (the ขนาด field's
+     * own placeholder is "เช่น 60x60 ซม."), which must NOT be doubled into "60x60 ซม. cm.".
+     */
+    @Test
+    void descriptionRendersAllAttributes_andSuppliesTheSizeUnitOnlyWhenItIsMissing() throws Exception {
+        TicketItemDto bareCatalogSize = itemWithAttributes(1, "SCG", "Elegance", "ขาวนวล", "ด้าน", "600x1200");
+        TicketItemDto sizeCarryingItsOwnUnit = itemWithAttributes(2, "Cotto", "Stone", "เทาเข้ม", "หยาบ", "60x60 ซม.");
+
+        byte[] xlsx = renderer.toXlsx(
+            ticket(List.of(bareCatalogSize, sizeCarryingItsOwnUnit)), quotation(), customer("123 Bangkok"));
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String first = sheet.getRow(9).getCell(1).getStringCellValue();
+            String second = sheet.getRow(10).getCell(1).getStringCellValue();
+
+            assertThat(first).isEqualTo("กระเบื้อง รุ่น Elegance สี ขาวนวล ขนาด 600x1200 cm. ด้าน");
+            // The regression this guards: not "ขนาด 60x60 ซม. cm.".
+            assertThat(second).isEqualTo("กระเบื้อง รุ่น Stone สี เทาเข้ม ขนาด 60x60 ซม. หยาบ");
+            assertThat(second).doesNotContain("ซม. cm.");
+        }
+    }
+
+    private TicketItemDto itemWithAttributes(int seq, String brand, String model, String color,
+                                             String texture, String size) {
+        return new TicketItemDto(
+            seq, 10L, brand, model,
+            color, texture, size,
+            null,                                        // factory
+            BigDecimal.ONE, null,                        // qty, qtySqm
+            null, null, "แผ่น",                          // rawPrice, rawCurrency, rawUnit
+            null, new BigDecimal("100.00"), "THB",       // proposedPrice, approvedPrice, currency
+            seq,                                         // sortOrder
+            null, null, null,                            // calcedCost, calcedPrice, calcConfigVersion
+            "PIECE", null, null);                        // unitBasis, manualPrice, manualOverrideReason
+    }
+
     private TicketItemDto item(int seq, String brand, String model, BigDecimal qty, BigDecimal approvedPrice) {
         return new TicketItemDto(
             seq, 10L, brand, model,

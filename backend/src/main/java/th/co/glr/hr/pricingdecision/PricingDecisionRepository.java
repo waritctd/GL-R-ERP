@@ -408,8 +408,14 @@ public class PricingDecisionRepository {
                 """, Map.of("pricingRequestId", pricingRequestId),
                 (rs, rowNum) -> new PricingDecisionSalesViewDto(pricingRequestId, rs.getLong("pricing_decision_id"),
                     rs.getString("currency"), rs.getTimestamp("approved_at").toInstant(), List.of()));
+            // color/texture/size added here (sales-view only — findItems() above is the OTHER
+            // query, feeding the cost-bearing PricingDecisionItemDto, and is deliberately left
+            // untouched) so Step 4's CustomerQuotationService#buildItem has them to snapshot
+            // onto sales.quotation_item's legacy render columns — see
+            // PricingDecisionSalesItemDto's own field comment for the full chain.
             List<PricingDecisionSalesItemDto> items = jdbc.query("""
                 SELECT pdi.pricing_decision_item_id, pdi.pricing_request_item_id, pri.brand, pri.model,
+                       pri.color, pri.texture, pri.size,
                        pri.product_description, pdi.requested_unit_basis, pdi.requested_quantity,
                        pdi.approved_selling_price_per_requested_unit,
                        pdi.minimum_selling_price_per_requested_unit
@@ -421,6 +427,7 @@ public class PricingDecisionRepository {
                 (rs, rowNum) -> new PricingDecisionSalesItemDto(
                     rs.getLong("pricing_request_item_id"), rs.getLong("pricing_decision_item_id"),
                     rs.getString("brand"), rs.getString("model"),
+                    rs.getString("color"), rs.getString("texture"), rs.getString("size"),
                     rs.getString("product_description"), rs.getString("requested_unit_basis"),
                     rs.getBigDecimal("requested_quantity"), rs.getBigDecimal("approved_selling_price_per_requested_unit"),
                     rs.getBigDecimal("minimum_selling_price_per_requested_unit")));
