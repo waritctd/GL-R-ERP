@@ -34,11 +34,30 @@ if [ ! -d "$FONT_DIR" ]; then
   exit 2
 fi
 
-# Pull the "Family|Style" specs out of the Dockerfile's verification loop.
-REQUIRED=$(sed -n '/for spec in/,/; do/p' "$DOCKERFILE" | grep -oE '"[^"]+\|[^"]+"' | tr -d '"')
+# Pull the "Family|Style" specs out of the Dockerfile's `set --` list — the single place the
+# required faces are defined, consumed by both the warn-branch and strict-branch loops via
+# `for spec in "$@"; do`. Scoped to the `set --` statement itself (it ends at its own trailing
+# `&&`) so this can never wander into a loop body and pick up shell-expansion noise instead of
+# real specs — that is exactly what happened when this used to grep the "for spec in ... ; do"
+# loop line, back when the loop spelled the specs out literally instead of reading "$@".
+REQUIRED=$(sed -n '/set --/,/&&/p' "$DOCKERFILE" | grep -oE '"[^"]+\|[^"]+"' | tr -d '"')
+
+# Trust nothing: validate what came out actually looks like N "Family|Style" specs before using
+# it. A parse that silently returns plausible-looking garbage (e.g. the literal text of a shell
+# expansion like `${spec%|*}`, which itself contains a "|" and so slips past a naive re-extract)
+# is worse than one that returns nothing — the old empty-string guard below did not catch that
+# failure mode, which is exactly how this broke last time the Dockerfile was reformatted.
+bad=0
 if [ -z "$REQUIRED" ]; then
+  bad=1
+elif printf '%s\n' "$REQUIRED" | grep -qE '[${}]'; then
+  bad=1
+elif printf '%s\n' "$REQUIRED" | grep -qvE '^[^|]+\|[^|]+$'; then
+  bad=1
+fi
+if [ "$bad" -eq 1 ]; then
   echo "ERROR: could not parse the required font list from $DOCKERFILE." >&2
-  echo "  The 'for spec in ... ; do' block may have been reformatted — fix this parser." >&2
+  echo "  The 'set -- ...' block may have been reformatted — fix this parser." >&2
   exit 2
 fi
 
