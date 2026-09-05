@@ -13,7 +13,6 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 import th.co.glr.hr.customer.CustomerDto;
@@ -21,8 +20,7 @@ import th.co.glr.hr.customer.CustomerDto;
 class QuotationRendererTest {
     private final QuotationRenderer renderer = new QuotationRenderer();
 
-    @BeforeEach
-    void requireLibreOffice() {
+    private void requireLibreOffice() {
         // toPdf() shells out to LibreOffice; skip (don't fail) where it isn't installed —
         // same policy as the repo's Testcontainers-on-Docker gating. CI installs libreoffice-calc.
         Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(),
@@ -31,6 +29,7 @@ class QuotationRendererTest {
 
     @Test
     void pdfRendersFormattedDocumentWithHeaderTableAndTotals() throws Exception {
+        requireLibreOffice();
         byte[] pdf = renderer.toPdf(ticket(List.of(item(1, "Cotto", "Marble Series",
             new BigDecimal("300"), new BigDecimal("580.00")))), quotation(), customer(null));
 
@@ -73,6 +72,7 @@ class QuotationRendererTest {
 
     @Test
     void pdfSurvivesMultilineProjectName() throws Exception {
+        requireLibreOffice();
         // Originally exercised a multiline CUSTOMER ADDRESS — but QuotationRenderer never
         // writes customer().address() onto the quotation template at all (the quotation
         // template has no address cell; see docs/V4(PDF Generator)/document-generation-fix.md
@@ -91,6 +91,7 @@ class QuotationRendererTest {
 
     @Test
     void pdfWrapsLongDescriptionsInsteadOfClipping() throws Exception {
+        requireLibreOffice();
         String longModel = "Super Extra Premium Glazed Porcelain Large Format Tile "
             + "with Anti-Slip Nano Coating and Digital Inkjet Marble Pattern Finish";
 
@@ -104,6 +105,7 @@ class QuotationRendererTest {
 
     @Test
     void pdfFlowsEveryItemAcrossPagesBeyondTheTemplateZone() throws Exception {
+        requireLibreOffice();
         // More than 4 items switches QuotationRenderer to the one-row-per-item flow layout: EVERY
         // item renders (items past the template's item zone get cloned table styling), the footer
         // relocates below the last item, and the quote paginates across pages. Items 12 and 20 sit
@@ -132,6 +134,7 @@ class QuotationRendererTest {
 
     @Test
     void aQuoteWithinTheTemplateItemZoneStaysASinglePage() throws Exception {
+        requireLibreOffice();
         // Up to SINGLE_PAGE_CAPACITY (12) one-line items keep the footer at its anchored native
         // rows and fit on one page — the "fills the page like Excel" layout.
         List<TicketItemDto> items = new ArrayList<>();
@@ -152,6 +155,7 @@ class QuotationRendererTest {
 
     @Test
     void aQuoteLargerThanOnePageOfItemsPaginatesWithTotalsOnTheLastPage() throws Exception {
+        requireLibreOffice();
         // Enough items that the quote must span multiple pages in ANY font environment — the exact
         // page count is font-dependent (CI runs without the Thai fonts, which over-shrink), but 120
         // one-line items cannot fit a single page even at maximum shrink. Every item renders and the
@@ -173,6 +177,22 @@ class QuotationRendererTest {
         assertThat(text).contains("1,200.00");         // 120 × 10 subtotal
         assertThat(text).contains("1,284.00");         // + 7% VAT grand total
         assertThat(text).doesNotContain("#VALUE!").doesNotContain("#REF!").doesNotContain("###");
+    }
+
+    @Test
+    void xlsxOutputIsRealBiff8OleBytesNotOoxmlZip() throws Exception {
+        // Pins the byte format and the advertised content type together: TicketController's
+        // quotationFile endpoint serves this exact output as "application/vnd.ms-excel" +
+        // ".xls". WorkbookFactory.create(templates/quotation_template.xls) returns an
+        // HSSFWorkbook, so wb.write(out) always emits OLE2/Compound File Binary bytes
+        // ([MS-CFB], BIFF8 .xls) — never the ZIP "PK\x03\x04" local-file-header magic an OOXML
+        // .xlsx would start with. If this ever drifts to XSSF, this assertion catches it before
+        // the response headers do (or don't).
+        byte[] xlsx = renderer.toXlsx(ticket(List.of(item(1, "Cotto", "Marble Series",
+            BigDecimal.ONE, new BigDecimal("10.00")))), quotation(), customer(null));
+
+        assertThat(xlsx).startsWith((byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+            (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1);
     }
 
     @Test

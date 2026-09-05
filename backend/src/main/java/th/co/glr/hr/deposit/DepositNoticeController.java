@@ -115,11 +115,11 @@ public class DepositNoticeController {
         String normalized = format == null ? "pdf" : format.trim().toLowerCase();
         if ("xlsx".equals(normalized)) {
             byte[] bytes = service.getXlsx(docId, user);
-            String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".xlsx";
+            String filename = (doc.docNumber() != null ? doc.docNumber() : "draft") + ".xls";
             return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .contentType(MediaType.parseMediaType(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                    "application/vnd.ms-excel"))
                 .body(bytes);
         }
         byte[] bytes = service.getPdf(docId, user);
@@ -138,11 +138,11 @@ public class DepositNoticeController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         byte[] bytes = service.getRemainingInvoiceXlsx(ticketId, user);
-        String filename = "remaining-invoice-" + ticketId + ".xlsx";
+        String filename = "remaining-invoice-" + ticketId + ".xls";
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
             .contentType(MediaType.parseMediaType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                "application/vnd.ms-excel"))
             .body(bytes);
     }
 }

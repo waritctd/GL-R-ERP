@@ -10,15 +10,13 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 
 class DepositNoticeRendererTest {
     private final DepositNoticeRenderer renderer = new DepositNoticeRenderer();
 
-    @BeforeEach
-    void requireLibreOffice() {
+    private void requireLibreOffice() {
         // toPdf() shells out to LibreOffice; skip (don't fail) where it isn't installed —
         // same policy as the repo's Testcontainers-on-Docker gating. CI installs libreoffice-calc.
         Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(),
@@ -26,7 +24,23 @@ class DepositNoticeRendererTest {
     }
 
     @Test
+    void xlsxOutputIsRealBiff8OleBytesNotOoxmlZip() throws Exception {
+        // Pins the byte format and the advertised content type together: DepositNoticeController's
+        // /file?format=xlsx endpoint serves this exact output as "application/vnd.ms-excel" +
+        // ".xls". WorkbookFactory.create(templates/deposit_notice_template.xls) returns an
+        // HSSFWorkbook, so wb.write(out) always emits OLE2/Compound File Binary bytes
+        // ([MS-CFB], BIFF8 .xls) — never the ZIP "PK\x03\x04" local-file-header magic an OOXML
+        // .xlsx would start with. If this ever drifts to XSSF, this assertion catches it before
+        // the response headers do (or don't).
+        byte[] xlsx = renderer.toXlsx(document());
+
+        assertThat(xlsx).startsWith((byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+            (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1);
+    }
+
+    @Test
     void rendersValidPdfBytes() {
+        requireLibreOffice();
         byte[] pdf = renderer.toPdf(document());
 
         assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
@@ -35,6 +49,7 @@ class DepositNoticeRendererTest {
 
     @Test
     void rendersThaiTextCorrectly() throws Exception {
+        requireLibreOffice();
         byte[] pdf = renderer.toPdf(document());
 
         String text;
@@ -51,6 +66,7 @@ class DepositNoticeRendererTest {
 
     @Test
     void rendersWithoutFormulaErrorsAsASinglePageWithTheCorrectTotal() throws Exception {
+        requireLibreOffice();
         // Regression test for the two bugs this branch fixed: the address cell used to
         // evaluate to #N/A (broken VLOOKUP) and every amount cell evaluated to #VALUE!,
         // and the render leaked extra blank pages. Assert none of that survives, and that
