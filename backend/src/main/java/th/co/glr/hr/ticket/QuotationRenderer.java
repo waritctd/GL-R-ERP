@@ -516,11 +516,29 @@ public class QuotationRenderer {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    // Size values reach this renderer in TWO shapes, and only one of them wants a unit appended:
+    //   - bare numerics from the catalog import (price_catalog "FORMATO" -> size_raw, e.g.
+    //     "600x1200", "598X598X18") -- these need the " cm." suffix to read as a measurement;
+    //   - values that ALREADY carry their own unit, because that is literally what the product
+    //     asks for: TicketDetailPage's ขนาด field placeholder is "เช่น 60x60 ซม.", and the seeded
+    //     sales data follows it ("60x60 ซม.", "60x120 cm").
+    // Appending " cm." unconditionally printed the second shape as "ขนาด 60x60 ซม. cm." on a
+    // customer-facing quotation. That was latent for the legacy flow and went live for Step 4
+    // the moment V162 started populating these columns -- see
+    // QuotationRendererTest#descriptionRendersAllAttributes_andSuppliesTheSizeUnitOnlyWhenItIsMissing.
+    // Anchored at the end of the trimmed value, so a bare "600x1200" (ends in a digit) can never
+    // match and still gets its unit.
+    private static final java.util.regex.Pattern SIZE_ALREADY_HAS_UNIT =
+        java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|ม\\.?|นิ้ว|cm\\.?|mm\\.?|m\\.?|in\\.?|\")\\s*$");
+
     private String buildDesc(TicketItemDto item) {
         StringBuilder sb = new StringBuilder("กระเบื้อง");
         if (item.model() != null && !item.model().isBlank())   sb.append(" รุ่น ").append(item.model());
         if (item.color() != null && !item.color().isBlank())   sb.append(" สี ").append(item.color());
-        if (item.size() != null && !item.size().isBlank())     sb.append(" ขนาด ").append(item.size()).append(" cm.");
+        if (item.size() != null && !item.size().isBlank()) {
+            sb.append(" ขนาด ").append(item.size());
+            if (!SIZE_ALREADY_HAS_UNIT.matcher(item.size().trim()).find()) sb.append(" cm.");
+        }
         if (item.texture() != null && !item.texture().isBlank()) sb.append(" ").append(item.texture());
         return sb.toString();
     }

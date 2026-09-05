@@ -103,6 +103,16 @@ public final class PricingDecisionDtos {
         long pricingDecisionItemId,
         String brand,
         String model,
+        // color/texture/size exist here for the same reason brand/model do: no cost/margin/FX
+        // value, so no weakening of design correction 2. They exist SOLELY so Step 4
+        // (CustomerQuotationService#buildItem) can populate sales.quotation_item's legacy
+        // brand/model/color/texture/size columns per V74's own migration comment ("the legacy
+        // ... columns, which stay populated too, so the existing renderer's buildDesc() has
+        // something to read") — see QuotationRenderer#buildDesc(TicketItemDto), the method that
+        // actually reads them back out at render time.
+        String color,
+        String texture,
+        String size,
         String productDescription,
         String requestedUnitBasis,
         BigDecimal requestedQuantity,

@@ -72,6 +72,7 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.DealLostReason;
+import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -303,6 +304,71 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'QUOTATION_ISSUED'
             """, Map.of("id", ticketId), Long.class)).isEqualTo(1L);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Legacy render columns (model/color/texture/size) — bug fix regression coverage
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Regression test for "สร้างใบเสนอราคาแล้ว รายละเอียดสินค้าไม่ขึ้น ทั้ง excel และ pdf": before
+     * the fix, {@code sales.quotation_item.model/color/texture/size} were always NULL for a
+     * Step 4-created row ({@code PricingDecisionRepository#findApprovedSalesView} dropped
+     * color/texture/size from its SELECT, and {@code CustomerQuotationRepository}'s NewItem/
+     * insertItems never carried model/color/texture/size through to the INSERT at all), so
+     * {@code QuotationRenderer#buildDesc} — reused as-is, never modified, and never the bug —
+     * had nothing to append after the bare "กระเบื้อง". This asserts every link in the chain: the
+     * persisted row, what the renderer's own read path
+     * ({@link TicketRepository#findQuotationItemsByQuotationId}) returns, and the actual
+     * rendered XLSX cell — every assertion below fails on the pre-fix code (NULL columns, blank
+     * cell), not merely "a row exists".
+     */
+    @Test
+    void create_populatesLegacyRenderColumnsForModelColorTextureSize() throws Exception {
+        long pricingRequestId = approvedSingleItemPricingRequestWithRenderFields(
+            "RenderModel4", "แดง", "ผิวมัน", "60x60-Render4");
+
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest("30 days", "45 days", "รถขนส่ง", LocalDate.now().plusDays(30),
+                null, UUID.randomUUID().toString()), salesActor);
+        assertThat(draft.items()).hasSize(1);
+        long quotationItemId = draft.items().get(0).id();
+
+        // 1. The persisted sales.quotation_item row itself — not merely that a row exists.
+        Map<String, Object> row = jdbc.queryForMap("""
+            SELECT model, color, texture, size FROM sales.quotation_item WHERE quotation_item_id = :id
+            """, Map.of("id", quotationItemId));
+        assertThat(row.get("model")).isEqualTo("RenderModel4");
+        assertThat(row.get("color")).isEqualTo("แดง");
+        assertThat(row.get("texture")).isEqualTo("ผิวมัน");
+        assertThat(row.get("size")).isEqualTo("60x60-Render4");
+
+        // 2. TicketRepository.findQuotationItemsByQuotationId is exactly what
+        // QuotationRenderer#buildDesc reads at render time (CustomerQuotationService's own
+        // loadRenderContext calls this, unmodified) — confirm the four values survive that read.
+        List<TicketItemDto> renderItems = tickets.findQuotationItemsByQuotationId(draft.id(), ticketId);
+        assertThat(renderItems).hasSize(1);
+        TicketItemDto renderItem = renderItems.get(0);
+        assertThat(renderItem.model()).isEqualTo("RenderModel4");
+        assertThat(renderItem.color()).isEqualTo("แดง");
+        assertThat(renderItem.texture()).isEqualTo("ผิวมัน");
+        assertThat(renderItem.size()).isEqualTo("60x60-Render4");
+
+        // 3. End to end: renderXlsx -> QuotationRenderer.toXlsx (reused as-is, never modified —
+        // the bug was never in this class) actually prints รุ่น/สี/ขนาด/พื้นผิว, not the bare
+        // "กระเบื้อง" the user reported. No LibreOffice needed here — toXlsx (unlike toPdf) is
+        // pure POI. Row/column layout per QuotationRendererTest's own
+        // xlsxSubtotalCellSumsAllPricedItemsNotJustTheRenderedFifteen comment: items start at
+        // 0-based row 9 in the flow layout; column B (description) is index 1.
+        byte[] xlsx = quotationService.renderXlsx(draft.id(), salesActor);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String description = sheet.getRow(9).getCell(1).getStringCellValue();
+            assertThat(description).contains("รุ่น RenderModel4");
+            assertThat(description).contains("สี แดง");
+            assertThat(description).contains("ขนาด 60x60-Render4");
+            assertThat(description).contains("ผิวมัน");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -932,6 +998,40 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingDecisionItemDto item = decision.items().get(0);
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
             new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
+        decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
+        return pricingRequestId;
+    }
+
+    /** Like {@link #approvedSingleItemPricingRequest} but lets the caller set
+     * model/color/texture/size explicitly — every other helper in this class always passes
+     * color=null/texture=null (see {@link #pricingItem}, {@link #singleItemSubmittedCosting}),
+     * which is exactly why the legacy-render-column bug went unnoticed by every other test here.
+     * Drives the same real chain (submit → pickup → factory quote → costing → CEO decision →
+     * approve) as {@link #singleItemSubmittedCosting}, just inlined so it can carry its own item
+     * fields through to the pricing request item. */
+    private long approvedSingleItemPricingRequestWithRenderFields(
+        String model, String color, String texture, String size
+    ) {
+        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
+            null, catalogProductIdFactoryC, null, "RenderBrand4", model, "RenderBrand4 " + model,
+            color, texture, size, "Factory C4", new BigDecimal("1"), new BigDecimal("1"), "piece",
+            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            null, "THB", "step 4 render-fields unit test", UUID.randomUUID().toString(), List.of(item));
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C4");
+        FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
+            response("REF-RENDER4", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
+        factoryQuoteService.markReadyForCosting(responded.id(), importActor);
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.10"), "THB", null, null), ceoActor);
+        PricingDecisionItemDto decisionItem = decision.items().get(0);
+        decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
+            new UpdatePricingDecisionItemRequest(decisionItem.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
         return pricingRequestId;
     }

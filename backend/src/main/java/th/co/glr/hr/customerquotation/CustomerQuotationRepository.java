@@ -90,8 +90,13 @@ public class CustomerQuotationRepository {
         BigDecimal vat, BigDecimal lineTotal,
         // Legacy rendering columns (kept in sync so QuotationRenderer/
         // TicketRepository.findQuotationItemsByQuotationId — reused as-is, unmodified — keep
-        // working for a Step 4 quotation exactly as they do for a legacy one).
-        String brand, String rawUnit) {}
+        // working for a Step 4 quotation exactly as they do for a legacy one). V74's own
+        // migration comment documents this contract ("the legacy ... columns, which stay
+        // populated too, so the existing renderer's buildDesc() has something to read"); the
+        // original implementation only ever carried brand through here and dropped
+        // model/color/texture/size, which is the root cause of QuotationRenderer#buildDesc
+        // having nothing to append after "กระเบื้อง" — restoring all five.
+        String brand, String model, String color, String texture, String size, String rawUnit) {}
 
     public record InsertDraftParams(
         long ticketId, long pricingRequestId, long pricingDecisionId, String recipientType,
@@ -174,6 +179,10 @@ public class CustomerQuotationRepository {
                 .addValue("quotationId", quotationId)
                 .addValue("seq", i + 1)
                 .addValue("brand", item.brand())
+                .addValue("model", item.model())
+                .addValue("color", item.color())
+                .addValue("texture", item.texture())
+                .addValue("size", item.size())
                 .addValue("rawUnit", item.rawUnit())
                 .addValue("qty", item.requestedQuantity())
                 .addValue("unitPrice", item.finalUnitPrice())
@@ -192,12 +201,12 @@ public class CustomerQuotationRepository {
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.quotation_item
-                (quotation_id, seq, brand, raw_unit, qty, unit_price, amount,
+                (quotation_id, seq, brand, model, color, texture, size, raw_unit, qty, unit_price, amount,
                  pricing_request_item_id, pricing_decision_item_id, requested_unit_basis,
                  requested_quantity, approved_unit_price, sales_discount, final_unit_price,
                  line_subtotal, vat, line_total, description)
             VALUES
-                (:quotationId, :seq, :brand, :rawUnit, :qty, :unitPrice, :amount,
+                (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
                  :pricingRequestItemId, :pricingDecisionItemId, :requestedUnitBasis,
                  :requestedQuantity, :approvedUnitPrice, :salesDiscount, :finalUnitPrice,
                  :lineSubtotal, :vat, :lineTotal, :description)

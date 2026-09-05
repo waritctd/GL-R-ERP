@@ -9838,6 +9838,14 @@ export const api = {
             pricingCostingItemId: costingItem.id,
             brand: prItem?.brand ?? null,
             model: prItem?.model ?? null,
+            // color/texture/size carried through for the same reason the Java side does
+            // (PricingDecisionRepository#findApprovedSalesView): Step 4 snapshots them onto
+            // sales.quotation_item's legacy render columns, which is what QuotationRenderer's
+            // buildDesc prints as รุ่น/สี/ขนาด/พื้นผิว. Dropping them here is exactly the bug
+            // V162 fixed on the backend — the quotation rendered a bare "กระเบื้อง".
+            color: prItem?.color ?? null,
+            texture: prItem?.texture ?? null,
+            size: prItem?.size ?? null,
             productDescription: prItem?.productDescription ?? null,
             factoryName: costingItem.factoryName ?? null,
             requestedUnitBasis: costingItem.requestedUnitBasis,
@@ -9894,6 +9902,12 @@ export const api = {
             pricingRequestItemId: item.pricingRequestItemId,
             brand: item.brand,
             model: item.model,
+            // Mirrors PricingDecisionSalesItemDto's own brand/model/color/texture/size ordering.
+            // Not a cost/margin/FX leak (design correction 2 is untouched) — these exist so Step 4
+            // can populate sales.quotation_item's legacy render columns.
+            color: item.color,
+            texture: item.texture,
+            size: item.size,
             productDescription: item.productDescription,
             requestedUnitBasis: item.requestedUnitBasis,
             requestedQuantity: item.requestedQuantity,
