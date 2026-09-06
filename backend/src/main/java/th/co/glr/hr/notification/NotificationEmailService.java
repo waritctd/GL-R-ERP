@@ -32,9 +32,10 @@ public class NotificationEmailService {
      * Whether {@code app.mail.override-to} is configured - NOT the address itself, and NOT used to
      * pick a recipient. Recipient redirection now lives entirely in
      * {@link th.co.glr.hr.mail.OverrideRedirectingMailer}, which wraps the {@link Mailer} bean this
-     * class is handed (issue #782: this class and {@code FactoryEmailService} used to each need their
-     * own copy of {@code overrideTo.isBlank() ? to : overrideTo} - one of them simply didn't have it -
-     * which is the defect the decorator exists to make structurally impossible; see that class).
+     * class is handed (issue #782: this class and the then-existing {@code FactoryEmailService}
+     * (deleted since — factory-quote mail became manual-only) used to each need their own copy of
+     * {@code overrideTo.isBlank() ? to : overrideTo} - one of them simply didn't have it - which is
+     * the defect the decorator exists to make structurally impossible; see that class).
      *
      * <p>This class still needs to know WHETHER an override is active, for a narrower and unrelated
      * reason: {@code to} can legitimately arrive null/blank (an employee with no email on file -

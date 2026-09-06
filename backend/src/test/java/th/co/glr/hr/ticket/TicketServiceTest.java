@@ -358,28 +358,9 @@ class TicketServiceTest {
         }
     }
 
-    // ── factory email gate ────────────────────────────────────────────────
-
-    @Test
-    void factoryEmail_allowsImportOnExistingTicket() {
-        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-        service.assertFactoryEmailAllowed(10L, importActor); // must not throw
-    }
-
-    @Test
-    void factoryEmail_rejectsNonImportRoles() {
-        // Previously session-only — an authenticated open mail relay.
-        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesActor));
-        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, hrActor));
-        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, employeeActor));
-    }
-
-    @Test
-    void factoryEmail_rejectsNonExistentTicket() {
-        assertThatThrownBy(() -> service.assertFactoryEmailAllowed(99L, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e ->
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
-    }
+    // factory email gate tests were removed alongside TicketService.assertFactoryEmailAllowed and
+    // the deleted POST /tickets/{id}/factory-emails/send route (factory RFQ email is manual-only
+    // now, gated by FactoryQuoteService.send's own IMPORT_ROLES check instead).
 
     // ── submit (deprecated — superseded by the PricingRequest aggregate) ───
 
@@ -2575,11 +2556,6 @@ class TicketServiceTest {
     @Test
     void confirmFinalPayment_rejectsSalesManagerRole() {
         assertForbidden(() -> service.confirmFinalPayment(10L, salesManagerActor));
-    }
-
-    @Test
-    void factoryEmail_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.assertFactoryEmailAllowed(10L, salesManagerActor));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────

@@ -104,25 +104,6 @@ function itemDisplayName(item) {
  */
 const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
 
-const DISPATCH_STATUS_LABEL = {
-  PENDING: 'รอส่ง',
-  SENDING: 'กำลังส่ง',
-  SENT: 'ส่งแล้ว',
-  FAILED: 'ส่งไม่สำเร็จ',
-};
-
-function dispatchStatusBadge(quote) {
-  const status = quote?.dispatchStatus;
-  if (!status || status === 'SENT') return null;
-  const tone = status === 'FAILED' ? 'danger' : 'warning';
-  const attempt = quote.dispatchAttemptCount > 1 ? ` (ครั้งที่ ${quote.dispatchAttemptCount})` : '';
-  return (
-    <StatusBadge key={`dispatch-${quote.id}`} tone={tone}>
-      {(DISPATCH_STATUS_LABEL[status] ?? status) + attempt}
-    </StatusBadge>
-  );
-}
-
 function PricingRequestDetailSkeleton() {
   return (
     <div className="grid w-[min(760px,100%)] gap-3" aria-hidden="true">
@@ -299,12 +280,21 @@ const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)
 /**
  * The factory-quote email composer, relocated into a modal behind each factory group's header
  * "ร่างอีเมล" button (owner-supplied mockup, 2026-08-16 — the header collapses this to one action;
- * the always-visible primary surface is the item-price grid, not email mechanics). Every field and
- * action here is unchanged from the inline block it replaces: To/Subject/Body editable while
- * `quote.status === 'DRAFT'`, "คัดลอกข้อความ" (copy, never sends), and "ส่งแล้ว"/"บันทึกว่าส่งแล้วอีกครั้ง"
- * (records that a human sent it — see the copy this button's parent Confirm dialog still owns).
- * Real labels, not placeholder-only, for the same reason the inline version used them: a screen
- * reader needs a stable accessible name, not one that depends on the field being empty.
+ * the always-visible primary surface is the item-price grid, not email mechanics).
+ *
+ * Manual-RFQ redesign (owner decision): the backend never sends this email — it only records that
+ * a human already sent it from their own mail client. So this modal's job is to make that three-step
+ * manual hand-off obvious rather than read as a normal in-app "send": (1) คัดลอกข้อความ copies the
+ * draft to the clipboard — the actual first, load-bearing step, styled `primary` here for exactly
+ * that reason, not `secondary` as if it were an afterthought next to a real send button; (2) the
+ * human pastes it into their own mail client and sends it — outside this app entirely, which is why
+ * there is no "sending…" state to show; (3) ส่งแล้ว — styled `success`, matching this app's existing
+ * "confirm a real-world action already happened" vocabulary (see e.g. ProfileRequestsPage's approve
+ * button) rather than `primary`, since it is a confirmation of something done elsewhere, not this
+ * dialog's own action — records that in `sales.factory_quote` (DRAFT -> REQUESTED) and opens the
+ * shared `<ConfirmDialog>` to say so in plain language before committing (see that dialog's own copy
+ * below). Real labels, not placeholder-only, for the same reason the inline version used them: a
+ * screen reader needs a stable accessible name, not one that depends on the field being empty.
  *
  * `onRequestSend` closes this modal before opening the shared `<ConfirmDialog>` (rather than
  * stacking two modals) — sequencing one focus-trapped dialog at a time is simpler than reasoning
@@ -312,8 +302,7 @@ const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)
  * moves: finish the draft, then confirm the send.
  */
 function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, onRequestSend }) {
-  const dispatchInFlight = quote.dispatchStatus === 'PENDING' || quote.dispatchStatus === 'SENDING';
-  const canOfferSendActions = quote.status === 'DRAFT' && !dispatchInFlight;
+  const canOfferSendActions = quote.status === 'DRAFT';
   const canEditFields = quote.status === 'DRAFT';
 
   return (
@@ -325,34 +314,38 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
       footer={
         <>
           <Button type="button" variant="secondary" onClick={onClose}>ปิด</Button>
-          {canOfferSendActions ? (
-            <Button type="button" variant="secondary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
-              คัดลอกข้อความ
-            </Button>
-          ) : null}
           {canEditFields ? (
             <Button type="button" variant="secondary" disabled={savePending} onClick={onSave}>
               บันทึกร่างอีเมล
             </Button>
           ) : null}
           {canOfferSendActions ? (
-            <Button type="button" variant="primary" data-testid="pcr-mark-factory-email-sent" onClick={onRequestSend}>
-              {quote.dispatchStatus === 'FAILED' ? 'บันทึกว่าส่งแล้วอีกครั้ง' : 'ส่งแล้ว'}
+            <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
+              <Icon name="clipboard" size={14} />
+              คัดลอกข้อความ
+            </Button>
+          ) : null}
+          {canOfferSendActions ? (
+            <Button type="button" variant="success" data-testid="pcr-mark-factory-email-sent" onClick={onRequestSend}>
+              ส่งแล้ว
             </Button>
           ) : null}
         </>
       }
     >
       <div className="grid gap-3">
-        {!canEditFields ? (
+        {canEditFields ? (
+          <ol className="m-0 grid list-decimal gap-1 rounded-md border border-border-subtle bg-surface-subtle p-3 pl-8 text-xs text-text-secondary">
+            <li>คัดลอกข้อความอีเมลด้านล่าง</li>
+            <li>วางและส่งอีเมลนี้จากโปรแกรมอีเมลของคุณเอง — ระบบนี้ไม่ได้ส่งอีเมลให้</li>
+            <li>กลับมาที่นี่แล้วกด &ldquo;ส่งแล้ว&rdquo; เพื่อบันทึกว่าส่งคำขอราคาไปแล้ว</li>
+          </ol>
+        ) : (
           <p className="m-0 rounded-md border border-border-subtle bg-surface-subtle p-3 text-xs text-text-muted">
-            ส่งคำขอราคาไปแล้ว — แก้ไขอีเมลฉบับนี้ไม่ได้ ดูรายละเอียดที่ส่งจริงด้านล่าง
+            บันทึกว่าส่งคำขอราคาไปแล้ว — แก้ไขอีเมลฉบับนี้ไม่ได้ ดูรายละเอียดที่ส่งจริงด้านล่าง
           </p>
-        ) : null}
-        {quote.dispatchStatus === 'FAILED' && quote.dispatchFailureMessage ? (
-          <p className="m-0 text-xs text-danger">ส่งไม่สำเร็จ: {quote.dispatchFailureMessage}</p>
-        ) : null}
-        <FormField label="อีเมลโรงงาน" htmlFor="pcr-email-to">
+        )}
+        <FormField label="อีเมลโรงงาน (ถ้ามี)" htmlFor="pcr-email-to" hint={canEditFields ? 'ไม่บังคับ — บันทึกว่าส่งแล้วได้แม้ยังไม่มีอีเมลติดต่อโรงงานนี้ในระบบ' : undefined}>
           <input
             id="pcr-email-to"
             type="email"
@@ -611,7 +604,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const queryClient = useQueryClient();
   const [responseDrafts, setResponseDrafts] = useState({});
   const [emailDrafts, setEmailDrafts] = useState({});
-  const [sendClientRequestIds, setSendClientRequestIds] = useState({});
   const [receiveClientRequestIds, setReceiveClientRequestIds] = useState({});
   const [confirmAction, setConfirmAction] = useState(null);
   // Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI now reuses
@@ -630,17 +622,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
     enabled: Number.isFinite(pricingRequestId),
   });
 
+  // Manual-RFQ redesign: send() now completes synchronously (DRAFT -> REQUESTED in one call, no
+  // out-of-band dispatch worker), so there is no longer an in-flight state to poll for — the
+  // mutation's own onSuccess invalidate (see useActionMutation below) is enough to show the result.
   const factoryQuery = useQuery({
     queryKey: queryKeys.pricingRequestFactoryQuotes(pricingRequestId),
     queryFn: () => api.pricingRequests.listFactoryQuotes(pricingRequestId).then((r) => r.items ?? []),
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
-    // The outbox worker sends/finalizes a factory quote dispatch out-of-band (send() only
-    // enqueues), so while any quote has one in flight, poll instead of leaving the UI stuck
-    // showing a stale "PENDING"/"SENDING" badge until the next unrelated invalidate.
-    refetchInterval: (query) => {
-      const quotes = query.state.data ?? [];
-      return quotes.some((q) => ['PENDING', 'SENDING'].includes(q.dispatchStatus)) ? 2000 : false;
-    },
   });
 
   const costingQuery = useQuery({
@@ -764,12 +752,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
   );
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
+  // Manual-RFQ redesign: records that Import already sent this email themselves — see
+  // FactoryEmailDraftModal's doc comment. No clientRequestId any more (there is no dispatch to
+  // replay against); send() is idempotent by the quote's own status instead.
   const sendQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.sendFactoryQuote(quote.id, {
     emailTo: draft?.emailTo ?? quote.emailTo,
     emailSubject: draft?.emailSubject ?? quote.emailSubject,
     emailBody: draft?.emailBody ?? quote.emailBody,
-    clientRequestId: sendClientRequestIds[quote.id] ?? generateClientRequestId(),
-  }), 'ส่งคำขอโรงงานแล้ว');
+  }), 'บันทึกว่าส่งคำขอราคาแล้ว');
   const negotiateQuote = useActionMutation((quote) => api.pricingRequests.startFactoryNegotiation(quote.id, { note: quote.negotiationNote || 'Negotiation in progress' }), 'เริ่มเจรจาแล้ว');
   /**
    * ยืนยันราคาเสนอ — ONE primary action per factory group (owner-supplied mockup, 2026-08-16, task
@@ -1339,10 +1329,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="flex flex-col gap-2 p-4">
           {/* The blocking condition, stated BEFORE the สร้างร่างอีเมล button is pressed. It used to
               be discoverable only by pressing it and reading a 422 that named the row's primary
-              key — a number that appears nowhere on this page. */}
+              key — a number that appears nowhere on this page.
+              Manual-RFQ redesign: generateDrafts no longer refuses the whole batch over one
+              unresolved line — it drafts every factory that DOES resolve and simply skips the
+              rest (see FactoryQuoteService.generateDrafts's own doc comment). This banner used to
+              say a draft could not be created "until every line is filled in", which stopped being
+              true the moment that changed; it now says what actually happens: partial drafts, plus
+              which lines still block a QUOTE (not a draft) until they get a factory. */}
           {missingFactoryItems.length ? (
             <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
-              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — สร้างร่างอีเมลถึงโรงงานไม่ได้จนกว่าจะระบุครบ: `}
+              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างร่างอีเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
               {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
               {canSetItemFactory
                 ? ' — กรอกชื่อโรงงานในรายการด้านล่างแล้วกดบันทึก'
@@ -1589,7 +1585,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         <span className="text-xs text-text-muted">({current.items?.length ?? 0} รายการ)</span>
                         {current.emailTo ? <span className="truncate text-xs text-text-muted">{current.emailTo}</span> : null}
                         <StatusBadge tone={quoteStatus.tone}>{quoteStatus.label}</StatusBadge>
-                        {dispatchStatusBadge(current)}
                         {current.revisionNo > 1 ? <StatusBadge tone="neutral">ครั้งที่ {current.revisionNo}</StatusBadge> : null}
                       </div>
                       {canOpenEmailDraft ? (
@@ -2560,7 +2555,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคาลูกค้า'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
-          : 'ส่งอีเมลถึงโรงงาน'}
+          // Manual-RFQ redesign: this dialog used to confirm the app SENDING the factory email
+          // (it never did — see FactoryQuoteService.send's own javadoc, "Was BROKEN"). The title,
+          // message and confirmLabel below now say plainly that this RECORDS a send the user
+          // already did themselves, in their own mail client.
+          : 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว'}
         message={confirmAction?.type === 'approveDecision'
           ? 'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก (ราคานี้เป็นราคาก่อน VAT — ยังไม่รวมภาษีมูลค่าเพิ่ม 7%)'
           : confirmAction?.type === 'returnDecision'
@@ -2571,13 +2570,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 ? `อนุมัติส่วนลดรายการที่ ${confirmAction?.approval?.quotationItemId} ที่ราคา ${formatCurrency(confirmAction?.approval?.requestedFinalUnitPrice, currentCustomerQuotation?.currency)} — เมื่ออนุมัติแล้ว ใบเสนอราคานี้จะออกได้ตราบใดที่ไม่มีการแก้ไขราคาอีก`
                 : confirmAction?.type === 'rejectDiscount'
                   ? 'ระบุเหตุผลที่ปฏิเสธส่วนลดนี้ — ฝ่ายขายจะเห็นเหตุผลนี้และต้องแก้ไขราคาหรือถอนส่วนลดก่อนออกใบเสนอราคาได้'
-                  : 'ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้'}
+                  : `ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ ${confirmAction?.quote?.factoryName ?? 'โรงงาน'} เรียบร้อยแล้วด้วยตัวเอง — ระบบไม่ได้ส่งอีเมลนี้ให้ เมื่อยืนยันแล้วสถานะคำขอราคาโรงงานนี้จะเปลี่ยนเป็น "ส่งคำขอแล้ว"`}
         confirmLabel={confirmAction?.type === 'approveDecision' ? 'อนุมัติ'
           : confirmAction?.type === 'returnDecision' ? 'ตีกลับ'
           : confirmAction?.type === 'issueQuotation' ? 'ออกใบเสนอราคา'
           : confirmAction?.type === 'approveDiscount' ? 'อนุมัติส่วนลด'
           : confirmAction?.type === 'rejectDiscount' ? 'ปฏิเสธส่วนลด'
-          : 'ส่งอีเมล'}
+          : 'บันทึกว่าส่งแล้ว'}
         tone={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount' ? 'danger' : 'default'}
         requireReason={confirmAction?.type === 'returnDecision' || confirmAction?.type === 'rejectDiscount'}
         reasonLabel={confirmAction?.type === 'rejectDiscount' ? 'เหตุผลที่ปฏิเสธส่วนลด' : 'เหตุผลที่ตีกลับ'}
@@ -2616,14 +2615,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
           onRequestSend={() => {
             const quote = emailModalQuote;
             const draft = emailDrafts[quote.id] ?? { emailTo: quote.emailTo ?? '', emailSubject: quote.emailSubject ?? '', emailBody: quote.emailBody ?? '', note: quote.note ?? '' };
-            // A FAILED dispatch has permanently exhausted its own clientRequestId (the backend's
-            // unique (created_by, client_request_id) index would just replay that same dead row),
-            // so a manual retry must mint a fresh idempotency key rather than reuse whatever is
-            // cached for this quote.
-            const clientRequestId = quote.dispatchStatus === 'FAILED'
-              ? generateClientRequestId()
-              : (sendClientRequestIds[quote.id] ?? generateClientRequestId());
-            setSendClientRequestIds((cur) => ({ ...cur, [quote.id]: clientRequestId }));
             // Close this modal before opening the shared ConfirmDialog rather than stacking two
             // focus-trapped modals — see FactoryEmailDraftModal's own doc comment.
             setEmailModalQuoteId(null);

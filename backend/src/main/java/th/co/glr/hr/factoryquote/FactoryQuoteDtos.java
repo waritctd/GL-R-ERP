@@ -35,14 +35,7 @@ public final class FactoryQuoteDtos {
         Instant createdAt,
         Instant updatedAt,
         List<FactoryQuoteItemDto> items,
-        List<FactoryQuoteAttachmentDto> attachments,
-        // Most recent sales.factory_quote_email_dispatch row for this quote (the outbox worker's
-        // state), so the frontend can show pending/sending/sent/failed without a second endpoint.
-        // Null when send() has never been called for this quote.
-        String dispatchStatus,
-        int dispatchAttemptCount,
-        String dispatchFailureMessage,
-        Instant dispatchNextAttemptAt
+        List<FactoryQuoteAttachmentDto> attachments
     ) {}
 
     public record FactoryQuoteItemDto(

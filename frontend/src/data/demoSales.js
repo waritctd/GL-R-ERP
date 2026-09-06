@@ -159,7 +159,7 @@ export function buildDemoSalesSeed() {
 
   // ── FactoryQuote builder ────────────────────────────────────────────────
   function makeFactoryQuote(pr, {
-    status, dispatchStatus = null, factoryName, lines, createdAt,
+    status, factoryName, lines, createdAt,
     negotiationNote = null, note = null, revisionNo = 1, parentFactoryQuoteId = null,
     current = true, response = false,
   }) {
@@ -202,8 +202,6 @@ export function buildDemoSalesSeed() {
       revisionReason: parentFactoryQuoteId ? 'โรงงานปรับราคาใหม่หลังต่อรอง' : null,
       current, createdAt, updatedAt: createdAt,
       attachments: [], items,
-      dispatchStatus, dispatchAttemptCount: dispatchStatus ? 1 : 0,
-      dispatchFailureMessage: null, dispatchNextAttemptAt: null,
     };
     factoryQuotes.push(quote);
     return quote;
@@ -885,7 +883,7 @@ export function buildDemoSalesSeed() {
   pushPrEvent(pr4, IMPORT1, 'PRICING_REQUEST_PICKED_UP', 'SUBMITTED', 'IMPORT_REVIEWING', null, daysAgoIso(11));
   pushPrEvent(pr4, IMPORT1, 'FACTORY_EMAIL_SENT', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', null, daysAgoIso(10));
   makeFactoryQuote(pr4, {
-    status: 'REQUESTED', dispatchStatus: 'SENT', factoryName: 'Cotto Industry',
+    status: 'REQUESTED', factoryName: 'Cotto Industry',
     lines: [{ prItemId: pr4.items[0].id, qty: 500, unitBasis: 'PER_PIECE' }],
     createdAt: daysAgoIso(10),
   });

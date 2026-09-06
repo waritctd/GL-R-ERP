@@ -5,9 +5,11 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Enables Spring's {@code @Scheduled} background workers (factory-quote email outbox, quotation
- * expiry sweep, attendance daily recalc, BOT FX fetch, BOT holiday fetch) — but <b>only outside
- * the {@code test} profile</b>.
+ * Enables Spring's {@code @Scheduled} background workers (quotation expiry sweep, attendance
+ * daily recalc, BOT FX fetch, BOT holiday fetch) — but <b>only outside the {@code test}
+ * profile</b>. The factory-quote email outbox worker this list used to include ({@code
+ * FactoryQuoteEmailDispatchWorker}) is deleted — factory RFQ email is manual-only now, so there
+ * is nothing left on that surface for a scheduler to drive.
  *
  * <p>Integration tests that boot a full {@code @SpringBootTest} context point it at the same shared
  * Testcontainers Postgres the non-Spring {@code AbstractPostgresIntegrationTest} tests use. Spring

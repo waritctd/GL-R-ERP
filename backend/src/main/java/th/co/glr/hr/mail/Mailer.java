@@ -14,9 +14,10 @@ import java.util.List;
  *       boots and business flows run without any mail credentials.</li>
  * </ul>
  *
- * <p>Callers ({@link th.co.glr.hr.notification.NotificationEmailService},
- * {@link th.co.glr.hr.factory.FactoryEmailService}) depend on this interface, never a concrete
- * transport - swapping providers is a config change, not a code change.
+ * <p>Callers ({@link th.co.glr.hr.notification.NotificationEmailService}) depend on this
+ * interface, never a concrete transport - swapping providers is a config change, not a code
+ * change. ({@code th.co.glr.hr.factory.FactoryEmailService} used to be a second caller; it was
+ * deleted when factory RFQ email became manual-only — see {@code FactoryQuoteService#send}.)
  *
  * <p><b>{@code app.mail.override-to} containment lives here too, transparently.</b> When that
  * property is set, {@link MailOverrideBeanPostProcessor} wraps whichever transport is active in

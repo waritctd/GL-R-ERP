@@ -19,7 +19,6 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
-import th.co.glr.hr.factory.FactoryEmailService;
 import org.springframework.web.bind.annotation.PutMapping;
 import th.co.glr.hr.ticket.TicketResponses.TicketDetailResponse;
 import th.co.glr.hr.ticket.TicketResponses.TicketListResponse;
@@ -29,12 +28,10 @@ import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 @RequestMapping("/api/tickets")
 public class TicketController {
     private final TicketService ticketService;
-    private final FactoryEmailService factoryEmail;
     private final SessionContext sessions;
 
-    public TicketController(TicketService ticketService, FactoryEmailService factoryEmail, SessionContext sessions) {
+    public TicketController(TicketService ticketService, SessionContext sessions) {
         this.ticketService = ticketService;
-        this.factoryEmail  = factoryEmail;
         this.sessions      = sessions;
     }
 
@@ -336,17 +333,11 @@ public class TicketController {
                                 @jakarta.validation.constraints.NotBlank
                                 @jakarta.validation.constraints.Size(max = 2000) String reason) {}
 
-    @PostMapping("/{id}/factory-emails/send")
-    Map<String, String> sendFactoryEmail(
-        @PathVariable long id,
-        @Valid @RequestBody SendFactoryEmailRequest request,
-        HttpSession session
-    ) {
-        UserPrincipal user = sessions.requireUser(session);
-        ticketService.assertFactoryEmailAllowed(id, user);
-        factoryEmail.send(id, request.factory(), request.to(), request.subject(), request.body());
-        return Map.of("status", "sent");
-    }
+    // POST /{id}/factory-emails/send is retired: factory RFQ email is manual-only now (owner
+    // decision) — a human copies the draft FactoryQuoteService generates and sends it from their
+    // own mail client, then marks it sent via POST /api/factory-quotes/{factoryQuoteId}/send
+    // (FactoryQuoteController.send / FactoryQuoteService.send — see that method's javadoc).
+    // TicketService.assertFactoryEmailAllowed, this route's only gate, was deleted alongside it.
 
     // calculate-prices and items/{itemId}/price-override are retired too — same Slice S1
     // rationale as above (legacy price_proposed-only CEO tooling; see

@@ -9,65 +9,35 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import th.co.glr.hr.brand.BrandAssets;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.notification.NotificationEmailService;
 
 /**
- * Issue #782's concrete regression pin: drives TODAY's real senders - {@link FactoryEmailService}
- * (which had NO override handling at all before this fix) and {@link NotificationEmailService} (which
- * hand-rolled its own, twice) - through a REAL {@link OverrideRedirectingMailer}, and asserts
- * wrong-way-round that the caller-supplied address never reaches the terminal transport.
+ * Issue #782's concrete regression pin: drives TODAY's real sender - {@link
+ * NotificationEmailService} (which hand-rolled its own override check, twice) - through a REAL
+ * {@link OverrideRedirectingMailer}, and asserts wrong-way-round that the caller-supplied address
+ * never reaches the terminal transport.
  *
- * <p>This is deliberately in the {@code th.co.glr.hr.mail} package rather than split across
- * {@code factory}/{@code notification}: it is a cross-cutting property of the mail subsystem, not of
- * either sender, and package-private access to {@link OverrideRedirectingMailer} makes that the
- * natural home. It is also deliberately NOT the test that proves a FUTURE sender is safe - that is
+ * <p>The other half of #782's original regression pin covered {@code FactoryEmailService} (which
+ * had NO override handling at all before this fix) — that sender was deleted outright when factory
+ * RFQ email became manual-only (see {@code FactoryQuoteService#send}), so there is no automated
+ * factory-quote mail path left to pin here any more.
+ *
+ * <p>This is deliberately in the {@code th.co.glr.hr.mail} package rather than
+ * {@code notification}: it is a cross-cutting property of the mail subsystem, not of the sender,
+ * and package-private access to {@link OverrideRedirectingMailer} makes that the natural home. It
+ * is also deliberately NOT the test that proves a FUTURE sender is safe - that is
  * {@link OverrideRedirectingMailerTest}, which exhausts every {@link Mailer} method rather than
- * enumerating callers. This class exists so the fix is proven against real, current call sites too,
- * not only against the shared collaborator in the abstract.
+ * enumerating callers. This class exists so the fix is proven against a real, current call site
+ * too, not only against the shared collaborator in the abstract.
  */
 class MailOverrideContainmentTest {
     private static final String OVERRIDE_TO = "qa-inbox@example.com";
-    private static final String REAL_FACTORY_ADDRESS = "real-factory@supplier.example";
     private static final String REAL_EMPLOYEE_ADDRESS = "real-employee@company.example";
 
     private final Mailer terminalTransport = mock(Mailer.class);
     private final Mailer mailer = new OverrideRedirectingMailer(terminalTransport, OVERRIDE_TO);
-
-    @Test
-    void factoryEmailServiceSendNeverReachesTheRealFactoryAddress() {
-        FactoryEmailService factoryEmailService = new FactoryEmailService(mailer);
-
-        factoryEmailService.send(1L, "Acme Supplies", REAL_FACTORY_ADDRESS, "RFQ PR-1", "please quote");
-
-        verify(terminalTransport, never()).send(eq(REAL_FACTORY_ADDRESS), anyString(), anyString());
-        verify(terminalTransport).send(eq(OVERRIDE_TO), eq("RFQ PR-1"),
-            argThat(body -> body.contains("please quote") && body.contains(REAL_FACTORY_ADDRESS)));
-    }
-
-    @Test
-    void factoryEmailServiceSendWithAttachmentsNeverReachesTheRealFactoryAddress(@TempDir Path tempDir) throws Exception {
-        Path attachmentFile = tempDir.resolve("drawing.pdf");
-        Files.write(attachmentFile, "%PDF-fake".getBytes());
-        var attachment = new FactoryEmailService.EmailAttachment("drawing.pdf", attachmentFile.toString(), "application/pdf");
-        FactoryEmailService factoryEmailService = new FactoryEmailService(mailer);
-
-        factoryEmailService.send(2L, "Acme Supplies", REAL_FACTORY_ADDRESS, "RFQ PR-2 with drawing",
-            "please quote", List.of(attachment));
-
-        verify(terminalTransport, never()).sendWithAttachments(eq(REAL_FACTORY_ADDRESS), anyString(), anyString(), anyList());
-        verify(terminalTransport).sendWithAttachments(
-            eq(OVERRIDE_TO),
-            eq("RFQ PR-2 with drawing"),
-            argThat(body -> body.contains("please quote") && body.contains(REAL_FACTORY_ADDRESS)),
-            argThat(attachments -> attachments.size() == 1 && attachments.get(0).filename().equals("drawing.pdf")));
-    }
 
     @Test
     void notificationEmailServiceSendNeverReachesTheRealEmployeeAddress() {

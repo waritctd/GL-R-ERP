@@ -32,7 +32,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -150,22 +149,12 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications, objectMapper,
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
         decisionService = new PricingDecisionService(new PricingDecisionRepository(jdbc), pricingRequests,
@@ -184,12 +173,6 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
 
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory OverrideValidation', 'factory-override-validation@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
         catalogProductId = insertCatalogProduct("Factory OverrideValidation", "IT", "TEST-OV-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
