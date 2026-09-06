@@ -39,7 +39,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemThicknessReques
  *       {@link ThicknessDefaultRepository#saveAll} as-is, so filling a gap here also closes it in
  *       the CEO's own bulk thickness-gap editor ({@code ThicknessDefaultController}), and vice
  *       versa. The collection comes from the RESOLVED catalog row via {@link
- *       CatalogRepository#findFactoryAndCollection}, never from {@code
+ *       CatalogRepository#findFactoryAndCollection(long)}, never from {@code
  *       PricingRequestItemDto#catalogCollection} — that column is a submit-time snapshot that can
  *       go stale the moment the catalog changes underneath it.
  *   <li>Not linked at all: writes this line's OWN {@code
