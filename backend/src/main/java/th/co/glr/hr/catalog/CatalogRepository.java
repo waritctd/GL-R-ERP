@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -113,6 +114,102 @@ public class CatalogRepository {
      * resolve", mirroring the deleted single-row {@code findThicknessMm}/{@code
      * findOriginCountryCode}'s {@code Optional.empty()} exactly (see {@link #findPricingKeys}). */
     public record CatalogPricingKey(BigDecimal thicknessMm, String originCountryCode) {}
+
+    /**
+     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): the (factory, collection) a
+     * catalog price row belongs to — the routing key {@code PricingRequestItemThicknessService#setItemThickness}
+     * needs to upsert the right {@code price_catalog.collection_thickness_default} row when a
+     * pricing-request line's hand-entered thickness should land on the SHARED catalog default
+     * rather than the line's own {@code thickness_mm_override}. Also the identity lookup
+     * {@code PricingRequestThicknessSuggestionService} (SPEC-PREFILL, ladder A) starts from before
+     * it can look for sibling products or a box-weight estimate — {@code factoryName} (added for
+     * that caller) is what keys {@code ThicknessEstimator}'s per-factory density map.
+     *
+     * <p>Deliberately reads the base {@code product_prices} table directly, with NO {@code
+     * price_list_versions.status = 'ACTIVE'} filter — unlike {@link #findPricingKeys}, which is
+     * ACTIVE-only because it answers "what would the pricing engine resolve right now". This
+     * method answers a different question: "which factory/collection does this catalog ROW belong
+     * to", an identity that does not change with the row's version status. Matches the SAME
+     * un-filtered join {@link #findPricingKeys}'s origin-country half already uses, for the same
+     * reason (see that method's own Javadoc).
+     */
+    public Optional<CatalogFactoryCollection> findFactoryAndCollection(long priceId) {
+        return jdbc.query("""
+            SELECT p.factory_id, p.collection, f.name AS factory_name
+              FROM price_catalog.product_prices p
+              JOIN price_catalog.factories       f ON f.factory_id = p.factory_id
+             WHERE p.price_id = :priceId
+            """, Map.of("priceId", priceId),
+            (rs, i) -> new CatalogFactoryCollection(
+                rs.getLong("factory_id"), rs.getString("factory_name"), rs.getString("collection")))
+            .stream().findFirst();
+    }
+
+    /** A catalog price row's factory + collection identity — see {@link #findFactoryAndCollection}. */
+    public record CatalogFactoryCollection(long factoryId, String factoryName, String collection) {}
+
+    /**
+     * SPEC-PREFILL ladder A, rung 3 ("sibling products"): every OTHER row's own {@code
+     * thickness_mm} in the same (factory, collection) — never {@code NULL}, never {@code
+     * excludePriceId} itself (defensive; that row's own thickness is null by construction whenever
+     * a caller reaches this method, since {@link ThicknessEstimator#fromSiblings} is only worth
+     * calling once the catalog chain has already failed to resolve one for it — see {@code
+     * PricingRequestThicknessSuggestionService}). One list entry per matching row (duplicates are
+     * meaningful: they are how the caller counts "N รายการ" and tells agreement from disagreement),
+     * so this deliberately returns a flat list rather than a distinct set or a GROUP BY count —
+     * {@link ThicknessEstimator#fromSiblings} owns the agreement decision, not this query.
+     *
+     * <p>ACTIVE-only (joins {@code price_list_versions}), unlike {@link #findFactoryAndCollection}
+     * above: this answers "what would a reasonable sibling suggest RIGHT NOW", the same "resolve
+     * as of today" question {@link #findPricingKeys} answers for the engine itself — a sibling
+     * sitting on an ARCHIVED or DRAFT version is not evidence of what a NEW line should be priced
+     * at today.
+     */
+    public List<BigDecimal> findSiblingThicknessesMm(long factoryId, String collection, long excludePriceId) {
+        return jdbc.query("""
+            SELECT p.thickness_mm
+              FROM price_catalog.product_prices p
+              JOIN price_catalog.price_list_versions v ON v.version_id = p.version_id
+             WHERE p.factory_id = :factoryId
+               AND p.collection IS NOT DISTINCT FROM :collection
+               AND p.price_id <> :excludePriceId
+               AND p.thickness_mm IS NOT NULL
+               AND v.status = 'ACTIVE'
+            """,
+            new MapSqlParameterSource()
+                .addValue("factoryId", factoryId)
+                .addValue("collection", collection)
+                .addValue("excludePriceId", excludePriceId),
+            (rs, i) -> rs.getBigDecimal("thickness_mm"));
+    }
+
+    /**
+     * SPEC-PREFILL ladder A, rung 4 ("box weight"): the three raw ingredients {@link
+     * ThicknessEstimator#fromBoxWeight} needs for one catalog row — the factory NAME (keys the
+     * density map), {@code kg_per_box} (V40 import, box-level, never priced-affecting on its own),
+     * and the box's real footprint area. That area is {@code true_sqm_per_box}
+     * (V153/V164), not the raw {@code sqm_per_box} column — for a {@code per_linear_m} row the raw
+     * column holds LINEAR METRES mislabelled as square metres (V153's own column comment: a CITY
+     * battiscopa reports 6.0 for a box that is really 0.42 m², a 14.3x overstatement), and feeding
+     * that straight into a density-implied thickness would be wrong in exactly the same way. Reads
+     * {@code price_catalog.v_priceable_product} — ACTIVE-only, matching {@link #findPricingKeys}'s
+     * "resolve as of today" semantics — joined back to the base table for the two columns V164
+     * added there but not to any pricing computation (see that migration's header).
+     */
+    public Optional<CatalogThicknessEstimationInputs> findThicknessEstimationInputs(long priceId) {
+        return jdbc.query("""
+            SELECT vpp.factory AS factory_name, vpp.true_sqm_per_box, p.kg_per_box
+              FROM price_catalog.v_priceable_product vpp
+              JOIN price_catalog.product_prices      p ON p.price_id = vpp.price_id
+             WHERE vpp.price_id = :priceId
+            """, Map.of("priceId", priceId),
+            (rs, i) -> new CatalogThicknessEstimationInputs(
+                rs.getString("factory_name"), rs.getBigDecimal("true_sqm_per_box"), rs.getBigDecimal("kg_per_box")))
+            .stream().findFirst();
+    }
+
+    /** The box-weight estimator's raw ingredients for one price row — see {@link #findThicknessEstimationInputs}. */
+    public record CatalogThicknessEstimationInputs(String factoryName, BigDecimal sqmPerBox, BigDecimal kgPerBox) {}
 
     public List<CatalogDto> search(String q) {
         String pattern = q == null || q.isBlank() ? "%" : "%" + q.trim() + "%";

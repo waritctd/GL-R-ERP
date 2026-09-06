@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingrequest;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -77,6 +78,24 @@ public final class PricingRequestRequests {
      */
     public record SetItemFactoryRequest(
         @NotBlank @Size(max = 255) String factory
+    ) {}
+
+    /**
+     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import or ceo supplies a
+     * hand-entered thickness for one line the catalog cannot resolve. See {@code
+     * PricingRequestItemThicknessService#setItemThickness} for the routing rule (a catalog-linked line updates
+     * the shared {@code price_catalog.collection_thickness_default}; an unlinked line updates this
+     * line's own {@code thickness_mm_override}) and its 409 refusal.
+     *
+     * @param thicknessMm null CLEARS whichever of the two this line owns. The upper bound mirrors
+     *        {@code ThicknessDefaultRequests.ThicknessDefaultEntry}'s own reasoning: a slab
+     *        genuinely thicker than 100mm should surface as a real (if unusual) value, not be
+     *        rejected at entry as though it were a typo.
+     */
+    public record SetItemThicknessRequest(
+        @DecimalMin(value = "0", inclusive = false, message = "ความหนาต้องมากกว่า 0")
+        @DecimalMax(value = "100", message = "ความหนาต้องไม่เกิน 100 มม.")
+        BigDecimal thicknessMm
     ) {}
 
     /** Import-only toggle on a Pricing Request attachment (V69, review remediation COMMIT 4). */

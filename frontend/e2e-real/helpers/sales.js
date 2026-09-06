@@ -242,10 +242,14 @@ export async function cancelDeal(sessions, ticketId) {
 // ── sqmPerUnit is required unconditionally, not only for a PER_SQM line ──────────────────────
 // LandedCostCalculator.calculate calls resolveSqmPerPiece for EVERY line regardless of unit
 // basis (pricingcosting/LandedCostCalculator.java:90, 212-234) — freight/insurance/inland are
-// always priced per sqm of product. Every fixture below uses PER_PIECE for both the requested
-// and quoted unit basis (the simplest basis — pricePerPiece/quantityToPieces need no conversion
-// factor for it) but still supplies the factory quote item's own sqmPerUnit, which
-// resolveSqmPerPiece prefers over the PCR item's requestedQtySqm/requestedQty fallback.
+// always priced per sqm of product. This is no longer only a calculator-internal need the
+// fixture happens to satisfy out of caution: FactoryQuoteService.receive itself now 422s at
+// receive-time if ANY line's factory-quote response omits sqmPerUnit, regardless of that line's
+// unit basis (owner-ruled change, 2026-09, matching what resolveSqmPerPiece has always required)
+// — turning what used to be a late, CEO-discovered costing failure into an early, actionable
+// import-stage one. Every fixture below uses PER_PIECE for both the requested and quoted unit
+// basis (the simplest basis — pricePerPiece/quantityToPieces need no conversion factor for it)
+// but still supplies the factory quote item's own sqmPerUnit — REQUIRED now, not merely prudent.
 export const PRICING_REQUEST_STATUS = {
   DRAFT: 'DRAFT',
   SUBMITTED: 'SUBMITTED',

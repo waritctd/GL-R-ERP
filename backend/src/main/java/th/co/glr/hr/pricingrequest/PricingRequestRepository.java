@@ -1,5 +1,6 @@
 package th.co.glr.hr.pricingrequest;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -514,22 +515,69 @@ public class PricingRequestRepository {
         }
     }
 
+    /**
+     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): LEFT JOINs {@code
+     * price_catalog.v_priceable_product} on the SAME {@code catalog_price_id ?? product_id} link
+     * {@code LandedCostCalculator#resolveThicknessMm} resolves through, so {@code
+     * resolved_thickness_mm}/{@code thickness_is_default}/{@code catalog_sqm_per_piece} always
+     * reflect the CURRENT catalog state — never the (possibly stale) {@code catalog_*} snapshot
+     * columns selected above, which are frozen at submit time and never revisited afterward.
+     *
+     * <p>SPEC-PREFILL.md ladder B/C (2026-09): five more columns off the SAME already-joined
+     * {@code vpp} row — {@code product_name}/{@code size_raw}/{@code true_sqm_per_box}/{@code
+     * pcs_per_box}/{@code sqm_per_linear_m} (the last three added to the view by V164 for exactly
+     * this). Free to add: no new join, no extra round trip, same one row per item this query
+     * already fetches. {@code thickness_suggestion} (ladder A) is NOT one of these five — it needs
+     * OTHER rows (siblings) and raw ingredients this per-row mapper has no way to reach, so it is
+     * left null here and filled in afterwards, read-path only, by {@code
+     * PricingRequestThicknessSuggestionService} — see {@code PricingRequestItemDto#withThicknessSuggestion}.
+     */
     public List<PricingRequestItemDto> findItems(long pricingRequestId) {
         return jdbc.query("""
-            SELECT pricing_request_item_id, pricing_request_id, source_ticket_item_id, product_id, variant_id,
-                   brand, model, product_description, color, texture, size, factory,
-                   requested_qty, requested_qty_sqm, requested_unit, requested_unit_basis, quantity_type,
-                   target_delivery_date, delivery_location, special_requirement, sort_order,
-                   price_list_version_id, catalog_price_id, catalog_base_price, catalog_currency,
-                   catalog_effective_date, resolved_factory_id, resolved_factory_name,
-                   catalog_product_code, catalog_brand, catalog_collection, catalog_model,
-                   product_type_override
-              FROM sales.pricing_request_item
-             WHERE pricing_request_id = :id
-             ORDER BY sort_order, pricing_request_item_id
+            SELECT pri.pricing_request_item_id, pri.pricing_request_id, pri.source_ticket_item_id,
+                   pri.product_id, pri.variant_id,
+                   pri.brand, pri.model, pri.product_description, pri.color, pri.texture, pri.size, pri.factory,
+                   pri.requested_qty, pri.requested_qty_sqm, pri.requested_unit, pri.requested_unit_basis,
+                   pri.quantity_type,
+                   pri.target_delivery_date, pri.delivery_location, pri.special_requirement, pri.sort_order,
+                   pri.price_list_version_id, pri.catalog_price_id, pri.catalog_base_price, pri.catalog_currency,
+                   pri.catalog_effective_date, pri.resolved_factory_id, pri.resolved_factory_name,
+                   pri.catalog_product_code, pri.catalog_brand, pri.catalog_collection, pri.catalog_model,
+                   pri.product_type_override, pri.thickness_mm_override,
+                   COALESCE(pri.thickness_mm_override, vpp.thickness_mm) AS resolved_thickness_mm,
+                   COALESCE(vpp.thickness_is_default, FALSE) AS thickness_is_default,
+                   vpp.sqm_per_piece AS catalog_sqm_per_piece,
+                   vpp.product_name AS catalog_product_name,
+                   vpp.size_raw AS catalog_size_raw,
+                   vpp.true_sqm_per_box AS catalog_sqm_per_box,
+                   vpp.pcs_per_box AS catalog_pcs_per_box,
+                   vpp.sqm_per_linear_m AS catalog_sqm_per_linear_m
+              FROM sales.pricing_request_item pri
+              LEFT JOIN price_catalog.v_priceable_product vpp
+                     ON vpp.price_id = COALESCE(pri.catalog_price_id, pri.product_id)
+             WHERE pri.pricing_request_id = :id
+             ORDER BY pri.sort_order, pri.pricing_request_item_id
             """,
             Map.of("id", pricingRequestId),
             (rs, rowNum) -> mapItem(rs));
+    }
+
+    /**
+     * V163: writes or clears ONE line's own {@code thickness_mm_override} — the ONLY thickness
+     * source for a line with no catalog link at all (a catalog-linked line's hand-entered
+     * thickness instead upserts the SHARED {@code price_catalog.collection_thickness_default} via
+     * {@code ThicknessDefaultRepository}, reused as-is rather than duplicated here). See {@code
+     * PricingRequestItemThicknessService#setItemThickness} for the routing decision and its refuse case.
+     */
+    public int updateItemThicknessOverride(long pricingRequestItemId, BigDecimal thicknessMm) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET thickness_mm_override = :thicknessMm
+             WHERE pricing_request_item_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", pricingRequestItemId)
+                .addValue("thicknessMm", thicknessMm));
     }
 
     /**
@@ -1107,7 +1155,20 @@ public class PricingRequestRepository {
             rs.getString("catalog_brand"),
             rs.getString("catalog_collection"),
             rs.getString("catalog_model"),
-            rs.getString("product_type_override")
+            rs.getString("product_type_override"),
+            rs.getBigDecimal("resolved_thickness_mm"),
+            rs.getBoolean("thickness_is_default"),
+            rs.getBigDecimal("thickness_mm_override"),
+            rs.getBigDecimal("catalog_sqm_per_piece"),
+            rs.getString("catalog_product_name"),
+            rs.getString("catalog_size_raw"),
+            rs.getBigDecimal("catalog_sqm_per_box"),
+            rs.getBigDecimal("catalog_pcs_per_box"),
+            rs.getBigDecimal("catalog_sqm_per_linear_m"),
+            // thicknessSuggestion (ladder A): never computed here — see this class's findItems()
+            // Javadoc for why a per-row mapper cannot reach it, and
+            // PricingRequestThicknessSuggestionService for where it is actually filled in.
+            null
         );
     }
 

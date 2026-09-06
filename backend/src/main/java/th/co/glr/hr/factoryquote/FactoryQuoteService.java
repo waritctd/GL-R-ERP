@@ -631,29 +631,53 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
         // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
-        // quote is ready — LandedCostCalculator.isFullyResolvable is the SAME predicate
-        // LandedCostCalculator.calculate() itself requires, so "we said ready" and "the
-        // calculator can run" cannot drift apart. A multi-factory request does not advance until
-        // the LAST factory's quote is marked ready; re-reading summary is unnecessary since
-        // quotes.markReady above did not touch the pricing_request row itself. No advisory lock
-        // guards this check (unlike PricingDecisionService.startReview) — the worst case of two
-        // quotes being marked ready in the same instant is a missed auto-advance, not an illegal
-        // state, and the plan does not call for locking here.
-        if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
-                && landedCosts.isFullyResolvable(summary)) {
-            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-                PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
-            if (transitioned == 1) {
-                // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
-                // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
-                // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
-                // the same kind preserves one consistent "became ready for CEO review" trail
-                // across both eras of the workflow.
-                addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                    PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-                    "All factory quotes ready for costing — request advanced for CEO review");
-                notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                    "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
+        // quote is ready AND every item's thickness resolves — LandedCostCalculator.
+        // isFullyResolvable is the SAME predicate FactoryQuoteCarryForward shares, so those two
+        // call sites cannot drift apart from each other (see that method's own V163 correction for
+        // why it is no longer exactly "the calculator can run"). A multi-factory request does not
+        // advance until the LAST factory's quote is marked ready; re-reading summary is unnecessary
+        // since quotes.markReady above did not touch the pricing_request row itself. No advisory
+        // lock guards this check (unlike PricingDecisionService.startReview) — the worst case of
+        // two quotes being marked ready in the same instant is a missed auto-advance, not an
+        // illegal state, and the plan does not call for locking here.
+        if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
+            if (landedCosts.isFullyResolvable(summary)) {
+                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+                    PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+                if (transitioned == 1) {
+                    // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
+                    // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
+                    // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
+                    // the same kind preserves one consistent "became ready for CEO review" trail
+                    // across both eras of the workflow.
+                    addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                        PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                        "All factory quotes ready for costing — request advanced for CEO review");
+                    notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                        "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
+                }
+            } else {
+                // V163: every factory quote may be ready (resolveSources succeeds) while the
+                // request still cannot advance because a thickness gap remains — isFullyResolvable
+                // folds both conditions into one boolean, so this branch cannot tell which one
+                // failed without asking separately. itemsMissingThickness re-runs resolveSources
+                // and returns an EMPTY list whenever resolveSources itself is the reason (a
+                // still-pending factory quote elsewhere, say) — so this only fires, and only tells
+                // Import something new, when thickness is genuinely the ONE thing left blocking the
+                // CEO hop. Recorded as an event (not a thrown exception) because marking THIS
+                // quote's OWN response ready must still succeed regardless — the gap is someone
+                // else's line, and Import already sees it called out in the factory-quote response
+                // screen (PricingRequestItemDto#resolvedThicknessMm); this puts the same fact in the
+                // request's own history so it survives a page reload without requiring the reader to
+                // re-spot which row is still blank.
+                List<String> missingThickness = landedCosts.itemsMissingThickness(summary);
+                if (!missingThickness.isEmpty()) {
+                    addEvent(summary, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_THICKNESS_SET,
+                        summary.status(), summary.status(),
+                        "ทุกโรงงานตอบราคาแล้ว แต่ยังไม่สามารถส่งให้ CEO พิจารณาได้ เนื่องจากยังไม่มีความหนาของ: "
+                            + String.join(", ", missingThickness)
+                            + " — กรุณาระบุความหนาในขั้นตอนตอบกลับราคาโรงงานก่อน");
+                }
             }
         }
         return requireQuote(quoteId);
@@ -762,9 +786,23 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
             }
-            if (UnitBasis.PER_SQM.equals(unitBasis) && responseItem.sqmPerUnit() == null) {
+            // Widened from PER_SQM-only (owner-ruled change, 2026-09): sqmPerUnit is now required
+            // on EVERY line, regardless of unit basis — matching what
+            // LandedCostCalculator#resolveSqmPerPiece has always needed (freight/insurance are
+            // priced per sqm unconditionally; see that method's own javadoc). Before this, a
+            // PER_PIECE/PER_BOX/PER_LINEAR_M line with no sqmPerUnit sailed through receive() and
+            // only 422'd much later, at CEO costing time — a late, CEO-discovered failure for a gap
+            // Import could have been told about immediately. This turns it into an early,
+            // actionable import-stage 422 instead. Known, accepted narrowing: resolveSqmPerPiece
+            // also accepts requestItem.requestedQtySqm()/requestedQty() as a fallback when the quote
+            // itself carries no sqmPerUnit — this check does not look at the request side, so a line
+            // that would have costed fine via that fallback now needs sqmPerUnit supplied here too.
+            // Real data rarely populates requestedQtySqm (0 of prod's 7 rows, 12 of UAT's 32 do), so
+            // the practical impact is small, but it is a real narrowing, not merely a relocation.
+            if (responseItem.sqmPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit");
+                    "รายการตอบกลับทุกแบบต้องระบุ sqmPerUnit (พื้นที่ต่อหน่วย ตร.ม.) "
+                        + "เนื่องจากใช้คำนวณค่าขนส่งและประกันภัยเสมอ ไม่ว่าหน่วยนับจะเป็นแบบใด");
             }
             if (UnitBasis.PER_LINEAR_M.equals(unitBasis) && responseItem.linearMPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,

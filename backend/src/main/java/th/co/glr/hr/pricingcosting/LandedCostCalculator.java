@@ -94,8 +94,12 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * names the item by its human label (never the bare id) and the missing factor in Thai alongside
  * its technical identifier, plus where it is entered ({@code sales.factory_quote_item}), so the
  * CEO knows what to fix and who to ask without a second guess. {@link #isFullyResolvable}'s
- * semantics are unchanged by this — it still wraps only {@link #resolveSources}, exactly as
- * before.
+ * semantics were unchanged by P1a/P1b — it wrapped only {@link #resolveSources}, exactly as
+ * before. <b>That stopped being true under V163</b> (ฝ่ายนำเข้า must supply ความหนา when the
+ * catalog has none, 2026-09): it now ALSO requires every item's thickness to resolve, which is a
+ * deliberately STRICTER condition than "the calculator can run" — see that method's own Javadoc
+ * for why, and for the one gap (origin country) it still leaves to this class's own V156
+ * uncostable-line handling below.
  *
  * <p><b>F2 correction — what this class does NOT aggregate, and a masking change that came free
  * with the restructure.</b> An earlier version of this Javadoc's headline claimed the calculator
@@ -496,34 +500,51 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Thickness comes ONLY from the catalog link — {@code price_catalog.product_prices.thickness_mm}
-     * via {@code pricing_request_item.catalog_price_id} (the submit-time snapshot, V61), falling
-     * back to the live {@code product_id} (both columns point at the SAME target,
-     * {@code price_catalog.product_prices.price_id}, V68) when the snapshot has not run yet —
-     * never guessed, never defaulted. An item with no resolvable catalog link at all is a
-     * legitimate case (Import may submit a free-text line with no catalog match, owner ruling
-     * 2026-08-11 — {@code PricingRequestService#submit}'s own comment), and a matched catalog row
-     * can still have a NULL {@code thickness_mm} — 41.7% of the production catalogue does, and for
-     * some products (Bode's whole range, REFIN's OUT2.0) NO source carries it, so it cannot be
-     * fixed by better data alone.
+     * <b>V163 correction: thickness no longer comes ONLY from the catalog link.</b> This Javadoc
+     * used to open with exactly that claim, and it was true until ฝ่ายนำเข้า must supply ความหนา
+     * when the catalog has none (owner-ruled, 2026-09) added a FIRST, more specific rung:
+     * {@code requestItem.thicknessMmOverride()} — a hand-entered value for THIS deal's line,
+     * writable via {@code PricingRequestItemThicknessService#setItemThickness} whenever the catalog
+     * chain below resolves nothing. It wins over the catalog precisely because it is more specific:
+     * a per-line correction for a product the catalogue cannot yet price, not a guess.
+     *
+     * <p>Only once the override is absent does resolution fall through to the catalog link —
+     * {@code price_catalog.product_prices.thickness_mm} via {@code pricing_request_item.catalog_price_id}
+     * (the submit-time snapshot, V61), falling back to the live {@code product_id} (both columns
+     * point at the SAME target, {@code price_catalog.product_prices.price_id}, V68) when the
+     * snapshot has not run yet. An item with no resolvable catalog link at all is a legitimate case
+     * (Import may submit a free-text line with no catalog match, owner ruling 2026-08-11 — {@code
+     * PricingRequestService#submit}'s own comment), and a matched catalog row can still have a NULL
+     * {@code thickness_mm} — 41.7% of the production catalogue does, and for some products (Bode's
+     * whole range, REFIN's OUT2.0) NO source carries it, so it cannot be fixed by better data
+     * alone. The override exists for exactly this remainder: whichever of the two links resolves
+     * nothing, a human can now supply the number directly on the line.
      *
      * <p><b>Returns null rather than throwing (V156).</b> It used to throw 422 here, which aborted
      * {@code PricingDecisionService#startReview} before a single costing row was written — and
      * therefore before the CEO could reach the very screen that owns the manual cost override
      * ({@code manual_landed_cost_per_unit_thb}, V141) that resolves this. The capability existed
      * and the route to it was blocked. A null now marks the item UNCOSTABLE, it persists with a
-     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. Nothing
-     * is ever priced on a guessed thickness — the guarantee moved, it did not weaken.
+     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. V163
+     * ADDS a stricter, earlier gate on top ({@link #isFullyResolvable}, which now also requires
+     * every item's thickness to resolve) — this V156 safety net stays as the backstop for a
+     * request that reached the CEO before that gate existed, or via a path {@code
+     * isFullyResolvable} does not cover (an unresolved ORIGIN COUNTRY, which V163 deliberately
+     * leaves ungated — see that method's own Javadoc). Nothing is ever priced on a guessed
+     * thickness — the guarantee moved, it did not weaken.
      *
-     * <p><b>P1b.2:</b> reads {@code catalogKeys}, a map {@link #calculate} prefetches ONCE per
-     * request via {@link CatalogRepository#findPricingKeys} (batched over every source's price
-     * id), rather than calling {@code CatalogRepository#findThicknessMm} (F1: deleted — its only
-     * caller was its own test, repointed at {@code findPricingKeys}) here per item. Resolution
-     * semantics are byte-identical to that deleted single-row method (same view, same
-     * ACTIVE-version filter) — only the round-trip count changed.
+     * <p><b>P1b.2:</b> the catalog-chain half reads {@code catalogKeys}, a map {@link #calculate}
+     * prefetches ONCE per request via {@link CatalogRepository#findPricingKeys} (batched over every
+     * source's price id), rather than calling {@code CatalogRepository#findThicknessMm} (F1:
+     * deleted — its only caller was its own test, repointed at {@code findPricingKeys}) here per
+     * item. Resolution semantics are byte-identical to that deleted single-row method (same view,
+     * same ACTIVE-version filter) — only the round-trip count changed.
      */
     private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem,
                                           Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
+        if (requestItem.thicknessMmOverride() != null) {
+            return requestItem.thicknessMmOverride();
+        }
         Long priceId = catalogPriceId(requestItem);
         if (priceId == null) {
             return null;
@@ -700,21 +721,69 @@ public class LandedCostCalculator {
     }
 
     /**
-     * True when {@link #resolveSources} would succeed — the single definition of "ready to cost".
-     * {@code FactoryQuoteService.markReadyForCosting} calls this to decide whether the LAST
-     * outstanding factory quote just became ready (and therefore whether the pricing request
-     * should auto-advance to {@code READY_FOR_CEO_REVIEW}); {@link #calculate} 422s via the same
-     * {@link #resolveSources} check if it is ever called when this would return false. Sharing
-     * one predicate for both is deliberate — "we said ready" and "the calculator can run" must
-     * never be able to drift apart.
+     * True when {@link #resolveSources} would succeed AND every resolved item's thickness resolves
+     * — the single definition of "ready for the CEO". {@code FactoryQuoteService.markReadyForCosting}
+     * calls this to decide whether the LAST outstanding factory quote just became ready (and
+     * therefore whether the pricing request should auto-advance to {@code READY_FOR_CEO_REVIEW});
+     * {@code FactoryQuoteCarryForward} calls it twice (parent, then child) to decide whether a
+     * customer-change revision may skip straight to the CEO too. Both call sites share this ONE
+     * predicate so they cannot drift apart from EACH OTHER.
+     *
+     * <p><b>V163 correction — this is NO LONGER exactly "the calculator can run".</b> Before ฝ่าย
+     * นำเข้า must supply ความหนา when the catalog has none (owner-ruled, 2026-09), this method
+     * wrapped ONLY {@link #resolveSources}, and the Javadoc here said so — truthfully, at the time.
+     * That is no longer the whole story: {@link #calculate} can still SUCCEED on a request with an
+     * unresolved thickness (V156's uncostable-line safety net marks that one line UNCOSTABLE
+     * instead of throwing), but THIS method now returns {@code false} for exactly that request —
+     * deliberately STRICTER than "the calculator can run", not merely a description of it. The
+     * point of the gate is to stop Import at their own stage instead of the CEO discovering a gap
+     * after the hop (see {@link #itemsMissingThickness}, which {@code markReadyForCosting} uses to
+     * tell Import which item, by name). V156's safety net is still real and still needed — for a
+     * request that reached {@code READY_FOR_CEO_REVIEW} before this gate existed, and for the one
+     * case this method deliberately does NOT re-check: an unresolved ORIGIN COUNTRY. Thickness
+     * alone gets the stricter, pre-CEO gate because it is the one Import can act on directly (a
+     * catalog link or a hand-entered override); an unresolved origin country means the catalog link
+     * itself is broken in a way only a CEO-side manual cost override can route around, so gating it
+     * here would block the CEO from ever reaching the tool that fixes it.
      */
     public boolean isFullyResolvable(PricingRequestSummaryDto summary) {
         try {
-            resolveSources(summary);
-            return true;
+            List<ResolvedSource> sources = resolveSources(summary);
+            return unresolvedThicknessLabels(sources).isEmpty();
         } catch (ApiException e) {
             return false;
         }
+    }
+
+    /**
+     * Item labels (see {@link #itemLabel}) for every item in {@code summary} whose thickness will
+     * not resolve — {@link #resolveThicknessMm}, override included. Returns an empty list both
+     * when every item's thickness resolves AND when {@link #resolveSources} itself fails (a quote
+     * not yet answered, say) — that is a DIFFERENT, pre-existing reason the request cannot advance,
+     * and this method's only caller, {@code FactoryQuoteService#markReadyForCosting}, already
+     * treats it as "nothing new to tell Import" rather than a thickness problem (it only consults
+     * this list once {@link #isFullyResolvable} has already said no, and only to decide whether
+     * THAT "no" is a thickness gap worth naming).
+     */
+    public List<String> itemsMissingThickness(PricingRequestSummaryDto summary) {
+        try {
+            return unresolvedThicknessLabels(resolveSources(summary));
+        } catch (ApiException e) {
+            return List.of();
+        }
+    }
+
+    /** Shared worker for {@link #isFullyResolvable} and {@link #itemsMissingThickness} — every
+     * source in {@code sources} whose thickness will not resolve, by {@link #itemLabel}. */
+    private List<String> unresolvedThicknessLabels(List<ResolvedSource> sources) {
+        Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys = prefetchCatalogKeys(sources);
+        List<String> missing = new ArrayList<>();
+        for (ResolvedSource source : sources) {
+            if (resolveThicknessMm(source.requestItem(), catalogKeys) == null) {
+                missing.add(itemLabel(source.requestItem()));
+            }
+        }
+        return missing;
     }
 
     /**

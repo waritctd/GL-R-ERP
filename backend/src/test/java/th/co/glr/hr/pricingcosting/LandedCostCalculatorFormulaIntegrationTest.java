@@ -55,6 +55,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
+import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
@@ -349,6 +350,23 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         long pricingRequestId = readyForReviewWithProduct(noThicknessProductId, "No Thickness Factory",
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
+
+        // V163 correction: readyForReviewWithProduct's own markReadyForCosting call no longer
+        // auto-advances this request on its own — ฝ่ายนำเข้า must supply ความหนา when the catalog
+        // has none (owner-ruled, 2026-09) widened LandedCostCalculator#isFullyResolvable to ALSO
+        // require this item's thickness to resolve, and it does not (that is this test's whole
+        // premise). The request is left sitting at AWAITING_FACTORY_RESPONSE, exactly as intended
+        // — see PricingFactoryQuoteCostingIntegrationTest#
+        // markReadyForCosting_doesNotAutoAdvance_untilEveryItemsThicknessResolvesToo for that gate
+        // itself. THIS test's own subject is different: what V156's safety net still does for a
+        // request that reaches READY_FOR_CEO_REVIEW ANYWAY, despite an unresolved thickness — the
+        // backstop the class Javadoc says stays for exactly that case (a request that reached
+        // review before this gate existed, or via a path this gate does not cover). Forcing the
+        // transition directly, bypassing the service layer entirely, is how that scenario is
+        // reached on purpose, without resurrecting a since-closed auto-advance path.
+        int forced = pricingRequests.transition(pricingRequestId, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+            PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+        assertThat(forced).as("the forced transition itself must succeed for this test's premise to hold").isEqualTo(1);
 
         // V156 — the behaviour CHANGED here, deliberately. startReview used to throw 422, which
         // aborted before any costing row was written and therefore before the CEO could reach the

@@ -1561,7 +1561,34 @@ function buildPricingRequestSummary(pr) {
 }
 
 function buildPricingRequestDetail(pr) {
-  return { summary: buildPricingRequestSummary(pr), items: pr.items, events: pr.events };
+  return { summary: buildPricingRequestSummary(pr), items: pr.items.map(mapMockPricingRequestItem), events: pr.events };
+}
+
+// Mirrors PricingRequestRepository#mapItem's V163 additions (resolvedThicknessMm/
+// thicknessIsDefault/catalogSqmPerPiece) — computed here at READ time, never stored on the item,
+// so they can never drift from item.thicknessMmOverride/item.catalogPriceId the way a
+// snapshot-at-write-time copy could.
+//
+// SIMPLIFIED ON PURPOSE for the catalog half, not a faithful mirror: mockProductPrices carries no
+// thickness_mm column at all (see catalogThicknessDefaults' own comment above — "there is no
+// catalogue [thickness data] in mock mode"), so resolvedThicknessMm can only ever be
+// thicknessMmOverride here, never a catalog-resolved value, and thicknessIsDefault is always
+// false. A mock-seeded item therefore always renders as "no resolved thickness" until an override
+// is set — the SAME visible state a real NO_THICKNESS catalogue row produces, so this is an
+// honest simplification (never MORE permissive than production), not a fabricated behaviour.
+// catalogSqmPerPiece IS a genuine mirror: mockProductPrices does carry sqmPerPiece, so a linked
+// item's value is looked up for real.
+function mapMockPricingRequestItem(item) {
+  const catalogPriceId = item.catalogPriceId ?? item.productId ?? null;
+  const catalogProduct = catalogPriceId != null
+    ? mockProductPrices.find((p) => p.priceId === catalogPriceId)
+    : null;
+  return {
+    ...item,
+    resolvedThicknessMm: item.thicknessMmOverride ?? null,
+    thicknessIsDefault: false,
+    catalogSqmPerPiece: catalogProduct?.sqmPerPiece ?? null,
+  };
 }
 
 function requirePricingRequestViewable(id, user) {
@@ -9172,6 +9199,10 @@ export const api = {
         catalogBrand: null,
         catalogCollection: null,
         catalogModel: null,
+        // V163: never populated by any snapshot step (unlike the catalog_* fields above) — only
+        // ever written by setItemThickness once the request is past DRAFT and a factory has
+        // responded, so a freshly-created/updated item always starts with no override.
+        thicknessMmOverride: null,
       }));
       const pr = {
         id, requestCode, ticketId: Number(ticketId),
@@ -9294,6 +9325,8 @@ export const api = {
           catalogBrand: null,
           catalogCollection: null,
           catalogModel: null,
+          // See create()'s identical field above — never touched by any snapshot step.
+          thicknessMmOverride: null,
         }));
       }
       pr.updatedAt = new Date().toISOString();
@@ -9325,6 +9358,42 @@ export const api = {
       item.factory = factory;
       pr.updatedAt = new Date().toISOString();
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FACTORY_SET', pr.status, pr.status);
+      return delay({ pricingRequest: buildPricingRequestDetail(pr) });
+    },
+
+    // Mirrors PricingRequestItemThicknessService (import/ceo) — ฝ่ายนำเข้า must supply ความหนา
+    // when the catalog has none (V163).
+    //
+    // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role gate below approximates the
+    // Java service; verify permission behaviour against the real service, never this mock.
+    //
+    // SIMPLIFIED ON PURPOSE, not a faithful mirror of the real routing: the real endpoint upserts
+    // price_catalog.collection_thickness_default for a line WITH a catalog link, or this item's
+    // own thickness_mm_override for a line WITHOUT one — and 409s when the line already resolves a
+    // thickness from the catalog. mockProductPrices carries no thickness_mm column at all (see
+    // catalogThicknessDefaults' and mapMockPricingRequestItem's own comments above — "there is no
+    // catalogue [thickness data] in mock mode"), so there is no catalog-resolved value this mock
+    // could ever refuse to overwrite, and no collection-level store worth fabricating just to
+    // route a write into. Every call here writes (or clears) thicknessMmOverride directly, and
+    // mapMockPricingRequestItem's resolvedThicknessMm is exactly that value — an honest
+    // simplification (never MORE permissive than production: the real 409 is a "nothing to do"
+    // guard, not an authorization boundary), not a fabricated behaviour. The real routing/409 rule
+    // is proven only by PricingRequestItemThicknessIntegrationTest against a real Postgres.
+    async setItemThickness(id, itemId, payload) {
+      const user = hasRole('import', 'ceo');
+      const pr = findPricingRequestRaw(id);
+      const item = pr.items.find((candidate) => candidate.id === itemId);
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      const raw = payload?.thicknessMm;
+      if (raw == null || raw === '') {
+        item.thicknessMmOverride = null;
+      } else {
+        const value = Number(raw);
+        if (!(value > 0)) fail('ความหนาต้องมากกว่า 0', 400);
+        item.thicknessMmOverride = value;
+      }
+      pr.updatedAt = new Date().toISOString();
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_THICKNESS_SET', pr.status, pr.status);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
