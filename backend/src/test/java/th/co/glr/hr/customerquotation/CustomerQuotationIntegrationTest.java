@@ -38,7 +38,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -130,16 +129,6 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         th.co.glr.hr.pricingcosting.PricingFormulaEngine formulaEngine =
             new th.co.glr.hr.pricingcosting.PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
@@ -149,7 +138,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
         // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
@@ -183,25 +172,11 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
         // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
         // open-ended, so ANY quantity resolves — see that helper's own comment).
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES
-                ('Factory A4', 'factory-a4@example.com', 'THB', 'piece', 'Italy'),
-                ('Factory B4', 'factory-b4@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
         catalogProductIdFactoryA = insertCatalogProduct("Factory A4", "IT", "TEST-A4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B4", "IT", "TEST-B4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C4', 'factory-c4@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
         catalogProductIdFactoryC = insertCatalogProduct("Factory C4", "IT", "TEST-C4-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 

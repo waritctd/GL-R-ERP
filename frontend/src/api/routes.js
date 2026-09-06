@@ -191,7 +191,8 @@ export const API_ROUTES = {
   },
   factoryConfigs: {
     list: '/api/factory-configs',
-    sendEmail: (ticketId) => `/api/tickets/${ticketId}/factory-emails/send`,
+    // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
+    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteSend.
   },
   customers: {
     create: '/api/customers',
@@ -343,6 +344,13 @@ export const API_ROUTES = {
   },
   priceImport: {
     factories: '/api/price-import/factories',
+    // PUT counterpart of factories above — updates one factory's master data (name/country/
+    // currency/email/unit). Mirrors PriceImportController.updateFactory.
+    factory: (factoryId) => `/api/price-import/factories/${factoryId}`,
+    // Country picker for the factory add/edit form — see PriceImportController.countries and
+    // PriceImportService.listCountries. Replaces the old free-text 2-letter country input, which
+    // was the direct cause of createFactory's 500 on a typo'd/unseeded code.
+    countries: '/api/price-import/countries',
     versions: (factoryId) => `/api/price-import/versions?factoryId=${factoryId}`,
     upload: '/api/price-import/upload',
     uploadCommit: '/api/price-import/upload-commit',

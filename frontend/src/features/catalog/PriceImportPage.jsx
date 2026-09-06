@@ -3,6 +3,7 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
+import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -11,6 +12,17 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
+
+// Default quoting unit for a factory's RFQ (price_catalog.factories.unit, V163). The column is a
+// free VARCHAR with no server-side CHECK constraint, but its own migration comment names exactly
+// these three values as the intended vocabulary — a constrained select is a better fit for that
+// than a free-text field pretending the domain is open-ended.
+const FACTORY_UNIT_OPTIONS = [
+  { value: 'piece', label: 'ชิ้น' },
+  { value: 'sqm', label: 'ตร.ม.' },
+  { value: 'box', label: 'กล่อง' },
+];
+const FACTORY_CURRENCY_OPTIONS = ['EUR', 'USD', 'THB', 'GBP'];
 
 // ── StepLabel ─────────────────────────────────────────────────────────────────
 // This upload flow is a genuine ordered sequence (select factory → upload →
@@ -60,27 +72,58 @@ function statusLabel(status) {
   return status || 'ไม่ทราบสถานะ';
 }
 
-// ── AddFactoryModal ───────────────────────────────────────────────────────────
+// factory.unit ('piece'/'sqm'/'box', V163) is a DIFFERENT vocabulary from product.priceUnit
+// ('per_sqm'/'per_piece'/...) above — do not reuse unitLabel() for it.
+function factoryUnitLabel(unit) {
+  return FACTORY_UNIT_OPTIONS.find((opt) => opt.value === unit)?.label ?? (unit || '—');
+}
 
-function AddFactoryModal({ onClose, onCreated }) {
-  const [name, setName]         = useState('');
-  const [country, setCountry]   = useState('');
-  const [currency, setCurrency] = useState('EUR');
+// `factory.country` is a price_catalog.country CODE (e.g. "IT") since V163's factory editor
+// replaced the old free-text input — resolves it to a Thai display name via the same roster the
+// picker itself offers, so the list reads "อิตาลี (IT)" instead of a bare code.
+function countryLabel(countries, code) {
+  const match = countries.find((c) => c.countryCode === code);
+  return match ? `${match.nameTh} (${match.countryCode})` : (code || '—');
+}
+
+// ── FactoryFormModal ─────────────────────────────────────────────────────────
+// Add AND edit share this one modal rather than a second, drifting copy of the same five fields —
+// `factory` is null for "เพิ่มโรงงานใหม่", or the row being edited.
+//
+// Country used to be a free-text 2-letter input — the direct cause of "cannot add a factory": a
+// typo or an unseeded code reached price_catalog.factories' NOT NULL + FK column and 500'd
+// (PriceImportService.createFactory's own javadoc). It is now a required <select> sourced from
+// GET /api/price-import/countries, so an invalid value cannot be typed in the first place.
+//
+// email/unit are the two RFQ fields V163 folded onto price_catalog.factories from the dropped
+// sales.factory_config — email is this change's whole point (see PriceImportPage's own comment
+// on the factory list below), so it is deliberately NOT required: a factory may sit here with no
+// contact email until จัดซื้อ has one to enter, same as every real factory does today.
+function FactoryFormModal({ factory, countries, onClose, onSaved }) {
+  const isEdit = Boolean(factory);
+  const [name, setName]         = useState(factory?.name ?? '');
+  const [country, setCountry]   = useState(factory?.country ?? '');
+  const [currency, setCurrency] = useState(factory?.defaultCurrency ?? 'EUR');
+  const [email, setEmail]       = useState(factory?.email ?? '');
+  const [unit, setUnit]         = useState(factory?.unit ?? 'piece');
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState('');
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!name.trim()) { setError('กรุณาใส่ชื่อโรงงาน'); return; }
+    if (!country) { setError('กรุณาเลือกประเทศ'); return; }
     setSaving(true);
     setError('');
     try {
-      const factory = await api.priceImport.createFactory(
-        name.trim(), country.trim() || undefined, currency
-      );
-      onCreated(factory);
+      const saved = isEdit
+        ? await api.priceImport.updateFactory(factory.factoryId, name.trim(), country, currency, email.trim(), unit)
+        : await api.priceImport.createFactory(name.trim(), country, currency, email.trim(), unit);
+      onSaved(saved);
     } catch (err) {
-      setError(err.message || 'เพิ่มโรงงานไม่สำเร็จ');
+      // Surfaces the backend's own Thai 400/409 message (bad/blank country, duplicate name)
+      // rather than a generic failure — see PriceImportService.createFactory/updateFactory.
+      setError(err.message || (isEdit ? 'บันทึกโรงงานไม่สำเร็จ' : 'เพิ่มโรงงานไม่สำเร็จ'));
     } finally {
       setSaving(false);
     }
@@ -88,62 +131,76 @@ function AddFactoryModal({ onClose, onCreated }) {
 
   return (
     <Modal
-      title="เพิ่มโรงงานใหม่"
+      title={isEdit ? 'แก้ไขข้อมูลโรงงาน' : 'เพิ่มโรงงานใหม่'}
+      subtitle={isEdit ? factory.name : undefined}
       onClose={onClose}
       footer={
         <>
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
-          <Button type="submit" form="add-factory-form" variant="primary" disabled={saving}>
+          <Button type="submit" form="factory-form" variant="primary" disabled={saving}>
             {saving ? 'กำลังบันทึก…' : 'บันทึก'}
           </Button>
         </>
       }
     >
-      <SafeForm id="add-factory-form" onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="af-name" className="block text-sm font-medium mb-1">ชื่อโรงงาน *</label>
+      <SafeForm id="factory-form" onSubmit={handleSubmit} className="grid gap-4">
+        <FormField label="ชื่อโรงงาน" htmlFor="factory-name" required>
           <input
-            id="af-name"
+            id="factory-name"
             type="text"
-            className="input w-full"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="เช่น Rex Ceramics"
           />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="af-country" className="block text-sm font-medium mb-1">
-              ประเทศ (2 อักษร)
-            </label>
-            <input
-              id="af-country"
-              type="text"
-              className="input w-full"
-              value={country}
-              onChange={(e) => setCountry(e.target.value.toUpperCase())}
-              maxLength={2}
-              placeholder="เช่น IT, ES"
-            />
-          </div>
-          <div>
-            <label htmlFor="af-currency" className="block text-sm font-medium mb-1">
-              สกุลเงินหลัก
-            </label>
+        </FormField>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="ประเทศ" htmlFor="factory-country" required>
             <select
-              id="af-currency"
-              className="input w-full"
+              id="factory-country"
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+            >
+              <option value="">— เลือกประเทศ —</option>
+              {countries.map((c) => (
+                <option key={c.countryCode} value={c.countryCode}>{c.nameTh} ({c.countryCode})</option>
+              ))}
+            </select>
+          </FormField>
+          <FormField label="สกุลเงินหลัก" htmlFor="factory-currency">
+            <select
+              id="factory-currency"
               value={currency}
               onChange={(e) => setCurrency(e.target.value)}
             >
-              <option>EUR</option>
-              <option>USD</option>
-              <option>THB</option>
-              <option>GBP</option>
+              {FACTORY_CURRENCY_OPTIONS.map((code) => (
+                <option key={code} value={code}>{code}</option>
+              ))}
             </select>
-          </div>
+          </FormField>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FormField label="อีเมลขอราคา (ถ้ามี)" htmlFor="factory-email" hint="ที่อยู่อีเมลติดต่อโรงงานนี้เวลาขอราคา — ไม่บังคับ">
+            <input
+              id="factory-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="buyer@factory.example"
+            />
+          </FormField>
+          <FormField label="หน่วยขอราคา" htmlFor="factory-unit">
+            <select
+              id="factory-unit"
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+            >
+              {FACTORY_UNIT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </FormField>
+        </div>
+        {error && <p className="m-0 text-sm font-bold text-danger">{error}</p>}
       </SafeForm>
     </Modal>
   );
@@ -236,6 +293,31 @@ function ProductCard({ product, onEdit, onDelete }) {
   );
 }
 
+// ── FactoryCard (mobile) ─────────────────────────────────────────────────────
+// Same five columns as the desktop factory table below, reflowed by hand — same pattern as
+// ProductCard above for the products table.
+function FactoryCard({ factory, countries, onEdit }) {
+  return (
+    <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <strong className="min-w-0 truncate text-md font-extrabold text-text">{factory.name}</strong>
+        <Button size="sm" variant="secondary" onClick={() => onEdit(factory)}>
+          <Icon name="pencil" size={14} />
+          แก้ไข
+        </Button>
+      </div>
+      <span className="text-xs text-text-muted">
+        {countryLabel(countries, factory.country)} · {factory.defaultCurrency} · {factoryUnitLabel(factory.unit)}
+      </span>
+      {factory.email ? (
+        <span className="min-w-0 truncate text-xs text-text-muted">{factory.email}</span>
+      ) : (
+        <span className="text-xs font-bold text-warning-dark">ยังไม่ระบุอีเมลขอราคา</span>
+      )}
+    </div>
+  );
+}
+
 // ── VersionsPanel ─────────────────────────────────────────────────────────────
 
 function VersionsPanel({ versions, currentVersionId }) {
@@ -271,6 +353,7 @@ function VersionsPanel({ versions, currentVersionId }) {
 export function PriceImportPage({ showToast }) {
   const isMobile = useIsMobile();
   const [factories, setFactories]             = useState([]);
+  const [countries, setCountries]             = useState([]);
   const [factoryId, setFactoryId]             = useState('');
   const [versions, setVersions]               = useState([]);
   const [products, setProducts]               = useState([]);
@@ -284,6 +367,10 @@ export function PriceImportPage({ showToast }) {
   const [error, setError]                       = useState('');
 
   const [showFactoryModal, setShowFactoryModal] = useState(false);
+  // The factory master-data row จัดซื้อ is currently editing — null closes FactoryFormModal in
+  // edit mode; `showFactoryModal` above is the separate "add" trigger. Both render the same modal
+  // (see FactoryFormModal), just with `factory` set or not.
+  const [editingFactory, setEditingFactory]     = useState(null);
   const [editingProduct, setEditingProduct]     = useState(null);
   const [confirmUpload, setConfirmUpload]       = useState(false);
   const [deleteTarget, setDeleteTarget]         = useState(null);
@@ -293,6 +380,7 @@ export function PriceImportPage({ showToast }) {
 
   useEffect(() => {
     api.priceImport.factories().then(setFactories).catch(() => {});
+    api.priceImport.countries().then(setCountries).catch(() => {});
   }, []);
 
   const loadVersions = useCallback(async (fid) => {
@@ -377,14 +465,28 @@ export function PriceImportPage({ showToast }) {
     }
   }
 
-  function handleFactoryCreated(factory) {
-    setFactories((prev) =>
-      [...prev, factory].sort((a, b) => a.name.localeCompare(b.name, 'th'))
-    );
+  // Shared save handler for FactoryFormModal in BOTH its modes. An edit replaces the row in
+  // place and leaves the current price-list selection alone (its versions/products are
+  // untouched — only master data changed); an add appends the new row and switches Step 2's
+  // selection onto it, same as this page has always done right after creating a factory.
+  function handleFactorySaved(factory) {
+    setFactories((prev) => {
+      const isEdit = prev.some((f) => f.factoryId === factory.factoryId);
+      const next = isEdit
+        ? prev.map((f) => (f.factoryId === factory.factoryId ? factory : f))
+        : [...prev, factory];
+      return next.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    });
+    if (editingFactory) {
+      setEditingFactory(null);
+      showToast?.('success', 'บันทึกข้อมูลโรงงานแล้ว');
+      return;
+    }
     setShowFactoryModal(false);
     setFactoryId(String(factory.factoryId));
     setVersions([]);
     setProducts([]);
+    showToast?.('success', 'เพิ่มโรงงานแล้ว');
   }
 
   function handleDeleteProduct(product) {
@@ -411,6 +513,11 @@ export function PriceImportPage({ showToast }) {
     showToast?.('success', 'บันทึกสินค้าแล้ว');
     await loadProducts(factoryId);
   }
+
+  // The RFQ-email gap this whole change exists to close (see V163's migration header: the old
+  // email directory matched 0% of the real factories) — surfaced as a count here rather than only
+  // discoverable one row at a time.
+  const factoriesMissingEmail = factories.filter((f) => !f.email).length;
 
   return (
     <PageStack>
@@ -444,6 +551,68 @@ export function PriceImportPage({ showToast }) {
             เพิ่มโรงงาน
           </Button>
         </div>
+      </Panel>
+
+      {/* Factory master data — name/country/currency/RFQ email/quoting unit for every factory,
+          each with its own แก้ไข action (PUT /api/price-import/factories/{factoryId}). Deliberately
+          NOT folded into the เลือกโรงงาน select above or gated behind a disclosure: setting a real
+          RFQ email here is this change's whole point (see V163's migration header — the old email
+          directory matched 0% of the real factories, so no factory has ever had a usable one), and
+          that only gets fixed if the gap is visible, not tucked away. Always rendered once
+          factories have loaded, independent of Step 1's price-list selection below. */}
+      <Panel flush title="ข้อมูลโรงงาน">
+        {factoriesMissingEmail > 0 ? (
+          <p className="m-0 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark">
+            {`${factoriesMissingEmail} จาก ${factories.length} โรงงานยังไม่มีอีเมลขอราคา — กด "แก้ไข" เพื่อเพิ่ม`}
+          </p>
+        ) : null}
+        {factories.length === 0 ? (
+          <p className="p-4 text-sm text-muted">ยังไม่มีโรงงาน</p>
+        ) : isMobile ? (
+          <div className="flex flex-col px-4 pb-4">
+            {factories.map((f) => (
+              <FactoryCard key={f.factoryId} factory={f} countries={countries} onEdit={setEditingFactory} />
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead className="border-b-2 border-border">
+                <tr>
+                  <th className="text-left px-5 py-2 text-muted font-medium">ชื่อโรงงาน</th>
+                  <th className="text-left px-2 py-2 text-muted font-medium">ประเทศ</th>
+                  <th className="text-left px-2 py-2 text-muted font-medium">สกุลเงิน</th>
+                  <th className="text-left px-2 py-2 text-muted font-medium">อีเมลขอราคา</th>
+                  <th className="text-left px-2 py-2 text-muted font-medium">หน่วยขอราคา</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {factories.map((f) => (
+                  <tr key={f.factoryId} className="border-b border-border hover:bg-surface-hover transition-colors">
+                    <td className="px-5 py-2 font-medium text-text">{f.name}</td>
+                    <td className="px-2 py-2 text-text-muted">{countryLabel(countries, f.country)}</td>
+                    <td className="px-2 py-2 text-text-muted">{f.defaultCurrency}</td>
+                    <td className="px-2 py-2">
+                      {f.email ? (
+                        <span className="text-text-muted">{f.email}</span>
+                      ) : (
+                        <span className="font-bold text-warning-dark">ยังไม่ระบุ</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-text-muted">{factoryUnitLabel(f.unit)}</td>
+                    <td className="px-2 py-2 text-right">
+                      <Button size="sm" variant="secondary" onClick={() => setEditingFactory(f)}>
+                        <Icon name="pencil" size={14} />
+                        แก้ไข
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Panel>
 
       {/* Upload panel */}
@@ -595,9 +764,20 @@ export function PriceImportPage({ showToast }) {
 
       {/* Modals */}
       {showFactoryModal && (
-        <AddFactoryModal
+        <FactoryFormModal
+          factory={null}
+          countries={countries}
           onClose={() => setShowFactoryModal(false)}
-          onCreated={handleFactoryCreated}
+          onSaved={handleFactorySaved}
+        />
+      )}
+
+      {editingFactory && (
+        <FactoryFormModal
+          factory={editingFactory}
+          countries={countries}
+          onClose={() => setEditingFactory(null)}
+          onSaved={handleFactorySaved}
         />
       )}
 

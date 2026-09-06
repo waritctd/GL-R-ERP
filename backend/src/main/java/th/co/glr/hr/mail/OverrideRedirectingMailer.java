@@ -12,12 +12,13 @@ import org.slf4j.LoggerFactory;
  * {@link SmtpMailer} / {@link ResendMailer}) is active underneath.
  *
  * <p><b>Issue #782.</b> Before this class existed, {@code NotificationEmailService} hand-rolled
- * {@code overrideTo.isBlank() ? to : overrideTo} at two separate call sites, and
- * {@code FactoryEmailService} had no such check at all - factory-quote mail reached
- * {@code sales.factory_config.email} exactly as stored, in every environment, including a UAT
- * deployment with {@code app.mail.override-to} set. Two hand-written copies of the same rule, one of
- * them simply missing, with nothing structural to notice the gap - that is the defect class, not
- * "FactoryEmailService forgot a check". Wrapping the {@link Mailer} bean itself - installed by
+ * {@code overrideTo.isBlank() ? to : overrideTo} at two separate call sites, and the
+ * then-existing {@code FactoryEmailService} (deleted since — factory-quote mail became
+ * manual-only, see {@code FactoryQuoteService#send}) had no such check at all - factory-quote
+ * mail reached the factory's on-file email exactly as stored, in every environment, including a
+ * UAT deployment with {@code app.mail.override-to} set. Two hand-written copies of the same rule,
+ * one of them simply missing, with nothing structural to notice the gap - that is the defect
+ * class, not "one caller forgot a check". Wrapping the {@link Mailer} bean itself - installed by
  * {@link MailOverrideBeanPostProcessor}, never constructed any other way - fixes it by construction:
  * every current caller of {@link Mailer} inherits containment, and so does every future one, because
  * there is no other way to send mail in this codebase (see {@link Mailer}'s own class Javadoc). A

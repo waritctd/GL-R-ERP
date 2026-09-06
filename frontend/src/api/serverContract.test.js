@@ -599,7 +599,10 @@ const UNREACHABLE_FROM_UI = new Set([
   // 'POST /api/tickets/{}/entry-channel' was here until issue #740 wired DealStagePanel's
   // ช่องทางรับงาน control. The `UNREACHABLE_FROM_UI entry is real and still unreachable` test is
   // what demanded this deletion — it is not an optional tidy-up.
-  'POST /api/tickets/{}/factory-emails/send',
+  // 'POST /api/tickets/{}/factory-emails/send' left this list on 2026-09-06: the endpoint itself
+  // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
+  // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and
+  // the "every UNREACHABLE_FROM_UI entry is real" test would flag a stale entry left here.
   'PUT /api/payroll/deduction-obligations/{}',
   'PUT /api/payroll/tax-allowances',
   'PUT /api/payroll/ytd-seed',

@@ -46,7 +46,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -151,16 +150,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             pricingRequests, tickets, notificationRepository, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
@@ -169,7 +158,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notificationRepository, fileStorage,
             landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
@@ -216,12 +205,6 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     private void insertFactory(String name) {
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, :email, 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of("factory", name, "email", name.toLowerCase().replace(" ", "-") + "@example.com"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -419,7 +402,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         long pricingRequestItemId = draft.items().get(0).pricingRequestItemId();
         String email = factory.toLowerCase().replace(" ", "-") + "@example.com";
         factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest(email, null, null, UUID.randomUUID().toString()), importActor);
+            new SendFactoryQuoteRequest(email, null, null), importActor);
         drainDispatches();
         ReceiveFactoryQuoteRequest response = new ReceiveFactoryQuoteRequest(
             "REF-" + UUID.randomUUID(), "THB", "30 days", "45 days", "revision", "note",
@@ -454,9 +437,10 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     private void drainDispatches() {
-        for (long id : factoryQuoteService.claimableDispatchIds()) {
-            factoryQuoteService.processDispatch(id);
-        }
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
+        // there is no dispatch/worker queue left to drain. Kept (rather than removing
+        // every call site) so this helper's callers do not all need to be revisited
+        // individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

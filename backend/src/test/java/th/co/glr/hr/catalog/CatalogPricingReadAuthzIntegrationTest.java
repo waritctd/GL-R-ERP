@@ -114,7 +114,7 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
 
         catalogMvc = standalone(new CatalogController(
             new CatalogRepository(jdbc),
-            new PriceImportService(mock(ImportEngine.class), jdbc, objectMapper),
+            new PriceImportService(mock(ImportEngine.class), jdbc, objectMapper, new FactoryConfigRepository(jdbc)),
             sessions), jsonMapper);
         priceConfigMvc = standalone(
             new PriceCalcConfigController(new PriceCalcConfigRepository(jdbc), sessions), jsonMapper);
@@ -300,6 +300,10 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
      * inserts the "permitted role" controls would pass against empty tables and prove nothing.
      * {@code sales.fx_rates} and {@code sales.price_calc_config} are still seeded by V26, but this
      * adds its own distinguishable rows so the assertions do not depend on that seed surviving.
+     *
+     * <p>V163 merged {@code sales.factory_config} (email/unit/notes) onto {@code
+     * price_catalog.factories} and dropped the former table, so the email/unit fixture below is now
+     * an UPDATE on the row {@link #insertCatalogProduct} already created, not a separate INSERT.
      */
     private void seedFixtures() {
         insertCatalogProduct("Authz Factory 388", "IT", "AUTHZ-388-001",
@@ -310,8 +314,10 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
                     'Authz Factory 388', 0.360000)
             """, Map.of());
         jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Authz Factory 388', 'export@authz388.example', 'EUR', 'sqm', 'Authzland')
+            UPDATE price_catalog.factories
+               SET email = 'export@authz388.example',
+                   unit = 'sqm'
+             WHERE name = 'Authz Factory 388'
             """, Map.of());
         jdbc.update("""
             INSERT INTO sales.fx_rates (currency, rate_to_thb, effective_date)

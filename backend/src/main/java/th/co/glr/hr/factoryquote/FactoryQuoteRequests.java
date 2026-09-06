@@ -18,11 +18,18 @@ public final class FactoryQuoteRequests {
         String note
     ) {}
 
+    /**
+     * Manual-only RFQ send (owner decision): the system only records that a human already sent
+     * this email from their own mail client — there is no automatic dispatch to make idempotent
+     * with a client-generated key any more, so {@code clientRequestId} (used by the deleted
+     * dispatch-outbox path) is gone. {@link FactoryQuoteService#send} is naturally idempotent
+     * instead: calling it again once the quote is already {@code REQUESTED} is a no-op that
+     * returns the existing quote.
+     */
     public record SendFactoryQuoteRequest(
         String emailTo,
         String emailSubject,
-        String emailBody,
-        @NotBlank String clientRequestId
+        String emailBody
     ) {}
 
     public record ReceiveFactoryQuoteRequest(

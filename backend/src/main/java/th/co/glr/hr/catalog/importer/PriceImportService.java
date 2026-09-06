@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.catalog.ProductPriceInput;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.factory.FactoryConfigRepository;
 import org.springframework.http.HttpStatus;
 
 @Service
@@ -26,15 +28,18 @@ public class PriceImportService {
     private final ImportEngine engine;
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final FactoryConfigRepository factoryConfigs;
 
     public PriceImportService(
         ImportEngine engine,
         NamedParameterJdbcTemplate jdbc,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        FactoryConfigRepository factoryConfigs
     ) {
-        this.engine       = engine;
-        this.jdbc         = jdbc;
-        this.objectMapper = objectMapper;
+        this.engine         = engine;
+        this.jdbc           = jdbc;
+        this.objectMapper   = objectMapper;
+        this.factoryConfigs = factoryConfigs;
     }
 
     // ── parse + stage ─────────────────────────────────────────────────────────
@@ -513,8 +518,11 @@ public class PriceImportService {
     ) {}
 
     public List<Map<String, Object>> listFactories() {
+        // V163: email/unit are folded onto this table from the now-dropped sales.factory_config
+        // (see FactoryConfigRepository's class javadoc) — surfaced here too so the factory-list UI
+        // that this endpoint feeds can show and edit them without a second round trip.
         return jdbc.query(
-            "SELECT factory_id, name, country, default_currency FROM price_catalog.factories ORDER BY name",
+            "SELECT factory_id, name, country, default_currency, email, unit FROM price_catalog.factories ORDER BY name",
             Map.of(),
             (rs, i) -> {
                 Map<String, Object> m = new HashMap<>();
@@ -522,6 +530,8 @@ public class PriceImportService {
                 m.put("name",            rs.getString("name"));
                 m.put("country",         rs.getString("country"));
                 m.put("defaultCurrency", rs.getString("default_currency"));
+                m.put("email",           rs.getString("email"));
+                m.put("unit",            rs.getString("unit"));
                 return m;
             }
         );
@@ -579,21 +589,36 @@ public class PriceImportService {
 
     // ── C5: create factory ────────────────────────────────────────────────────
 
-    public Map<String, Object> createFactory(String name, String country, String defaultCurrency) {
-        String cur = defaultCurrency != null && !defaultCurrency.isBlank()
-            ? defaultCurrency.strip().toUpperCase() : "EUR";
-        String cty = country != null && !country.isBlank() ? country.strip().toUpperCase() : null;
+    /**
+     * Was BROKEN: {@code country = null} on a blank input, but V151 made
+     * {@code price_catalog.factories.country} NOT NULL + FK to {@code price_catalog.country}, so a
+     * blank or unseeded country raised a {@code DataAccessException} that {@code
+     * ApiExceptionHandler.handleDataAccess} turned into a bare 500 — "cannot add a factory" with no
+     * useful message. Country is now REQUIRED and validated against {@code price_catalog.country}
+     * up front ({@link #requireValidCountry}), so a bad value is a clean Thai 400 instead. Also now
+     * accepts the optional {@code email}/{@code unit} RFQ fields V163 added to this table.
+     */
+    @Transactional
+    public Map<String, Object> createFactory(String name, String country, String defaultCurrency,
+                                             String email, String unit) {
+        if (name == null || name.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
+        }
+        String trimmedName = name.strip();
+        String cur = normalizeCurrency(defaultCurrency);
+        String cty = requireValidCountry(country);
+        String em = blankToNull(email);
+        requireMaxLength(em, 200, "อีเมล");
+        String normalizedUnit = blankToNull(unit);
+        requireMaxLength(normalizedUnit, 30, "หน่วย");
+        String un = normalizedUnit != null ? normalizedUnit : "piece";
 
-        var holder = new GeneratedKeyHolder();
-        jdbc.update(
-            "INSERT INTO price_catalog.factories (name, country, default_currency) VALUES (:name, :country, :cur)",
-            new MapSqlParameterSource()
-                .addValue("name",    name.strip())
-                .addValue("country", cty)
-                .addValue("cur",     cur),
-            holder, new String[]{"factory_id"}
-        );
-        long factoryId = ((Number) holder.getKeys().get("factory_id")).longValue();
+        long factoryId;
+        try {
+            factoryId = factoryConfigs.create(trimmedName, cty, cur, em, un);
+        } catch (DuplicateKeyException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีโรงงานชื่อนี้อยู่แล้ว: " + trimmedName);
+        }
 
         String blankCfg = String.format(
             "{\"number_format\":\"eu\",\"sheets\":[],\"columns\":{},\"defaults\":{\"currency\":\"%s\"}}", cur);
@@ -604,10 +629,126 @@ public class PriceImportService {
 
         Map<String, Object> m = new HashMap<>();
         m.put("factoryId",       factoryId);
-        m.put("name",            name.strip());
+        m.put("name",            trimmedName);
         m.put("country",         cty);
         m.put("defaultCurrency", cur);
+        m.put("email",           em);
+        m.put("unit",            un);
         return m;
+    }
+
+    /**
+     * Updates name/country/currency/email/unit on an existing factory. 404 if {@code factoryId} is
+     * unknown, 400 on an invalid country (same rule as {@link #createFactory}), 409 on a duplicate
+     * name (the UNIQUE constraint on {@code price_catalog.factories.name}) rather than a 500.
+     */
+    @Transactional
+    public Map<String, Object> updateFactory(long factoryId, String name, String country, String defaultCurrency,
+                                             String email, String unit) {
+        if (name == null || name.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
+        }
+        String trimmedName = name.strip();
+        String cur = normalizeCurrency(defaultCurrency);
+        String cty = requireValidCountry(country);
+        String em = blankToNull(email);
+        requireMaxLength(em, 200, "อีเมล");
+        String normalizedUnit = blankToNull(unit);
+        requireMaxLength(normalizedUnit, 30, "หน่วย");
+        String un = normalizedUnit != null ? normalizedUnit : "piece";
+
+        if (factoryConfigs.existsNameExcluding(trimmedName, factoryId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีโรงงานชื่อนี้อยู่แล้ว: " + trimmedName);
+        }
+        int updated;
+        try {
+            updated = factoryConfigs.update(factoryId, trimmedName, cty, cur, em, un);
+        } catch (DuplicateKeyException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีโรงงานชื่อนี้อยู่แล้ว: " + trimmedName);
+        }
+        if (updated == 0) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบโรงงาน id=" + factoryId);
+        }
+
+        Map<String, Object> m = new HashMap<>();
+        m.put("factoryId",       factoryId);
+        m.put("name",            trimmedName);
+        m.put("country",         cty);
+        m.put("defaultCurrency", cur);
+        m.put("email",           em);
+        m.put("unit",            un);
+        return m;
+    }
+
+    /**
+     * {@code price_catalog.country} options, so the factory editor can offer a select instead of
+     * the free-text field that used to make an unseeded/typo'd country 500 (see {@link
+     * #createFactory}).
+     */
+    public List<Map<String, Object>> listCountries() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (FactoryConfigRepository.CountryOptionDto c : factoryConfigs.listCountries()) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("countryCode", c.countryCode());
+            m.put("nameEn", c.nameEn());
+            m.put("nameTh", c.nameTh());
+            out.add(m);
+        }
+        return out;
+    }
+
+    private String requireValidCountry(String country) {
+        if (country == null || country.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุประเทศของโรงงาน");
+        }
+        String code = country.strip().toUpperCase();
+        if (!factoryConfigs.countryExists(code)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบรหัสประเทศนี้: " + code);
+        }
+        return code;
+    }
+
+    /**
+     * Review remediation (MEDIUM 5): uppercasing/trimming alone left the length unchecked, and
+     * {@code default_currency} is {@code CHAR(3)} (V40) — {@code "EURO"} sailed past this method,
+     * hit Postgres as a 22001 ("value too long for type character(3)"), and {@code
+     * ApiExceptionHandler.handleDataAccess} turned that into a bare 500: the exact defect class
+     * this whole change (clean 400s instead of a raw SQL error) set out to remove, just on a
+     * different column than {@link #requireValidCountry} already guards. The check is exact
+     * equality, not just an upper bound: {@code CHAR(3)} BLANK-PADS a shorter value rather than
+     * rejecting it, so a 2-character code (e.g. a typo'd "TH") would otherwise be silently stored
+     * as {@code "TH "} with a trailing space that nothing downstream expects.
+     */
+    private String normalizeCurrency(String defaultCurrency) {
+        String cur = defaultCurrency != null && !defaultCurrency.isBlank()
+            ? defaultCurrency.strip().toUpperCase() : "EUR";
+        if (cur.length() != 3) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "สกุลเงินต้องมี 3 ตัวอักษรตามมาตรฐาน ISO 4217: " + cur);
+        }
+        return cur;
+    }
+
+    private String blankToNull(String value) {
+        return value != null && !value.isBlank() ? value.strip() : null;
+    }
+
+    /**
+     * Review remediation (MEDIUM 5): the same "clean 400, not a 500 from Postgres" gap {@link
+     * #normalizeCurrency} closes for currency, for {@code price_catalog.factories.email}
+     * ({@code VARCHAR(200)}) and {@code .unit} ({@code VARCHAR(30)}, both V163). Without this, an
+     * over-length value of either sailed through {@link #blankToNull} untouched and hit a 22001
+     * ("value too long for type character varying(n)") at the {@code INSERT}/{@code UPDATE},
+     * turned into a bare 500 by {@code ApiExceptionHandler.handleDataAccess} — {@code max} must be
+     * kept in sync with the real column width or this either over-rejects or under-protects.
+     * {@code null} (the blank case, already normalized by {@link #blankToNull}) always passes:
+     * blank/absent is legal for both fields (see the class-level Javadoc on {@link
+     * #createFactory}).
+     */
+    private void requireMaxLength(String value, int max, String fieldLabel) {
+        if (value != null && value.length() > max) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                fieldLabel + "ยาวเกินไป (สูงสุด " + max + " ตัวอักษร)");
+        }
     }
 
     // ── C5: upload + auto commit ──────────────────────────────────────────────

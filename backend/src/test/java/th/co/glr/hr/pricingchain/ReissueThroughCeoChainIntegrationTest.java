@@ -42,7 +42,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -107,8 +106,8 @@ import th.co.glr.hr.ticket.TicketService;
  * <p>Driven end to end through the real services against real Postgres, never hand-rolled SQL:
  * a mocked repository "passes" while the SQL does something else, and three of the four rules here
  * live in SQL (the compare-and-set supersede, the quote copy, the chain-scoped quotation retire).
- * The only mock is the collaborator every other test in this package already mocks —
- * {@link FactoryEmailService} (sends real email).
+ * No mocks at all — factory RFQ email is manual-only ({@code FactoryQuoteService#send} just
+ * records that a human sent it), so there is no mail-provider collaborator left to mock.
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new}, {@code @Transactional} is inert,
@@ -149,18 +148,12 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
             new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCosts);
 
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
@@ -180,12 +173,6 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         // Country 'Thailand' has a real, non-all-zero price_calc_config row (seeded by V26), so the
         // landed cost this chain computes is real arithmetic — which matters here, because the
         // carry-forward's own gate is LandedCostCalculator.isFullyResolvable.
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-reissue@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of("factory", FACTORY));
         catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-REISSUE-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 

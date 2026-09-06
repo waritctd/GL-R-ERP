@@ -13,7 +13,6 @@ public class AppProperties {
     private final Overtime overtime = new Overtime();
     private final SpecialMoney specialMoney = new SpecialMoney();
     private final Bot bot = new Bot();
-    private final FactoryQuoteDispatch factoryQuoteDispatch = new FactoryQuoteDispatch();
     private final QuotationExpiry quotationExpiry = new QuotationExpiry();
     private final Payroll payroll = new Payroll();
 
@@ -43,10 +42,6 @@ public class AppProperties {
 
     public Bot getBot() {
         return bot;
-    }
-
-    public FactoryQuoteDispatch getFactoryQuoteDispatch() {
-        return factoryQuoteDispatch;
     }
 
     public QuotationExpiry getQuotationExpiry() {
@@ -262,70 +257,13 @@ public class AppProperties {
     }
 
     /**
-     * Tuning for {@code FactoryQuoteEmailDispatchWorker}, the background outbox worker that sends
-     * factory quote request emails asynchronously (see V67).
-     */
-    public static class FactoryQuoteDispatch {
-        /** How often the worker polls for claimable dispatch rows. */
-        private long pollIntervalMs = 5000;
-        /**
-         * How long a claim on a SENDING row is honoured before another worker tick may reclaim it
-         * as stale (the fix for a worker crashing between claim and finalize).
-         */
-        private int reclaimTimeoutSeconds = 120;
-        /** Attempts beyond this are never reclaimed again; the row is left FAILED permanently. */
-        private int maxAttempts = 8;
-        /** Backoff unit: next_attempt_at = now() + attemptCount * this, after a failed attempt. */
-        private int backoffBaseSeconds = 30;
-        /** Rows claimed per worker tick. */
-        private int batchSize = 20;
-
-        public long getPollIntervalMs() {
-            return pollIntervalMs;
-        }
-
-        public void setPollIntervalMs(long pollIntervalMs) {
-            this.pollIntervalMs = pollIntervalMs;
-        }
-
-        public int getReclaimTimeoutSeconds() {
-            return reclaimTimeoutSeconds;
-        }
-
-        public void setReclaimTimeoutSeconds(int reclaimTimeoutSeconds) {
-            this.reclaimTimeoutSeconds = reclaimTimeoutSeconds;
-        }
-
-        public int getMaxAttempts() {
-            return maxAttempts;
-        }
-
-        public void setMaxAttempts(int maxAttempts) {
-            this.maxAttempts = maxAttempts;
-        }
-
-        public int getBackoffBaseSeconds() {
-            return backoffBaseSeconds;
-        }
-
-        public void setBackoffBaseSeconds(int backoffBaseSeconds) {
-            this.backoffBaseSeconds = backoffBaseSeconds;
-        }
-
-        public int getBatchSize() {
-            return batchSize;
-        }
-
-        public void setBatchSize(int batchSize) {
-            this.batchSize = batchSize;
-        }
-    }
-
-    /**
      * Tuning for {@code QuotationExpiryWorker} (Step 5, V75) — a small scheduled sweep that flips
-     * ISSUED customer quotations whose validity_date has passed to EXPIRED. Unlike
-     * {@link FactoryQuoteDispatch}, this isn't calling an external system, so it needs no
-     * claim/reclaim/backoff — a single guarded UPDATE on each tick is sufficient.
+     * ISSUED customer quotations whose validity_date has passed to EXPIRED. This isn't calling an
+     * external system, so it needs no claim/reclaim/backoff — a single guarded UPDATE on each tick
+     * is sufficient. (The factory-quote email outbox worker this comment used to contrast with —
+     * {@code FactoryQuoteEmailDispatchWorker}, tuned by a since-deleted {@code FactoryQuoteDispatch}
+     * nested class here — was deleted when factory RFQ email became manual-only; see
+     * {@code FactoryQuoteService#send}.)
      */
     public static class QuotationExpiry {
         /** How often the worker sweeps for overdue ISSUED quotations. */
