@@ -38,7 +38,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -110,8 +109,9 @@ import th.co.glr.hr.ticket.TicketService;
  * anything under test: the cutoff lives in a Java map but the cascade lives entirely in SQL
  * predicates, and a mocked repository "passes" while the {@code WHERE} clause does something else.
  * Even the terminal factory quote in the cascade test is produced the way production produces one
- * (a second {@code receive} supersedes the first), not inserted. The only mock is the collaborator
- * every other test in this package already mocks — {@link FactoryEmailService} (sends real email).
+ * (a second {@code receive} supersedes the first), not inserted. No mocks at all — factory RFQ
+ * email is manual-only ({@code FactoryQuoteService#send} just records that a human sent it), so
+ * there is no mail-provider collaborator left to mock.
  *
  * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
  * no Spring context, so services are hand-wired with {@code new} and {@code @Transactional} is
@@ -152,17 +152,12 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         LandedCostCalculator landedCosts = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
             new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, new AppProperties(),
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCosts);
 
         PricingDecisionRepository decisions = new PricingDecisionRepository(jdbc);
@@ -179,12 +174,6 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         importActor = actor(createEmployee(employees, "ฝ่ายนำเข้า ยกเลิก", "import-cancel@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
         ceoActor = actor(createEmployee(employees, "ผู้บริหาร ยกเลิก", "ceo-cancel@glr.co.th", "MD", "ผู้บริหาร"), "ceo");
 
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:factory, 'factory-cancel@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of("factory", FACTORY));
         catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-CANCEL-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 

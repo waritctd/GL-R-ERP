@@ -20,9 +20,7 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -49,7 +47,6 @@ class FactoryQuoteServiceAttachmentTest {
     private final PricingRequestRepository pricingRequests = mock(PricingRequestRepository.class);
     private final TicketRepository tickets = mock(TicketRepository.class);
     private final FactoryConfigRepository factoryConfigs = mock(FactoryConfigRepository.class);
-    private final FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
     private final NotificationRepository notifications = mock(NotificationRepository.class);
     private final FileStorageService fileStorage = mock(FileStorageService.class);
     // V141 ("CEO owns costing"): FactoryQuoteService now takes a LandedCostCalculator too (used
@@ -58,8 +55,7 @@ class FactoryQuoteServiceAttachmentTest {
     private final th.co.glr.hr.pricingcosting.LandedCostCalculator landedCosts =
         mock(th.co.glr.hr.pricingcosting.LandedCostCalculator.class);
     private final FactoryQuoteService service = new FactoryQuoteService(
-        quotes, pricingRequests, tickets, factoryConfigs, factoryEmail, notifications, fileStorage,
-        new AppProperties(), landedCosts);
+        quotes, pricingRequests, tickets, factoryConfigs, notifications, fileStorage, landedCosts);
 
     private final UserPrincipal importActor = actor(1L, "import");
     private final UserPrincipal salesActor = actor(2L, "sales");
@@ -137,7 +133,7 @@ class FactoryQuoteServiceAttachmentTest {
             quoteId, "FQ-2026-0001", pricingRequestId, 40L, "Factory A", status,
             "factory@example.com", "subject", "body", null, null, null, "THB", null, null, null, null,
             null, null, quoteId, null, 1, null, true, Instant.now(), Instant.now(),
-            List.of(), List.of(), null, 0, null, null)));
+            List.of(), List.of())));
     }
 
     private void stubPricingRequest(long pricingRequestId, String status) {

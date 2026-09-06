@@ -150,9 +150,6 @@ function buildFactoryQuote(overrides = {}) {
     revisionNo: 1,
     status: 'DRAFT',
     current: true,
-    dispatchStatus: undefined,
-    dispatchAttemptCount: 0,
-    dispatchFailureMessage: null,
     emailTo: 'sales@scg-factory.example',
     emailSubject: 'ขอราคา SCG A1',
     emailBody: 'เรียน โรงงาน...',
@@ -628,7 +625,7 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     // accessible name, not placeholder: these fields carry real labels now, so
     // a placeholder query would report "absent" for a field that is present and
     // simply has no placeholder — an assertion that passes for the wrong reason.
-    expect(screen.queryByLabelText('อีเมลโรงงาน')).toBeNull();
+    expect(screen.queryByLabelText(/อีเมลโรงงาน/)).toBeNull();
     expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
     // The per-factory currency/unit controls are read-only text for CEO, not a live select.
     expect(screen.queryByLabelText('สกุลเงิน')).toBeNull();
@@ -648,7 +645,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
     const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
 
-    const toInput = within(dialog).getByLabelText('อีเมลโรงงาน');
+    const toInput = within(dialog).getByLabelText(/อีเมลโรงงาน/);
     const subjectInput = within(dialog).getByLabelText('หัวข้ออีเมล');
     const bodyInput = within(dialog).getByLabelText('เนื้อหาอีเมล');
 
@@ -668,53 +665,97 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  // Commit 1 follow-up: send() requires a stable clientRequestId across retries of the SAME
-  // dispatch attempt so the backend's (created_by, client_request_id) idempotency key actually
-  // dedupes instead of minting a fresh, always-distinct key that could never replay. The button's
-  // onClick only regenerates the id when dispatchStatus is FAILED (a permanently exhausted key) —
-  // otherwise it must reuse whatever is already cached in state for this quote.
-  it('keeps the same clientRequestId across repeated "ส่งแล้ว" clicks (open/cancel/reopen) — it must not regenerate per click', async () => {
+  // Manual-RFQ redesign (2026-09-06) retired the dispatch-outbox model this test used to pin
+  // (a clientRequestId cached across retries of the same enqueue attempt). send() is now a
+  // synchronous, one-shot record with no dispatch to replay against, so there is no idempotency
+  // key left to stabilize — this test now covers what replaces it: the payload carries no
+  // clientRequestId at all, and repeated open/cancel/reopen still ends in exactly one call.
+  it('sends the factory quote with no clientRequestId — open/cancel/reopen still ends in exactly one send', async () => {
     const quote = buildFactoryQuote();
-    const uuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID');
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
-    // Several client-request ids are minted once on mount (useState(() => generateClientRequestId())),
-    // all unrelated to the send flow under test — baseline off whatever mount produced rather than
-    // asserting an absolute count, which would be a hostage to how many the page happens to hold.
-    // (One of them, costingClientRequestId, went away with #747; this baseline absorbed that.)
-    const callsBeforeAnySend = uuidSpy.mock.calls.length;
 
-    // The To/Subject/Body composer + ส่งแล้ว now live behind the factory group's ร่างอีเมล modal.
+    // The To/Subject/Body composer + ส่งแล้ว live behind the factory group's ร่างอีเมล modal.
     // Requesting send closes THAT modal before opening the shared ConfirmDialog (one focus-trapped
     // dialog at a time — see FactoryEmailDraftModal's own doc comment), so each attempt below
-    // reopens ร่างอีเมล first. "ยกเลิก" alone would now also match this quote's own (unrelated)
+    // reopens ร่างอีเมล first. "ยกเลิก" alone would also match this quote's own (unrelated)
     // discard-edits button in the item-price grid, so the ConfirmDialog's is scoped with `within`.
-
-    // First open: mints and caches a clientRequestId for this quote.
     fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
     await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    const firstConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
-    expect(firstConfirmDialog).not.toBeNull();
-    expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
+    const firstConfirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
 
-    // Cancel without confirming, reopen ร่างอีเมล, request send again: must reuse the cached id.
+    // Cancel without confirming, reopen ร่างอีเมล, request send again.
     fireEvent.click(within(firstConfirmDialog).getByRole('button', { name: 'ยกเลิก' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' })).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
     await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
-    const secondConfirmDialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
-    expect(secondConfirmDialog).not.toBeNull();
-    // Still no new call — reused the cached id, not regenerated.
-    expect(uuidSpy).toHaveBeenCalledTimes(callsBeforeAnySend + 1);
+    const secondConfirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
 
-    fireEvent.click(within(secondConfirmDialog).getByRole('button', { name: 'ส่งอีเมล' }));
+    fireEvent.click(within(secondConfirmDialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' }));
 
     await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledTimes(1));
-    const [, payload] = api.pricingRequests.sendFactoryQuote.mock.calls[0];
-    expect(payload.clientRequestId).toBe(uuidSpy.mock.results[callsBeforeAnySend].value);
+    const [id, payload] = api.pricingRequests.sendFactoryQuote.mock.calls[0];
+    expect(id).toBe(quote.id);
+    // clientRequestId is GONE (manual-RFQ redesign): there is no dispatch left to replay against,
+    // so send() is idempotent by the quote's own status instead — see hrApi.js's own doc comment
+    // on sendFactoryQuote.
+    expect(payload).not.toHaveProperty('clientRequestId');
+    expect(payload).toEqual({
+      emailTo: quote.emailTo,
+      emailSubject: quote.emailSubject,
+      emailBody: quote.emailBody,
+    });
+  });
+
+  // The recipient is optional now (owner decision): a human may mark an RFQ sent even when no
+  // factory contact email is on file. This used to be untested either way; it is now pinned so a
+  // future regression that disables ส่งแล้ว on a blank address, or blocks the confirm, is caught.
+  it('lets Import mark a factory quote sent with a blank recipient email', async () => {
+    const quote = buildFactoryQuote({ emailTo: null });
+    renderDetailPage({ user: importUser, factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    const draftDialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
+    const emailInput = within(draftDialog).getByLabelText(/อีเมลโรงงาน/);
+    expect(emailInput.value).toBe('');
+    const markSentButton = within(draftDialog).getByRole('button', { name: 'ส่งแล้ว' });
+    expect(markSentButton.disabled).toBe(false);
+    fireEvent.click(markSentButton);
+
+    const confirmDialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' }));
+
+    // The blank field round-trips as '' (the controlled input's own empty value), not blocked and
+    // not coerced back to the quote's original (already-null) emailTo on the way out.
+    await waitFor(() => expect(api.pricingRequests.sendFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({ emailTo: '' }),
+    ));
+  });
+
+  // The three-step manual hand-off (copy -> send from your own mail client -> come back and
+  // confirm) must be spelled out on screen, not left implicit now that the app itself sends
+  // nothing — see FactoryEmailDraftModal's own doc comment.
+  it('spells out the copy → send yourself → confirm steps while the draft is still editable', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ร่างอีเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
+
+    expect(within(dialog).getByText('คัดลอกข้อความอีเมลด้านล่าง')).not.toBeNull();
+    expect(within(dialog).getByText(/วางและส่งอีเมลนี้จากโปรแกรมอีเมลของคุณเอง/)).not.toBeNull();
+    expect(within(dialog).getByText(/ระบบนี้ไม่ได้ส่งอีเมลให้/)).not.toBeNull();
+    // Both actions are offered while the draft is still a DRAFT — copy is the actionable first
+    // step, not a decorative afterthought beside the button that actually changes state.
+    expect(within(dialog).getByRole('button', { name: /คัดลอกข้อความ/ })).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'ส่งแล้ว' })).not.toBeNull();
   });
 
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
@@ -1004,7 +1045,11 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
 // is falsifiable. Mutation-checked on 2026-08-14: swapping any single branch of any of the three
 // chains turns exactly the matching case below red.
 describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving actions)', () => {
-  it('sendQuote — the chain default: ส่งอีเมลถึงโรงงาน / ยืนยันการส่ง… / ส่งอีเมล', async () => {
+  // Manual-RFQ redesign (2026-09-06): this case's copy changed from confirming that the APP would
+  // send the email (it never did — FactoryQuoteService.send's own javadoc: "Was BROKEN") to
+  // plainly saying the click only RECORDS a send the user already made themselves. Still the same
+  // chain-default branch, still pinned the same way as the other three.
+  it('sendQuote — the chain default: บันทึกว่าส่งอีเมลถึงโรงงานแล้ว / ยืนยันว่าคุณส่ง… / บันทึกว่าส่งแล้ว', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
@@ -1014,9 +1059,12 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the four surviving
     await screen.findByRole('dialog', { name: 'ร่างอีเมลถึงโรงงาน' });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งแล้ว' }));
 
-    const dialog = await screen.findByRole('dialog', { name: 'ส่งอีเมลถึงโรงงาน' });
-    expect(within(dialog).getByText('ยืนยันการส่งคำขอราคาให้โรงงานด้วยรายละเอียดอีเมลนี้')).not.toBeNull();
-    expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' })).not.toBeNull();
+    const dialog = await screen.findByRole('dialog', { name: 'บันทึกว่าส่งอีเมลถึงโรงงานแล้ว' });
+    // Names the factory and says plainly that the SYSTEM did not send the email — the user is
+    // recording a send they already made themselves, in their own mail client.
+    expect(within(dialog).getByText(/ยืนยันว่าคุณส่งอีเมลคำขอราคานี้ให้ SCG Ceramics เรียบร้อยแล้วด้วยตัวเอง/)).not.toBeNull();
+    expect(within(dialog).getByText(/ระบบไม่ได้ส่งอีเมลนี้ให้/)).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'บันทึกว่าส่งแล้ว' })).not.toBeNull();
     // No reason textarea: requireReason is returnDecision-only.
     expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
   });

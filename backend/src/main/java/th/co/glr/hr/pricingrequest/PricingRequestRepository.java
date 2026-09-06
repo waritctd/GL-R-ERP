@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
+import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestEventDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -631,6 +632,30 @@ public class PricingRequestRepository {
                 .addValue("factory", factory));
     }
 
+    /**
+     * True if {@code factoryName} already has a CURRENT {@code sales.factory_quote} on this
+     * pricing request whose status has moved past {@code DRAFT} — i.e. an RFQ that a human has
+     * already sent (REQUESTED) or that has progressed further (a factory has answered, etc.).
+     * Used by {@code PricingRequestService#setItemFactory} (BLOCKER 1b, review remediation) to
+     * refuse filling a blank line onto a factory whose current quote can no longer safely absorb
+     * it — routed through {@link #factoryQuotes} rather than new SQL here, same one-way-dependency
+     * shape {@link #cancelOpenChildrenForDeadRequest} already uses to reach {@code
+     * sales.factory_quote} (see this class's field-level Javadoc on {@link #factoryQuotes}).
+     *
+     * <p>Companion to {@code FactoryQuoteService#generateDrafts}'s own half of the same invariant,
+     * which ADDS a newly-resolved item to the existing quote instead of stranding it — but only
+     * while that quote is still DRAFT. This method is what stops a NEW line from ever being routed
+     * onto a factory once that window has closed, so the two guards protect one invariant from
+     * both directions: {@code setItemFactory} refuses the write that would create the
+     * unrecoverable case; {@code generateDrafts} handles the case gracefully when it is still
+     * safe to.
+     */
+    public boolean hasFactoryQuotePastDraft(long pricingRequestId, String factoryName) {
+        return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName)
+            .filter(quote -> !FactoryQuoteStatus.DRAFT.equals(quote.status()))
+            .isPresent();
+    }
+
     public List<Long> findUnresolvableCatalogItemIds(long pricingRequestId) {
         return jdbc.query("""
             SELECT pri.pricing_request_item_id
@@ -1022,11 +1047,19 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Server-internal file handle for outbound email use only — deliberately NOT the public
-     * {@link PricingRequestAttachmentDto} (which never exposes a local disk path). Used solely by
-     * {@code FactoryQuoteService.attemptSend}, resolved fresh at actual-send time so a late
-     * {@code include_in_factory_email} toggle is honoured up to the moment the worker really
-     * calls the mail provider.
+     * Server-internal file handle — deliberately NOT the public {@link PricingRequestAttachmentDto}
+     * (which never exposes a local disk path). {@code filePath}/{@code mimeType} are unused by the
+     * current caller and kept only because they cost nothing to carry alongside {@code fileName}.
+     *
+     * <p><b>The caller changed (review remediation, HIGH 4).</b> This used to serve {@code
+     * FactoryQuoteService.attemptSend} — the automatic dispatch worker, deleted along with the
+     * outbox path (factory RFQ email is manual-only now) — resolved fresh at actual-send time so a
+     * late {@code include_in_factory_email} toggle was honoured up to the moment the worker really
+     * called the mail provider. There is no send-time resolution left to do: the sole caller today
+     * is {@code FactoryQuoteService.emailBody}, at DRAFT-GENERATION time, which lists these file
+     * names in the generated draft text so the human copying it into their own mail client knows
+     * what to physically attach — a toggle flipped after a draft already exists is reflected only
+     * the next time a draft is (re)generated for that factory, not retroactively.
      */
     public record PricingRequestEmailAttachmentFile(String fileName, String filePath, String mimeType) {}
 

@@ -112,11 +112,12 @@ class PricingRequestItemThicknessIntegrationTest extends AbstractPostgresIntegra
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
         employeeActor = actor(employeeUserId, "employee");
 
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Thickness Test Factory', 'thickness-factory@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE SET email = EXCLUDED.email
-            """, Map.of());
+        // develop's V163 (merge_factory_email_into_catalog_factories) DROPPED sales.factory_config
+        // and folded its email/unit columns into price_catalog.factories, so the seed that used to
+        // sit here no longer has a table to write to. Nothing below needs it: insertCatalogProduct
+        // (AbstractPostgresIntegrationTest) already creates the price_catalog.factories row these
+        // tests link against, and this class exercises the thickness ROLE GATE, never RFQ email —
+        // which V163's own column comment says may be blank without blocking a draft anyway.
 
         CustomerDto customer = customers.create(
             "บริษัท ทดสอบความหนา จำกัด", "0100000000099", "99 ถนนทดสอบ", "สำนักงานใหญ่", "02-999-9999");

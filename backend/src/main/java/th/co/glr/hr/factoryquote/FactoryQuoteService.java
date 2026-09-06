@@ -16,13 +16,11 @@ import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
-import th.co.glr.hr.factoryquote.FactoryQuoteRepository.FactoryQuoteEmailDispatchDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
@@ -71,28 +69,48 @@ public class FactoryQuoteService {
     private final PricingRequestRepository pricingRequests;
     private final TicketRepository tickets;
     private final FactoryConfigRepository factoryConfigs;
-    private final FactoryEmailService factoryEmail;
     private final NotificationRepository notifications;
     private final FileStorageService fileStorage;
-    private final AppProperties properties;
     private final LandedCostCalculator landedCosts;
 
     public FactoryQuoteService(FactoryQuoteRepository quotes, PricingRequestRepository pricingRequests,
                                TicketRepository tickets, FactoryConfigRepository factoryConfigs,
-                               FactoryEmailService factoryEmail, NotificationRepository notifications,
-                               FileStorageService fileStorage, AppProperties properties,
+                               NotificationRepository notifications, FileStorageService fileStorage,
                                LandedCostCalculator landedCosts) {
         this.quotes = quotes;
         this.pricingRequests = pricingRequests;
         this.tickets = tickets;
         this.factoryConfigs = factoryConfigs;
-        this.factoryEmail = factoryEmail;
         this.notifications = notifications;
         this.fileStorage = fileStorage;
-        this.properties = properties;
         this.landedCosts = landedCosts;
     }
 
+    /**
+     * Generates drafts for every factory that RESOLVES, instead of blocking the whole batch on
+     * lines that do not (owner decision, manual-RFQ redesign). Only when NO line resolves to a
+     * factory does this throw — generating nothing while still returning 200 would be a silent
+     * no-op, which is worse than the 422 it replaces. Partially-unresolved requests are common
+     * (Import routes factories to lines one at a time), and used to force a second, otherwise
+     * pointless round trip once the last line was fixed; now a re-run after filling the gap
+     * completes the set.
+     *
+     * <p><b>A factory that already has a current quote is not simply skipped (BLOCKER 1 fix).</b>
+     * This Javadoc used to claim the only silent-no-op this method could produce was the
+     * all-unresolved case above, thrown as a 422 — that was wrong. "Every resolved factory
+     * already has a quote" was a SECOND silent no-op: the old code skipped such a factory
+     * unconditionally, which permanently stranded any line resolved to it AFTER its draft was
+     * first created — this method would skip that factory on every future re-run, {@code
+     * PricingRequestService#setItemFactory} would 409 on any attempt to move the line elsewhere,
+     * and {@code receive}'s item-set check meant the existing quote could never absorb it either.
+     * Now: while the current quote is still {@code DRAFT}, newly-resolved items are ADDED to it
+     * (see {@link #addNewlyResolvedItemsToExistingDraft}); only once the quote has advanced past
+     * DRAFT — REQUESTED and beyond, meaning a human has already sent it or the factory has
+     * already answered — is it left alone, because its item set is then exactly what was
+     * sent/received and must not silently change under the request's owner. {@code
+     * PricingRequestService#setItemFactory} independently refuses to route a NEW line onto a
+     * factory in that state, so the two guards protect the same invariant from both directions.
+     */
     @Transactional
     public List<FactoryQuoteDto> generateDrafts(long pricingRequestId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
@@ -104,15 +122,23 @@ public class FactoryQuoteService {
         requireActiveDeal(summary.ticketId());
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
         Map<String, List<PricingRequestItemDto>> byFactory = groupByFactory(items);
+        if (byFactory.isEmpty()) {
+            List<String> missing = unresolvedLineDescriptions(items);
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "ยังไม่ได้ระบุโรงงานสำหรับ " + String.join(", ", missing)
+                    + " — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล");
+        }
         for (Map.Entry<String, List<PricingRequestItemDto>> entry : byFactory.entrySet()) {
             String factoryName = entry.getKey();
-            if (quotes.findCurrentByFactory(pricingRequestId, factoryName).isPresent()) {
+            Optional<FactoryQuoteDto> currentQuote = quotes.findCurrentByFactory(pricingRequestId, factoryName);
+            if (currentQuote.isPresent()) {
+                addNewlyResolvedItemsToExistingDraft(summary, actor, factoryName, currentQuote.get(), entry.getValue());
                 continue;
             }
             FactoryConfigDto config = factoryConfigs.findByName(factoryName).orElse(null);
             String emailTo = config == null ? null : config.email();
             String subject = "Pricing request " + summary.requestCode() + " - " + safe(summary.projectName(), summary.customerName());
-            String body = emailBody(summary, factoryName, entry.getValue());
+            String body = emailBody(summary, factoryName, entry.getValue(), actor);
             Long factoryId = entry.getValue().stream()
                 .map(PricingRequestItemDto::resolvedFactoryId)
                 .filter(java.util.Objects::nonNull)
@@ -126,6 +152,44 @@ public class FactoryQuoteService {
                 "คำขอราคา " + summary.requestCode() + " สร้างร่างอีเมลโรงงาน " + factoryName);
         }
         return list(pricingRequestId, actor);
+    }
+
+    /**
+     * BLOCKER 1a (review remediation): the other half of {@link #generateDrafts}' fix for a
+     * factory whose current quote already exists. Adds whichever of {@code resolvedItems} are not
+     * already on {@code currentQuote} — and ONLY while it is still {@code DRAFT} — instead of the
+     * old unconditional skip that stranded them. {@code resolvedItems} is the FULL set of items
+     * currently resolved to this factory (old and new alike; see {@link #groupByFactory}), so
+     * filtering against the quote's existing item ids is what isolates the genuinely new ones.
+     *
+     * <p>A quote already past DRAFT (REQUESTED and beyond) is left untouched — its item set is
+     * exactly what was sent to or received from the factory, and {@code
+     * PricingRequestService#setItemFactory} independently refuses to route a new line onto a
+     * factory in that state, so this method should rarely even see one; it stays defensive here
+     * regardless (e.g. a line resolved via the catalog snapshot rather than setItemFactory).
+     */
+    private void addNewlyResolvedItemsToExistingDraft(PricingRequestSummaryDto summary, UserPrincipal actor,
+                                                       String factoryName, FactoryQuoteDto currentQuote,
+                                                       List<PricingRequestItemDto> resolvedItems) {
+        if (!FactoryQuoteStatus.DRAFT.equals(currentQuote.status())) {
+            return;
+        }
+        Set<Long> alreadyOnQuote = currentQuote.items().stream()
+            .map(FactoryQuoteItemDto::pricingRequestItemId)
+            .collect(java.util.stream.Collectors.toSet());
+        List<Long> newItemIds = resolvedItems.stream()
+            .map(PricingRequestItemDto::id)
+            .filter(itemId -> !alreadyOnQuote.contains(itemId))
+            .toList();
+        if (newItemIds.isEmpty()) {
+            return;
+        }
+        quotes.addItemsToDraft(currentQuote.id(), newItemIds);
+        addEvent(summary, actor, PricingRequestEventKind.FACTORY_EMAIL_READY, summary.status(), summary.status(),
+            "Factory email draft for " + factoryName + " updated with " + newItemIds.size()
+                + " newly-routed item(s)");
+        notifyCeo(summary, PricingRequestEventKind.FACTORY_EMAIL_READY,
+            "คำขอราคา " + summary.requestCode() + " เพิ่มรายการในร่างอีเมลโรงงาน " + factoryName);
     }
 
     public List<FactoryQuoteDto> list(long pricingRequestId, UserPrincipal actor) {
@@ -153,13 +217,21 @@ public class FactoryQuoteService {
     }
 
     /**
-     * Enqueue-only: validates and commits a {@code PENDING} dispatch row, then returns
-     * immediately. {@link FactoryQuoteEmailDispatchWorker} sends the email and finalizes the
-     * quote/pricing-request state out-of-band, in a separate transaction, so an app crash between
-     * "email accepted by the provider" and "quote/pricing-request updated" cannot happen inside
-     * the HTTP request/response cycle — see {@link #finalizeDispatch} for how a crash mid-flight
-     * is recovered instead of stranding the dispatch. This method itself never calls the mail
-     * provider.
+     * Manual-only RFQ send (owner decision — the automatic dispatch/outbox path is deleted). This
+     * records that a HUMAN has already sent the RFQ email from their own mail client: DRAFT →
+     * REQUESTED, persisting emailTo/subject/body/{@code email_sent_at}/{@code sent_by}, advancing
+     * the pricing request's status, and raising the same audit event and CEO notification the old
+     * dispatch-finalize step used to — all synchronously, in one transaction. Nothing here calls a
+     * mail provider, and there is no dispatch row: {@code sales.factory_quote_email_dispatch} is
+     * left in place (V163) but no longer written to.
+     *
+     * <p>The recipient is OPTIONAL — a blank {@code emailTo} no longer 400s, because a human may
+     * mark an RFQ sent even when no factory contact email is on file.
+     *
+     * <p><b>Idempotent by current STATE, not a client-generated key.</b> Calling this again once
+     * the quote is already {@code REQUESTED} is a no-op that returns the quote unchanged. The old
+     * {@code clientRequestId} idempotency key existed only to protect the enqueue call from being
+     * replayed before the out-of-band worker had run; there is no worker to race any more.
      */
     @Transactional
     public FactoryQuoteDto send(long quoteId, SendFactoryQuoteRequest request, UserPrincipal actor) {
@@ -174,117 +246,15 @@ public class FactoryQuoteService {
         String emailTo = firstText(request.emailTo(), quote.emailTo());
         String subject = firstText(request.emailSubject(), quote.emailSubject());
         String body = firstText(request.emailBody(), quote.emailBody());
-        if (emailTo == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับอีเมลโรงงาน");
-        }
-        String clientRequestId = validateClientRequestId(request.clientRequestId());
-        dispatchForSend(quoteId, clientRequestId, emailTo, subject, body, actor);
-        return requireQuote(quoteId);
-    }
-
-    /**
-     * One worker-tick's candidate dispatch ids (PENDING, backed-off FAILED due for retry, or
-     * stale SENDING past the reclaim timeout — all under the configured attempt cap).
-     */
-    public List<Long> claimableDispatchIds() {
-        AppProperties.FactoryQuoteDispatch config = properties.getFactoryQuoteDispatch();
-        return quotes.findClaimableDispatchIds(config.getBatchSize(), config.getReclaimTimeoutSeconds(),
-            config.getMaxAttempts());
-    }
-
-    /**
-     * Atomically claims one dispatch row for this worker. Returns false if another worker (or a
-     * concurrent tick of this one) already claimed it, or it is no longer eligible (already
-     * SENT, past the attempt cap, or not yet due). Two workers racing the same id: only one
-     * UPDATE affects a row, courtesy of Postgres row locking plus the WHERE recheck — see
-     * {@link FactoryQuoteRepository#claimDispatch}.
-     */
-    public boolean claimDispatch(long dispatchId) {
-        AppProperties.FactoryQuoteDispatch config = properties.getFactoryQuoteDispatch();
-        return quotes.claimDispatch(dispatchId, config.getReclaimTimeoutSeconds(), config.getMaxAttempts()) > 0;
-    }
-
-    /**
-     * Calls the mail provider for a claimed dispatch, unless a previous attempt already got a
-     * provider acknowledgement recorded (a crash between "provider accepted" and finalize would
-     * otherwise cause a reclaim to resend the email to the factory). Throws on provider failure;
-     * the caller ({@link #processDispatch}) is responsible for marking the dispatch FAILED.
-     */
-    public void attemptSend(long dispatchId) {
-        FactoryQuoteEmailDispatchDto dispatch = quotes.findDispatch(dispatchId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการส่งอีเมลราคาโรงงานนี้"));
-        if (dispatch.providerMessageId() != null) {
-            return;
-        }
-        FactoryQuoteDto quote = requireQuote(dispatch.factoryQuoteId());
-        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
-        // Resolved fresh right here, not at send()-time enqueue: Import can keep toggling
-        // include_in_factory_email on Pricing Request attachments up until the worker actually
-        // calls the mail provider, and this is that moment. See FactoryEmailService's javadoc for
-        // why an empty list keeps the original plain-text SimpleMailMessage path unchanged.
-        List<FactoryEmailService.EmailAttachment> emailAttachments = pricingRequests
-            .findIncludedInFactoryEmailAttachmentFiles(summary.id()).stream()
-            .map(file -> new FactoryEmailService.EmailAttachment(file.fileName(), file.filePath(), file.mimeType()))
-            .toList();
-        String messageId = factoryEmail.send(summary.ticketId(), quote.factoryName(), dispatch.emailTo(),
-            dispatch.emailSubject(), dispatch.emailBody(), emailAttachments);
-        // "sent-<id>" is a local fallback marker, not a real provider id: FactoryEmailService
-        // always returns one today, but a null return must still count as "sent, don't resend" —
-        // this is the field's whole purpose, not merely audit metadata.
-        quotes.recordProviderMessageId(dispatchId, messageId != null ? messageId : ("sent-" + dispatchId));
-    }
-
-    /**
-     * Idempotently completes a dispatch whose email has already gone out: quote to REQUESTED,
-     * the pricing request's status transition, the audit event, the CEO notification, and the
-     * dispatch's own SENT/finalized_at — all in one transaction.
-     *
-     * <p><b>Must only be entered through the Spring proxy</b> — i.e. called on the injected
-     * {@code FactoryQuoteService} bean from outside this class (as {@link
-     * FactoryQuoteEmailDispatchWorker} does), never as a same-class self-invocation such as
-     * {@code this.finalizeDispatch(...)} from another method here. A self-invocation bypasses the
-     * AOP proxy entirely, silently disabling {@code @Transactional}: every write below would then
-     * auto-commit individually instead of atomically, reopening the exact crash window this method
-     * exists to close. See {@link #processDispatch}'s javadoc — that method's self-invocation of
-     * this one is a known, deliberately test-only exception to this rule.
-     *
-     * <p>Two independent guards protect against duplicating the event/notification pair:
-     * <ul>
-     *   <li>{@code finalizedAt != null} short-circuits the whole method for a dispatch that is
-     *       already fully done — cheap, and correct whenever finalize genuinely runs as one
-     *       transaction (a crash before commit rolls back everything, including the otherwise
-     *       self-idempotent quote-status/pricing-request writes below, so there is no reachable
-     *       in-between state where the event exists but {@code finalizedAt} does not).
-     *   <li>{@code existsEventForDispatch} additionally guards the event/notification insert
-     *       itself, keyed on this dispatch's id via the event's {@code metadata} column. This is
-     *       deliberate defense-in-depth for a scenario the first guard does NOT cover: finalize
-     *       being entered non-transactionally after all (self-invocation reintroduced by a future
-     *       refactor, or any other path that leaves {@code finalizedAt} null after the event was
-     *       already committed). Without it, a retry in that state would re-insert the event and
-     *       re-notify the CEO — see {@code
-     *       PricingFactoryQuoteCostingIntegrationTest#dispatchFinalizeSkipsDuplicateEventAndNotificationWhenReRunAfterEventAlreadyWritten}.
-     * </ul>
-     */
-    @Transactional
-    public FactoryQuoteDto finalizeDispatch(long dispatchId) {
-        FactoryQuoteEmailDispatchDto dispatch = quotes.findDispatch(dispatchId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการส่งอีเมลราคาโรงงานนี้"));
-        FactoryQuoteDto quote = requireQuote(dispatch.factoryQuoteId());
-        if (dispatch.finalizedAt() != null) {
-            return quote;
-        }
-
-        quotes.markRequested(quote.id(), dispatch.emailTo(), dispatch.emailSubject(), dispatch.emailBody(),
-            dispatch.createdBy() == null ? 0L : dispatch.createdBy());
-        FactoryQuoteDto requestedQuote = requireQuote(quote.id());
-        if (!FactoryQuoteStatus.REQUESTED.equals(requestedQuote.status())) {
+        int rows = quotes.markRequested(quoteId, emailTo, subject, body, actor.id());
+        if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ใบเสนอราคาโรงงาน " + quote.id() + " ไม่สามารถปิดจบได้จากสถานะ " + requestedQuote.status());
+                "ใบเสนอราคาโรงงาน " + quote.id() + " ไม่สามารถส่งได้จากสถานะปัจจุบัน");
         }
 
-        PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so the only status
-        // still needing promotion here is IMPORT_REVIEWING.
+        // still needing promotion here is IMPORT_REVIEWING — mirrors the deleted dispatch
+        // finalize step's own transition.
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
@@ -292,55 +262,12 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
             }
         }
-        PricingRequestSummaryDto currentSummary = requirePricingRequest(quote.pricingRequestId());
-
-        if (!pricingRequests.existsEventForDispatch(currentSummary.id(),
-                PricingRequestEventKind.FACTORY_EMAIL_SENT, dispatchId)) {
-            addEventForDispatch(currentSummary, dispatch.createdBy(), PricingRequestEventKind.FACTORY_EMAIL_SENT,
-                summary.status(), currentSummary.status(), "Factory request sent to " + quote.factoryName(),
-                dispatchId);
-            notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
-                "คำขอราคา " + currentSummary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
-        }
-
-        quotes.markDispatchFinalized(dispatchId);
-        return requireQuote(quote.id());
-    }
-
-    /** Records a failed attempt with exponential-ish backoff; stays claimable under the attempt cap. */
-    public void markDispatchFailed(long dispatchId, String message) {
-        FactoryQuoteEmailDispatchDto dispatch = quotes.findDispatch(dispatchId).orElse(null);
-        int attemptCount = dispatch == null ? 1 : Math.max(1, dispatch.attemptCount());
-        AppProperties.FactoryQuoteDispatch config = properties.getFactoryQuoteDispatch();
-        int backoffSeconds = config.getBackoffBaseSeconds() * attemptCount;
-        quotes.markDispatchFailedWithBackoff(dispatchId, message == null ? "unknown error" : message, backoffSeconds);
-    }
-
-    /**
-     * TEST-ONLY convenience wrapper — <b>not</b> the production path. It calls {@link
-     * #finalizeDispatch} as a same-class self-invocation ({@code this.finalizeDispatch(...)}),
-     * which bypasses the Spring AOP proxy and silently disables {@code @Transactional} whenever
-     * this object IS a proxy (i.e. in production, where Spring manages this bean). That is
-     * harmless only in {@code AbstractPostgresIntegrationTest}, which constructs {@code
-     * FactoryQuoteService} directly with {@code new} — there is no proxy to bypass there, so this
-     * method's behavior is identical to calling the three steps separately in that harness, and it
-     * exists purely to keep test call sites short.
-     *
-     * <p>The real production path is {@link FactoryQuoteEmailDispatchWorker#pollAndDispatch()},
-     * which calls {@code claimDispatch}/{@code attemptSend}/{@code finalizeDispatch} as three
-     * separate calls into the injected (proxied) service bean, so {@code finalizeDispatch}'s
-     * {@code @Transactional} genuinely applies there. Do not call this method from production code.
-     */
-    public void processDispatch(long dispatchId) {
-        if (!claimDispatch(dispatchId)) {
-            return;
-        }
-        try {
-            attemptSend(dispatchId);
-            finalizeDispatch(dispatchId);
-        } catch (RuntimeException e) {
-            markDispatchFailed(dispatchId, e.getMessage());
-        }
+        PricingRequestSummaryDto currentSummary = requirePricingRequest(summary.id());
+        addEvent(currentSummary, actor, PricingRequestEventKind.FACTORY_EMAIL_SENT, summary.status(),
+            currentSummary.status(), "Factory request sent to " + quote.factoryName());
+        notifyCeo(currentSummary, PricingRequestEventKind.FACTORY_EMAIL_SENT,
+            "คำขอราคา " + currentSummary.requestCode() + " ส่งคำขอโรงงาน " + quote.factoryName());
+        return requireQuote(quoteId);
     }
 
     @Transactional
@@ -440,25 +367,6 @@ public class FactoryQuoteService {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถลบไฟล์แนบนี้ได้");
         }
     }
-
-    private FactoryQuoteEmailDispatchDto dispatchForSend(long quoteId, String clientRequestId, String emailTo,
-                                                         String subject, String body, UserPrincipal actor) {
-        FactoryQuoteEmailDispatchDto existingForClient = quotes.findDispatchByClientRequest(actor.id(), clientRequestId)
-            .orElse(null);
-        if (existingForClient != null) {
-            if (existingForClient.factoryQuoteId() != quoteId) {
-                throw new ApiException(HttpStatus.CONFLICT,
-                    "clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น");
-            }
-            return existingForClient;
-        }
-        FactoryQuoteEmailDispatchDto active = quotes.findActiveDispatch(quoteId).orElse(null);
-        if (active != null) {
-            return active;
-        }
-        return quotes.createDispatch(quoteId, clientRequestId, emailTo, subject, body, actor.id());
-    }
-
 
     @Transactional
     public FactoryQuoteDto receive(long quoteId, ReceiveFactoryQuoteRequest request, UserPrincipal actor) {
@@ -702,8 +610,30 @@ public class FactoryQuoteService {
     }
 
     /**
-     * Groups a pricing request's lines by the factory each one is routed to, and refuses the whole
-     * batch if any line has no factory at all.
+     * Groups a pricing request's lines by the factory each one is routed to. A line with no
+     * resolved factory is simply SKIPPED, not fatal (owner decision, manual-RFQ redesign) — {@link
+     * #generateDrafts} decides whether an entirely-empty result is an error; this method's only
+     * job is the grouping.
+     */
+    private Map<String, List<PricingRequestItemDto>> groupByFactory(List<PricingRequestItemDto> items) {
+        List<PricingRequestItemDto> ordered = items.stream()
+            .sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder))
+            .toList();
+        Map<String, List<PricingRequestItemDto>> byFactory = new LinkedHashMap<>();
+        for (PricingRequestItemDto item : ordered) {
+            String factoryName = item.resolvedFactory();
+            if (factoryName == null) {
+                continue;
+            }
+            byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
+        }
+        return byFactory;
+    }
+
+    /**
+     * Human-readable "รายการที่ N (ชื่อสินค้า)" descriptions for every line with no resolved
+     * factory, in on-screen row order — used by {@link #generateDrafts} to build its 422 message
+     * when NO line resolves at all.
      *
      * <p><b>The message names the ROW, not the primary key.</b> It used to read
      * {@code "รายการที่ " + item.id()} — the {@code sales.pricing_request_item} PK. The identical
@@ -716,31 +646,22 @@ public class FactoryQuoteService {
      * that order. The product name is included as well, so the line is identifiable even if the
      * reader is looking at a stale render.
      *
-     * <p>It also reports EVERY offending line rather than throwing on the first. Fixing them one
-     * 422 at a time was the difference between one trip through
+     * <p>It also reports EVERY offending line rather than just the first. Fixing them one 422 at a
+     * time was the difference between one trip through
      * {@code PricingRequestService#setItemFactory} and N of them.
      */
-    private Map<String, List<PricingRequestItemDto>> groupByFactory(List<PricingRequestItemDto> items) {
+    private List<String> unresolvedLineDescriptions(List<PricingRequestItemDto> items) {
         List<PricingRequestItemDto> ordered = items.stream()
             .sorted(Comparator.comparingInt(PricingRequestItemDto::sortOrder))
             .toList();
-        Map<String, List<PricingRequestItemDto>> byFactory = new LinkedHashMap<>();
         List<String> missing = new ArrayList<>();
         for (int i = 0; i < ordered.size(); i++) {
             PricingRequestItemDto item = ordered.get(i);
-            String factoryName = item.resolvedFactory();
-            if (factoryName == null) {
+            if (item.resolvedFactory() == null) {
                 missing.add("รายการที่ " + (i + 1) + " (" + item.displayName() + ")");
-                continue;
             }
-            byFactory.computeIfAbsent(factoryName, ignored -> new ArrayList<>()).add(item);
         }
-        if (!missing.isEmpty()) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                "ยังไม่ได้ระบุโรงงานสำหรับ " + String.join(", ", missing)
-                    + " — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล");
-        }
-        return byFactory;
+        return missing;
     }
 
     private List<ReceiveFactoryQuoteItemRequest> validateAndNormalizeResponseItems(
@@ -873,39 +794,65 @@ public class FactoryQuoteService {
             message, null);
     }
 
-    /**
-     * Worker-context event tagged with its dispatch id in {@code metadata}, so {@code
-     * PricingRequestRepository.existsEventForDispatch} can detect a re-run and skip inserting a
-     * duplicate — see {@link #finalizeDispatch}'s javadoc for why this guard exists alongside the
-     * {@code finalizedAt} check.
-     */
-    private void addEventForDispatch(PricingRequestSummaryDto summary, Long actorId, String kind,
-                                     String fromStatus, String toStatus, String message, long dispatchId) {
-        pricingRequests.addEvent(summary.id(), summary.ticketId(), actorId, null, kind, fromStatus, toStatus,
-            message, "{\"dispatchId\":" + dispatchId + "}");
-    }
-
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
         notifications.notifyByRoleForPricingRequest("ceo", summary.id(), type, message);
     }
 
-    private String emailBody(PricingRequestSummaryDto summary, String factoryName, List<PricingRequestItemDto> items) {
+    /**
+     * English RFQ draft body (manual-RFQ redesign, P2). Contains what the owner approved for this
+     * template: a greeting identifying GL&R as the requester, the item table (brand/model/size/
+     * quantity/unit), the sales note if any, and a sign-off naming the requesting user and their
+     * email. Deliberately NO commercial-terms block and NO reply-by-date block — the owner
+     * declined both explicitly. This is a human-reviewed DRAFT the requester edits and sends from
+     * their own mail client (factory RFQ email is manual-only — see {@link #send}), not a
+     * machine-sent message, so it reads as ordinary business correspondence rather than a system
+     * dump of field names.
+     *
+     * <p><b>Attachment list (review remediation, HIGH 4) — a DEVIATION from the owner's approved
+     * template above, flagged rather than assumed.</b> {@code include_in_factory_email} has had no
+     * caller since {@code attemptSend} (the old dispatch worker) was deleted: Import could still
+     * tick "include this attachment in the factory email" on a pricing-request attachment, and
+     * nothing would ever attach it, because nothing sends anything any more. Rather than leave
+     * that toggle live and silently pointless, this appends a short plain-text list of the marked
+     * attachments' file names — ONLY when at least one is marked — so the human copying this draft
+     * into their own mail client knows what to physically attach. It is deliberately a bare file
+     * list, not a table, specifically so it is trivial to delete outright if the owner says no to
+     * it on review.
+     */
+    private String emailBody(PricingRequestSummaryDto summary, String factoryName, List<PricingRequestItemDto> items,
+                             UserPrincipal actor) {
         StringBuilder body = new StringBuilder();
-        body.append("Pricing request ").append(summary.requestCode()).append("\n");
-        body.append("Factory: ").append(factoryName).append("\n\n");
+        body.append("Dear ").append(factoryName).append(" team,\n\n");
+        body.append("We are GL&R, a tile and ceramics importer based in Bangkok, Thailand. ")
+            .append("We would like to request your best pricing and lead time for the following item(s), ")
+            .append("referencing our internal pricing request ").append(summary.requestCode()).append(":\n\n");
+        body.append(String.format("%-20s %-25s %-15s %10s  %s%n", "Brand", "Model", "Size", "Quantity", "Unit"));
         for (PricingRequestItemDto item : items) {
-            body.append("- ")
-                .append(safe(item.brand(), ""))
-                .append(" ")
-                .append(safe(item.model(), item.productDescription()))
-                .append(" ")
-                .append(safe(item.size(), ""))
-                .append(" qty ").append(item.requestedQty()).append(" ").append(item.requestedUnit())
-                .append("\n");
+            body.append(String.format("%-20s %-25s %-15s %10s  %s%n",
+                safe(item.brand(), "-"),
+                safe(item.model(), item.productDescription()),
+                safe(item.size(), "-"),
+                String.valueOf(item.requestedQty()),
+                item.requestedUnit()));
         }
         if (summary.note() != null && !summary.note().isBlank()) {
-            body.append("\nSales note: ").append(summary.note()).append("\n");
+            body.append("\nAdditional note from our sales team: ").append(summary.note()).append("\n");
         }
+        List<PricingRequestRepository.PricingRequestEmailAttachmentFile> attachmentsToInclude =
+            pricingRequests.findIncludedInFactoryEmailAttachmentFiles(summary.id());
+        if (!attachmentsToInclude.isEmpty()) {
+            body.append("\nPlease also see the following attachment(s) with this request:\n");
+            for (PricingRequestRepository.PricingRequestEmailAttachmentFile attachment : attachmentsToInclude) {
+                body.append("- ").append(attachment.fileName()).append("\n");
+            }
+        }
+        body.append("\nThank you very much, and we look forward to your quotation.\n\n");
+        body.append("Best regards,\n");
+        body.append(safe(actor.name(), "GL&R"));
+        if (actor.email() != null && !actor.email().isBlank()) {
+            body.append("\n").append(actor.email());
+        }
+        body.append("\nGL&R\n");
         return body.toString();
     }
 

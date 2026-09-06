@@ -320,11 +320,6 @@ class FileStorageRollbackOrphanIntegrationTest extends AbstractPostgresIntegrati
 
     /** A DRAFT pricing request owned by {@code salesRepId} — uploadAttachment's only editable state. */
     private long draftPricingRequest(long salesRepId, UserPrincipal sales) {
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'factory-orphan@example.com', 'THB', 'piece', 'Thailand')
-            ON CONFLICT (factory_name) DO UPDATE SET email = EXCLUDED.email
-            """, Map.of("name", "Factory Orphan"));
         long productId = insertCatalogProduct("Factory Orphan", "TH", "TEST-ORPHAN-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         long ticketId = tickets.create(

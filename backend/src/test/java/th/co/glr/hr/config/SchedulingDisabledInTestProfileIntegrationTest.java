@@ -13,7 +13,7 @@ import org.springframework.scheduling.config.ScheduledTaskHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import th.co.glr.hr.factoryquote.FactoryQuoteEmailDispatchWorker;
+import th.co.glr.hr.customerquotation.QuotationExpiryWorker;
 import th.co.glr.hr.support.PostgresTestSupport;
 
 /**
@@ -21,7 +21,8 @@ import th.co.glr.hr.support.PostgresTestSupport;
  * background workers must NOT run inside a {@code @SpringBootTest} context, because that context is
  * cached across the surefire JVM and shares the Testcontainers Postgres with the non-Spring
  * integration tests — a leaked worker thread would poll and mutate their rows mid-test (it did:
- * the factory-email outbox worker stole a test's own dispatches and failed to send them).
+ * the factory-email outbox worker — since deleted, factory RFQ email is manual-only now, see
+ * {@code FactoryQuoteService#send} — stole a test's own dispatches and failed to send them).
  *
  * <p>{@code @EnableScheduling} lives in {@link SchedulingConfig} gated on {@code @Profile("!test")},
  * so with the {@code test} profile active no scheduled task is registered at all. This asserts that
@@ -59,7 +60,11 @@ class SchedulingDisabledInTestProfileIntegrationTest {
 
     @Test
     void theOutboxWorkerBeanStillExistsSoTestsCanDriveItsLogicDirectly() {
-        assertThat(context.getBeanNamesForType(FactoryQuoteEmailDispatchWorker.class))
+        // FactoryQuoteEmailDispatchWorker (the original subject of this test) was deleted when
+        // factory RFQ email became manual-only; QuotationExpiryWorker is the same shape of
+        // @Scheduled bean and pins the same property — @Profile("!test") disabling the SCHEDULE
+        // must not also prevent the bean itself from being created.
+        assertThat(context.getBeanNamesForType(QuotationExpiryWorker.class))
             .as("the worker bean must still be created — only its timer is disabled in tests")
             .isNotEmpty();
     }

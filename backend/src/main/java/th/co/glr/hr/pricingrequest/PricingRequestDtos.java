@@ -244,8 +244,10 @@ public final class PricingRequestDtos {
      * still {@code DRAFT} (V140 narrowed that from {@code DRAFT}/{@code MORE_INFO_REQUIRED} when
      * the ขอข้อมูลเพิ่มเติม round-trip left the product); Import may mark {@code includeInFactoryEmail}
      * so a later factory email carries it. Deliberately has no local file path field — that stays
-     * server-internal (see {@code PricingRequestRepository.PricingRequestEmailAttachmentFile}, used
-     * only by {@code FactoryQuoteService.attemptSend}).
+     * server-internal (see {@code PricingRequestRepository.PricingRequestEmailAttachmentFile}; its
+     * sole reader today is {@code FactoryQuoteService.emailBody}, at DRAFT-GENERATION time — the
+     * old {@code FactoryQuoteService.attemptSend} dispatch worker that used to read it at
+     * actual-send time is deleted, factory RFQ email being manual-only now).
      */
     public record PricingRequestAttachmentDto(
         long id,

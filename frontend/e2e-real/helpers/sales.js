@@ -443,9 +443,14 @@ export async function generateFactoryEmailDrafts(sessions, pricingRequestId) {
  * (FactoryQuoteService.receive, factoryquote/FactoryQuoteService.java:464-586 — the
  * DRAFT/REQUESTED branch at :499-538 that a freshly-drafted quote always takes).
  *
- * ⛔ Never call POST /api/factory-quotes/{id}/send or any factory-emails/send endpoint — UAT's
- * Resend integration ignores APP_MAIL_OVERRIDE_TO (issue #782) and would mail a real inbox.
- * receive() accepts a quote straight from DRAFT (line 499), so send() is never needed.
+ * This flow calls receive() directly rather than POST /api/factory-quotes/{id}/send, which
+ * remains unneeded here: receive() accepts a quote straight from DRAFT (line 499). The mail-safety
+ * reason this bullet used to give — that send() would call Resend and UAT's integration ignores
+ * APP_MAIL_OVERRIDE_TO (issue #782) — no longer applies: the manual-RFQ redesign (2026-09-06) made
+ * send() a synchronous, human-performed-send RECORD only; it never calls a mail provider any more
+ * (FactoryQuoteService.send's own javadoc), and the factory-emails/send endpoint it also warned
+ * about is deleted outright. send() is safe to call in any environment now — it is just not the
+ * call this particular flow needs.
  *
  * currency is pinned THB (see this file's header). sqmPerUnit is supplied even though the
  * chosen unitBasis is PER_PIECE — see this file's header on why that field is unconditional.

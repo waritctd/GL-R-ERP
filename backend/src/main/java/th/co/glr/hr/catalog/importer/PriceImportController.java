@@ -16,6 +16,9 @@ import th.co.glr.hr.common.ApiException;
 /**
  * C2/C3/C4 import endpoints:
  *   GET  /api/price-import/factories               — list factories with profiles
+ *   POST /api/price-import/factories                — create a factory (name + REQUIRED country)
+ *   PUT  /api/price-import/factories/{factoryId}    — update a factory's master data
+ *   GET  /api/price-import/countries                — country picker for the factory editor
  *   GET  /api/price-import/versions?factoryId=     — list versions for factory
  *   GET  /api/price-import/profile/{factoryId}     — get raw profile JSON
  *   PUT  /api/price-import/profile/{factoryId}     — update profile JSON (saved to DB)
@@ -54,7 +57,32 @@ public class PriceImportController {
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
-        return svc.createFactory(name, body.get("country"), body.get("defaultCurrency"));
+        return svc.createFactory(name, body.get("country"), body.get("defaultCurrency"),
+            body.get("email"), body.get("unit"));
+    }
+
+    /** Country is REQUIRED and validated — see {@code PriceImportService#createFactory}'s javadoc
+     * for the 500 this replaces. */
+    @PutMapping("/factories/{factoryId}")
+    Map<String, Object> updateFactory(
+        @PathVariable long factoryId,
+        @RequestBody Map<String, String> body,
+        HttpSession session
+    ) {
+        requireImporter(session);
+        String name = body.get("name");
+        if (name == null || name.isBlank())
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
+        return svc.updateFactory(factoryId, name, body.get("country"), body.get("defaultCurrency"),
+            body.get("email"), body.get("unit"));
+    }
+
+    /** Backs the factory editor's country select, so a typo/unseeded free-text country can no
+     * longer reach {@code createFactory}/{@code updateFactory} and 500. */
+    @GetMapping("/countries")
+    List<Map<String, Object>> countries(HttpSession session) {
+        requireImporter(session);
+        return svc.listCountries();
     }
 
     @PostMapping(value = "/upload-commit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

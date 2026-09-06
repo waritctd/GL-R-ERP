@@ -30,7 +30,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -104,21 +103,13 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications, objectMapper,
             new ContactRepository(jdbc), fileStorage, mock(th.co.glr.hr.factoryquote.FactoryQuoteCarryForward.class));
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaConfigRepository formulaConfigRepository = new PricingFormulaConfigRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(formulaConfigRepository);
         landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
@@ -269,14 +260,6 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * {@code currency} PER_PIECE — the simplest costable fixture, parametrized only by currency so
      * the FX test above can drive a non-THB chain end to end. */
     private long singleItemReadyForReview(String factoryName, String currency) {
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, :email, :currency, 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, country = EXCLUDED.country
-            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
-                .addValue("name", factoryName).addValue("email", "fx-" + UUID.randomUUID() + "@example.com")
-                .addValue("currency", currency));
         long productId = insertCatalogProduct(factoryName, "IT", "FX-TEST-" + UUID.randomUUID(),
             new BigDecimal("100.00"), currency, "per_piece");
 
@@ -328,12 +311,6 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
     private long twoItemTwoFactoriesEachMissingADifferentFactor() {
         String factoryA = "Missing Linear Factory " + UUID.randomUUID();
         String factoryB = "Missing Box Factory " + UUID.randomUUID();
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:a, 'agg-a@example.com', 'THB', 'piece', 'Italy'),
-                   (:b, 'agg-b@example.com', 'THB', 'piece', 'Italy')
-            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
-                .addValue("a", factoryA).addValue("b", factoryB));
         long productA = insertCatalogProduct(factoryA, "IT", "AGG-A-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
         long productB = insertCatalogProduct(factoryB, "IT", "AGG-B-" + UUID.randomUUID(),
@@ -399,10 +376,6 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * received yet — {@code resolveSources} fails at the "quote not found" step, the simplest
      * unresolvable state. */
     private long singleItemSubmittedNoQuoteYet(String factoryName) {
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'unresolvable@example.com', 'THB', 'piece', 'Italy')
-            """, Map.of("name", factoryName));
         long productId = insertCatalogProduct(factoryName, "IT", "UNRESOLVED-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
         long ticketId = createDeal("ดีล Unresolvable " + UUID.randomUUID(), factoryName);

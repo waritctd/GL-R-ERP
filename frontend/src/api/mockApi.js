@@ -561,14 +561,48 @@ let mockFormulaDutyRateSeq = 1;
 let mockFormulaClearanceFeeSeq = 1;
 let mockFormulaConfigSeq = 1;
 
-// Mirrors price_catalog.country (V151). The real API returns this on the formula config so the
-// freight editor can offer a select; a new supplier country is a row here, not free text.
+// Mirrors price_catalog.country (V151) — this must be EXACTLY the twelve codes that migration
+// seeds, no more and no fewer. (Review remediation, BLOCKER 2: this array used to add a
+// thirteenth, 'DE'/Germany, on the theory that Bode — the one seeded factory whose free-text
+// country used to read 'Germany' — needed a real code to hold. It does not: V40 seeds Bode's
+// country as 'CN', and 'DE' appears zero times in V151's seed. A mock country the real backend
+// does not recognize is the exact "mock more permissive than production" shape CLAUDE.md
+// forbids — creating/editing a factory with Germany here was green against the mock and would
+// 400 against the real `PriceImportService.requireValidCountry`.) The real API returns this list
+// on the formula config so the freight editor can offer a select, and it also backs GET
+// /api/price-import/countries (V163's factory master-data merge) — a new supplier country is a
+// row in V151, never free text.
 const MOCK_COUNTRIES = [
+  { countryCode: 'BR', nameEn: 'Brazil', nameTh: 'บราซิล' },
   { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
   { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
+  { countryCode: 'ID', nameEn: 'Indonesia', nameTh: 'อินโดนีเซีย' },
+  { countryCode: 'IN', nameEn: 'India', nameTh: 'อินเดีย' },
   { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
+  { countryCode: 'MY', nameEn: 'Malaysia', nameTh: 'มาเลเซีย' },
+  { countryCode: 'PL', nameEn: 'Poland', nameTh: 'โปแลนด์' },
+  { countryCode: 'PT', nameEn: 'Portugal', nameTh: 'โปรตุเกส' },
   { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+  { countryCode: 'TR', nameEn: 'Turkey', nameTh: 'ตุรกี' },
+  { countryCode: 'VN', nameEn: 'Vietnam', nameTh: 'เวียดนาม' },
 ];
+
+// Mirrors PriceImportService.requireValidCountry: country is REQUIRED on both create and update,
+// and must be a real price_catalog.country code — a blank/unseeded value is a clean 400 here too,
+// not the 500 createFactory used to raise once country became NOT NULL + FK (V151).
+function requireValidMockCountry(country) {
+  if (!country || !String(country).trim()) fail('ต้องระบุประเทศของโรงงาน', 400);
+  const code = String(country).trim().toUpperCase();
+  if (!MOCK_COUNTRIES.some((c) => c.countryCode === code)) {
+    fail(`ไม่พบรหัสประเทศนี้: ${code}`, 400);
+  }
+  return code;
+}
+
+// Mirrors PriceImportService.blankToNull.
+function blankToNullMock(value) {
+  return value != null && String(value).trim() ? String(value).trim() : null;
+}
 
 function formulaFreightRow(originCountryCode, thicknessMinMm, thicknessMaxMm, qtyMinSqm, qtyMaxSqm, amountThb) {
   // originCountryName is display only — PricingFormulaConfigRepository resolves it by joining
@@ -832,11 +866,28 @@ let mockAttachSeq = 1;
 const mockDealActivities = [];
 let mockDealActivitySeq = 1;
 
+// Mirrors GET /api/factory-configs (FactoryConfigController -> FactoryConfigRepository.findAll,
+// which queries "ORDER BY name" -- reproduced below). Review remediation, HIGH 3: this fixture
+// used to be the 4 OLD sales.factory_config demo rows (SCG Ceramics/Cotto Industry/Duragres
+// Thailand/Panaria SpA, free-text 'Thailand'/'Italy' countries, real-looking emails) -- exactly
+// db/migration-demo/V91.1's seed. V163 dropped that table outright and pointed this endpoint at
+// price_catalog.factories instead: the REAL 9 factories (Bode/CDE/CITY/Equipe/LEA/Padana/Panaria/
+// REFIN/Vives -- V40/V42/V151), with ISO country codes, not free text. Production's email/unit
+// copy in V163 moves ZERO rows (the free-text name join never matched a real factory -- see that
+// migration's own header), so every real factory sits at email=NULL and unit='piece' (the
+// column's DEFAULT) today. Keeping the old fixture's populated emails here would be exactly the
+// "fixture more populated than production" shape CLAUDE.md forbids, on the one field (email) this
+// whole change exists to expose as empty.
 const mockFactoryConfigs = [
-  { id: 1, factoryName: 'SCG Ceramics',      email: 'sales@scg.co.th',         currency: 'THB', unit: 'piece', country: 'Thailand' },
-  { id: 2, factoryName: 'Cotto Industry',    email: 'orders@cotto.co.th',       currency: 'THB', unit: 'piece', country: 'Thailand' },
-  { id: 3, factoryName: 'Duragres Thailand', email: 'sales@duragres.co.th',     currency: 'THB', unit: 'piece', country: 'Thailand' },
-  { id: 4, factoryName: 'Panaria SpA',       email: 'export@panaria.it',        currency: 'EUR', unit: 'sqm',   country: 'Italy' },
+  { id: 9, factoryName: 'Bode',    email: null, currency: 'USD', unit: 'piece', country: 'CN' },
+  { id: 4, factoryName: 'CDE',     email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 5, factoryName: 'CITY',    email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 7, factoryName: 'Equipe',  email: null, currency: 'EUR', unit: 'piece', country: 'ES' },
+  { id: 2, factoryName: 'LEA',     email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 3, factoryName: 'Padana',  email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 1, factoryName: 'Panaria', email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 6, factoryName: 'REFIN',   email: null, currency: 'EUR', unit: 'piece', country: 'IT' },
+  { id: 8, factoryName: 'Vives',   email: null, currency: 'EUR', unit: 'piece', country: 'ES' },
 ];
 
 const mockCatalog = [
@@ -860,24 +911,42 @@ const mockCatalog = [
 // factories a user creates at runtime, so leaving it at 10 would have re-issued 10/11/12
 // and collided with them on the first `priceImport` factory creation.
 let mockPriceImportFactorySeq = 13;
+// country is now a price_catalog.country CODE (see MOCK_COUNTRIES), not the free-text full name
+// this array used to carry ('Italy', 'Germany', ...) — V163 made the real column NOT NULL + FK,
+// and the add/edit factory form now offers a validated <select> of real codes, so a seeded row
+// with a name the picker cannot select would silently rewrite itself the moment anyone opened
+// its edit modal and saved without touching the country field. email is null on every row here
+// on purpose: it mirrors V163's own migration note that its factory_config->factories email copy
+// moves ZERO rows in production (the old directory never matched a real factory by name), so NO
+// seeded factory has ever had a usable RFQ email — setting one via priceImport.updateFactory is
+// the fix this whole change ships, and the mock should not paper over that with a rosier fixture.
+// defaultCurrency matches what mockProductPrices below actually prices each factory's products
+// in (Bode is USD, not EUR like the rest of the Italian/Spanish factories — see its rows there),
+// so the factory-editor's currency column agrees with the price list under Step 2, and both
+// sides of this file describe the same world.
 const mockPriceImportFactories = [
-  { factoryId: 1, name: 'Panaria SpA',    country: 'Italy',   numberFormat: 'eu' },
-  { factoryId: 2, name: 'REFIN',          country: 'Italy',   numberFormat: 'eu' },
-  { factoryId: 3, name: 'Equipe',         country: 'Spain',   numberFormat: 'eu' },
-  { factoryId: 4, name: 'Vives',          country: 'Spain',   numberFormat: 'eu' },
-  { factoryId: 5, name: 'Bode',           country: 'Germany', numberFormat: 'us' },
-  { factoryId: 6, name: 'CDE',            country: 'Italy',   numberFormat: 'eu' },
-  { factoryId: 7, name: 'Padana Marmi',   country: 'Italy',   numberFormat: 'eu' },
-  { factoryId: 8, name: 'LEA',            country: 'Italy',   numberFormat: 'eu' },
-  { factoryId: 9, name: 'CITY Ceramica',  country: 'Italy',   numberFormat: 'eu' },
+  { factoryId: 1, name: 'Panaria SpA',    country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'sqm' },
+  { factoryId: 2, name: 'REFIN',          country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
+  { factoryId: 3, name: 'Equipe',         country: 'ES', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'sqm' },
+  { factoryId: 4, name: 'Vives',          country: 'ES', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
+  // Country is 'CN', not 'DE'/Germany, even though Bode is a German factory name (review
+  // remediation, BLOCKER 2) — V40__catalog_import_schema.sql:114 seeds Bode's real
+  // sales.factories row with country 'CN', and that is what production actually carries.
+  // 'DE' does not exist in price_catalog.country (V151); a mock value the backend cannot accept
+  // would have been invisible here and a 400 in production.
+  { factoryId: 5, name: 'Bode',           country: 'CN', defaultCurrency: 'USD', numberFormat: 'us', email: null, unit: 'piece' },
+  { factoryId: 6, name: 'CDE',            country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
+  { factoryId: 7, name: 'Padana Marmi',   country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
+  { factoryId: 8, name: 'LEA',            country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
+  { factoryId: 9, name: 'CITY Ceramica',  country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
   // The three DOMESTIC factories every seeded deal actually names. Their absence here is
   // why /catalog was unusable: the page reads `catalog.prices` (mockProductPrices below),
   // whose rows were all European imports, while every factory quote in demoSales.js is from
   // SCG / Cotto / Duragres. A rep searching the brand on their own deal got
   // "ไม่พบสินค้าที่ตรงกัน". `numberFormat: 'us'` — Thai price lists use a decimal point.
-  { factoryId: 10, name: 'SCG Ceramics',      country: 'Thailand', numberFormat: 'us' },
-  { factoryId: 11, name: 'Cotto Industry',    country: 'Thailand', numberFormat: 'us' },
-  { factoryId: 12, name: 'Duragres Thailand', country: 'Thailand', numberFormat: 'us' },
+  { factoryId: 10, name: 'SCG Ceramics',      country: 'TH', defaultCurrency: 'THB', numberFormat: 'us', email: null, unit: 'box' },
+  { factoryId: 11, name: 'Cotto Industry',    country: 'TH', defaultCurrency: 'THB', numberFormat: 'us', email: null, unit: 'piece' },
+  { factoryId: 12, name: 'Duragres Thailand', country: 'TH', defaultCurrency: 'THB', numberFormat: 'us', email: null, unit: 'piece' },
 ];
 
 // Two separate ID spaces, deliberately. priceImport.upload() used to mint version
@@ -958,9 +1027,6 @@ let mockPricingRequestEventSeq = 1;
 const mockFactoryQuotes = [];
 const mockPricingCostings = [];
 const mockFactoryQuoteResponseReceipts = [];
-// clientRequestId -> quoteId, for sendFactoryQuote()'s idempotency replay (mirrors
-// sales.factory_quote_email_dispatch's unique (created_by, client_request_id) index).
-const mockFactoryQuoteDispatchClientRequests = [];
 let mockFactoryQuoteSeq = 1;
 let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
@@ -1052,32 +1118,10 @@ function findPricingRequestRaw(id) {
   return pr;
 }
 
-// Mock stand-in for FactoryQuoteEmailDispatchWorker: send() only enqueues (dispatchStatus:
-// 'PENDING'); this simulates the background worker claiming it (-> 'SENDING') and finalizing it
-// (-> 'SENT', quote -> REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) a
-// short delay later, so PricingRequestDetailPage's polling has something real to observe.
-function scheduleMockFactoryQuoteDispatch(quote, actor) {
-  quote.dispatchStatus = 'SENDING';
-  quote.dispatchAttemptCount = 1;
-  setTimeout(() => {
-    const current = mockFactoryQuotes.find((q) => q.id === quote.id);
-    // Guard against a quote that moved on (e.g. was cancelled) while "in flight" — the closest
-    // mock equivalent of the real worker's guarded, idempotent finalize.
-    if (!current || current.status !== 'DRAFT' || current.dispatchStatus !== 'SENDING') return;
-    current.status = 'REQUESTED';
-    current.emailSentAt = new Date().toISOString();
-    current.requestedAt = current.emailSentAt;
-    current.sentBy = actor.id;
-    current.updatedAt = current.emailSentAt;
-    current.dispatchStatus = 'SENT';
-    const pr = findPricingRequestRaw(current.pricingRequestId);
-    const fromStatus = pr.status;
-    // Mirrors FactoryQuoteService.attemptSend: V140 merged COSTING_IN_PROGRESS into
-    // AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the only status still needing promotion.
-    if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
-    pushPricingRequestEvent(pr, actor, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
-  }, 700);
-}
+// scheduleMockFactoryQuoteDispatch (the mock stand-in for FactoryQuoteEmailDispatchWorker) is
+// retired along with the real worker it mirrored: factory RFQ email is manual-only now, and
+// sendFactoryQuote below performs its DRAFT -> REQUESTED transition synchronously, in one call,
+// matching FactoryQuoteService.send()'s own javadoc.
 
 // Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors
 // FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately
@@ -8417,7 +8461,9 @@ export const api = {
     },
   },
 
-  // Mirrors FactoryConfigController + FactoryEmailService (factory/).
+  // Mirrors FactoryConfigController (factory/). FactoryEmailService is DELETED (review
+  // remediation: this header used to still name it) — factory RFQ email is manual-only now, so
+  // there is no email-sending service left on this surface to mirror.
   // #388: list() mirrors FactoryConfigController.READ_ROLES = ceo/import — the
   // supplier directory is procurement data. It was requireSession() before.
   factoryConfigs: {
@@ -8425,13 +8471,8 @@ export const api = {
       hasRole('ceo', 'import');
       return delay({ factories: mockFactoryConfigs });
     },
-    async sendEmail(ticketId, payload) {
-      // Mirrors TicketService.assertFactoryEmailAllowed: import role + real ticket.
-      hasRole('import');
-      findTicketRaw(Number(ticketId));
-      console.log(`[mock] Factory email sent | ticket=${ticketId} factory=${payload.factory} to=${payload.to}`);
-      return delay({ status: 'sent' });
-    },
+    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
+    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.sendFactoryQuote.
   },
 
   // Mirrors FxRateController + BotFxFetchService (pricing/).
@@ -8895,22 +8936,68 @@ export const api = {
       hasRole('ceo', 'import');
       return delay(mockPriceImportFactories);
     },
-    async createFactory(name, country, defaultCurrency) {
-      // #205: PriceImportController now gates every endpoint (including reads) to
-      // ceo/import via requireImporter(session) — mirror that here.
+    // V163 + #205: country is now REQUIRED and validated against the real price_catalog.country
+    // roster (countries() below) — mirrors PriceImportService.createFactory/requireValidCountry.
+    // A blank/unseeded country used to reach price_catalog.factories' NOT NULL + FK column and
+    // 500; here it fails the same clean 400 the real service now raises. email/unit are the two
+    // RFQ fields V163 folded onto this table from the dropped sales.factory_config.
+    async createFactory(name, country, defaultCurrency, email, unit) {
       hasRole('ceo', 'import');
       if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
+      const trimmedName = String(name).trim();
+      const countryCode = requireValidMockCountry(country);
+      if (mockPriceImportFactories.some((f) => f.name === trimmedName)) {
+        fail(`มีโรงงานชื่อนี้อยู่แล้ว: ${trimmedName}`, 409);
+      }
       const factory = {
         factoryId: mockPriceImportFactorySeq++,
-        name: String(name).trim(),
-        country: country && String(country).trim() ? String(country).trim().toUpperCase() : null,
+        name: trimmedName,
+        country: countryCode,
         defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
           ? String(defaultCurrency).trim().toUpperCase()
           : 'EUR',
+        email: blankToNullMock(email),
+        unit: blankToNullMock(unit) ?? 'piece',
         numberFormat: 'eu',
       };
       mockPriceImportFactories.push(factory);
       return delay(factory);
+    },
+    // PUT /api/price-import/factories/{factoryId} — mirrors PriceImportService.updateFactory: 404
+    // unknown id, 400 bad country, 409 duplicate name. This is the actual fix's whole point — it's
+    // the only way จัดซื้อ can put a real RFQ email on one of the 9 real factories, which have
+    // never had one (see V163's migration header: the old email directory matched 0% of them).
+    async updateFactory(factoryId, name, country, defaultCurrency, email, unit) {
+      hasRole('ceo', 'import');
+      const fid = Number(factoryId);
+      const factory = mockPriceImportFactories.find((f) => f.factoryId === fid);
+      if (!factory) fail(`ไม่พบโรงงาน id=${fid}`, 404);
+      if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
+      const trimmedName = String(name).trim();
+      const countryCode = requireValidMockCountry(country);
+      if (mockPriceImportFactories.some((f) => f.factoryId !== fid && f.name === trimmedName)) {
+        fail(`มีโรงงานชื่อนี้อยู่แล้ว: ${trimmedName}`, 409);
+      }
+      Object.assign(factory, {
+        name: trimmedName,
+        country: countryCode,
+        defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
+          ? String(defaultCurrency).trim().toUpperCase()
+          : 'EUR',
+        email: blankToNullMock(email),
+        unit: blankToNullMock(unit) ?? 'piece',
+      });
+      return delay(factory);
+    },
+    // price_catalog.country options for the factory add/edit form's country select. Reuses
+    // MOCK_COUNTRIES — the same fixture CeoSettingsPage's freight-rate origin-country picker
+    // already reads off pricingFormulaConfig.get() — rather than a second, divergent list.
+    // Sorted by nameTh (a COPY — MOCK_COUNTRIES itself is left in its declared order, since
+    // fxRates/formula-config read that array directly) to mirror FactoryConfigRepository
+    // .listCountries()'s real `ORDER BY name_th`, not just the same five rows in some order.
+    async countries() {
+      hasRole('ceo', 'import');
+      return delay([...MOCK_COUNTRIES].sort((a, b) => a.nameTh.localeCompare(b.nameTh, 'th')));
     },
     async versions(factoryId) {
       hasRole('ceo', 'import');
@@ -9397,6 +9484,9 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
+    // Manual-RFQ redesign: mirrors FactoryQuoteService.generateDrafts, which now generates a draft
+    // for every factory that DOES resolve instead of refusing the whole batch when some lines
+    // don't (owner decision) — only an entirely-unresolved request (byFactory empty) still 422s.
     async generateFactoryEmailDrafts(id) {
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
@@ -9404,8 +9494,10 @@ export const api = {
       if (!['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'].includes(pr.status)) {
         fail('คำขอราคาต้องอยู่ระหว่างการตรวจสอบของฝ่ายนำเข้าก่อนจึงจะสร้างร่างอีเมลราคาโรงงานได้', 409);
       }
-      // Mirrors FactoryQuoteService.groupByFactory. Two things this used to get wrong, both of
-      // which mattered to the reader of the error rather than to the plumbing a mock test drives:
+      // Mirrors FactoryQuoteService.groupByFactory: a line with no resolved factory is SKIPPED,
+      // not fatal — generateDrafts (below) only refuses when NO line resolves at all. Two things
+      // this used to get wrong even before that redesign, both of which mattered to the reader of
+      // the error rather than to the plumbing a mock test drives:
       //   - it keyed on `item.factory` alone, while the Java resolves
       //     firstText(resolvedFactoryName, factory) — a catalog-resolved line with no free-text
       //     factory 422'd here and succeeded in production;
@@ -9422,21 +9514,37 @@ export const api = {
         }
         byFactory.set(factoryName, [...(byFactory.get(factoryName) ?? []), item]);
       });
-      if (missingFactory.length) {
+      if (byFactory.size === 0) {
         fail(`ยังไม่ได้ระบุโรงงานสำหรับ ${missingFactory.join(', ')} — กรุณาระบุโรงงานในรายการสินค้าก่อนสร้างร่างอีเมล`, 422);
       }
       for (const [factoryName, items] of byFactory) {
         const exists = mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.factoryName === factoryName && q.current);
         if (exists) continue;
         const quoteId = mockFactoryQuoteSeq++;
+        // Resolves the RFQ recipient off price_catalog.factories (mockPriceImportFactories) by
+        // exact name — mirrors FactoryConfigRepository.findByName, which V163 repointed at that
+        // same real master-data table. Before V163 this always resolved null in production (the
+        // old sales.factory_config directory matched 0% of the real factories by name), which is
+        // the defect this whole change fixes — an email set via priceImport.updateFactory now
+        // actually shows up on the next draft generated for that factory.
+        const factoryConfig = mockPriceImportFactories.find((f) => f.name === factoryName);
+        // Review remediation (MEDIUM 8): factoryId used to come from this SAME name lookup
+        // (factoryConfig?.factoryId), but FactoryQuoteService.generateDrafts does not resolve it
+        // that way — it takes the first non-null item.resolvedFactoryId() among this factory's
+        // OWN items instead (a per-item catalog snapshot, not a name-keyed master-data lookup).
+        // The two normally agree, but only the Java's own resolution is authoritative, and a line
+        // with no catalog link at all (free-text factory, no resolvedFactoryId on ANY item in the
+        // group) correctly yields null here exactly as it does there, rather than papering over
+        // it with whatever factoryConfig happens to name-match.
+        const factoryId = items.map((item) => item.resolvedFactoryId).find((id) => id != null) ?? null;
         mockFactoryQuotes.push({
           id: quoteId,
           quoteCode: `FQ-2026-${String(quoteId).padStart(4, '0')}`,
           pricingRequestId: pr.id,
-          factoryId: null,
+          factoryId,
           factoryName,
           status: 'DRAFT',
-          emailTo: null,
+          emailTo: factoryConfig?.email ?? null,
           emailSubject: `Pricing request ${pr.requestCode}`,
           emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
           emailSentAt: null,
@@ -9457,13 +9565,6 @@ export const api = {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           attachments: [],
-          // Mirrors FactoryQuoteDto's dispatchStatus/dispatchAttemptCount/dispatchFailureMessage/
-          // dispatchNextAttemptAt: the outbox worker's state for this quote's most recent send.
-          // Null until sendFactoryQuote() enqueues one.
-          dispatchStatus: null,
-          dispatchAttemptCount: 0,
-          dispatchFailureMessage: null,
-          dispatchNextAttemptAt: null,
           items: items.map((item, i) => ({
             id: mockFactoryQuoteItemSeq++,
             factoryQuoteId: quoteId,
@@ -9522,40 +9623,41 @@ export const api = {
       return delay({ factoryQuote: quote });
     },
 
-    // Mirrors FactoryQuoteService.send(): enqueue-only. The actual "send + finalize" (quote ->
-    // REQUESTED, pricing request status transition, FACTORY_EMAIL_SENT event) happens out-of-band
-    // a moment later via scheduleMockFactoryQuoteDispatch(), the mock stand-in for
-    // FactoryQuoteEmailDispatchWorker, so the frontend can exercise the same
-    // pending/sending/sent-with-a-delay UX it will see against the real backend.
+    /**
+     * Manual-only RFQ send (owner decision — the automatic dispatch/outbox path is deleted).
+     * Mirrors FactoryQuoteService.send(): records that a human already sent this email from their
+     * own mail client — DRAFT -> REQUESTED, synchronously, with no out-of-band worker in between.
+     * `clientRequestId` is GONE from the payload (there is no dispatch to replay against any
+     * more); calling this again once the quote is already REQUESTED is a no-op, matching the real
+     * service's own idempotent-by-status behaviour. `emailTo` is OPTIONAL — a human may mark an
+     * RFQ sent even with no factory contact email on file.
+     */
     async sendFactoryQuote(id, payload = {}) {
       const user = hasRole('import');
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
-      if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
       if (quote.status === 'REQUESTED') return delay({ factoryQuote: quote });
       if (quote.status !== 'DRAFT') fail('ส่งได้เฉพาะอีเมลราคาโรงงานที่ยังเป็นฉบับร่างเท่านั้น', 409);
-      const existingForClient = mockFactoryQuoteDispatchClientRequests.find(
-        (d) => d.clientRequestId === payload.clientRequestId
-      );
-      if (existingForClient) {
-        if (existingForClient.quoteId !== quote.id) {
-          fail('clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น', 409);
-        }
-        return delay({ factoryQuote: quote });
-      }
-      if (quote.dispatchStatus && ['PENDING', 'SENDING', 'SENT'].includes(quote.dispatchStatus)) {
-        return delay({ factoryQuote: quote });
-      }
-      quote.emailTo = payload.emailTo ?? quote.emailTo;
-      quote.emailSubject = payload.emailSubject ?? quote.emailSubject;
-      quote.emailBody = payload.emailBody ?? quote.emailBody;
-      quote.updatedAt = new Date().toISOString();
-      mockFactoryQuoteDispatchClientRequests.push({ clientRequestId: payload.clientRequestId, quoteId: quote.id });
-      quote.dispatchStatus = 'PENDING';
-      quote.dispatchAttemptCount = 0;
-      quote.dispatchFailureMessage = null;
-      quote.dispatchNextAttemptAt = null;
-      scheduleMockFactoryQuoteDispatch(quote, user);
+      // Mirrors FactoryQuoteService.firstText: the payload wins only when it supplies a non-blank
+      // value, so submitting a blank recipient does not blank out an emailTo already on the draft.
+      const firstNonBlank = (first, fallback) => {
+        const trimmed = typeof first === 'string' ? first.trim() : first;
+        return trimmed ? trimmed : fallback;
+      };
+      quote.emailTo = firstNonBlank(payload.emailTo, quote.emailTo) ?? null;
+      quote.emailSubject = firstNonBlank(payload.emailSubject, quote.emailSubject) ?? null;
+      quote.emailBody = firstNonBlank(payload.emailBody, quote.emailBody) ?? null;
+      quote.status = 'REQUESTED';
+      quote.emailSentAt = new Date().toISOString();
+      quote.requestedAt = quote.emailSentAt;
+      quote.sentBy = user.id;
+      quote.updatedAt = quote.emailSentAt;
+      const pr = findPricingRequestRaw(quote.pricingRequestId);
+      const fromStatus = pr.status;
+      // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is
+      // the only status still needing promotion here — mirrors FactoryQuoteService.send().
+      if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
+      pushPricingRequestEvent(pr, user, 'FACTORY_EMAIL_SENT', fromStatus, pr.status);
       return delay({ factoryQuote: quote });
     },
 

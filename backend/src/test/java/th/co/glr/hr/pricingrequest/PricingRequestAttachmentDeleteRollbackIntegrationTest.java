@@ -186,11 +186,6 @@ class PricingRequestAttachmentDeleteRollbackIntegrationTest extends AbstractPost
 
     /** A DRAFT pricing request on a ticket the fixture rep created — deleteAttachment's only editable state. */
     private long draftPricingRequest() {
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'factory-prdel@example.com', 'THB', 'piece', 'Thailand')
-            ON CONFLICT (factory_name) DO UPDATE SET email = EXCLUDED.email
-            """, Map.of("name", "Factory PrDelete"));
         long productId = insertCatalogProduct("Factory PrDelete", "TH", "TEST-PRDEL-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         long ticketId = tickets.create(

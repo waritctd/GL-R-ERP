@@ -41,7 +41,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -90,8 +89,9 @@ import th.co.glr.hr.ticket.TicketService;
 
 /**
  * Composition UAT for the ENTIRE sales pricing chain (Steps 1-4), driven end to end on a single
- * deal through the real services — no mocks except the collaborator the per-step tests
- * themselves already mock ({@link FactoryEmailService}). Every
+ * deal through the real services — no mocks at all. Factory RFQ email is manual-only
+ * ({@code FactoryQuoteService#send} just records that a human sent it — see the class javadoc),
+ * so there is no mail-provider collaborator left to mock here. Every
  * state transition below is produced by calling the real service that owns it; nothing is
  * hand-rolled via SQL to skip a step. The point of this file is NOT to re-prove any single
  * step's own business rules (unit-conversion math, idempotency, concurrency, etc. — all
@@ -150,16 +150,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
@@ -167,7 +157,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
@@ -201,14 +191,6 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         // price_calc_config row already seeded by V26 — see that migration), so the chain
         // exercises real freight/insurance/duty/inland arithmetic end to end, not the all-zero
         // shortcut some per-step tests use for isolating unit-conversion math.
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES
-                (:factoryA, 'factory-a-chain@example.com', 'THB', 'piece', 'Italy'),
-                (:factoryB, 'factory-b-chain@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of("factoryA", FACTORY_A, "factoryB", FACTORY_B));
         catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "IT", "TEST-CHAIN-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-CHAIN-B-001",
@@ -254,7 +236,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
              WHERE pricing_request_id = :id AND catalog_price_id IS NOT NULL AND catalog_base_price IS NOT NULL
             """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(2L);
 
-        // ── Step 1 -> 2 handoff: pickup, generate drafts, send via the real outbox worker ──
+        // ── Step 1 -> 2 handoff: pickup, generate drafts, send (manual-RFQ, synchronous) ──
         pricingRequestService.pickup(pricingRequestId, importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
@@ -267,12 +249,12 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         long itemBId = draftB.items().get(0).pricingRequestItemId();
 
         factoryQuoteService.send(draftA.id(),
-            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null, UUID.randomUUID().toString()),
+            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null),
             importActor);
         factoryQuoteService.send(draftB.id(),
-            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null, UUID.randomUUID().toString()),
+            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null),
             importActor);
-        drainDispatches(); // real outbox worker path — the actual send() codepath production uses
+        drainDispatches(); // no-op now — send() above already completed synchronously
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.pricing_request_event
              WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
@@ -577,10 +559,10 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         long itemBId = draftB.items().get(0).pricingRequestItemId();
 
         factoryQuoteService.send(draftA.id(),
-            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null, UUID.randomUUID().toString()),
+            new SendFactoryQuoteRequest("factory-a-chain@example.com", null, null),
             importActor);
         factoryQuoteService.send(draftB.id(),
-            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null, UUID.randomUUID().toString()),
+            new SendFactoryQuoteRequest("factory-b-chain@example.com", null, null),
             importActor);
         drainDispatches();
 
@@ -658,33 +640,15 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             .findFirst().orElseThrow();
     }
 
-    /** Simulates one outbox worker tick draining everything currently claimable — the actual
-     * production codepath send() enqueues onto, not a shortcut around it. */
     /**
-     * A single {@link FactoryQuoteService#claimableDispatchIds()} call is not guaranteed to
-     * return every dispatch this test just enqueued — the real production worker
-     * ({@code FactoryQuoteEmailDispatchWorker}) is a {@code @Scheduled} loop that self-heals over
-     * repeated ticks by design (a dispatch that is transiently unclaimed on one tick is picked up
-     * on the next), so a test helper that only calls it ONCE is testing a weaker guarantee than
-     * production actually provides. Observed on CI (not reproducible locally in 5/5 isolated runs
-     * or repeated full-suite runs): one of two same-test dispatches was left un-finalized after a
-     * single pass, failing this test's own FACTORY_EMAIL_SENT count assertion. Loop like the real
-     * worker does, bounded so a GENUINELY stuck dispatch (permanently FAILED past its attempt cap)
-     * still fails loudly instead of hanging.
+     * No-op now — kept, empty, as a call-site marker. It used to drive the async outbox worker's
+     * claim/send/finalize loop to completion after {@code FactoryQuoteService.send()} only
+     * enqueued a dispatch row; that worker was deleted when factory RFQ email became manual-only
+     * (owner decision — see {@code FactoryQuoteService#send}'s javadoc), and {@code send()} itself
+     * is now synchronous, so there is nothing left to drain.
      */
     private void drainDispatches() {
-        for (int tick = 0; tick < 10; tick++) {
-            List<Long> claimable = factoryQuoteService.claimableDispatchIds();
-            if (claimable.isEmpty()) {
-                return;
-            }
-            for (long id : claimable) {
-                factoryQuoteService.processDispatch(id);
-            }
-        }
-        assertThat(factoryQuoteService.claimableDispatchIds())
-            .as("dispatches still claimable after 10 drain ticks — a dispatch is genuinely stuck, not just transiently delayed")
-            .isEmpty();
+        // Intentionally empty — see javadoc above.
     }
 
     private FactoryQuoteDto quoteFor(List<FactoryQuoteDto> quotes, String factoryName) {

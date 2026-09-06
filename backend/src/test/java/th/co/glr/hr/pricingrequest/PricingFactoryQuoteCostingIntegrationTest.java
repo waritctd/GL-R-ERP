@@ -34,7 +34,6 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -45,7 +44,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteAttachmentDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
@@ -91,9 +89,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     // PricingDecisionService#startReview/recalculateCost instead.
     private PricingDecisionService pricingDecisionService;
     private LandedCostCalculator landedCostCalculator;
-    private FactoryEmailService factoryEmail;
     private NotificationRepository notificationRepository;
-    private AppProperties dispatchProperties;
 
     private long salesRepId;
     private long importUserId;
@@ -135,18 +131,6 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
         notificationRepository = notifications;
-        factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString(),
-            ArgumentMatchers.any(), ArgumentMatchers.any())).thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString(),
-            ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.anyList())).thenReturn(UUID.randomUUID().toString());
-        // Small, deterministic values so the reclaim/backoff/attempt-cap tests below run fast and
-        // without flakiness, instead of the production defaults (120s reclaim, 8 attempts).
-        dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
@@ -154,8 +138,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
             new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
+            new FactoryConfigRepository(jdbc), notifications,
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), landedCostCalculator);
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
         // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
         // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
@@ -183,33 +167,29 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
         // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
         // open-ended, so ANY quantity resolves — see that helper's own comment).
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES
-                ('Factory A', 'factory-a@example.com', 'THB', 'piece', 'Italy'),
-                ('Factory B', 'factory-b@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email,
-                currency = EXCLUDED.currency,
-                unit = EXCLUDED.unit,
-                country = EXCLUDED.country
-            """, Map.of());
+        //
+        // V163 merged sales.factory_config (email/unit) onto price_catalog.factories and dropped
+        // the former table, so the RFQ email/unit fixture is now an UPDATE on the row
+        // insertCatalogProduct creates (by name), run right after it, instead of a separate INSERT.
         catalogProductIdFactoryA = insertCatalogProduct("Factory A", "IT", "TEST-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B", "IT", "TEST-B-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-
         jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C', 'factory-c@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email,
-                currency = EXCLUDED.currency,
-                unit = EXCLUDED.unit,
-                country = EXCLUDED.country
+            UPDATE price_catalog.factories SET email = 'factory-a@example.com', unit = 'piece'
+             WHERE name = 'Factory A'
             """, Map.of());
+        jdbc.update("""
+            UPDATE price_catalog.factories SET email = 'factory-b@example.com', unit = 'piece'
+             WHERE name = 'Factory B'
+            """, Map.of());
+
         catalogProductIdFactoryC = insertCatalogProduct("Factory C", "IT", "TEST-C-001",
             new BigDecimal("100.00"), "THB", "per_piece");
+        jdbc.update("""
+            UPDATE price_catalog.factories SET email = 'factory-c@example.com', unit = 'piece'
+             WHERE name = 'Factory C'
+            """, Map.of());
 
         CustomerDto customer = customers.create(
             "บริษัท Step 2 จำกัด", "0100000000001", "123 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0001");
@@ -238,11 +218,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto factoryB = quoteFor(drafts, "Factory B");
 
         factoryQuoteService.send(factoryA.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", null, null,
-                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), secondImportActor);
+            new SendFactoryQuoteRequest("factory-a@example.com", null, null), secondImportActor);
         factoryQuoteService.send(factoryB.id(),
-            new SendFactoryQuoteRequest("factory-b@example.com", null, null,
-                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"), secondImportActor);
+            new SendFactoryQuoteRequest("factory-b@example.com", null, null), secondImportActor);
         // send() only enqueues; the outbox worker (simulated here by draining the queue directly)
         // is what actually calls the mail provider and finalizes quote/pricing-request state.
         drainDispatches();
@@ -388,397 +366,6 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     @Test
-    void factoryQuoteSendIsIdempotentForClientRequestIdAndDoesNotSendTwice() {
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("33333333-3333-4333-8333-333333333333"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-
-        SendFactoryQuoteRequest send = new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body",
-            "dddddddd-dddd-4ddd-8ddd-dddddddddddd");
-        factoryQuoteService.send(draft.id(), send, importActor);
-        factoryQuoteService.send(draft.id(), send, importActor);
-
-        // Enqueue-only: two calls with the same clientRequestId must still resolve to exactly one
-        // dispatch row, and send() itself must never have touched the mail provider.
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.factory_quote_email_dispatch WHERE factory_quote_id = :quoteId
-            """, Map.of("quoteId", draft.id()), Long.class)).isEqualTo(1L);
-        verify(factoryEmail, times(0)).send(ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(),
-            ArgumentMatchers.anyString(), ArgumentMatchers.any(), ArgumentMatchers.any());
-        assertThat(factoryQuoteService.get(draft.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.DRAFT);
-
-        drainDispatches();
-
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*)
-              FROM sales.factory_quote_email_dispatch
-             WHERE factory_quote_id = :quoteId
-               AND status = 'SENT'
-            """, Map.of("quoteId", draft.id()), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*)
-              FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id
-               AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-
-        // Draining again (an idle worker tick finding nothing claimable) must not resend.
-        drainDispatches();
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-    }
-
-    // ---- Outbox worker: crash-window recovery (COMMIT 2) ----------------------------------
-
-    @Test
-    void dispatchClaimedRowIsNotReclaimedBeforeTimeoutButIsReclaimedAndSentAfterIt() throws Exception {
-        // Simulates window A from the review finding: the app crashes right after claiming a
-        // dispatch (SENDING) but before ever calling the mail provider. The row must stay
-        // un-reclaimable until the configured timeout elapses (dispatchProperties: 2s here), and
-        // must become claimable and completable once it does.
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-1111-4111-8111-a00000000001"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENDING");
-        // Simulate the crash: no attemptSend/finalizeDispatch call here at all.
-
-        // Immediately after: still within the reclaim timeout, must NOT be reclaimable.
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isFalse();
-
-        Thread.sleep(2200); // past dispatchProperties' 2s reclaimTimeoutSeconds
-
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId);
-        factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(factoryQuoteService.get(draft.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENT");
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-    }
-
-    @Test
-    void dispatchCrashedAfterProviderSuccessBeforeFinalizeIsCompletedByTheNextClaimWithoutDuplicatingAuditTrail() {
-        // Window B: the provider accepted the email but the app crashed before finalize ran at
-        // all. attemptSend() persists provider_message_id right after the provider call succeeds
-        // (simulating that step completing before the crash); finalizeDispatch() is then called
-        // directly, standing in for "the next claim completes finalization."
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-2222-4222-8222-a00000000002"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId); // provider "succeeds" — crash happens right after this
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENDING"); // finalize never ran
-
-        FactoryQuoteDto finalized = factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(finalized.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENT");
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE link = :link AND type = 'FACTORY_EMAIL_SENT'
-            """, Map.of("link", "/pricing-requests/" + pricingRequestId), Long.class)).isEqualTo(1L);
-        // The email itself must never be sent a second time by any later step.
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-        factoryQuoteService.attemptSend(dispatchId); // a later reclaim attempting to (re)send is a no-op
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-    }
-
-    @Test
-    void dispatchReFinalizeAfterPartialCrashCompletesTheRestWithoutDuplicatingAlreadyWrittenParts() {
-        // Window C, deliberately reproduced at the granularity finalizeDispatch() must tolerate:
-        // the quote and pricing request already reached their post-send state (as an earlier,
-        // interrupted finalize attempt would have left them, since those two steps are individually
-        // idempotent) but the event/notification/finalized_at were never written. finalizeDispatch()
-        // must complete the missing parts without erroring on the already-applied ones.
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-3333-4333-8333-a00000000003"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId);
-
-        // Hand-roll the partial state an interrupted finalize would have left: quote -> REQUESTED
-        // and pricing request -> AWAITING_FACTORY_RESPONSE, but nothing else.
-        jdbc.update("UPDATE sales.factory_quote SET status = 'REQUESTED', requested_at = now() WHERE factory_quote_id = :id",
-            Map.of("id", draft.id()));
-        jdbc.update("UPDATE sales.pricing_request SET status = 'AWAITING_FACTORY_RESPONSE' WHERE pricing_request_id = :id",
-            Map.of("id", pricingRequestId));
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isZero();
-
-        FactoryQuoteDto finalized = factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(finalized.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENT");
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE link = :link AND type = 'FACTORY_EMAIL_SENT'
-            """, Map.of("link", "/pricing-requests/" + pricingRequestId), Long.class)).isEqualTo(1L);
-    }
-
-    @Test
-    void finalizeDispatchCalledAgainAfterFullCompletionIsANoOp() {
-        // Once a dispatch is fully finalized, calling finalizeDispatch() again (e.g. an
-        // overlapping worker tick) must not re-run the event/notification steps. This is covered
-        // by BOTH guards finalizeDispatch carries (finalizedAt != null short-circuits the whole
-        // method; existsEventForDispatch additionally guards the insert itself), so it is not a
-        // clean mutation target for either guard in isolation — see
-        // dispatchFinalizeSkipsDuplicateEventAndNotificationWhenReRunAfterEventAlreadyWritten below
-        // for the test that isolates existsEventForDispatch specifically.
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-4444-4444-8444-a00000000004"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId);
-        factoryQuoteService.finalizeDispatch(dispatchId);
-
-        FactoryQuoteDto again = factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(again.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE link = :link AND type = 'FACTORY_EMAIL_SENT'
-            """, Map.of("link", "/pricing-requests/" + pricingRequestId), Long.class)).isEqualTo(1L);
-        verify(factoryEmail, times(1)).send(ticketId, "Factory A", "factory-a@example.com", "Subject", "Body", java.util.List.of());
-    }
-
-    @Test
-    void dispatchFinalizeSkipsDuplicateEventAndNotificationWhenReRunAfterEventAlreadyWritten() {
-        // Regression for the review defect (processDispatch's self-invocation of finalizeDispatch
-        // silently disabled @Transactional in production, since a self-call inside the same class
-        // bypasses the Spring AOP proxy). That meant a crash between addEvent/notifyCeo and
-        // markDispatchFinalized could leave the event/notification already committed with
-        // finalized_at still NULL — the one state the old finalizedAt-only guard could NOT detect.
-        // This test constructs exactly that state directly (bypassing finalizeDispatch entirely,
-        // the way a proxy-bypassed partial commit would have left it) and proves finalizeDispatch's
-        // existsEventForDispatch guard catches it even though finalizedAt is null.
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-9999-4999-8999-a00000000009"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId);
-
-        // Hand-roll everything a (buggy, non-atomic) finalize would have committed up through
-        // notifyCeo, but NOT the final markDispatchFinalized write — the dangerous partial state.
-        jdbc.update("""
-            UPDATE sales.factory_quote SET status = 'REQUESTED', requested_at = now() WHERE factory_quote_id = :id
-            """, Map.of("id", draft.id()));
-        jdbc.update("""
-            UPDATE sales.pricing_request SET status = 'AWAITING_FACTORY_RESPONSE' WHERE pricing_request_id = :id
-            """, Map.of("id", pricingRequestId));
-        pricingRequests.addEvent(pricingRequestId, ticketId, importUserId, importActor.name(), "FACTORY_EMAIL_SENT",
-            "IMPORT_REVIEWING", "AWAITING_FACTORY_RESPONSE", "Factory request sent to Factory A",
-            "{\"dispatchId\":" + dispatchId + "}");
-        notificationRepository.notifyByRoleForPricingRequest("ceo", pricingRequestId, "FACTORY_EMAIL_SENT",
-            "คำขอราคา ทดสอบ ส่งคำขอโรงงาน Factory A");
-        assertThat(dispatchFinalizedAt(dispatchId)).isNull();
-
-        FactoryQuoteDto finalized = factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(finalized.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENT");
-        assertThat(dispatchFinalizedAt(dispatchId)).isNotNull();
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE link = :link AND type = 'FACTORY_EMAIL_SENT'
-            """, Map.of("link", "/pricing-requests/" + pricingRequestId), Long.class)).isEqualTo(1L);
-    }
-
-    @Test
-    void dispatchFinalizeRollsBackEntirelyOnFailureAfterEventInsertThenCleanRetryWritesEachAuditRecordOnce() {
-        // Proves — rather than asserts — that finalizeDispatch is atomic when genuinely entered
-        // through a transaction proxy, which is what the production worker now relies on since
-        // orchestration moved out of processDispatch() into
-        // FactoryQuoteEmailDispatchWorker.pollAndDispatch() (three separate calls into the
-        // Spring-proxied bean). AbstractPostgresIntegrationTest has no Spring proxy at all, so —
-        // mirroring the pattern commit 1's concurrency tests established for getting genuine
-        // transactional coverage in this harness — finalizeDispatch is driven through an explicit
-        // TransactionTemplate bound to the same DataSource the test's `jdbc` uses. A
-        // NotificationRepository stub throws from inside notifyCeo, i.e. AFTER addEvent has
-        // already executed its INSERT within that same transaction, and the assertion is that
-        // NOTHING committed — not even the event insert that ran first.
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-8888-4888-8888-a00000000008"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-        assertThat(factoryQuoteService.claimDispatch(dispatchId)).isTrue();
-        factoryQuoteService.attemptSend(dispatchId);
-
-        NotificationRepository throwingNotifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP) {
-            @Override
-            public void notifyByRoleForPricingRequest(String role, long pricingRequestIdArg, String type, String message) {
-                throw new RuntimeException("simulated notification failure");
-            }
-        };
-        FactoryQuoteService crashingService = new FactoryQuoteService(factoryQuoteRepository, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, throwingNotifications,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
-
-        var txManager = new org.springframework.jdbc.datasource.DataSourceTransactionManager(
-            jdbc.getJdbcTemplate().getDataSource());
-        var txTemplate = new org.springframework.transaction.support.TransactionTemplate(txManager);
-
-        assertThatThrownBy(() -> txTemplate.execute(status -> crashingService.finalizeDispatch(dispatchId)))
-            .isInstanceOf(RuntimeException.class)
-            .hasMessageContaining("simulated notification failure");
-
-        // Full rollback: quote still DRAFT, pricing request untouched, no event, finalized_at
-        // still null — the event insert that ran before the throw did NOT survive.
-        assertThat(factoryQuoteService.get(draft.id(), importActor).status()).isEqualTo(FactoryQuoteStatus.DRAFT);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isZero();
-        assertThat(dispatchFinalizedAt(dispatchId)).isNull();
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENDING");
-
-        // A clean re-finalize (working notifications) now completes exactly once.
-        FactoryQuoteDto finalized = factoryQuoteService.finalizeDispatch(dispatchId);
-
-        assertThat(finalized.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.pricing_request_event
-             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
-            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE link = :link AND type = 'FACTORY_EMAIL_SENT'
-            """, Map.of("link", "/pricing-requests/" + pricingRequestId), Long.class)).isEqualTo(1L);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENT");
-    }
-
-    @Test
-    void dispatchRetryCapIsRespectedAndBackoffIsObserved() {
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-5555-4555-8555-a00000000005"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-
-        FactoryEmailService failingEmail = mock(FactoryEmailService.class);
-        when(failingEmail.send(ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString(),
-            ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.anyList()))
-            .thenThrow(new RuntimeException("smtp unreachable"));
-        FactoryQuoteService failingService = new FactoryQuoteService(factoryQuoteRepository, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), failingEmail, notificationRepository,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator);
-
-        failingService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-
-        int maxAttempts = dispatchProperties.getFactoryQuoteDispatch().getMaxAttempts();
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            failingService.processDispatch(dispatchId);
-            assertThat(dispatchAttemptCount(dispatchId)).isEqualTo(attempt);
-            assertThat(dispatchStatus(dispatchId)).isEqualTo("FAILED");
-            assertThat(dispatchNextAttemptAt(dispatchId)).isAfter(java.time.Instant.now());
-            // Fast-forward past this attempt's backoff so the loop's next claim (or the final
-            // out-of-cap assertion below) is not blocked on real wall-clock time.
-            jdbc.update("""
-                UPDATE sales.factory_quote_email_dispatch
-                   SET next_attempt_at = now() - interval '1 second'
-                 WHERE factory_quote_email_dispatch_id = :id
-                """, Map.of("id", dispatchId));
-        }
-
-        // attempt_count now equals maxAttempts: even though next_attempt_at is due, the cap
-        // itself must stop further claims — this is what actually leaves it FAILED for good.
-        assertThat(failingService.claimDispatch(dispatchId)).isFalse();
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("FAILED");
-        assertThat(dispatchAttemptCount(dispatchId)).isEqualTo(maxAttempts);
-        verify(failingEmail, times(maxAttempts)).send(ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(),
-            ArgumentMatchers.anyString(), ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.anyList());
-    }
-
-    @Test
-    void twoWorkersCannotBothClaimTheSameDispatchRow() throws Exception {
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            pricingRequest("a0000000-6666-4666-8666-a00000000006"), salesActor).summary().id();
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        long dispatchId = dispatchIdForQuote(draft.id());
-
-        Callable<Boolean> claimTask = () -> factoryQuoteService.claimDispatch(dispatchId);
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            Future<Boolean> first = executor.submit(claimTask);
-            Future<Boolean> second = executor.submit(claimTask);
-            boolean firstClaimed = first.get(10, TimeUnit.SECONDS);
-            boolean secondClaimed = second.get(10, TimeUnit.SECONDS);
-
-            assertThat(firstClaimed ^ secondClaimed).isTrue();
-        } finally {
-            executor.shutdownNow();
-        }
-        assertThat(dispatchAttemptCount(dispatchId)).isEqualTo(1);
-        assertThat(dispatchStatus(dispatchId)).isEqualTo("SENDING");
-    }
-
-    @Test
     void firstFactoryResponseOnMultiFactoryRequestMovesToAwaitingFactoryResponse_andMarkingItReadyAloneDoesNotAdvanceEither() {
         // Regression for the review finding, extended for V141 ("CEO owns costing"): a single
         // factory answering (and even being marked READY_FOR_COSTING) on a multi-factory pricing
@@ -902,8 +489,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // landedCostCalculator is deliberately the UNSPIED one: isFullyResolvable must read the
         // database exactly as production does, through this thread's own transaction.
         FactoryQuoteService racing = transactional(new FactoryQuoteService(racingQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notificationRepository,
-            new FileStorageService("/tmp/glr-pricing-test-uploads"), dispatchProperties, landedCostCalculator));
+            new FactoryConfigRepository(jdbc), notificationRepository,
+            new FileStorageService("/tmp/glr-pricing-test-uploads"), landedCostCalculator));
 
         Callable<Long> firstImportUser = () -> racing.markReadyForCosting(respondedA.id(), importActor).id();
         Callable<Long> secondImportUser = () -> racing.markReadyForCosting(respondedB.id(), secondImportActor).id();
@@ -1406,33 +993,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /** Outgoing factory email carries Pricing Request attachments Import marked for inclusion. */
-    @Test
-    void factoryEmailDispatch_attachesPricingRequestAttachmentsMarkedIncludeInFactoryEmail() {
-        long pricingRequestId = pricingRequestService.createDraft(ticketId,
-            singleFactoryPricingRequest("a1000000-0005-4005-8005-a10000000005"), salesActor).summary().id();
-        PricingRequestDtos.PricingRequestAttachmentDto prAttachment = pricingRequestService.uploadAttachment(
-            pricingRequestId,
-            new MockMultipartFile("file", "sketch.pdf", "application/pdf", "sketch".getBytes()), salesActor);
-        pricingRequestService.submit(pricingRequestId, salesActor);
-        pricingRequestService.pickup(pricingRequestId, importActor);
-        pricingRequestService.setAttachmentIncludeInFactoryEmail(prAttachment.id(),
-            new PricingRequestRequests.UpdatePricingRequestAttachmentRequest(true), importActor);
-        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
-
-        factoryQuoteService.send(draft.id(),
-            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body", UUID.randomUUID().toString()),
-            importActor);
-        drainDispatches();
-
-        @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<List<th.co.glr.hr.factory.FactoryEmailService.EmailAttachment>> captor =
-            org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(factoryEmail).send(eq(ticketId), eq("Factory A"), eq("factory-a@example.com"), eq("Subject"), eq("Body"),
-            captor.capture());
-        assertThat(captor.getValue()).extracting(th.co.glr.hr.factory.FactoryEmailService.EmailAttachment::fileName)
-            .containsExactly("sketch.pdf");
-    }
+    // factoryEmailDispatch_attachesPricingRequestAttachmentsMarkedIncludeInFactoryEmail was
+    // removed: it pinned that Pricing Request attachments marked include-in-factory-email were
+    // threaded onto the mail provider call FactoryQuoteService.attemptSend made. That whole path
+    // (dispatch, FactoryEmailService, attachment-forwarding) was deleted when factory RFQ email
+    // became manual-only — the human composing the email now attaches whatever they choose
+    // themselves, in their own mail client, so there is nothing left in this service for that
+    // behaviour to live in.
 
     @Test
     void unitConversionRejectsMissingBoxConversionBeforeCosting() {
@@ -1645,13 +1212,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
-        // Before: the factory-email step is blocked, and it names the ROW POSITION (2), not the
-        // primary key — which is the whole reason Import could not act on the old message.
-        assertThatThrownBy(() -> factoryQuoteService.generateDrafts(pricingRequestId, importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).contains("รายการที่ 2 (Blank factory line)");
-            });
+        // Before: partial draft generation (owner decision, manual-RFQ redesign) — line 1
+        // (Factory A) resolves and gets its draft; the still-blank row 2 is skipped rather than
+        // blocking the whole batch, so this no longer throws at all.
+        List<FactoryQuoteDto> beforeDrafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        assertThat(beforeDrafts).extracting(FactoryQuoteDto::factoryName).containsExactly("Factory A");
 
         pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
             new PricingRequestRequests.SetItemFactoryRequest("  Factory B  "), importActor);
@@ -1755,12 +1320,57 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             Map.of("id", victimItemId), String.class)).isNull();
     }
 
+    /**
+     * BLOCKER 1b (review remediation): the companion guard to {@code
+     * FactoryQuoteService#generateDrafts}'s own BLOCKER 1a fix. Once Factory A's RFQ has actually
+     * been sent, its quote's item set is exactly what went out and must not silently change under
+     * Import — so filling the still-blank line onto Factory A must now be refused HERE, at the
+     * moment of the decision, instead of silently succeeding and permanently stranding the line
+     * (the pre-fix sequence: generateDrafts would skip Factory A forever because it "already has a
+     * quote", setItemFactory would 409 on any attempt to move the line elsewhere because it
+     * "already has a factory", and receive's item-set check meant the sent quote could never grow
+     * to cover it either).
+     */
     @Test
-    void generateDrafts_namesEveryBlankLineByItsRowPositionWithItsProductName() {
+    void setItemFactory_refusesWhenTheTargetFactorysQuoteHasAlreadyAdvancedPastDraft() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+        FactoryQuoteDto factoryADraft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        factoryQuoteService.send(factoryADraft.id(),
+            new SendFactoryQuoteRequest("factory-a@example.com", null, null), importActor);
+
+        assertThatThrownBy(() -> pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory A"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isNull();
+
+        // The guard is per-factory, not a blanket refusal the moment ANY quote on the request has
+        // been sent: a factory with no current quote at all must still be fillable.
+        pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory C"), importActor);
+        assertThat(jdbc.queryForObject(
+            "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", blankItemId), String.class)).isEqualTo("Factory C");
+    }
+
+    /**
+     * Partial draft generation (owner decision, manual-RFQ redesign): a request with SOME lines
+     * unresolved no longer blocks the WHOLE batch on a 422 — {@link
+     * FactoryQuoteService#groupByFactory} now simply skips a blank line, and {@link
+     * FactoryQuoteService#generateDrafts} throws only when NOTHING resolves at all (see the
+     * sibling test below). Here line 1 (Factory A) resolves; lines 2 and 3 do not — exactly one
+     * draft is created, for Factory A alone, and it contains only the resolved item.
+     */
+    @Test
+    void generateDrafts_someLinesUnresolved_stillCreatesDraftsForTheFactoriesThatDidResolve() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-                null, "THB", "blank factory test", UUID.randomUUID().toString(),
+                null, "THB", "partial factory test", UUID.randomUUID().toString(),
                 List.of(
                     pricingItem("SCG", "Tile A", "Factory A", new BigDecimal("10")),
                     factorylessPricingItem("Blank line two"),
@@ -1769,20 +1379,241 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
-        // EVERY offending line in ONE message, each by the row position the detail page renders and
-        // by the product name that page shows — not the first line only, and not by a primary key
-        // that appears nowhere on screen.
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+
+        assertThat(drafts).extracting(FactoryQuoteDto::factoryName).containsExactly("Factory A");
+        assertThat(drafts.get(0).items()).hasSize(1);
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Long.class)).isEqualTo(1L);
+    }
+
+    /**
+     * The one case that must still 422: NOTHING resolves, so generating zero drafts while
+     * returning 200 would be a silent no-op — worse than refusing outright. Keeps the informative
+     * message the batch-blocking behaviour used to always produce: EVERY offending line in ONE
+     * message, each by the row position the detail page renders and the product name that page
+     * shows — not the first line only, and not a primary key that appears nowhere on screen.
+     */
+    @Test
+    void generateDrafts_everyLineUnresolved_throws422NamingEachBlankLineByItsRowPosition() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            new PricingRequestRequests.CreatePricingRequestRequest(
+                PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+                null, "THB", "all blank factory test", UUID.randomUUID().toString(),
+                List.of(
+                    factorylessPricingItem("Blank line one"),
+                    factorylessPricingItem("Blank line two"))),
+            salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
         assertThatThrownBy(() -> factoryQuoteService.generateDrafts(pricingRequestId, importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
                 assertThat(e.getMessage())
-                    .contains("รายการที่ 2 (Blank line two)")
-                    .contains("รายการที่ 3 (Blank line three)")
-                    .doesNotContain("รายการที่ 1");
+                    .contains("รายการที่ 1 (Blank line one)")
+                    .contains("รายการที่ 2 (Blank line two)");
             });
         assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.factory_quote WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), Long.class)).isZero();
+    }
+
+    /**
+     * BLOCKER 1a (review remediation). Sequence pulled straight from the defect report: line 1
+     * resolves to Factory A immediately; line 2 starts blank, so the first {@code generateDrafts}
+     * skips it and drafts only Factory A. Import then fills line 2's factory in via {@code
+     * setItemFactory} — onto the SAME factory that already has a DRAFT quote, which is allowed
+     * because nothing has been sent yet. Re-running {@code generateDrafts} used to skip Factory A
+     * outright (it "already has a quote") and silently strand line 2 forever. Now it must ADD line
+     * 2 to the SAME existing draft — no second quote for Factory A, no lost line — and the result
+     * must be genuinely usable: receiving a response covering BOTH items must succeed, proving the
+     * previously-stranded line is actually reachable through the ordinary factory-quote lifecycle,
+     * not merely present in a list.
+     */
+    @Test
+    void generateDrafts_reRunAfterFillingABlankLineOntoAFactoryWithAnExistingDraft_addsToItInsteadOfStranding() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+
+        FactoryQuoteDto firstDraft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+        assertThat(firstDraft.status()).isEqualTo(FactoryQuoteStatus.DRAFT);
+        assertThat(firstDraft.items()).hasSize(1);
+        long firstItemId = firstDraft.items().get(0).pricingRequestItemId();
+
+        pricingRequestService.setItemFactory(pricingRequestId, blankItemId,
+            new PricingRequestRequests.SetItemFactoryRequest("Factory A"), importActor);
+
+        List<FactoryQuoteDto> secondRun = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        assertThat(secondRun).extracting(FactoryQuoteDto::factoryName).containsExactly("Factory A");
+        FactoryQuoteDto updated = secondRun.get(0);
+        assertThat(updated.id()).as("must be the SAME draft, not a second quote for Factory A")
+            .isEqualTo(firstDraft.id());
+        assertThat(updated.status()).isEqualTo(FactoryQuoteStatus.DRAFT);
+        assertThat(updated.items()).extracting(FactoryQuoteItemDto::pricingRequestItemId)
+            .containsExactlyInAnyOrder(firstItemId, blankItemId);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.factory_quote
+             WHERE pricing_request_id = :id AND factory_name_snapshot = 'Factory A'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("exactly one factory_quote row for Factory A — the add must not create a second")
+            .isEqualTo(1L);
+        // The add is its own audited event, distinct from the original draft-creation event.
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_READY'
+            """, Map.of("id", pricingRequestId), Long.class)).isEqualTo(2L);
+
+        // Proves the previously-stranded line is genuinely reachable, not merely listed: a
+        // response covering BOTH items is accepted, and the request can proceed.
+        FactoryQuoteDto received = factoryQuoteService.receive(updated.id(), new ReceiveFactoryQuoteRequest(
+                "REF-A", "THB", "30 days", "45 days", "revision", "note",
+                List.of(
+                    new ReceiveFactoryQuoteItemRequest(firstItemId, null, null, new BigDecimal("1.00"),
+                        "piece", "piece", new BigDecimal("100.00"), "THB", null, new BigDecimal("1.00"),
+                        null, null, "45 days", null, null),
+                    new ReceiveFactoryQuoteItemRequest(blankItemId, null, null, new BigDecimal("1.00"),
+                        "piece", "piece", new BigDecimal("120.00"), "THB", null, new BigDecimal("1.00"),
+                        null, null, "45 days", null, null)),
+                UUID.randomUUID().toString()),
+            importActor);
+        assertThat(received.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        assertThat(received.items()).hasSize(2);
+    }
+
+    /**
+     * A re-run must still leave a factory's quote ALONE once it has advanced past DRAFT — this is
+     * the other half of the same invariant {@link
+     * #setItemFactory_refusesWhenTheTargetFactorysQuoteHasAlreadyAdvancedPastDraft} pins from the
+     * write side. {@code setItemFactory} normally prevents this situation from arising at all, so
+     * this test reaches the item straight through the repository (bypassing that guard) to prove
+     * {@code generateDrafts} itself is defensive here too, and does not mutate a REQUESTED quote's
+     * item set even if a line somehow ends up routed to it.
+     */
+    @Test
+    void generateDrafts_reRunNeverTouchesAFactoryQuoteThatHasAlreadyBeenSent() {
+        long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
+        long blankItemId = blankFactoryItemId(pricingRequestId);
+        FactoryQuoteDto factoryADraft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+        factoryQuoteService.send(factoryADraft.id(),
+            new SendFactoryQuoteRequest("factory-a@example.com", null, null), importActor);
+
+        // Bypasses the service-level setItemFactory guard on purpose (see this test's Javadoc).
+        assertThat(pricingRequests.fillItemFactory(pricingRequestId, blankItemId, "Factory A")).isEqualTo(1);
+
+        FactoryQuoteDto afterRerun = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+        assertThat(afterRerun.id()).isEqualTo(factoryADraft.id());
+        assertThat(afterRerun.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
+        assertThat(afterRerun.items()).hasSize(1);
+        assertThat(afterRerun.items().get(0).pricingRequestItemId())
+            .isEqualTo(factoryADraft.items().get(0).pricingRequestItemId());
+    }
+
+    /**
+     * HIGH 4 (review remediation): {@code include_in_factory_email} had no caller since {@code
+     * attemptSend} (the old dispatch worker) was deleted — Import could still tick "include this
+     * attachment in the factory email" and nothing would ever attach it. The fix appends a short
+     * plain list of the marked attachments' file names to the generated draft body.
+     */
+    @Test
+    void generateDrafts_listsAttachmentsMarkedIncludeInFactoryEmailInTheDraftBody() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            singleFactoryPricingRequest(UUID.randomUUID().toString()), salesActor).summary().id();
+        var uploaded = pricingRequestService.uploadAttachment(pricingRequestId,
+            new MockMultipartFile("file", "spec-sheet.pdf", "application/pdf", "spec".getBytes()), salesActor);
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        pricingRequestService.setAttachmentIncludeInFactoryEmail(uploaded.id(),
+            new PricingRequestRequests.UpdatePricingRequestAttachmentRequest(true), importActor);
+
+        FactoryQuoteDto draft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        assertThat(draft.emailBody()).contains("spec-sheet.pdf");
+    }
+
+    /** The companion case: an attachment exists but was never marked, so the generated draft must
+     * carry no attachment section referencing it at all — the feature must stay invisible until
+     * Import deliberately opts an attachment in. */
+    @Test
+    void generateDrafts_omitsTheAttachmentSectionEntirelyWhenNothingIsMarkedForInclusion() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            singleFactoryPricingRequest(UUID.randomUUID().toString()), salesActor).summary().id();
+        pricingRequestService.uploadAttachment(pricingRequestId,
+            new MockMultipartFile("file", "unrelated.pdf", "application/pdf", "spec".getBytes()), salesActor);
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+
+        FactoryQuoteDto draft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        assertThat(draft.emailBody()).doesNotContain("unrelated.pdf");
+    }
+
+    /** A blank recipient must be allowed — factory RFQ email is manual-only, and the human sending
+     * it from their own mail client may have no on-file factory contact to prefill. "Free Text
+     * Factory" (unlike "Factory A"/"B"/"C") is never seeded into price_catalog.factories by this
+     * class's fixture, so factoryConfigs.findByName resolves to nothing and emailTo really is
+     * null at draft time — not merely unasserted. */
+    @Test
+    void send_withANullRecipient_succeedsAndRequestsTheQuote() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            new PricingRequestRequests.CreatePricingRequestRequest(
+                PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+                null, "THB", "no factory contact on file", UUID.randomUUID().toString(),
+                List.of(freeTextPricingItem("Unlisted factory item"))),
+            salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(
+            factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Free Text Factory");
+        assertThat(draft.emailTo()).isNull();
+
+        FactoryQuoteDto sent = factoryQuoteService.send(draft.id(),
+            new SendFactoryQuoteRequest(null, "Subject only", "Body only"), importActor);
+
+        assertThat(sent.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
+        assertThat(sent.emailTo()).isNull();
+        assertThat(sent.emailSubject()).isEqualTo("Subject only");
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
+            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
+    }
+
+    /**
+     * Manual-only send's idempotency mechanism: once REQUESTED, calling send() again is a no-op
+     * that returns the quote unchanged, rather than the old clientRequestId-keyed dispatch guard
+     * (there is no out-of-band worker left to protect against replaying ahead of).
+     */
+    @Test
+    void send_calledAgainOnceAlreadyRequested_isANoOpAndDoesNotDuplicateTheAuditTrail() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId,
+            singleFactoryPricingRequest(UUID.randomUUID().toString()), salesActor).summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory A");
+
+        FactoryQuoteDto first = factoryQuoteService.send(draft.id(),
+            new SendFactoryQuoteRequest("factory-a@example.com", "Subject", "Body"), importActor);
+        FactoryQuoteDto second = factoryQuoteService.send(draft.id(),
+            new SendFactoryQuoteRequest("a-different-address@example.com", "Different subject", "Different body"),
+            importActor);
+
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(second.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
+        // The second call's (different) payload must NOT have overwritten the first send's values —
+        // it short-circuited on current status before touching anything.
+        assertThat(second.emailTo()).isEqualTo("factory-a@example.com");
+        assertThat(second.emailSubject()).isEqualTo("Subject");
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'FACTORY_EMAIL_SENT'
+            """, Map.of("id", pricingRequestId), Long.class))
+            .as("re-sending an already-REQUESTED quote must not duplicate the audit event")
+            .isEqualTo(1L);
     }
 
     /** A deal-active, Import-owned request whose line 1 is catalog-backed and line 2 has no factory at all. */
@@ -2174,45 +2005,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     /** Simulates one outbox worker tick draining everything currently claimable. */
     private void drainDispatches() {
-        for (long id : factoryQuoteService.claimableDispatchIds()) {
-            factoryQuoteService.processDispatch(id);
-        }
-    }
-
-    private long dispatchIdForQuote(long quoteId) {
-        return jdbc.queryForObject("""
-            SELECT factory_quote_email_dispatch_id
-              FROM sales.factory_quote_email_dispatch
-             WHERE factory_quote_id = :quoteId
-             ORDER BY factory_quote_email_dispatch_id DESC
-             LIMIT 1
-            """, Map.of("quoteId", quoteId), Long.class);
-    }
-
-    private String dispatchStatus(long dispatchId) {
-        return jdbc.queryForObject("""
-            SELECT status FROM sales.factory_quote_email_dispatch WHERE factory_quote_email_dispatch_id = :id
-            """, Map.of("id", dispatchId), String.class);
-    }
-
-    private int dispatchAttemptCount(long dispatchId) {
-        return jdbc.queryForObject("""
-            SELECT attempt_count FROM sales.factory_quote_email_dispatch WHERE factory_quote_email_dispatch_id = :id
-            """, Map.of("id", dispatchId), Integer.class);
-    }
-
-    private Instant dispatchNextAttemptAt(long dispatchId) {
-        java.sql.Timestamp ts = jdbc.queryForObject("""
-            SELECT next_attempt_at FROM sales.factory_quote_email_dispatch WHERE factory_quote_email_dispatch_id = :id
-            """, Map.of("id", dispatchId), java.sql.Timestamp.class);
-        return ts == null ? null : ts.toInstant();
-    }
-
-    private Instant dispatchFinalizedAt(long dispatchId) {
-        java.sql.Timestamp ts = jdbc.queryForObject("""
-            SELECT finalized_at FROM sales.factory_quote_email_dispatch WHERE factory_quote_email_dispatch_id = :id
-            """, Map.of("id", dispatchId), java.sql.Timestamp.class);
-        return ts == null ? null : ts.toInstant();
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
+        // there is no dispatch/worker queue left to drain. Kept (rather than removing
+        // every call site) so this helper's callers do not all need to be revisited
+        // individually.
     }
 
     private void markAllFactoriesReady(long pricingRequestId) {

@@ -57,7 +57,12 @@ class FlywayMigrationTest {
         assertThat(countRows("SELECT count(*) FROM customers.contact")).isZero();
         assertThat(countRows("SELECT count(*) FROM customers.project")).isZero();
         assertThat(countRows("SELECT count(*) FROM sales.catalog")).isZero();
-        assertThat(countRows("SELECT count(*) FROM sales.factory_config")).isZero();
+        // V163 merged sales.factory_config's columns onto price_catalog.factories and dropped
+        // the table outright, so by the time a full migrate completes it no longer exists at
+        // all -- a stronger property than "V25's seed didn't survive" (the row-count check this
+        // line replaced), and one that would fail loudly (relation does not exist) if V163 were
+        // ever reverted or reordered.
+        assertThat(tableExists("sales", "factory_config")).isFalse();
     }
 
     /**
@@ -99,7 +104,12 @@ class FlywayMigrationTest {
         assertThat(countRows("SELECT count(*) FROM customers.contact")).isEqualTo(5);
         assertThat(countRows("SELECT count(*) FROM customers.project")).isEqualTo(5);
         assertThat(countRows("SELECT count(*) FROM sales.catalog")).isEqualTo(14);
-        assertThat(countRows("SELECT count(*) FROM sales.factory_config")).isEqualTo(4);
+        // V163's own header states this ordering explicitly: db/migration-demo/V91.1 (version
+        // "91.1") runs before V163 in the combined location set used here, so its 4 rows are
+        // inserted and then the table itself is dropped -- the demo email/unit fixtures are
+        // discarded BY DESIGN (owner decision), not migrated forward. There is no longer a "the
+        // 4 demo rows survived" property to assert; there is no table left to hold them.
+        assertThat(tableExists("sales", "factory_config")).isFalse();
     }
 
     private static int countRows(String sql) {
@@ -113,6 +123,22 @@ class FlywayMigrationTest {
             return rows.getInt(1);
         } catch (SQLException e) {
             throw new IllegalStateException("Could not count rows for: " + sql, e);
+        }
+    }
+
+    private static boolean tableExists(String schema, String table) {
+        try (Connection connection = DriverManager.getConnection(
+                PostgresTestSupport.jdbcUrl(),
+                PostgresTestSupport.username(),
+                PostgresTestSupport.password());
+             Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables"
+                     + " WHERE table_schema = '" + schema + "' AND table_name = '" + table + "')")) {
+            rows.next();
+            return rows.getBoolean(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not check table existence for: " + schema + "." + table, e);
         }
     }
 }

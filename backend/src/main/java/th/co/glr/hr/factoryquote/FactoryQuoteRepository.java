@@ -21,14 +21,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 
 @Repository
 public class FactoryQuoteRepository {
-    private static final String DISPATCH_SELECT = """
-        SELECT factory_quote_email_dispatch_id, factory_quote_id, client_request_id::text AS client_request_id,
-               status, email_to, email_subject, email_body, created_by, created_at,
-               sending_at, sent_at, failed_at, failure_message,
-               attempt_count, next_attempt_at, claimed_at, provider_message_id, finalized_at
-          FROM sales.factory_quote_email_dispatch
-        """;
-
     private final NamedParameterJdbcTemplate jdbc;
     private final FileAttachmentBlobRepository blobs;
 
@@ -104,6 +96,51 @@ public class FactoryQuoteRepository {
             """, batch);
     }
 
+    /**
+     * Appends newly-resolved pricing-request items onto an EXISTING DRAFT quote, continuing its
+     * {@code sort_order} sequence. Companion to {@link #insertDraftItems} for {@code
+     * FactoryQuoteService#generateDrafts}'s BLOCKER 1 fix: a re-run that resolves MORE lines onto
+     * a factory that already has a DRAFT quote must not strand them, but must also not disturb
+     * the lines the draft already has. Callers MUST pre-filter {@code pricingRequestItemIds} down
+     * to ids not already present on the quote (see {@code
+     * FactoryQuoteService#addNewlyResolvedItemsToExistingDraft}) — this method does not
+     * deduplicate, so passing an id the quote already has would insert it a second time rather
+     * than raise anything, silently corrupting the quote's item list.
+     *
+     * <p>Only ever safe to call while the quote is still {@code DRAFT} — once a quote has been
+     * sent or answered its item set must never be mutated (see {@link #markRequested} and the
+     * guard {@code PricingRequestService#setItemFactory}'s Javadoc protects on the other side of
+     * this same invariant); enforcing that is the caller's job, same division of labour as every
+     * other status guard in this class.
+     */
+    public void addItemsToDraft(long quoteId, List<Long> pricingRequestItemIds) {
+        if (pricingRequestItemIds.isEmpty()) {
+            return;
+        }
+        Integer maxSortOrder = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(sort_order), -1) FROM sales.factory_quote_item WHERE factory_quote_id = :quoteId
+            """, Map.of("quoteId", quoteId), Integer.class);
+        int startAt = (maxSortOrder == null ? -1 : maxSortOrder) + 1;
+        MapSqlParameterSource[] batch = new MapSqlParameterSource[pricingRequestItemIds.size()];
+        for (int i = 0; i < pricingRequestItemIds.size(); i++) {
+            batch[i] = new MapSqlParameterSource()
+                .addValue("quoteId", quoteId)
+                .addValue("pricingRequestItemId", pricingRequestItemIds.get(i))
+                .addValue("sortOrder", startAt + i);
+        }
+        // Same unit_basis-copied-verbatim shape as insertDraftItems — see that method's Javadoc
+        // for why no COALESCE is needed.
+        jdbc.batchUpdate("""
+            INSERT INTO sales.factory_quote_item
+                (factory_quote_id, pricing_request_item_id, quoted_quantity, quoted_unit, unit_basis, sort_order)
+            SELECT :quoteId, pri.pricing_request_item_id, pri.requested_qty, pri.requested_unit,
+                   pri.requested_unit_basis,
+                   :sortOrder
+              FROM sales.pricing_request_item pri
+             WHERE pri.pricing_request_item_id = :pricingRequestItemId
+            """, batch);
+    }
+
     public boolean updateDraft(long quoteId, String emailTo, String subject, String body, String note) {
         int rows = jdbc.update("""
             UPDATE sales.factory_quote
@@ -144,183 +181,6 @@ public class FactoryQuoteRepository {
                 .addValue("subject", subject)
                 .addValue("body", body)
                 .addValue("actorId", actorId));
-    }
-
-    public Optional<FactoryQuoteEmailDispatchDto> findDispatchByClientRequest(long actorId, String clientRequestId) {
-        try {
-            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject(DISPATCH_SELECT + """
-                 WHERE created_by = :actorId
-                   AND client_request_id = CAST(:clientRequestId AS uuid)
-                """,
-                new MapSqlParameterSource()
-                    .addValue("actorId", actorId)
-                    .addValue("clientRequestId", clientRequestId),
-                (rs, rowNum) -> mapDispatch(rs));
-            return Optional.ofNullable(dto);
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
-    }
-
-    public FactoryQuoteEmailDispatchDto createDispatch(long quoteId, String clientRequestId, String emailTo,
-                                                       String subject, String body, long actorId) {
-        GeneratedKeyHolder key = new GeneratedKeyHolder();
-        jdbc.update("""
-            INSERT INTO sales.factory_quote_email_dispatch
-                (factory_quote_id, client_request_id, email_to, email_subject, email_body, created_by)
-            VALUES
-                (:quoteId, CAST(:clientRequestId AS uuid), :emailTo, :subject, :body, :actorId)
-            """,
-            new MapSqlParameterSource()
-                .addValue("quoteId", quoteId)
-                .addValue("clientRequestId", clientRequestId)
-                .addValue("emailTo", emailTo)
-                .addValue("subject", subject)
-                .addValue("body", body)
-                .addValue("actorId", actorId),
-            key, new String[]{"factory_quote_email_dispatch_id"});
-        return findDispatch(key.getKey().longValue()).orElseThrow();
-    }
-
-    public Optional<FactoryQuoteEmailDispatchDto> findActiveDispatch(long quoteId) {
-        try {
-            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject(DISPATCH_SELECT + """
-                 WHERE factory_quote_id = :quoteId
-                   AND status IN ('PENDING', 'SENDING', 'SENT')
-                 ORDER BY factory_quote_email_dispatch_id DESC
-                 LIMIT 1
-                """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapDispatch(rs));
-            return Optional.ofNullable(dto);
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
-    }
-
-    public Optional<FactoryQuoteEmailDispatchDto> findDispatch(long dispatchId) {
-        try {
-            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject(DISPATCH_SELECT + """
-                 WHERE factory_quote_email_dispatch_id = :dispatchId
-                """, Map.of("dispatchId", dispatchId), (rs, rowNum) -> mapDispatch(rs));
-            return Optional.ofNullable(dto);
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * Most recent dispatch row for a quote, regardless of status — used to surface
-     * pending/sending/sent/failed on {@code FactoryQuoteDto} for the frontend. Unlike
-     * {@link #findActiveDispatch}, this also returns a terminal FAILED row so Import can see why
-     * a send did not go out.
-     */
-    public Optional<FactoryQuoteEmailDispatchDto> findLatestDispatch(long quoteId) {
-        try {
-            FactoryQuoteEmailDispatchDto dto = jdbc.queryForObject(DISPATCH_SELECT + """
-                 WHERE factory_quote_id = :quoteId
-                 ORDER BY factory_quote_email_dispatch_id DESC
-                 LIMIT 1
-                """, Map.of("quoteId", quoteId), (rs, rowNum) -> mapDispatch(rs));
-            return Optional.ofNullable(dto);
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * The outbox worker's atomic claim. A single UPDATE keyed on the row id, rechecking the same
-     * eligibility predicate the scan query used: PENDING (never attempted), FAILED (backed off,
-     * due for retry), or SENDING-but-stale (claimed by a worker that crashed before finishing,
-     * past {@code reclaimTimeoutSeconds}) — AND under the attempt cap — AND due (next_attempt_at
-     * elapsed or unset). Two workers racing the same row: Postgres row-level locking on the UPDATE
-     * serializes them, and the loser's WHERE no longer matches once the winner's UPDATE has
-     * committed (status is now SENDING with a fresh claimed_at), so it affects zero rows.
-     */
-    public int claimDispatch(long dispatchId, int reclaimTimeoutSeconds, int maxAttempts) {
-        return jdbc.update("""
-            UPDATE sales.factory_quote_email_dispatch
-               SET status = 'SENDING',
-                   claimed_at = now(),
-                   attempt_count = attempt_count + 1
-             WHERE factory_quote_email_dispatch_id = :dispatchId
-               AND attempt_count < :maxAttempts
-               AND (
-                    status = 'PENDING'
-                    OR status = 'FAILED'
-                    OR (status = 'SENDING' AND claimed_at < now() - (:reclaimTimeoutSeconds || ' seconds')::interval)
-               )
-               AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-            """,
-            new MapSqlParameterSource()
-                .addValue("dispatchId", dispatchId)
-                .addValue("maxAttempts", maxAttempts)
-                .addValue("reclaimTimeoutSeconds", reclaimTimeoutSeconds));
-    }
-
-    /**
-     * Candidate ids for a worker tick to attempt {@link #claimDispatch}. A plain SELECT — the
-     * actual atomicity/race-safety comes from the per-id claim UPDATE above, not from this scan.
-     */
-    public List<Long> findClaimableDispatchIds(int batchSize, int reclaimTimeoutSeconds, int maxAttempts) {
-        return jdbc.queryForList("""
-            SELECT factory_quote_email_dispatch_id
-              FROM sales.factory_quote_email_dispatch
-             WHERE attempt_count < :maxAttempts
-               AND (
-                    status = 'PENDING'
-                    OR status = 'FAILED'
-                    OR (status = 'SENDING' AND claimed_at < now() - (:reclaimTimeoutSeconds || ' seconds')::interval)
-               )
-               AND (next_attempt_at IS NULL OR next_attempt_at <= now())
-             ORDER BY created_at
-             LIMIT :batchSize
-            """,
-            new MapSqlParameterSource()
-                .addValue("maxAttempts", maxAttempts)
-                .addValue("reclaimTimeoutSeconds", reclaimTimeoutSeconds)
-                .addValue("batchSize", batchSize),
-            Long.class);
-    }
-
-    /** Best-effort marker that the provider call succeeded, so a reclaim after a post-send crash skips resending. */
-    public void recordProviderMessageId(long dispatchId, String providerMessageId) {
-        jdbc.update("""
-            UPDATE sales.factory_quote_email_dispatch
-               SET provider_message_id = :providerMessageId
-             WHERE factory_quote_email_dispatch_id = :dispatchId
-            """,
-            new MapSqlParameterSource()
-                .addValue("dispatchId", dispatchId)
-                .addValue("providerMessageId", providerMessageId));
-    }
-
-    /** Terminal-per-attempt failure with backoff; stays claimable (via claimDispatch's WHERE) until attempt_count hits the cap. */
-    public void markDispatchFailedWithBackoff(long dispatchId, String message, int backoffSeconds) {
-        jdbc.update("""
-            UPDATE sales.factory_quote_email_dispatch
-               SET status = 'FAILED',
-                   failed_at = now(),
-                   failure_message = :message,
-                   next_attempt_at = now() + (:backoffSeconds || ' seconds')::interval
-             WHERE factory_quote_email_dispatch_id = :dispatchId
-               AND status = 'SENDING'
-            """,
-            new MapSqlParameterSource()
-                .addValue("dispatchId", dispatchId)
-                .addValue("message", message)
-                .addValue("backoffSeconds", backoffSeconds));
-    }
-
-    /** Last step of an idempotent finalize: dispatch reaches its terminal SENT state. */
-    public void markDispatchFinalized(long dispatchId) {
-        jdbc.update("""
-            UPDATE sales.factory_quote_email_dispatch
-               SET status = 'SENT',
-                   sent_at = COALESCE(sent_at, now()),
-                   finalized_at = now(),
-                   failed_at = NULL,
-                   failure_message = NULL
-             WHERE factory_quote_email_dispatch_id = :dispatchId
-            """, Map.of("dispatchId", dispatchId));
     }
 
     /**
@@ -638,8 +498,7 @@ public class FactoryQuoteRepository {
     public Optional<FactoryQuoteDto> find(long quoteId) {
         try {
             FactoryQuoteDto quote = jdbc.queryForObject(baseSelect() + " WHERE fq.factory_quote_id = :quoteId",
-                Map.of("quoteId", quoteId), (rs, rowNum) -> mapQuote(rs, findItems(quoteId), findAttachments(quoteId),
-                    findLatestDispatch(quoteId).orElse(null)));
+                Map.of("quoteId", quoteId), (rs, rowNum) -> mapQuote(rs, findItems(quoteId), findAttachments(quoteId)));
             return Optional.ofNullable(quote);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -654,7 +513,7 @@ public class FactoryQuoteRepository {
                 Map.of("pricingRequestId", pricingRequestId),
                 (rs, rowNum) -> {
                     long id = rs.getLong("factory_quote_id");
-                return mapQuote(rs, findItems(id), findAttachments(id), findLatestDispatch(id).orElse(null));
+                return mapQuote(rs, findItems(id), findAttachments(id));
             });
     }
 
@@ -789,7 +648,7 @@ public class FactoryQuoteRepository {
                 Map.of("pricingRequestId", pricingRequestId, "factoryName", factoryName),
                 (rs, rowNum) -> {
                     long id = rs.getLong("factory_quote_id");
-                    return mapQuote(rs, findItems(id), findAttachments(id), findLatestDispatch(id).orElse(null));
+                    return mapQuote(rs, findItems(id), findAttachments(id));
                 });
             return Optional.ofNullable(quote);
         } catch (EmptyResultDataAccessException e) {
@@ -948,8 +807,7 @@ public class FactoryQuoteRepository {
     }
 
     private FactoryQuoteDto mapQuote(ResultSet rs, List<FactoryQuoteItemDto> items,
-                                     List<FactoryQuoteAttachmentDto> attachments,
-                                     FactoryQuoteEmailDispatchDto dispatch) throws SQLException {
+                                     List<FactoryQuoteAttachmentDto> attachments) throws SQLException {
         return new FactoryQuoteDto(
             rs.getLong("factory_quote_id"),
             rs.getString("quote_code"),
@@ -978,11 +836,7 @@ public class FactoryQuoteRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             items,
-            attachments,
-            dispatch == null ? null : dispatch.status(),
-            dispatch == null ? 0 : dispatch.attemptCount(),
-            dispatch == null ? null : dispatch.failureMessage(),
-            dispatch == null ? null : dispatch.nextAttemptAt()
+            attachments
         );
     }
 
@@ -1030,29 +884,6 @@ public class FactoryQuoteRepository {
         );
     }
 
-    private FactoryQuoteEmailDispatchDto mapDispatch(ResultSet rs) throws SQLException {
-        return new FactoryQuoteEmailDispatchDto(
-            rs.getLong("factory_quote_email_dispatch_id"),
-            rs.getLong("factory_quote_id"),
-            rs.getString("client_request_id"),
-            rs.getString("status"),
-            rs.getString("email_to"),
-            rs.getString("email_subject"),
-            rs.getString("email_body"),
-            nullableLong(rs, "created_by"),
-            instant(rs, "created_at"),
-            instant(rs, "sending_at"),
-            instant(rs, "sent_at"),
-            instant(rs, "failed_at"),
-            rs.getString("failure_message"),
-            rs.getInt("attempt_count"),
-            instant(rs, "next_attempt_at"),
-            instant(rs, "claimed_at"),
-            rs.getString("provider_message_id"),
-            instant(rs, "finalized_at")
-        );
-    }
-
     private FactoryQuoteResponseReceiptDto mapResponseReceipt(ResultSet rs) throws SQLException {
         return new FactoryQuoteResponseReceiptDto(
             rs.getLong("factory_quote_response_receipt_id"),
@@ -1075,27 +906,6 @@ public class FactoryQuoteRepository {
     private String normalizeCurrency(String currency) {
         return currency == null ? null : currency.trim().toUpperCase();
     }
-
-    public record FactoryQuoteEmailDispatchDto(
-        long id,
-        long factoryQuoteId,
-        String clientRequestId,
-        String status,
-        String emailTo,
-        String emailSubject,
-        String emailBody,
-        Long createdBy,
-        java.time.Instant createdAt,
-        java.time.Instant sendingAt,
-        java.time.Instant sentAt,
-        java.time.Instant failedAt,
-        String failureMessage,
-        int attemptCount,
-        java.time.Instant nextAttemptAt,
-        java.time.Instant claimedAt,
-        String providerMessageId,
-        java.time.Instant finalizedAt
-    ) {}
 
     public record FactoryQuoteResponseReceiptDto(
         long id,
