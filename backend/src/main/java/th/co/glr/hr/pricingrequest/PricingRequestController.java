@@ -145,10 +145,11 @@ public class PricingRequestController {
     }
 
     /**
-     * ฝ่ายนำเข้า (or CEO) supplies a hand-entered thickness for one line the catalog cannot resolve
-     * — see {@link PricingRequestItemThicknessService} for the routing/refuse rule. An
-     * AUTHORIZATION CHANGE: thickness defaults used to be {@code ceo}-only ({@code
-     * ThicknessDefaultController}); import can now supply one per-line here too.
+     * Sales (or CEO, as a fallback) supplies a hand-entered thickness for one line the catalog
+     * cannot resolve — see {@link PricingRequestItemThicknessService} for the routing/refuse rule
+     * and the authorization window per role. AUTHORIZATION CHANGE, 2026-09-06 (owner-ruled scope
+     * change): this used to be {@code import}/{@code ceo}; {@code import} is now refused and
+     * {@code sales} (owner-scoped, DRAFT only) supplies it instead.
      */
     @PutMapping("/pricing-requests/{id}/items/{itemId}/thickness")
     PricingRequestDetailResponse setItemThickness(

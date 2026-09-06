@@ -76,9 +76,21 @@ function isSales(user) {
   return user?.role === 'sales';
 }
 
+function isCeo(user) {
+  return user?.role === 'ceo';
+}
+
 function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
+
+// Mirrors PricingRequestItemThicknessService.CEO_EDITABLE_STATUSES exactly (owner-ruled scope
+// change, 2026-09-06) — the CEO fallback's wider window, DRAFT plus every Import/CEO stage up to
+// CEO_REVIEWING. Sales's own window is a single status (DRAFT), so it is inlined at its one call
+// site instead of getting a matching constant.
+const CEO_THICKNESS_STATUSES = [
+  'DRAFT', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING',
+];
 
 // Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
 // free text. `null` here is exactly what makes FactoryQuoteService.groupByFactory refuse to build
@@ -331,15 +343,18 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 
 // One CSS-grid template shared by the column-header row and every item row beneath it (DESIGN.md
 // §13: "CSS-grid columns per table type keep alignment"), so ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน ·
-// ราคาที่เสนอ · ความหนา · ราคาที่อนุมัติ line up down the whole grouped list regardless of which
+// ราคาที่เสนอ · ราคาที่อนุมัติ line up down the whole grouped list regardless of which
 // factory a row belongs to. Mobile-first, matching this file's own existing per-item response grid
 // below (`md:grid-cols-[1fr_auto_auto_auto]`): no columns at all below `md` (768px, this file's
-// established switch point), full 6-track grid from `md` up (widened from 5 for ความหนา, owner
-// ruling 2026-09 — see Change 1). `min-w-[880px]` gives the grid a floor at tablet width — Panel's
-// `flush` variant is `overflow-x-auto`, so a tight tablet card scrolls this table horizontally
-// inside itself rather than crushing the columns unreadable or silently losing data off the edge
-// (see Layout.jsx's own Panel comment on why that clip is scroll, not hidden).
-const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_140px_150px] md:min-w-[880px]';
+// established switch point), 5-track grid from `md` up. `min-w-[740px]` gives the grid a floor at
+// tablet width — Panel's `flush` variant is `overflow-x-auto`, so a tight tablet card scrolls this
+// table horizontally inside itself rather than crushing the columns unreadable or silently losing
+// data off the edge (see Layout.jsx's own Panel comment on why that clip is scroll, not hidden).
+//
+// Briefly 6 tracks (widened for a ความหนา column, owner ruling 2026-09) — an owner-ruled scope
+// change on 2026-09-06 moved that column to the sales-facing item list instead (ฝ่ายนำเข้า lost
+// the ability to set thickness entirely), so this surface narrowed back to 5.
+const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[740px]';
 
 /**
  * The factory-quote email composer, relocated into a modal behind each factory group's header
@@ -814,9 +829,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
     'บันทึกโรงงานแล้ว',
   );
-  // Change 1 (owner ruling, 2026-09): applies IMMEDIATELY to costing — no CEO approval step, no
-  // draft/confirm round trip the way the price/sqm inputs above have. See the factory-quote
-  // response section below for the read-only-vs-editable ความหนา cell this feeds.
+  // Applies IMMEDIATELY to costing — no CEO approval step, no draft/confirm round trip the way the
+  // price/sqm inputs above have. Originally the ฝ่ายนำเข้า factory-quote response section's own
+  // cell; an owner-ruled scope change (2026-09-06) moved WHO may call this and WHERE it renders —
+  // sales now supplies it in the คำขอราคา draft ("รายการสินค้าและราคาตั้งต้น" section below),
+  // with the CEO as the only fallback — but this is still the SAME mutation/endpoint either side
+  // uses, so it stays declared once, up here.
   const setItemThickness = useActionMutation(
     ({ itemId, thicknessMm }) => api.pricingRequests.setItemThickness(pricingRequestId, itemId, { thicknessMm }),
     'บันทึกความหนาแล้ว',
@@ -1172,10 +1190,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
   // above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
-  // pricingRequestItemId -> the ความหนา (mm) Import is typing for a line with no resolved
-  // thickness yet. Same shape as factoryDrafts — a key exists only once a change handler has
-  // written to it — and, like factoryDrafts, this saves IMMEDIATELY (setItemThickness.mutate) on
-  // submit rather than joining the price/sqm draft-then-ยืนยันราคาเสนอ flow.
+  // pricingRequestItemId -> the ความหนา (mm) being typed for a line with no resolved thickness
+  // yet — Sales's own DRAFT (owner-ruled scope change, 2026-09-06; the CEO fallback shares this
+  // same state on the wider window it may act in). Same shape as factoryDrafts — a key exists only
+  // once a change handler has written to it — and, like factoryDrafts, this saves IMMEDIATELY
+  // (setItemThickness.mutate) on submit rather than joining the price/sqm draft-then-ยืนยันราคาเสนอ
+  // flow that section still has.
   const [thicknessDrafts, setThicknessDrafts] = useState({});
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
@@ -1192,6 +1212,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => (request?.items ?? [])
       .map((item, index) => ({ item, position: index + 1 }))
       .filter((entry) => !itemFactoryName(entry.item)),
+    [request],
+  );
+  // Client-side mirror of PricingRequestService#submit's new thickness gate (owner-ruled scope
+  // change, 2026-09-06) — named here, with the item positions, so Sales sees WHICH lines block
+  // submit before clicking it rather than only after a 422 (the server gate in submit() is the
+  // real enforcement either way; this is purely so the reader is not surprised by it).
+  const missingThicknessItems = useMemo(
+    () => (request?.items ?? [])
+      .map((item, index) => ({ item, position: index + 1 }))
+      .filter((entry) => entry.item.resolvedThicknessMm == null),
     [request],
   );
   // Import owns this field, and only while the request is in its hands. NOT an authorization
@@ -1289,6 +1319,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const canEditPricingRequestAttachments = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && summary?.status === 'DRAFT';
+  // Mirrors PricingRequestItemThicknessService's SALES_EDITABLE_STATUSES / CEO_EDITABLE_STATUSES
+  // (owner-ruled scope change, 2026-09-06: "sales need to be forced to fill in the thickness, not
+  // import"). Sales is owner-scoped and DRAFT-only, the SAME shape as
+  // canEditPricingRequestAttachments above; the CEO is the fallback — never owner-scoped — across
+  // a wider window that also reaches a request already past DRAFT (V156's uncostable-line safety
+  // net means an old or otherwise-stuck request can still surface an unresolved line there).
+  // NOT an authorization decision by itself — the backend re-checks all of this — just whether to
+  // offer an input that would otherwise be refused.
+  const canSetItemThickness = (isSales(user)
+      && summary?.ticketCreatedById === user?.employeeId
+      && summary?.status === 'DRAFT')
+    || (isCeo(user) && CEO_THICKNESS_STATUSES.includes(summary?.status));
   const detailErrorStatus = apiStatus(detailQuery.error);
 
   if (detailQuery.isLoading) {
@@ -1421,12 +1463,44 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
             </p>
           ) : null}
+          {/* Owner-ruled scope change, 2026-09-06: submit() now refuses a DRAFT while any line
+              lacks a thickness — stated here BEFORE the "ส่งให้ฝ่ายนำเข้า" click (that control
+              lives on the deal page's PricingRequestPanel, not this one), the same "name it before
+              the 422" idiom the factory banner above already uses. Once past DRAFT this is no
+              longer a submit blocker (it already resolved, or the CEO fallback is now the one
+              acting on it), so the banner only shows while it still is one. */}
+          {missingThicknessItems.length && summary?.status === 'DRAFT' ? (
+            <p role="alert" className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+              {`ต้องระบุความหนาให้ครบก่อนส่งคำขอราคา — ยังไม่ได้ระบุ ${missingThicknessItems.length} รายการ: `}
+              {missingThicknessItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
+              {' — ระบุความหนาในรายการด้านล่างแล้วกดบันทึก'}
+            </p>
+          ) : null}
           {(request.items ?? []).map((item, index) => {
             const factoryName = itemFactoryName(item);
             // `position` is the 1-based row number the server counts too: findItems returns
             // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
             // sortOrder, so "รายการที่ N" means this exact row on both sides.
             const position = index + 1;
+            // Where a resolved thickness came from, for the reader to see it was supplied by hand
+            // rather than read off the product row. Deliberately two independent checks, not one
+            // merged flag — they answer different questions (which CATALOG fallback fired, vs.
+            // whether THIS line has its own override) and a line could in principle carry both.
+            const thicknessSource = item.thicknessMmOverride != null
+              ? 'ระบุเอง'
+              : item.thicknessIsDefault
+                ? 'ค่าเริ่มต้นของคอลเลกชัน'
+                : null;
+            // Ladder A (SPEC-PREFILL.md): backend-computed ESTIMATE, present only when
+            // resolvedThicknessMm is null. Rendering it writes nothing — only a "บันทึก" click
+            // does, through the SAME setItemThickness endpoint a hand-typed value already uses.
+            const thicknessSuggestion = item.thicknessSuggestion ?? null;
+            // The value the input actually shows/submits: whatever the viewer has typed wins
+            // outright (thicknessDrafts is only ever populated by this line's own onChange),
+            // falling back to the suggestion so a bare "บันทึก" click — with no typing at all —
+            // accepts it as-is. Never written to thicknessDrafts itself just by rendering.
+            const thicknessDraftValue = thicknessDrafts[item.id]
+              ?? (thicknessSuggestion?.thicknessMm != null ? String(thicknessSuggestion.thicknessMm) : '');
             return (
               <div
                 key={item.id}
@@ -1446,6 +1520,70 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   </span>
                   <span>Catalog: {item.catalogProductCode ?? '-'}</span>
                   <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
+                </div>
+                {/* Sales must supply ความหนา when the catalog resolves none (owner-ruled scope
+                    change, 2026-09-06 — moved here from ฝ่ายนำเข้า's factory-quote response
+                    section; see PricingRequestItemThicknessService's class Javadoc). Prefill
+                    (Ladder A), its confidence caption, and Equipe suppression are unchanged
+                    owner requirements — only the surface and the allowed role moved. */}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-bold text-text-muted">ความหนา:</span>
+                  {item.resolvedThicknessMm != null ? (
+                    <span className="text-text-secondary">
+                      {item.resolvedThicknessMm} มม.
+                      {thicknessSource ? ` (${thicknessSource})` : ''}
+                    </span>
+                  ) : canSetItemThickness ? (
+                    <div className="flex flex-col gap-1">
+                      <SafeForm
+                        className="flex flex-wrap items-center gap-1.5"
+                        onSubmit={() => setItemThickness.mutate(
+                          { itemId: item.id, thicknessMm: Number(thicknessDraftValue) },
+                          { onSuccess: () => setThicknessDrafts((cur) => {
+                            const next = { ...cur };
+                            delete next[item.id];
+                            return next;
+                          }) },
+                        )}
+                      >
+                        <input
+                          id={`pcr-item-thickness-${item.id}`}
+                          className="w-20"
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          inputMode="decimal"
+                          required
+                          placeholder="มม."
+                          aria-label={`ความหนา รายการที่ ${position}`}
+                          aria-describedby={thicknessSuggestion ? `pcr-item-thickness-basis-${item.id}` : undefined}
+                          value={thicknessDraftValue}
+                          onChange={(e) => setThicknessDrafts((cur) => ({ ...cur, [item.id]: e.target.value }))}
+                        />
+                        <Button
+                          type="submit"
+                          variant="secondary"
+                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          disabled={setItemThickness.isPending || !(Number(thicknessDraftValue) > 0)}
+                        >
+                          บันทึก
+                        </Button>
+                      </SafeForm>
+                      {thicknessSuggestion ? (
+                        <span
+                          id={`pcr-item-thickness-basis-${item.id}`}
+                          className={cn(
+                            'text-2xs',
+                            thicknessSuggestion.confidence === 'HIGH' ? 'text-text-muted' : 'text-warning-dark',
+                          )}
+                        >
+                          ประมาณการ {thicknessSuggestion.thicknessMm} มม. — {thicknessSuggestion.basis}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="font-bold text-warning-dark">ยังไม่ระบุ</span>
+                  )}
                 </div>
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
@@ -1575,7 +1713,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <span>สี / เนื้อผิว</span>
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
-                <span>ความหนา</span>
                 <span>ราคาที่อนุมัติ</span>
               </div>
               {factoryGroups.map((group) => {
@@ -1658,20 +1795,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     return next;
                   });
                 }
-                // Change 1 (owner ruling, 2026-09): client-side mirror of the backend gate
-                // (LandedCostCalculator.isFullyResolvable) — blocks ยืนยันราคาเสนอ, with an inline
-                // reason, when any line THIS GROUP owns still has no resolved thickness. Scoped to
-                // THIS group's own lines, not the whole request: confirming here only calls
-                // receive()/markReadyForCosting for THIS factory's quote, which succeeds
-                // regardless of a gap on a DIFFERENT factory's line (that gap blocks the overall
-                // request from auto-advancing, but is that OTHER group's own confirm button to
-                // worry about). The backend gate is the real enforcement either way — this is only
-                // to tell Import before they click, not after a silent non-advance.
-                const linesMissingThickness = draft.items.filter((line) => {
-                  const req = requestItemById.get(line.pricingRequestItemId);
-                  return (req?.resolvedThicknessMm ?? null) == null;
-                });
-
                 return (
                   <div key={group.key} className="border-t border-border-subtle first:border-t-0">
                     {/* Factory header: name, its item count, its contact email (current.emailTo —
@@ -1767,32 +1890,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       // edit was already approved.
                       const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
                       const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
-                      const resolvedThicknessMm = requested?.resolvedThicknessMm ?? null;
-                      // Where a resolved thickness came from, for the CEO to see it was supplied by
-                      // hand rather than read off the product row (Change 1, owner ruling 2026-09).
-                      // Deliberately two independent checks, not one merged flag — they answer
-                      // different questions (which CATALOG fallback fired, vs. whether THIS line
-                      // has its own override) and a line could in principle carry both.
-                      const thicknessSource = requested?.thicknessMmOverride != null
-                        ? 'ระบุเอง'
-                        : requested?.thicknessIsDefault
-                          ? 'ค่าเริ่มต้นของคอลเลกชัน'
-                          : null;
-                      // Ladder A (SPEC-PREFILL.md, 2026-09): backend-computed ESTIMATE — present
-                      // only when resolvedThicknessMm is null (see
-                      // PricingRequestThicknessSuggestionService). The governing distinction from
-                      // that spec: an estimate must be LABELLED and shown alongside its derivation,
-                      // and rendering it must write NOTHING — only a "บันทึก" click does, through
-                      // the SAME setItemThickness endpoint a hand-typed value already uses below.
-                      const thicknessSuggestion = requested?.thicknessSuggestion ?? null;
-                      // The value the input actually shows/submits: whatever Import has typed
-                      // wins outright (thicknessDrafts is only ever populated by this line's own
-                      // onChange), falling back to the suggestion so a bare "บันทึก" click — with
-                      // no typing at all — accepts it as-is. Never written to thicknessDrafts
-                      // itself just by rendering: computed fresh on every render, exactly the
-                      // "rendering a suggestion writes nothing" guarantee SPEC-PREFILL.md asks for.
-                      const thicknessDraftValue = thicknessDrafts[line.pricingRequestItemId]
-                        ?? (thicknessSuggestion?.thicknessMm != null ? String(thicknessSuggestion.thicknessMm) : '');
                       return (
                         <div
                           key={line.pricingRequestItemId}
@@ -1862,72 +1959,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                               </div>
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ความหนา</span>
-                            {resolvedThicknessMm != null ? (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-sm text-text-secondary">{resolvedThicknessMm} มม.</span>
-                                {thicknessSource ? (
-                                  <span className="text-2xs text-text-muted">({thicknessSource})</span>
-                                ) : null}
-                              </div>
-                            ) : editable ? (
-                              <div className="flex flex-col gap-1">
-                                <SafeForm
-                                  className="flex flex-wrap items-center gap-1.5"
-                                  onSubmit={() => setItemThickness.mutate(
-                                    { itemId: line.pricingRequestItemId, thicknessMm: Number(thicknessDraftValue) },
-                                    { onSuccess: () => setThicknessDrafts((cur) => {
-                                      const next = { ...cur };
-                                      delete next[line.pricingRequestItemId];
-                                      return next;
-                                    }) },
-                                  )}
-                                >
-                                  <input
-                                    id={`pcr-item-thickness-${line.pricingRequestItemId}`}
-                                    className="w-20"
-                                    type="number"
-                                    min="0.1"
-                                    step="0.1"
-                                    inputMode="decimal"
-                                    required
-                                    placeholder="มม."
-                                    aria-label={`ความหนา ${itemRef}`}
-                                    aria-describedby={thicknessSuggestion ? `pcr-item-thickness-basis-${line.pricingRequestItemId}` : undefined}
-                                    value={thicknessDraftValue}
-                                    onChange={(e) => setThicknessDrafts((cur) => ({ ...cur, [line.pricingRequestItemId]: e.target.value }))}
-                                  />
-                                  <Button
-                                    type="submit"
-                                    variant="secondary"
-                                    style={{ fontSize: 11, padding: '4px 8px' }}
-                                    disabled={setItemThickness.isPending || !(Number(thicknessDraftValue) > 0)}
-                                  >
-                                    บันทึก
-                                  </Button>
-                                </SafeForm>
-                                {/* Ladder A: the derivation + confidence SPEC-PREFILL.md requires
-                                    alongside any suggested value — never silent. LOW/UNVALIDATED
-                                    get the same warning tone ยังไม่ระบุ uses below, on purpose: a
-                                    reviewer skimming colour alone should still notice these need a
-                                    closer look before accepting as-is. */}
-                                {thicknessSuggestion ? (
-                                  <span
-                                    id={`pcr-item-thickness-basis-${line.pricingRequestItemId}`}
-                                    className={cn(
-                                      'text-2xs',
-                                      thicknessSuggestion.confidence === 'HIGH' ? 'text-text-muted' : 'text-warning-dark',
-                                    )}
-                                  >
-                                    ประมาณการ {thicknessSuggestion.thicknessMm} มม. — {thicknessSuggestion.basis}
-                                  </span>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <span className="text-sm font-bold text-warning-dark">ยังไม่ระบุ</span>
                             )}
                           </div>
                           <div>
@@ -2000,11 +2031,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           }).join(' · ')}
                         </p>
                       ) : null}
-                      {canConfirm && linesMissingThickness.length ? (
-                        <p role="alert" className="m-0 mt-2 text-xs font-bold text-danger-dark">
-                          {`ยืนยันราคาเสนอไม่ได้ — ยังไม่ได้ระบุความหนาของ ${linesMissingThickness.length} รายการ กรุณาระบุความหนาในตารางด้านบนก่อน`}
-                        </p>
-                      ) : null}
                       <div className="mt-3 flex flex-wrap justify-end gap-2">
                         {canNegotiate ? (
                           <Button type="button" variant="secondary" disabled={negotiateQuote.isPending} onClick={() => negotiateQuote.mutate(current)}>
@@ -2020,7 +2046,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           <Button
                             type="button"
                             variant="primary"
-                            disabled={confirmingFactoryQuoteId === current.id || linesMissingThickness.length > 0}
+                            disabled={confirmingFactoryQuoteId === current.id}
                             onClick={() => confirmFactoryQuote(current, draft)}
                             data-testid="pcr-submit-to-ceo"
                           >

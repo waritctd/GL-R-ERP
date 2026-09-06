@@ -539,53 +539,37 @@ public class FactoryQuoteService {
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
         // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
-        // quote is ready AND every item's thickness resolves — LandedCostCalculator.
-        // isFullyResolvable is the SAME predicate FactoryQuoteCarryForward shares, so those two
-        // call sites cannot drift apart from each other (see that method's own V164 correction for
-        // why it is no longer exactly "the calculator can run"). A multi-factory request does not
-        // advance until the LAST factory's quote is marked ready; re-reading summary is unnecessary
-        // since quotes.markReady above did not touch the pricing_request row itself. No advisory
-        // lock guards this check (unlike PricingDecisionService.startReview) — the worst case of
-        // two quotes being marked ready in the same instant is a missed auto-advance, not an
-        // illegal state, and the plan does not call for locking here.
-        if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())) {
-            if (landedCosts.isFullyResolvable(summary)) {
-                int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-                    PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
-                if (transitioned == 1) {
-                    // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
-                    // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
-                    // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
-                    // the same kind preserves one consistent "became ready for CEO review" trail
-                    // across both eras of the workflow.
-                    addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                        PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
-                        "All factory quotes ready for costing — request advanced for CEO review");
-                    notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                        "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
-                }
-            } else {
-                // V164: every factory quote may be ready (resolveSources succeeds) while the
-                // request still cannot advance because a thickness gap remains — isFullyResolvable
-                // folds both conditions into one boolean, so this branch cannot tell which one
-                // failed without asking separately. itemsMissingThickness re-runs resolveSources
-                // and returns an EMPTY list whenever resolveSources itself is the reason (a
-                // still-pending factory quote elsewhere, say) — so this only fires, and only tells
-                // Import something new, when thickness is genuinely the ONE thing left blocking the
-                // CEO hop. Recorded as an event (not a thrown exception) because marking THIS
-                // quote's OWN response ready must still succeed regardless — the gap is someone
-                // else's line, and Import already sees it called out in the factory-quote response
-                // screen (PricingRequestItemDto#resolvedThicknessMm); this puts the same fact in the
-                // request's own history so it survives a page reload without requiring the reader to
-                // re-spot which row is still blank.
-                List<String> missingThickness = landedCosts.itemsMissingThickness(summary);
-                if (!missingThickness.isEmpty()) {
-                    addEvent(summary, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_THICKNESS_SET,
-                        summary.status(), summary.status(),
-                        "ทุกโรงงานตอบราคาแล้ว แต่ยังไม่สามารถส่งให้ CEO พิจารณาได้ เนื่องจากยังไม่มีความหนาของ: "
-                            + String.join(", ", missingThickness)
-                            + " — กรุณาระบุความหนาในขั้นตอนตอบกลับราคาโรงงานก่อน");
-                }
+        // quote is ready — LandedCostCalculator.isFullyResolvable is the SAME predicate
+        // FactoryQuoteCarryForward shares, so those two call sites cannot drift apart from each
+        // other. A multi-factory request does not advance until the LAST factory's quote is marked
+        // ready; re-reading summary is unnecessary since quotes.markReady above did not touch the
+        // pricing_request row itself. No advisory lock guards this check (unlike
+        // PricingDecisionService.startReview) — the worst case of two quotes being marked ready in
+        // the same instant is a missed auto-advance, not an illegal state, and the plan does not
+        // call for locking here.
+        //
+        // V164 (2026-09) briefly ALSO required every item's thickness to resolve here, with an
+        // else-branch recording a "blocked on thickness" event for Import when it did not. An
+        // owner-ruled scope change on 2026-09-06 moved the thickness obligation to Sales
+        // (PricingRequestService#submit gates it before a request is ever visible here) and
+        // removed Import's ability to supply one at all — so a request reaching this method can no
+        // longer be blocked by an unresolved thickness, and that else-branch is gone with it. See
+        // LandedCostCalculator#isFullyResolvable's own Javadoc for the fuller history.
+        if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
+                && landedCosts.isFullyResolvable(summary)) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+                PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
+            if (transitioned == 1) {
+                // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
+                // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
+                // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
+                // the same kind preserves one consistent "became ready for CEO review" trail
+                // across both eras of the workflow.
+                addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                    PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
+                    "All factory quotes ready for costing — request advanced for CEO review");
+                notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
+                    "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
             }
         }
         return requireQuote(quoteId);

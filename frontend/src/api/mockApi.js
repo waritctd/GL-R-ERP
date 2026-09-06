@@ -9448,27 +9448,42 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
-    // Mirrors PricingRequestItemThicknessService (import/ceo) — ฝ่ายนำเข้า must supply ความหนา
-    // when the catalog has none (V164).
+    // Mirrors PricingRequestItemThicknessService (sales/ceo) — Sales must supply ความหนา when the
+    // catalog has none, in the คำขอราคา draft (owner-ruled SCOPE CHANGE, 2026-09-06: "sales need
+    // to be forced to fill in the thickness, not import" — this endpoint used to be import/ceo;
+    // import is refused now, and sales is owner-scoped + DRAFT-only, ceo is the wider, non-owner-
+    // scoped fallback). See the real service's own class Javadoc for the fuller history.
     //
-    // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role gate below approximates the
-    // Java service; verify permission behaviour against the real service, never this mock.
+    // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role/ownership/status gates
+    // below approximate the Java service; verify permission behaviour against the real service,
+    // never this mock. The real gate — including the wrong-way-round cases (import refused, a
+    // non-owner sales rep refused, sales refused once the request leaves DRAFT) — is pinned by
+    // PricingRequestItemThicknessIntegrationTest against a real Postgres.
     //
-    // SIMPLIFIED ON PURPOSE, not a faithful mirror of the real routing: the real endpoint upserts
-    // price_catalog.collection_thickness_default for a line WITH a catalog link, or this item's
-    // own thickness_mm_override for a line WITHOUT one — and 409s when the line already resolves a
-    // thickness from the catalog. mockProductPrices carries no thickness_mm column at all (see
-    // catalogThicknessDefaults' and mapMockPricingRequestItem's own comments above — "there is no
-    // catalogue [thickness data] in mock mode"), so there is no catalog-resolved value this mock
-    // could ever refuse to overwrite, and no collection-level store worth fabricating just to
-    // route a write into. Every call here writes (or clears) thicknessMmOverride directly, and
-    // mapMockPricingRequestItem's resolvedThicknessMm is exactly that value — an honest
-    // simplification (never MORE permissive than production: the real 409 is a "nothing to do"
-    // guard, not an authorization boundary), not a fabricated behaviour. The real routing/409 rule
-    // is proven only by PricingRequestItemThicknessIntegrationTest against a real Postgres.
+    // SIMPLIFIED ON PURPOSE, not a faithful mirror of the real ROUTING (still true after the scope
+    // change): the real endpoint ALWAYS writes this line's own thickness_mm_override now (upserting
+    // the shared price_catalog.collection_thickness_default was REMOVED, 2026-09-06) — which this
+    // mock already did unconditionally even before that change, since mockProductPrices carries no
+    // thickness_mm column at all (see catalogThicknessDefaults' and mapMockPricingRequestItem's own
+    // comments above — "there is no catalogue [thickness data] in mock mode"). So there was nothing
+    // to route here even under the OLD rule, and the 2026-09-06 change needed no update to this
+    // half. It also means the real 409 ("this line already resolves a thickness — nothing to
+    // fill") has no mock-side trigger: there is no catalog-resolved value here to refuse
+    // overwriting. Never MORE permissive than production (the 409 is a "nothing to do" guard, not
+    // an authorization boundary) — an honest simplification, not a fabricated behaviour.
     async setItemThickness(id, itemId, payload) {
-      const user = hasRole('import', 'ceo');
+      const user = hasRole('sales', 'ceo');
       const pr = findPricingRequestRaw(id);
+      if (user.role === 'sales') {
+        const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+        if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if (pr.status !== 'DRAFT') {
+          fail(`ระบุความหนาได้เฉพาะคำขอราคาที่อยู่ระหว่างดำเนินการเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+        }
+      } else if (!['DRAFT', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'].includes(pr.status)) {
+        // ceo: the wider, non-owner-scoped fallback window — mirrors CEO_EDITABLE_STATUSES.
+        fail(`ระบุความหนาได้เฉพาะคำขอราคาที่อยู่ระหว่างดำเนินการเท่านั้น (สถานะปัจจุบัน: '${pr.status}')`, 409);
+      }
       const item = pr.items.find((candidate) => candidate.id === itemId);
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const raw = payload?.thicknessMm;

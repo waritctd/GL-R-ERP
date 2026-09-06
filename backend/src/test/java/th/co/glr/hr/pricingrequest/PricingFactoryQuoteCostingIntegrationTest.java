@@ -1098,6 +1098,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 null, "THB", "catalog gate test", UUID.randomUUID().toString(),
                 List.of(freeTextPricingItem("Free-text tile, no catalog product"))),
             salesActor).summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
 
         pricingRequestService.submit(pricingRequestId, salesActor);
 
@@ -1179,6 +1180,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                     freeTextPricingItem("Free-text line 2"),
                     freeTextPricingItem("Free-text line 3"))),
             salesActor).summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
 
         pricingRequestService.submit(pricingRequestId, salesActor);
 
@@ -1287,6 +1289,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     void setItemFactory_refusesBeforeImportHasPickedTheRequestUp() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, blankFactoryRequest(), salesActor)
             .summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
@@ -1376,6 +1379,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                     factorylessPricingItem("Blank line two"),
                     factorylessPricingItem("Blank line three"))),
             salesActor).summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -1405,6 +1409,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                     factorylessPricingItem("Blank line one"),
                     factorylessPricingItem("Blank line two"))),
             salesActor).summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -1567,6 +1572,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 null, "THB", "no factory contact on file", UUID.randomUUID().toString(),
                 List.of(freeTextPricingItem("Unlisted factory item"))),
             salesActor).summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(
@@ -1620,9 +1626,28 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private long pricingRequestWithOneBlankFactoryLine() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, blankFactoryRequest(), salesActor)
             .summary().id();
+        resolveThicknessForFreeTextItems(pricingRequestId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         return pricingRequestId;
+    }
+
+    /**
+     * Test-fixture-only shortcut, NOT a call through {@code PricingRequestItemThicknessService}:
+     * writes {@code thickness_mm_override} directly via the repository for every item this
+     * DRAFT's catalog join does not already resolve, so {@code PricingRequestService#submit}'s new
+     * thickness gate (owner-ruled scope change, 2026-09-06) does not 422 fixtures in THIS file that
+     * are about factory routing (blank-line handling, generateDrafts partial behaviour) and were
+     * never about thickness at all. Bypassing the real endpoint's role/status/refuse checks is
+     * deliberate here — those are PricingRequestItemThicknessIntegrationTest's own job, on its own
+     * dedicated fixtures.
+     */
+    private void resolveThicknessForFreeTextItems(long pricingRequestId) {
+        for (PricingRequestDtos.PricingRequestItemDto item : pricingRequests.findItems(pricingRequestId)) {
+            if (item.resolvedThicknessMm() == null) {
+                pricingRequests.updateItemThicknessOverride(item.id(), new BigDecimal("10"));
+            }
+        }
     }
 
     private PricingRequestRequests.CreatePricingRequestRequest blankFactoryRequest() {
@@ -2130,77 +2155,65 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // V164: ฝ่ายนำเข้า must supply ความหนา when the catalog has none — the workflow gate
-    // (isFullyResolvable now also requires every item's thickness to resolve, not just
-    // resolveSources succeeding). This is a WORKFLOW change, not an authorization change — see
-    // PricingRequestItemThicknessIntegrationTest for the authz evidence on the new endpoint
-    // itself; this test is only about markReadyForCosting's auto-advance gate.
+    // V164 added a thickness gate to isFullyResolvable/markReadyForCosting; an owner-ruled scope
+    // change on 2026-09-06 ("sales need to be forced to fill in the thickness, not import") moved
+    // it OUT again, to PricingRequestService#submit instead — see LandedCostCalculator's own
+    // Javadoc for the fuller history. This is a WORKFLOW change, not an authorization change — see
+    // PricingRequestItemThicknessIntegrationTest for the authz evidence on the setItemThickness
+    // endpoint itself, and PricingRequestServiceSubmitThicknessGateIntegrationTest for the new
+    // submit()-time gate. This test is only about markReadyForCosting's auto-advance gate NOT
+    // duplicating what moved away from it.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * A single-factory, single-item request where the line's catalog product has NO thickness at
-     * all: {@code resolveSources} succeeds cleanly (the factory quote is fully priced) the moment
-     * Import marks it ready, but {@code isFullyResolvable} must still say no, because it now ALSO
-     * requires the thickness to resolve — so the auto-advance to {@code READY_FOR_CEO_REVIEW} must
-     * NOT fire. Once the thickness is supplied (mirroring what {@code
-     * PricingRequestItemThicknessService#setItemThickness} would write for an unlinked line — see
-     * that class's own integration test for the endpoint itself), a NEW factory-response revision
-     * marked ready DOES advance, proving the gate is not one-way.
+     * Proves the gate really MOVED rather than being duplicated: a line that resolved its
+     * thickness AT SUBMIT TIME (so the new submit()-time gate lets it through) but stops resolving
+     * afterward — the realistic case V156's uncostable-line safety net exists for, e.g. a
+     * catalog thickness corrected/removed after the request was already submitted — must still let
+     * {@code markReadyForCosting} auto-advance the request. If the old V164 gate were still here
+     * (even partially), this would stay stuck at {@code AWAITING_FACTORY_RESPONSE} instead.
      */
     @Test
-    void markReadyForCosting_doesNotAutoAdvance_untilEveryItemsThicknessResolvesToo() {
-        long noThicknessProductId = insertCatalogProduct("Factory A", "IT", "TEST-A-NOTHICK-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+    void markReadyForCosting_autoAdvancesEvenWithAnUnresolvedThickness_theGateMovedToSubmit() {
+        long driftingProductId = insertCatalogProduct("Factory A", "IT", "TEST-A-DRIFT-" + UUID.randomUUID(),
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", new BigDecimal("10"));
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, noThicknessProductId, null,
-            "Brand", "Model NoThickness", "Brand Model NoThickness", null, null, "60x60", "Factory A",
+            null, driftingProductId, null,
+            "Brand", "Model Drift", "Brand Model Drift", null, null, "60x60", "Factory A",
             new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
             QuantityType.CONFIRMED, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "V164 gate test request", UUID.randomUUID().toString(), List.of(item));
+            null, "THB", "gate-moved test request", UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // Resolves cleanly right now (the product HAS a thickness) — the submit()-time gate is
+        // satisfied, exactly as it should be.
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
-        long itemId = pricingRequestService.get(pricingRequestId, importActor).items().get(0).id();
 
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()
             .filter(q -> "Factory A".equals(q.factoryName())).findFirst().orElseThrow();
-        FactoryQuoteDto revision1 = factoryQuoteService.receive(draft.id(),
-            response("REF-V164-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
-        FactoryQuoteDto ready1 = factoryQuoteService.markReadyForCosting(revision1.id(), importActor);
-        assertThat(ready1.status()).isEqualTo(FactoryQuoteStatus.READY_FOR_COSTING);
+        FactoryQuoteDto revision = factoryQuoteService.receive(draft.id(),
+            response("REF-DRIFT-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
 
+        // Drift AFTER submission — resolvedThicknessMm is a LIVE join
+        // (PricingRequestRepository#findItems), not a submit-time snapshot, so this line is
+        // unresolved again by the time markReadyForCosting runs even though it resolved earlier.
+        jdbc.update("UPDATE price_catalog.product_prices SET thickness_mm = NULL WHERE price_id = :id",
+            Map.of("id", driftingProductId));
+        assertThat(pricingRequestService.get(pricingRequestId, importActor).items().get(0).resolvedThicknessMm())
+            .as("confirm the drift actually happened before asserting on its consequence")
+            .isNull();
+
+        FactoryQuoteDto ready = factoryQuoteService.markReadyForCosting(revision.id(), importActor);
+
+        assertThat(ready.status()).isEqualTo(FactoryQuoteStatus.READY_FOR_COSTING);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .as("the factory quote itself IS ready (resolveSources succeeds), but the request must "
-                + "not advance while this line's thickness is unresolved")
-            .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-        List<String> missingThicknessItems = landedCostCalculator.itemsMissingThickness(
-            pricingRequestService.get(pricingRequestId, importActor).summary());
-        assertThat(missingThicknessItems).hasSize(1);
-        assertThat(missingThicknessItems.get(0))
-            .as("names the item by its human label, not the bare id")
-            .contains("Model NoThickness");
-
-        // Supply the thickness (mirrors what the new endpoint writes for an unlinked line — this
-        // item IS linked, so the real endpoint would upsert collection_thickness_default instead;
-        // writing the override column directly here is a deliberate shortcut to isolate THIS
-        // test's own concern (the workflow gate) from PricingRequestItemThicknessService's own
-        // routing, which has its own dedicated integration test).
-        pricingRequests.updateItemThicknessOverride(itemId, new BigDecimal("10"));
-        assertThat(landedCostCalculator.isFullyResolvable(
-            pricingRequestService.get(pricingRequestId, importActor).summary()))
-            .as("the override now resolves ahead of the (still-null) catalog thickness")
-            .isTrue();
-
-        // A same-quote re-mark would 409 (markReady only transitions OUT of RESPONSE_RECEIVED/
-        // NEGOTIATING); a fresh revision is the normal way this quote re-enters that state.
-        FactoryQuoteDto revision2 = factoryQuoteService.receive(revision1.id(),
-            response("REF-V164-2", "THB", "100.00", revision1.items().get(0).pricingRequestItemId()), importActor);
-        factoryQuoteService.markReadyForCosting(revision2.id(), importActor);
-
-        assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
-            .as("thickness now resolves too, so the SAME auto-advance this class tests elsewhere fires")
+            .as("no thickness gate is left here (owner-ruled scope change, 2026-09-06) — the "
+                + "request must advance on resolveSources succeeding alone, regardless of this "
+                + "line's now-unresolved thickness. V156's safety net, not this method, is what "
+                + "still protects the CEO from pricing an unresolved line — see "
+                + "LandedCostCalculatorFormulaIntegrationTest's own drift-based test for that half.")
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
     }
 }

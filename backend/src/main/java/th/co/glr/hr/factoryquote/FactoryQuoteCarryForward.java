@@ -32,9 +32,10 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
  * quantity change.
  *
  * <p><strong>Fail-closed, twice.</strong> The parent must already be "ready for the CEO"
- * ({@link LandedCostCalculator#isFullyResolvable} — see that method's own V164 correction for
- * exactly what this now requires beyond "the calculator can run") before anything is copied, and
- * the CHILD is re-checked with the same predicate afterwards. If the second check disagrees the
+ * ({@link LandedCostCalculator#isFullyResolvable} — plainly "the calculator can run"; see that
+ * method's own Javadoc for a V164 detour that briefly made this stricter and was reverted on
+ * 2026-09-06) before anything is copied, and the CHILD is re-checked with the same predicate
+ * afterwards. If the second check disagrees the
  * copy is explicitly deleted and the request takes the normal Import path — a pricing request
  * parked at {@code READY_FOR_CEO_REVIEW} that the CEO cannot actually review is worse than one
  * extra Import step. Sharing {@code isFullyResolvable} with {@code

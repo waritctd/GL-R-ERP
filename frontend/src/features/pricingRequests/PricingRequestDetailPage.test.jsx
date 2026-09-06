@@ -130,10 +130,12 @@ function buildRequest(overrides = {}) {
         targetDeliveryDate: null,
         deliveryLocation: null,
         specialRequirement: null,
-        // Change 1 (owner ruling, 2026-09): resolved by default so every EXISTING test below (none
-        // of which is about thickness) keeps exercising ยืนยันราคาเสนอ exactly as before — the
-        // button is disabled while any line's thickness is unresolved. Tests for the new gate
-        // itself override this back to null (or omit it) on the specific line they care about.
+        // Resolved by default so every EXISTING test below (none of which is about thickness)
+        // renders a request with nothing outstanding. The scope change of 2026-09-06 moved the
+        // obligation from ฝ่ายนำเข้า to Sales, so this no longer has anything to do with
+        // ยืนยันราคาเสนอ (that button is not thickness-gated any more) — what it now keeps quiet is
+        // the SALES draft gate. The tests that exercise that gate build their own items with
+        // resolvedThicknessMm null: see draftNeedingThickness at the bottom of this file.
         resolvedThicknessMm: 8,
         thicknessIsDefault: false,
         thicknessMmOverride: null,
@@ -2339,5 +2341,63 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 
     expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน/)).toBeNull();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+  });
+});
+
+// ── Sales supplies ความหนา in the draft (owner-ruled SCOPE CHANGE, 2026-09-06) ────────────────
+//
+// The obligation moved from ฝ่ายนำเข้า to Sales: the input lives on the sales-facing item list of a
+// DRAFT request, and submit is blocked until every line resolves a thickness. These tests exist
+// because the move is invisible to every OTHER test in this file — buildRequest defaults
+// resolvedThicknessMm to 8 on both items, so the interesting state (a line with NO resolvable
+// thickness) is never built anywhere else and the whole surface would go unexercised.
+function draftNeedingThickness({ user = salesOwner, suggestion = null, status = 'DRAFT' } = {}) {
+  const base = buildRequest();
+  const request = buildRequest({
+    summary: { ...base.summary, status },
+    items: [
+      { ...base.items[0], resolvedThicknessMm: null, thicknessSuggestion: suggestion },
+      { ...base.items[1], resolvedThicknessMm: 8 },
+    ],
+  });
+  return { request, rendered: renderDetailPage({ user, request }) };
+}
+
+describe('PricingRequestDetailPage ความหนา — Sales fills it in the draft', () => {
+  it('offers the input to the owning sales rep on a DRAFT line with no resolvable thickness', async () => {
+    const { request } = draftNeedingThickness();
+    await waitForLoaded(request);
+
+    expect(screen.getByLabelText(/^ความหนา รายการที่ 1/)).not.toBeNull();
+    // The sibling line already resolves 8mm, so it must NOT offer an input — otherwise the gate
+    // would nag about a line that is already fine.
+    expect(screen.queryByLabelText(/^ความหนา รายการที่ 2/)).toBeNull();
+  });
+
+  it('blocks submit and names how many lines are still missing a thickness', async () => {
+    const { request } = draftNeedingThickness();
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ต้องระบุความหนาให้ครบก่อนส่งคำขอราคา/)).not.toBeNull();
+    expect(screen.getByText(/ยังไม่ได้ระบุ 1 รายการ/)).not.toBeNull();
+  });
+
+  it('prefills the estimator suggestion and shows the derivation it came from', async () => {
+    const { request } = draftNeedingThickness({
+      suggestion: { thicknessMm: 8, basis: 'ประมาณจากน้ำหนักกล่อง 14 กก. ÷ 0.756 ตร.ม.', confidence: 'HIGH' },
+    });
+    await waitForLoaded(request);
+
+    expect(screen.getByLabelText(/^ความหนา รายการที่ 1/).value).toBe('8');
+    // The basis is shown, not just the number — a reviewer must be able to see WHERE it came from
+    // before accepting it (SPEC-PREFILL.md's KNOWN-vs-ESTIMATED rule).
+    expect(screen.getByText(/ประมาณจากน้ำหนักกล่อง 14 กก/)).not.toBeNull();
+  });
+
+  it('does NOT offer the input to ฝ่ายนำเข้า — the entire point of the scope change', async () => {
+    const { request } = draftNeedingThickness({ user: importUser, status: 'IMPORT_REVIEWING' });
+    await waitForLoaded(request);
+
+    expect(screen.queryByLabelText(/^ความหนา รายการที่ 1/)).toBeNull();
   });
 });

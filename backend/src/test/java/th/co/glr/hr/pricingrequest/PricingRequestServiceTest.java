@@ -463,6 +463,43 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
+    // ── thickness gate (owner-ruled scope change, 2026-09-06) ───────────────
+    // "sales need to be forced to fill in the thickness, not import." The gate MOVED here from
+    // LandedCostCalculator#isFullyResolvable/FactoryQuoteService#markReadyForCosting — see those
+    // classes' own Javadoc for the history. "Unit-test the decision" half of CLAUDE.md's
+    // authz-evidence requirement; PricingRequestItemThicknessIntegrationTest and a dedicated
+    // real-Postgres submit() test are the other halves (enforcement survives into real SQL).
+
+    @Test
+    void submit_rejectsWhenAnItemsThicknessIsUnresolved() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithUnresolvedThickness()));
+
+        assertUnprocessable(() -> service.submit(20L, salesActor), "รายการที่ 1");
+
+        // Wrong-way-round half: a refused submit must never have transitioned the row — the SAME
+        // "did the write actually happen" check every other submit() gate test in this file makes.
+        verify(requestRepo, never()).transition(anyLong(), any(), any(), any(), any());
+    }
+
+    // Positive complement, using the SAME unresolved-shaped item with the gap closed — proves the
+    // 422 above is really about thickness and not some other field itemDtoWithUnresolvedThickness
+    // happens to leave null (it shares productId=null/sourceTicketItemId=null with
+    // itemDtoWithoutCatalogSnapshot's free-text shape, which submits fine on its own).
+    @Test
+    void submit_succeedsOnceEveryItemsThicknessResolves() {
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithoutCatalogSnapshot(null, null, "Brand", "Model")));
+        when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
+            .thenReturn(1);
+
+        service.submit(20L, salesActor);
+
+        verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
+    }
+
     // ── recipient contact ownership (Part 2) ────────────────────────────────
 
     @Test
@@ -1461,10 +1498,36 @@ class PricingRequestServiceTest {
         // catalog gate, and a free-text item (productId null) must still be able to pass the
         // catalog gate once catalog fields are populated by snapshotCatalogSelections in
         // production; this fixture simulates that already having happened.
+        //
+        // resolvedThicknessMm defaults RESOLVABLE (10mm — same safe constant
+        // AbstractPostgresIntegrationTest#insertCatalogProduct's 6-arg overload uses), for the
+        // same reason as that class's own comment: submit() now refuses (owner-ruled scope
+        // change, 2026-09-06) while any line's thickness is unresolved, and NONE of the ~11
+        // existing tests built on this helper are testing that gate — they exercise identity,
+        // recipient, date, transition-race and notification rules that would otherwise all need
+        // to route around a 422 this helper never used to risk. The dedicated test for the new
+        // gate (submit_rejectsWhenAnItemsThicknessIsUnresolved) builds its own item with this
+        // field explicitly null instead of reusing this helper.
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
             null, null, specialRequirement, 0, 900L, 900L, new BigDecimal("100.0000"), "THB",
+            null, 900L, "Test Factory", null, null, null, null, null, new BigDecimal("10"), false, null, null,
+            null, null, null, null, null, null);
+    }
+
+    /**
+     * Same catalog-populated shape as {@link #itemDtoWithIdentity}, but with {@code
+     * resolvedThicknessMm} deliberately left null — for {@code
+     * submit_rejectsWhenAnItemsThicknessIsUnresolved} only. Every OTHER item builder in this file
+     * defaults to a resolvable 10mm (see that helper's own comment for why); this is the one place
+     * that needs the gap back.
+     */
+    private static PricingRequestItemDto itemDtoWithUnresolvedThickness() {
+        return new PricingRequestItemDto(1L, 20L, null, null, null,
+            "Brand", "Model", null, null, null, null, null,
+            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
+            null, null, null, 0, 900L, 900L, new BigDecimal("100.0000"), "THB",
             null, 900L, "Test Factory", null, null, null, null, null, null, false, null, null,
             null, null, null, null, null, null);
     }
@@ -1472,11 +1535,16 @@ class PricingRequestServiceTest {
     /** Same shape as {@link #itemDtoWithIdentity}, but with every catalog snapshot field left null — for the dedicated catalog-gate tests. */
     private static PricingRequestItemDto itemDtoWithoutCatalogSnapshot(Long sourceTicketItemId, Long productId,
                                                                        String brand, String model) {
+        // resolvedThicknessMm defaults RESOLVABLE here too — see itemDtoWithIdentity's own
+        // comment above for why. "Without catalog snapshot" describes catalogPriceId/
+        // catalogBasePrice/etc. (the Finding A columns), not thickness — an unlinked free-text
+        // line's thickness comes from its OWN thickness_mm_override in production, which this
+        // constant stands in for.
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, null, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,
             null, null, null, 0, null, null, null, null, null, null, null, null, null, null, null, null,
-            null, false, null, null,
+            new BigDecimal("10"), false, null, null,
             null, null, null, null, null, null);
     }
 

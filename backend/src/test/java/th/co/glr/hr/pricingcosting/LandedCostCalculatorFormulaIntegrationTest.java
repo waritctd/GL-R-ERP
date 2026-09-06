@@ -344,31 +344,34 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void missingThickness_reachesTheCeoScreen_butApproveRefusesUntilACostIsSupplied() {
-        // A catalog product with NULL thickness_mm (the 7-arg overload with an explicit null) —
-        // a legitimate real-world state (owner ruling 2026-08-11: a free-text/unmatched line may
-        // be submitted with no catalog snapshot).
+        // Seeded WITH a real thickness so PricingRequestService#submit's own gate (owner-ruled
+        // scope change, 2026-09-06 — Sales must resolve every line's thickness before submitting)
+        // lets this fixture through cleanly, and so readyForReviewWithProduct's own
+        // markReadyForCosting call auto-advances the request on its own (that gate no longer
+        // checks thickness AT ALL — see LandedCostCalculator#isFullyResolvable's own Javadoc for
+        // why it moved). The thickness is removed AFTER the request has already reached
+        // READY_FOR_CEO_REVIEW, below — a realistic drift (the catalog value a request was
+        // submitted against gets corrected/removed later), and this test's actual premise: V156's
+        // safety net for a line that becomes unresolved AFTER the submit-time gate has already run.
         long noThicknessProductId = insertCatalogProduct("No Thickness Factory", "IT", "NO-THICKNESS-001",
-            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", new BigDecimal("10"));
         long pricingRequestId = readyForReviewWithProduct(noThicknessProductId, "No Thickness Factory",
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
+        assertThat(pricingRequests.findSummary(pricingRequestId).orElseThrow().status())
+            .as("resolveSources alone is enough to auto-advance now — no thickness gate left here")
+            .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        // V164 correction: readyForReviewWithProduct's own markReadyForCosting call no longer
-        // auto-advances this request on its own — ฝ่ายนำเข้า must supply ความหนา when the catalog
-        // has none (owner-ruled, 2026-09) widened LandedCostCalculator#isFullyResolvable to ALSO
-        // require this item's thickness to resolve, and it does not (that is this test's whole
-        // premise). The request is left sitting at AWAITING_FACTORY_RESPONSE, exactly as intended
-        // — see PricingFactoryQuoteCostingIntegrationTest#
-        // markReadyForCosting_doesNotAutoAdvance_untilEveryItemsThicknessResolvesToo for that gate
-        // itself. THIS test's own subject is different: what V156's safety net still does for a
-        // request that reaches READY_FOR_CEO_REVIEW ANYWAY, despite an unresolved thickness — the
-        // backstop the class Javadoc says stays for exactly that case (a request that reached
-        // review before this gate existed, or via a path this gate does not cover). Forcing the
-        // transition directly, bypassing the service layer entirely, is how that scenario is
-        // reached on purpose, without resurrecting a since-closed auto-advance path.
-        int forced = pricingRequests.transition(pricingRequestId, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
-            PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
-        assertThat(forced).as("the forced transition itself must succeed for this test's premise to hold").isEqualTo(1);
+        // The drift: resolvedThicknessMm is a LIVE join (PricingRequestRepository#findItems), not
+        // a submit-time snapshot, so clearing the catalog's own value here makes the line
+        // unresolved again even though it already passed both gates that ever checked it.
+        jdbc.update("UPDATE price_catalog.product_prices SET thickness_mm = NULL WHERE price_id = :id",
+            Map.of("id", noThicknessProductId));
+        assertThat(jdbc.queryForObject(
+            "SELECT thickness_mm FROM price_catalog.v_priceable_product WHERE price_id = :id",
+            Map.of("id", noThicknessProductId), BigDecimal.class))
+            .as("confirm the drift actually happened before asserting on its consequence")
+            .isNull();
 
         // V156 — the behaviour CHANGED here, deliberately. startReview used to throw 422, which
         // aborted before any costing row was written and therefore before the CEO could reach the
