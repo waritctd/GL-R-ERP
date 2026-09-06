@@ -89,7 +89,7 @@ public final class PricingRequestDtos {
         // PricingDecisionService#overrideItemProductType for who may set this and why it lives
         // here rather than on pricing_decision_item.
         String productTypeOverride,
-        // V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none). The next four fields are
+        // V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none). The next four fields are
         // read-side only — none is written directly by create/update; PricingRequestRepository#
         // findItems computes the first three fresh, per row, from a LIVE join against
         // price_catalog.v_priceable_product (never from the catalog snapshot columns above, which
@@ -108,7 +108,7 @@ public final class PricingRequestDtos {
         // whether THIS line has its own override) and conflating them would hide which one applies
         // to a line that could in principle carry both.
         boolean thicknessIsDefault,
-        // The line's own override (sales.pricing_request_item.thickness_mm_override, V163) — the
+        // The line's own override (sales.pricing_request_item.thickness_mm_override, V164) — the
         // ONLY thickness source for a line with no catalog link, and the source that outranks the
         // catalog even for a linked line (see resolveThicknessMm's javadoc for why "most specific,
         // hand-entered for this deal" wins). Null when never set.

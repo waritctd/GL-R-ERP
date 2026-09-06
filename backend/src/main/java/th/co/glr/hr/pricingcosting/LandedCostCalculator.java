@@ -95,7 +95,7 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * its technical identifier, plus where it is entered ({@code sales.factory_quote_item}), so the
  * CEO knows what to fix and who to ask without a second guess. {@link #isFullyResolvable}'s
  * semantics were unchanged by P1a/P1b — it wrapped only {@link #resolveSources}, exactly as
- * before. <b>That stopped being true under V163</b> (ฝ่ายนำเข้า must supply ความหนา when the
+ * before. <b>That stopped being true under V164</b> (ฝ่ายนำเข้า must supply ความหนา when the
  * catalog has none, 2026-09): it now ALSO requires every item's thickness to resolve, which is a
  * deliberately STRICTER condition than "the calculator can run" — see that method's own Javadoc
  * for why, and for the one gap (origin country) it still leaves to this class's own V156
@@ -500,7 +500,7 @@ public class LandedCostCalculator {
     }
 
     /**
-     * <b>V163 correction: thickness no longer comes ONLY from the catalog link.</b> This Javadoc
+     * <b>V164 correction: thickness no longer comes ONLY from the catalog link.</b> This Javadoc
      * used to open with exactly that claim, and it was true until ฝ่ายนำเข้า must supply ความหนา
      * when the catalog has none (owner-ruled, 2026-09) added a FIRST, more specific rung:
      * {@code requestItem.thicknessMmOverride()} — a hand-entered value for THIS deal's line,
@@ -525,11 +525,11 @@ public class LandedCostCalculator {
      * therefore before the CEO could reach the very screen that owns the manual cost override
      * ({@code manual_landed_cost_per_unit_thb}, V141) that resolves this. The capability existed
      * and the route to it was blocked. A null now marks the item UNCOSTABLE, it persists with a
-     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. V163
+     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. V164
      * ADDS a stricter, earlier gate on top ({@link #isFullyResolvable}, which now also requires
      * every item's thickness to resolve) — this V156 safety net stays as the backstop for a
      * request that reached the CEO before that gate existed, or via a path {@code
-     * isFullyResolvable} does not cover (an unresolved ORIGIN COUNTRY, which V163 deliberately
+     * isFullyResolvable} does not cover (an unresolved ORIGIN COUNTRY, which V164 deliberately
      * leaves ungated — see that method's own Javadoc). Nothing is ever priced on a guessed
      * thickness — the guarantee moved, it did not weaken.
      *
@@ -729,7 +729,7 @@ public class LandedCostCalculator {
      * customer-change revision may skip straight to the CEO too. Both call sites share this ONE
      * predicate so they cannot drift apart from EACH OTHER.
      *
-     * <p><b>V163 correction — this is NO LONGER exactly "the calculator can run".</b> Before ฝ่าย
+     * <p><b>V164 correction — this is NO LONGER exactly "the calculator can run".</b> Before ฝ่าย
      * นำเข้า must supply ความหนา when the catalog has none (owner-ruled, 2026-09), this method
      * wrapped ONLY {@link #resolveSources}, and the Javadoc here said so — truthfully, at the time.
      * That is no longer the whole story: {@link #calculate} can still SUCCEED on a request with an

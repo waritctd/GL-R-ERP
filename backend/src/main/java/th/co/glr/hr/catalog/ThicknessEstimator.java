@@ -176,7 +176,7 @@ public class ThicknessEstimator {
      *                     name exactly — see {@link CatalogRepository#findThicknessEstimationInputs})
      * @param kgPerBox     the row's {@code kg_per_box}
      * @param sqmPerBox    the row's REAL footprint area per box — {@code true_sqm_per_box} (V153/
-     *                     V164), already corrected for the per-linear-metre mislabelling; see
+     *                     V165), already corrected for the per-linear-metre mislabelling; see
      *                     {@link CatalogRepository#findThicknessEstimationInputs}'s own Javadoc
      */
     public Optional<Suggestion> fromBoxWeight(String factoryName, BigDecimal kgPerBox, BigDecimal sqmPerBox) {

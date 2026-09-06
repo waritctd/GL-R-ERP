@@ -516,7 +516,7 @@ public class PricingRequestRepository {
     }
 
     /**
-     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): LEFT JOINs {@code
+     * V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): LEFT JOINs {@code
      * price_catalog.v_priceable_product} on the SAME {@code catalog_price_id ?? product_id} link
      * {@code LandedCostCalculator#resolveThicknessMm} resolves through, so {@code
      * resolved_thickness_mm}/{@code thickness_is_default}/{@code catalog_sqm_per_piece} always
@@ -525,7 +525,7 @@ public class PricingRequestRepository {
      *
      * <p>SPEC-PREFILL.md ladder B/C (2026-09): five more columns off the SAME already-joined
      * {@code vpp} row — {@code product_name}/{@code size_raw}/{@code true_sqm_per_box}/{@code
-     * pcs_per_box}/{@code sqm_per_linear_m} (the last three added to the view by V164 for exactly
+     * pcs_per_box}/{@code sqm_per_linear_m} (the last three added to the view by V165 for exactly
      * this). Free to add: no new join, no extra round trip, same one row per item this query
      * already fetches. {@code thickness_suggestion} (ladder A) is NOT one of these five — it needs
      * OTHER rows (siblings) and raw ingredients this per-row mapper has no way to reach, so it is
@@ -563,7 +563,7 @@ public class PricingRequestRepository {
     }
 
     /**
-     * V163: writes or clears ONE line's own {@code thickness_mm_override} — the ONLY thickness
+     * V164: writes or clears ONE line's own {@code thickness_mm_override} — the ONLY thickness
      * source for a line with no catalog link at all (a catalog-linked line's hand-entered
      * thickness instead upserts the SHARED {@code price_catalog.collection_thickness_default} via
      * {@code ThicknessDefaultRepository}, reused as-is rather than duplicated here). See {@code

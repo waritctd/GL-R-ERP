@@ -31,7 +31,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 
 class PricingRequestControllerTest {
     private final PricingRequestService service = mock(PricingRequestService.class);
-    // V163: no test below exercises PUT .../items/{itemId}/thickness — its own controller wiring
+    // V164: no test below exercises PUT .../items/{itemId}/thickness — its own controller wiring
     // (role/status/routing) is pinned by PricingRequestItemThicknessIntegrationTest against real
     // Postgres instead. A plain mock is enough for this class's constructor to be satisfiable.
     private final PricingRequestItemThicknessService itemThickness = mock(PricingRequestItemThicknessService.class);

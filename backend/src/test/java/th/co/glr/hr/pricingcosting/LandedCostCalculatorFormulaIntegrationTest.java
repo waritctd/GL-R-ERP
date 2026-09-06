@@ -351,7 +351,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
 
-        // V163 correction: readyForReviewWithProduct's own markReadyForCosting call no longer
+        // V164 correction: readyForReviewWithProduct's own markReadyForCosting call no longer
         // auto-advances this request on its own — ฝ่ายนำเข้า must supply ความหนา when the catalog
         // has none (owner-ruled, 2026-09) widened LandedCostCalculator#isFullyResolvable to ALSO
         // require this item's thickness to resolve, and it does not (that is this test's whole

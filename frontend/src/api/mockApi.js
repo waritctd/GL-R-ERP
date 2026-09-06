@@ -1564,7 +1564,7 @@ function buildPricingRequestDetail(pr) {
   return { summary: buildPricingRequestSummary(pr), items: pr.items.map(mapMockPricingRequestItem), events: pr.events };
 }
 
-// Mirrors PricingRequestRepository#mapItem's V163 additions (resolvedThicknessMm/
+// Mirrors PricingRequestRepository#mapItem's V164 additions (resolvedThicknessMm/
 // thicknessIsDefault/catalogSqmPerPiece) — computed here at READ time, never stored on the item,
 // so they can never drift from item.thicknessMmOverride/item.catalogPriceId the way a
 // snapshot-at-write-time copy could.
@@ -9199,7 +9199,7 @@ export const api = {
         catalogBrand: null,
         catalogCollection: null,
         catalogModel: null,
-        // V163: never populated by any snapshot step (unlike the catalog_* fields above) — only
+        // V164: never populated by any snapshot step (unlike the catalog_* fields above) — only
         // ever written by setItemThickness once the request is past DRAFT and a factory has
         // responded, so a freshly-created/updated item always starts with no override.
         thicknessMmOverride: null,
@@ -9362,7 +9362,7 @@ export const api = {
     },
 
     // Mirrors PricingRequestItemThicknessService (import/ceo) — ฝ่ายนำเข้า must supply ความหนา
-    // when the catalog has none (V163).
+    // when the catalog has none (V164).
     //
     // NOTE (CLAUDE.md, "Authorization is NOT authoritative"): the role gate below approximates the
     // Java service; verify permission behaviour against the real service, never this mock.

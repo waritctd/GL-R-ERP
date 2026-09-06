@@ -43,7 +43,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemThicknessReques
  *       PricingRequestItemDto#catalogCollection} — that column is a submit-time snapshot that can
  *       go stale the moment the catalog changes underneath it.
  *   <li>Not linked at all: writes this line's OWN {@code
- *       sales.pricing_request_item.thickness_mm_override} (V163) instead — there is no shared
+ *       sales.pricing_request_item.thickness_mm_override} (V164) instead — there is no shared
  *       catalog row for an unlinked line to help, and {@code LandedCostCalculator#resolveThicknessMm}
  *       now reads this column FIRST, ahead of the catalog chain.
  * </ul>
@@ -137,7 +137,7 @@ public class PricingRequestItemThicknessService {
         if (thicknessMm != null) {
             // The CURRENT catalog-side resolution — product's own thickness_mm, or an existing
             // collection default, whichever price_catalog.v_priceable_product already COALESCEs.
-            // NOT item.resolvedThicknessMm(): that field also folds in thicknessMmOverride (V163's
+            // NOT item.resolvedThicknessMm(): that field also folds in thicknessMmOverride (V164's
             // own higher-priority rung), and an existing override must never block a correction
             // here — see this class's own Javadoc for why the refusal is deliberately
             // catalog-only.

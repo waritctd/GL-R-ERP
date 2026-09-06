@@ -13,7 +13,7 @@ public final class PricingRequestEventKind {
     // one. It is a routing decision, not metadata: it decides which factory gets asked for a
     // price, so it belongs in the audit trail beside the pickup and the factory-email events.
     public static final String PRICING_REQUEST_ITEM_FACTORY_SET = "PRICING_REQUEST_ITEM_FACTORY_SET";
-    // V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import/ceo supplied or
+    // V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import/ceo supplied or
     // cleared a line's thickness — see PricingRequestItemThicknessService#setItemThickness. Also raised (with a
     // different message, naming the still-unresolved item(s)) by FactoryQuoteService#
     // markReadyForCosting when every factory quote is ready but the request still cannot advance

@@ -1,4 +1,4 @@
--- V164: expose two more raw catalogue columns through v_priceable_product for a NEW read-only
+-- V165: expose two more raw catalogue columns through v_priceable_product for a NEW read-only
 -- consumer -- the "prefill everything" pass's estimators (SPEC-PREFILL.md) -- neither of which is
 -- a pricing input LandedCostCalculator consumes.
 --
@@ -44,7 +44,7 @@ SELECT p.price_id,
              OR COALESCE(p.thickness_mm, d.thickness_mm) >= 21 THEN 'THICKNESS_OUT_OF_BAND'
            ELSE 'PRICEABLE'
        END AS pricing_status,
-       -- New in V164 (appended -- see this migration's header for why these two must go last).
+       -- New in V165 (appended -- see this migration's header for why these two must go last).
        -- Deliberately RAW, unlike true_sqm_per_box above: pcs_per_box needs no per-linear-m
        -- correction (a piece count is a piece count regardless of price basis), and kg_per_box is
        -- always read alongside the ALREADY-corrected true_sqm_per_box, so no consumer ever divides
@@ -65,7 +65,7 @@ SELECT p.price_id,
  WHERE v.status = 'ACTIVE';
 
 COMMENT ON VIEW price_catalog.v_priceable_product IS
-    'The pricing engine reads ONLY this for pricing. kg_per_box/pcs_per_box (V164) are the one '
+    'The pricing engine reads ONLY this for pricing. kg_per_box/pcs_per_box (V165) are the one '
     'exception -- box-level facts read only by the thickness/sqm-per-unit PREFILL estimators '
     '(PricingRequestThicknessSuggestionService on the backend, deriveSqmPerPiece''s ladder on the '
     'frontend), never by LandedCostCalculator. Filters to the ACTIVE price-list version -- nothing '

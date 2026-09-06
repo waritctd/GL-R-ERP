@@ -32,7 +32,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
  * quantity change.
  *
  * <p><strong>Fail-closed, twice.</strong> The parent must already be "ready for the CEO"
- * ({@link LandedCostCalculator#isFullyResolvable} — see that method's own V163 correction for
+ * ({@link LandedCostCalculator#isFullyResolvable} — see that method's own V164 correction for
  * exactly what this now requires beyond "the calculator can run") before anything is copied, and
  * the CHILD is re-checked with the same predicate afterwards. If the second check disagrees the
  * copy is explicitly deleted and the request takes the normal Import path — a pricing request

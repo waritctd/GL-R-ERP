@@ -188,10 +188,10 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * the aggregation must turn THIS test red (specifically: only ONE of the two assertions below
      * still holds) and nothing else.
      *
-     * <p><b>V163 correction:</b> this used to pair item B's PER_BOX/piecesPerBox gap with an item A
+     * <p><b>V164 correction:</b> this used to pair item B's PER_BOX/piecesPerBox gap with an item A
      * missing {@code sqmPerUnit} instead of {@code linearMPerUnit}. That pairing stopped being
      * constructible once {@code FactoryQuoteService#receive} started requiring {@code sqmPerUnit}
-     * on EVERY line, regardless of unit basis (V163, matching what {@code resolveSqmPerPiece} has
+     * on EVERY line, regardless of unit basis (V164, matching what {@code resolveSqmPerPiece} has
      * always needed) — a quote response with no {@code sqmPerUnit} now 422s at {@code receive()}
      * itself, before it could ever reach the calculator. Item A is now built with the SAME trick
      * item B already used for {@code piecesPerBox}: quoted PER_PIECE (with a valid {@code
@@ -310,7 +310,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
      * READY_FOR_CEO_REVIEW), but each missing a DIFFERENT physical conversion factor (cluster 2).
      *
      * <p>Both items use the SAME shape of gap, for DIFFERENT factors, and neither can be {@code
-     * sqmPerUnit} any more (V163: {@code FactoryQuoteService#receive} now requires it on every
+     * sqmPerUnit} any more (V164: {@code FactoryQuoteService#receive} now requires it on every
      * line, so a quote missing it 422s at receive time, before the calculator ever sees it — see
      * this fixture's caller for the correction). Each item is quoted PER_PIECE (with a valid {@code
      * sqmPerUnit} supplied, so {@code resolveSqmPerPiece} succeeds and {@code receive()} accepts
@@ -362,7 +362,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
 
         // Factory A: quoted PER_PIECE (sqmPerUnit supplied, so resolveSqmPerPiece succeeds and
         // FactoryQuoteService#receive's own PER_BOX/PER_LINEAR_M validation never triggers — that
-        // check only looks at the QUOTE's basis, and V163's unconditional sqmPerUnit requirement is
+        // check only looks at the QUOTE's basis, and V164's unconditional sqmPerUnit requirement is
         // satisfied). linearMPerUnit is null; the REQUEST's own PER_LINEAR_M basis (see itemA
         // above) is what drives quantityToPieces to need it anyway.
         ReceiveFactoryQuoteRequest responseA = new ReceiveFactoryQuoteRequest("REF-AGG-A", "THB", "30 days", "45 days",

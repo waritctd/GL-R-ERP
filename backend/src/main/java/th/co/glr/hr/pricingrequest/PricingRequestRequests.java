@@ -81,7 +81,7 @@ public final class PricingRequestRequests {
     ) {}
 
     /**
-     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import or ceo supplies a
+     * V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import or ceo supplies a
      * hand-entered thickness for one line the catalog cannot resolve. See {@code
      * PricingRequestItemThicknessService#setItemThickness} for the routing rule (a catalog-linked line updates
      * the shared {@code price_catalog.collection_thickness_default}; an unlinked line updates this

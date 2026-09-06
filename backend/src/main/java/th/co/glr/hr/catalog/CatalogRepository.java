@@ -118,7 +118,7 @@ public class CatalogRepository {
     public record CatalogPricingKey(BigDecimal thicknessMm, String originCountryCode) {}
 
     /**
-     * V163 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): the (factory, collection) a
+     * V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): the (factory, collection) a
      * catalog price row belongs to — the routing key {@code PricingRequestItemThicknessService#setItemThickness}
      * needs to upsert the right {@code price_catalog.collection_thickness_default} row when a
      * pricing-request line's hand-entered thickness should land on the SHARED catalog default
@@ -337,12 +337,12 @@ public class CatalogRepository {
      * ThicknessEstimator#fromBoxWeight} needs for one catalog row — the factory NAME (keys the
      * density map), {@code kg_per_box} (V40 import, box-level, never priced-affecting on its own),
      * and the box's real footprint area. That area is {@code true_sqm_per_box}
-     * (V153/V164), not the raw {@code sqm_per_box} column — for a {@code per_linear_m} row the raw
+     * (V153/V165), not the raw {@code sqm_per_box} column — for a {@code per_linear_m} row the raw
      * column holds LINEAR METRES mislabelled as square metres (V153's own column comment: a CITY
      * battiscopa reports 6.0 for a box that is really 0.42 m², a 14.3x overstatement), and feeding
      * that straight into a density-implied thickness would be wrong in exactly the same way. Reads
      * {@code price_catalog.v_priceable_product} — ACTIVE-only, matching {@link #findPricingKeys}'s
-     * "resolve as of today" semantics — joined back to the base table for the two columns V164
+     * "resolve as of today" semantics — joined back to the base table for the two columns V165
      * added there but not to any pricing computation (see that migration's header).
      *
      * <p><b>Delegates to the batched {@link #findThicknessEstimationInputs(Collection)}</b>

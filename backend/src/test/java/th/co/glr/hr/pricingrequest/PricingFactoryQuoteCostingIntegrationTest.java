@@ -2334,7 +2334,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // V163: ฝ่ายนำเข้า must supply ความหนา when the catalog has none — the workflow gate
+    // V164: ฝ่ายนำเข้า must supply ความหนา when the catalog has none — the workflow gate
     // (isFullyResolvable now also requires every item's thickness to resolve, not just
     // resolveSources succeeding). This is a WORKFLOW change, not an authorization change — see
     // PricingRequestItemThicknessIntegrationTest for the authz evidence on the new endpoint
@@ -2362,7 +2362,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             QuantityType.CONFIRMED, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
-            null, "THB", "V163 gate test request", UUID.randomUUID().toString(), List.of(item));
+            null, "THB", "V164 gate test request", UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
@@ -2371,7 +2371,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()
             .filter(q -> "Factory A".equals(q.factoryName())).findFirst().orElseThrow();
         FactoryQuoteDto revision1 = factoryQuoteService.receive(draft.id(),
-            response("REF-V163-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
+            response("REF-V164-1", "THB", "100.00", draft.items().get(0).pricingRequestItemId()), importActor);
         FactoryQuoteDto ready1 = factoryQuoteService.markReadyForCosting(revision1.id(), importActor);
         assertThat(ready1.status()).isEqualTo(FactoryQuoteStatus.READY_FOR_COSTING);
 
@@ -2400,7 +2400,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // A same-quote re-mark would 409 (markReady only transitions OUT of RESPONSE_RECEIVED/
         // NEGOTIATING); a fresh revision is the normal way this quote re-enters that state.
         FactoryQuoteDto revision2 = factoryQuoteService.receive(revision1.id(),
-            response("REF-V163-2", "THB", "100.00", revision1.items().get(0).pricingRequestItemId()), importActor);
+            response("REF-V164-2", "THB", "100.00", revision1.items().get(0).pricingRequestItemId()), importActor);
         factoryQuoteService.markReadyForCosting(revision2.id(), importActor);
 
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())

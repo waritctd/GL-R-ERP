@@ -16,7 +16,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * PricingRequestThicknessSuggestionServiceTest} mocks — {@link
  * CatalogRepository#findSiblingThicknessesMm} and {@link
  * CatalogRepository#findThicknessEstimationInputs} — against real Postgres, so the SQL itself (the
- * ACTIVE-version filter, the collection scoping, and V164's view columns) is proven, not just the
+ * ACTIVE-version filter, the collection scoping, and V165's view columns) is proven, not just the
  * Java glue around it. {@link ThicknessEstimatorTest} covers the DECISION those two feed; this
  * class covers the DATA.
  *
@@ -129,7 +129,7 @@ class CatalogRepositoryThicknessEstimationIntegrationTest extends AbstractPostgr
     /**
      * The load-bearing case: for a {@code per_linear_m} row the raw {@code sqm_per_box} column
      * holds LINEAR METRES mislabelled as square metres (V153's own column comment). This method
-     * must return the CORRECTED {@code true_sqm_per_box}, not the raw column — proving V164 wired
+     * must return the CORRECTED {@code true_sqm_per_box}, not the raw column — proving V165 wired
      * the box-weight estimator to the same correction the sqm-per-piece side already relies on.
      */
     @Test

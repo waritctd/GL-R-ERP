@@ -633,7 +633,7 @@ public class FactoryQuoteService {
         // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
         // quote is ready AND every item's thickness resolves — LandedCostCalculator.
         // isFullyResolvable is the SAME predicate FactoryQuoteCarryForward shares, so those two
-        // call sites cannot drift apart from each other (see that method's own V163 correction for
+        // call sites cannot drift apart from each other (see that method's own V164 correction for
         // why it is no longer exactly "the calculator can run"). A multi-factory request does not
         // advance until the LAST factory's quote is marked ready; re-reading summary is unnecessary
         // since quotes.markReady above did not touch the pricing_request row itself. No advisory
@@ -657,7 +657,7 @@ public class FactoryQuoteService {
                         "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
                 }
             } else {
-                // V163: every factory quote may be ready (resolveSources succeeds) while the
+                // V164: every factory quote may be ready (resolveSources succeeds) while the
                 // request still cannot advance because a thickness gap remains — isFullyResolvable
                 // folds both conditions into one boolean, so this branch cannot tell which one
                 // failed without asking separately. itemsMissingThickness re-runs resolveSources

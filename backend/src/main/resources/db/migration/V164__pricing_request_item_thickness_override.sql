@@ -1,4 +1,4 @@
--- V163: ฝ่ายนำเข้า must supply ความหนา when the catalog resolves none for a pricing-request line.
+-- V164: ฝ่ายนำเข้า must supply ความหนา when the catalog resolves none for a pricing-request line.
 --
 -- LandedCostCalculator.resolveThicknessMm reads ONLY the catalog link today
 -- (catalog_price_id ?? product_id -> price_catalog.v_priceable_product.thickness_mm, which already
