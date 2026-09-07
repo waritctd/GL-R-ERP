@@ -439,7 +439,8 @@ export const api = {
   },
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
-    sendEmail: (ticketId, payload) => apiRequest(API_ROUTES.factoryConfigs.sendEmail(ticketId), { method: 'POST', body: payload }),
+    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
+    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.sendFactoryQuote.
   },
   customers: {
     create: (payload) => apiRequest(API_ROUTES.customers.create, { method: 'POST', body: payload }),
@@ -799,11 +800,26 @@ export const api = {
       apiRequest(API_ROUTES.payroll.deductionConsents, { method: 'PUT', body: payload }),
   },
   priceImport: {
+    // email/unit (V163): the RFQ contact address and default quoting unit folded onto
+    // price_catalog.factories from the now-dropped sales.factory_config — see
+    // PriceImportService.listFactories.
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
-    createFactory: (name, country, defaultCurrency) => apiRequest(API_ROUTES.priceImport.factories, {
+    // country is now REQUIRED and validated against price_catalog.country (PriceImportService's
+    // createFactory javadoc) — a blank/unseeded country used to reach the NOT NULL + FK column and
+    // 500 instead of a clean 400.
+    createFactory: (name, country, defaultCurrency, email, unit) => apiRequest(API_ROUTES.priceImport.factories, {
       method: 'POST',
-      body: { name, country, defaultCurrency },
+      body: { name, country, defaultCurrency, email, unit },
     }),
+    // PUT /api/price-import/factories/{factoryId} — same body/validation as createFactory. 404
+    // unknown id, 400 bad country, 409 duplicate name (PriceImportService.updateFactory).
+    updateFactory: (factoryId, name, country, defaultCurrency, email, unit) =>
+      apiRequest(API_ROUTES.priceImport.factory(factoryId), {
+        method: 'PUT',
+        body: { name, country, defaultCurrency, email, unit },
+      }),
+    // price_catalog.country options for the add/edit factory form's country select.
+    countries: () => apiRequest(API_ROUTES.priceImport.countries),
     versions: (factoryId) => apiRequest(API_ROUTES.priceImport.versions(factoryId)),
     upload: async (factoryId, file, label) => {
       const formData = new FormData();
@@ -873,6 +889,13 @@ export const api = {
     listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
     getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),
     updateFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id), { method: 'PUT', body: payload }),
+    // Manual-only RFQ send (owner decision): records that a human already sent this email from
+    // their own mail client — DRAFT -> REQUESTED, synchronously, no dispatch/outbox in between.
+    // `payload` is `{ emailTo, emailSubject, emailBody }`; emailTo is now OPTIONAL (a human may
+    // mark an RFQ sent even with no factory contact email on file), and `clientRequestId` is GONE
+    // — there is no out-of-band worker left to replay against, so FactoryQuoteService.send is
+    // idempotent by the quote's own current status instead (calling it again once REQUESTED is a
+    // no-op). See FactoryQuoteRequests.SendFactoryQuoteRequest's javadoc.
     sendFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteSend(id), { method: 'POST', body: payload }),
     receiveFactoryQuote: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteReceive(id), { method: 'POST', body: payload }),
     startFactoryNegotiation: (id, payload) => apiRequest(API_ROUTES.pricingRequests.factoryQuoteStartNegotiation(id), { method: 'POST', body: payload }),

@@ -97,9 +97,11 @@ public class ProductionReadinessConfig {
         // app.mail.*: REQUIRED (not DEGRADED) when the active provider actually reaches real
         // inboxes. spring.mail.username/password (MAIL_USERNAME/MAIL_PASSWORD) used to be checked
         // here as a DEGRADED gap; retired outright, not merely moved, because nothing reads those
-        // two properties any more -- NotificationEmailService/FactoryEmailService both moved onto
-        // the th.co.glr.hr.mail.Mailer abstraction, and SmtpMailer (app.mail.provider=smtp) builds
-        // its own JavaMailSenderImpl from app.mail.smtp.*, never spring.mail.*. A DEGRADED entry
+        // two properties any more -- NotificationEmailService moved onto the
+        // th.co.glr.hr.mail.Mailer abstraction (FactoryEmailService, which had done the same, was
+        // deleted when factory RFQ email became manual-only), and SmtpMailer
+        // (app.mail.provider=smtp) builds its own JavaMailSenderImpl from app.mail.smtp.*, never
+        // spring.mail.*. A DEGRADED entry
         // that can never stop firing (because the property it names is permanently unset) is worse
         // than no entry: it trains whoever reads the boot log to skip past a WARN that can never
         // mean anything changed.

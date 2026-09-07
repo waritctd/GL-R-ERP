@@ -2351,15 +2351,9 @@ public class TicketService {
 
     // --- helpers ---
 
-    /**
-     * Gate for POST /tickets/{id}/factory-emails/send. Factory outreach is part of the
-     * import price-proposal flow: import role only, and the ticket must exist — the
-     * endpoint previously required only a session, making it an open mail relay.
-     */
-    public void assertFactoryEmailAllowed(long ticketId, UserPrincipal actor) {
-        requireRole(actor, IMPORT_ROLES);
-        requireTicket(ticketId);
-    }
+    // assertFactoryEmailAllowed (the gate for the now-deleted POST /tickets/{id}/factory-emails/
+    // send) was removed alongside that route: factory RFQ email is manual-only now, recorded via
+    // FactoryQuoteService.send, which is gated by its own IMPORT_ROLES check — see that class.
 
     public TicketActionsResponse actions(long ticketId, UserPrincipal actor) {
         TicketDto ticket = requireViewAccess(ticketId, actor);

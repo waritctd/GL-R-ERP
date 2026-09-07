@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "npm install --prefix frontend",
-  "buildCommand": "npm run build --prefix frontend",
+  "buildCommand": "if [ \"$VERCEL_GIT_COMMIT_REF\" = \"develop\" ]; then VITE_SELF_SERVICE_ONLY=false npm run build --prefix frontend; else npm run build --prefix frontend; fi",
   "outputDirectory": "frontend/dist",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://gl-r-erp.onrender.com/api/:path*" },

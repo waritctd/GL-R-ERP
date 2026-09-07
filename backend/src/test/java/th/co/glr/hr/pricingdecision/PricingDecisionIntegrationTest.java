@@ -40,7 +40,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest;
@@ -139,16 +138,6 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         factoryQuoteRepository = factoryQuotes;
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         // V152 (V109 engine wiring): shared by FactoryQuoteService's markReadyForCosting
@@ -156,7 +145,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
         // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
@@ -189,25 +178,11 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         // catalogProductIdFactory* below uses insertCatalogProduct's 6-arg overload, which
         // defaults thickness_mm to 10 (inside Italy's seeded [8,12) band, whose top band is
         // open-ended, so ANY quantity resolves — see that helper's own comment).
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES
-                ('Factory A3', 'factory-a3@example.com', 'THB', 'piece', 'Italy'),
-                ('Factory B3', 'factory-b3@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
         catalogProductIdFactoryA = insertCatalogProduct("Factory A3", "IT", "TEST-A3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B3", "IT", "TEST-B3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Factory C3', 'factory-c3@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
         catalogProductIdFactoryC = insertCatalogProduct("Factory C3", "IT", "TEST-C3-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         jdbc.update("""
@@ -559,7 +534,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         // READY_FOR_COSTING, with the request auto-advanced to READY_FOR_CEO_REVIEW, by the time
         // twoItemSubmittedCosting() returns).
         assertThatThrownBy(() -> factoryQuoteService.send(quoteId,
-                new SendFactoryQuoteRequest("ceo-attempt@example.com", null, null, UUID.randomUUID().toString()), ceoActor))
+                new SendFactoryQuoteRequest("ceo-attempt@example.com", null, null), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> factoryQuoteService.receive(quoteId,
                 new ReceiveFactoryQuoteRequest("REF-CEO-ATTEMPT", "THB", "30 days", "45 days", "revision", "note",

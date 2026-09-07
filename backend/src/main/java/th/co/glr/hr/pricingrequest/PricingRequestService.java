@@ -428,6 +428,17 @@ public class PricingRequestService {
      * {@code sales.factory_quote} rows are grouped by factory NAME: moving a line after its quote
      * exists would strand that quote's item list. Correcting a wrong factory stays what it was
      * before this method: a new revision, not an edit in place.
+     *
+     * <p><b>The TARGET factory is checked too (BLOCKER 1b, review remediation).</b> Filling a
+     * blank line onto a factory whose current quote has already advanced past {@code DRAFT}
+     * (REQUESTED and beyond — sent, or already answered) is refused with a 409 for the identical
+     * reason: {@code FactoryQuoteService#generateDrafts} can only safely absorb a newly-resolved
+     * item into a quote still sitting at DRAFT, so once a factory's quote has moved on, a new line
+     * routed there today would be silently unreachable forever — {@code generateDrafts} would
+     * never re-add it, and {@code receive}'s item-set check would never let the sent/answered
+     * quote change shape to cover it. See {@link PricingRequestRepository#hasFactoryQuotePastDraft}
+     * and {@code FactoryQuoteService#generateDrafts}'s own Javadoc for the other half of this same
+     * invariant.
      */
     @Transactional
     public PricingRequestDetailDto setItemFactory(long id, long itemId, SetItemFactoryRequest request,
@@ -453,6 +464,10 @@ public class PricingRequestService {
         if (existing != null) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "รายการนี้ระบุโรงงานไว้แล้ว (" + existing + ") — หากต้องการเปลี่ยนโรงงาน ต้องสร้างคำขอราคารอบใหม่");
+        }
+        if (requests.hasFactoryQuotePastDraft(id, factory)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ได้ส่งคำขอราคาไปยังโรงงาน '" + factory + "' แล้ว — หากต้องการเพิ่มรายการนี้ให้โรงงานนี้ ต้องสร้างคำขอราคารอบใหม่");
         }
 
         int rows = requests.fillItemFactory(id, itemId, factory);
@@ -605,8 +620,10 @@ public class PricingRequestService {
     // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT
     // (see ATTACHMENT_EDITABLE_STATUSES, narrowed to DRAFT alone by V140); zero attachments
     // remains valid (no gate anywhere requires at least
-    // one). Import can mark which of those to include when it sends the factory email —
-    // FactoryQuoteService.attemptSend reads that flag fresh at actual-send time, not here.
+    // one). Import can mark which of those to include in the factory RFQ — review remediation,
+    // HIGH 4: the old FactoryQuoteService.attemptSend dispatch worker that used to read this flag
+    // at actual-send time is deleted (factory RFQ email is manual-only now); the flag's sole
+    // reader today is FactoryQuoteService.emailBody, at DRAFT-GENERATION time, not here.
     //
     // Every method below reuses requireViewable, which already carries the pricing-request
     // ownership rule (a "sales" actor may only reach a request on a ticket they created,

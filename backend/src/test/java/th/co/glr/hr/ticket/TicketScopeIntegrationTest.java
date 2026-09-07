@@ -30,7 +30,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.mail.Mailer;
@@ -106,8 +105,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
                 new FxRateRepository(jdbc), new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc),
                 formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), new FactoryEmailService(mock(Mailer.class)),
-            notifications, fileStorage, new AppProperties(), landedCostCalculator);
+            new FactoryConfigRepository(jdbc),
+            notifications, fileStorage, landedCostCalculator);
 
         // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience
         // constructor that assembled its own LandedCostCalculator is gone.

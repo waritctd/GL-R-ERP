@@ -31,7 +31,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.factory.FactoryConfigRepository;
-import th.co.glr.hr.factory.FactoryEmailService;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemRequest;
@@ -111,21 +110,13 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         pricingRequestService = new PricingRequestService(pricingRequests, tickets, notifications, objectMapper,
             new ContactRepository(jdbc), fileStorage, mock(th.co.glr.hr.factoryquote.FactoryQuoteCarryForward.class));
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        FactoryEmailService factoryEmail = mock(FactoryEmailService.class);
-        when(factoryEmail.send(org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), any(), any()))
-            .thenReturn(UUID.randomUUID().toString());
-        AppProperties dispatchProperties = new AppProperties();
-        dispatchProperties.getFactoryQuoteDispatch().setReclaimTimeoutSeconds(2);
-        dispatchProperties.getFactoryQuoteDispatch().setMaxAttempts(3);
-        dispatchProperties.getFactoryQuoteDispatch().setBackoffBaseSeconds(1);
-        dispatchProperties.getFactoryQuoteDispatch().setBatchSize(20);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         formulaConfigRepository = new PricingFormulaConfigRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(formulaConfigRepository);
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
-            new FactoryConfigRepository(jdbc), factoryEmail, notifications, fileStorage, dispatchProperties,
+            new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
         costingRepository = new PricingCostingRepository(jdbc);
         decisionRepository = new PricingDecisionRepository(jdbc);
@@ -141,19 +132,11 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
 
-        // sales.factory_config: RFQ-email-routing settings only. Its `country` is free text and,
-        // as of V151, is NOT what the freight lookup reads (see LandedCostCalculator's class
-        // Javadoc, V151 section) -- kept populated here only because the RFQ-generation flow
-        // (generateDrafts) needs a row for the factory to exist at all. The catalog product each
-        // helper creates below (via insertCatalogProduct, country "IT") is what actually feeds
-        // the freight lookup; see originCountry_resolvesFromTheCatalogFactoryJoin_... for a test
-        // that pins this precisely by making the two tables' country DISAGREE.
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('Formula Factory', 'formula-factory@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE
-            SET email = EXCLUDED.email, currency = EXCLUDED.currency, unit = EXCLUDED.unit, country = EXCLUDED.country
-            """, Map.of());
+        // price_catalog.factories.country (via insertCatalogProduct, country "IT" below) is what
+        // feeds the freight lookup (LandedCostCalculator#resolveOriginCountryCode) -- see
+        // originCountry_resolvesFromTheItemsCatalogLink_notFromTheQuotesFactoryNameSnapshot for a
+        // test that pins this precisely, by making the item's catalog link and its quote's
+        // factory-name snapshot disagree on which factory (and therefore country) applies.
 
         CustomerDto customer = customers.create(
             "บริษัท V109 จำกัด", "0100000000109", "109 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0109");
@@ -242,40 +225,64 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     /**
-     * V151 ("one canonical country, so the freight lookup can join") end to end: the origin
-     * country that actually drives the freight lookup is {@code price_catalog.factories.country}
-     * (via the item's catalog link), NOT {@code sales.factory_config.country} (the RFQ-email-
-     * routing table's free-text field). Proven by deliberately setting the two to DIFFERENT,
-     * unrelated values — {@code sales.factory_config.country} gets a string that matches no
-     * seeded ISO code at all ("Nowhere"), while {@code price_catalog.factories.country} (via
-     * {@code insertCatalogProduct}) gets a real, V151-seeded code ("IT"). If the engine ever
-     * regressed to reading the RFQ table instead (or as a fallback), this would 422 with "ไม่พบ
-     * อัตราค่าขนส่ง" instead of resolving cleanly — exactly the system-wide defect V151 fixed
-     * ("every freight lookup returned nothing, for all nine factories"), reproduced and pinned at
-     * the one unit this branch owns. A test built on hand-seeded rows that happen to share one
-     * value across both tables would NOT catch a regression back to the wrong table; this one
-     * would, because the two are deliberately never equal.
+     * Replaces {@code originCountry_resolvesFromTheCatalogFactoryJoin_notFromFactoryConfigsFreeTextCountry}
+     * (review remediation, MEDIUM 7). That test pinned V151's fix by putting price_catalog.factories.country
+     * and sales.factory_config.country DELIBERATELY at odds and proving the engine read the
+     * former; it was deleted because V163 merged factory_config's columns onto
+     * price_catalog.factories and dropped the table outright — there is no second,
+     * independently-settable country field left to regress to.
+     *
+     * <p><b>But a DIFFERENT way for two paths to disagree survived the merge, and post-V163 it is
+     * arguably more dangerous.</b> {@code LandedCostCalculator.costShipment} still separately
+     * resolves a {@code FactoryConfigDto} for the quote's {@code factory_name_snapshot} (today
+     * only as an existence check — see that method's own comment) while {@code
+     * resolveOriginCountryCode} resolves the ACTUAL freight-lookup country per item, through a
+     * LIVE join on the item's own {@code catalog_price_id -> product_prices.factory_id ->
+     * factories.country}. {@code resolved_factory_name} (what names the quote) is a snapshot,
+     * frozen at submit time; the catalog join is not. If a catalog product's factory assignment
+     * is corrected AFTER a pricing request already snapshotted its item and reached
+     * READY_FOR_COSTING under the ORIGINAL factory's name, the two paths point at different rows —
+     * and unlike pre-V163 (where the wrong table's free-text country would 422 the freight lookup
+     * outright), post-V163 BOTH factories carry a genuinely valid ISO code, so a future regression
+     * that read the quote's factory config instead of the item's catalog link would resolve
+     * CLEANLY to the WRONG country and silently miscost the shipment, never throwing at all. This
+     * test constructs exactly that drift and pins which side actually wins today.
      */
     @Test
-    void originCountry_resolvesFromTheCatalogFactoryJoin_notFromFactoryConfigsFreeTextCountry() {
-        String factoryName = "Mismatched Country Factory " + UUID.randomUUID();
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'mismatch@example.com', 'THB', 'piece', 'Nowhere')
-            """, Map.of("name", factoryName));
-        long productId = insertCatalogProduct(factoryName, "IT", "MISMATCH-001",
+    void originCountry_resolvesFromTheItemsCatalogLink_notFromTheQuotesFactoryNameSnapshot() {
+        String factoryName = "Reassignable Factory " + UUID.randomUUID();
+        long productId = insertCatalogProduct(factoryName, "IT", "REASSIGN-001-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
-
         long pricingRequestId = readyForReviewWithProduct(productId, factoryName, new BigDecimal("100"),
             UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100"), "100.00",
             new BigDecimal("1"), null, null);
 
+        // Simulates a LATER catalog correction: the product's factory assignment changes AFTER the
+        // pricing request already snapshotted resolved_factory_name = factoryName (Italy) and its
+        // factory quote (also named factoryName) reached READY_FOR_COSTING. Neither frozen,
+        // name-keyed value is touched here — only the LIVE product_prices.factory_id the catalog
+        // join reads is reassigned, to a factory whose country (China) has a KNOWN, DIFFERENT
+        // freight rate for the identical thickness/quantity band than Italy's (V109's seed).
+        long reassignedFactoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES (:name, 'CN', 'THB')
+            RETURNING factory_id
+            """, Map.of("name", "Reassigned-To Factory " + UUID.randomUUID()), Long.class);
+        jdbc.update("""
+            UPDATE price_catalog.product_prices SET factory_id = :factoryId WHERE price_id = :priceId
+            """, Map.of("factoryId", reassignedFactoryId, "priceId", productId));
+
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
-            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
+            ceoActor);
         PricingCostingItemDto costingItem = costingItemFor(decision);
-        // Resolves the REAL Italy [8,12)mm, qty [1,101) band (฿50,000 / 100 pieces = ฿500.0000/pc)
-        // -- proof the lookup used the catalog's "IT", never factory_config's "Nowhere".
-        assertThat(costingItem.freightCostThb()).isEqualByComparingTo("500.0000");
+
+        // China [8,12)mm, qty [1,101) -> 30,000 THB / 100 pieces = 300.0000/pc (V109 seed).
+        // Italy's rate for the SAME band is 50,000 -> 500.0000/pc (see the hand-computed test
+        // above): if a regression ever read the quote's (still-"factoryName", still-Italy)
+        // factory config instead of the item's reassigned catalog link, this would silently
+        // resolve 500.0000 instead, with no error of any kind.
+        assertThat(costingItem.freightCostThb()).isEqualByComparingTo("300.0000");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -341,11 +348,6 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         // be submitted with no catalog snapshot).
         long noThicknessProductId = insertCatalogProduct("No Thickness Factory", "IT", "NO-THICKNESS-001",
             new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES ('No Thickness Factory', 'nt@example.com', 'THB', 'piece', 'Italy')
-            ON CONFLICT (factory_name) DO UPDATE SET country = EXCLUDED.country
-            """, Map.of());
         long pricingRequestId = readyForReviewWithProduct(noThicknessProductId, "No Thickness Factory",
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
@@ -625,21 +627,14 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     /**
-     * {@code originCountryCode} is the CATALOG's factory country ({@code
-     * price_catalog.factories.country}) — the value that actually drives V109's freight lookup as
-     * of V151 (see {@code LandedCostCalculator#resolveOriginCountryCode}). Must be one of the
-     * twelve codes V151 seeds into {@code price_catalog.country} (its FK target), or the fixture
-     * INSERT itself fails — this is deliberately NOT a free-text field any more, the exact thing
-     * V151 fixed. {@code sales.factory_config.country} (a different, still-free-text table used
-     * only for RFQ email routing) is set to a throwaway value alongside it, since nothing in the
-     * pricing path reads it.
+     * {@code originCountryCode} is the factory's country on {@code price_catalog.factories.country}
+     * — the value that actually drives V109's freight lookup as of V151 (see {@code
+     * LandedCostCalculator#resolveOriginCountryCode}). Must be one of the twelve codes V151 seeds
+     * into {@code price_catalog.country} (its FK target), or the fixture INSERT itself fails —
+     * this is deliberately NOT a free-text field, the exact thing V151 fixed.
      */
     private long readyForReviewInCountry(String originCountryCode, BigDecimal requestedQty, String rawPrice) {
         String factoryName = "Country Test Factory " + UUID.randomUUID();
-        jdbc.update("""
-            INSERT INTO sales.factory_config (factory_name, email, currency, unit, country)
-            VALUES (:name, 'ct@example.com', 'THB', 'piece', 'Unused')
-            """, Map.of("name", factoryName));
         long productId = insertCatalogProduct(factoryName, originCountryCode, "COUNTRY-TEST-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");
         return readyForReviewWithProduct(productId, factoryName, requestedQty, UnitBasis.PER_PIECE,
