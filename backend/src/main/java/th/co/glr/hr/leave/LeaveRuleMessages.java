@@ -1,5 +1,6 @@
 package th.co.glr.hr.leave;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -33,26 +34,69 @@ import java.util.Map;
  * naturally after "…". {@code LeaveRuleMessagesTest} pins it: no rendered message may contain "ลาลา".
  *
  * <p><b>Params are pre-formatted by the caller.</b> This class does no date formatting and no
- * locale logic of its own -- a date param (e.g. {@code probationEndsOn}) arrives as whatever
- * {@link Object#toString()} (or an explicit formatter) the caller in {@code LeaveService} already
- * chose, matching the original English message's own {@code + probationEndsOn} string-concat
- * behaviour exactly. This class only does string substitution.
+ * locale logic of its own -- a date param (e.g. {@code probationEndsOn}, {@code certificateDeadline})
+ * arrives already rendered through {@code th.co.glr.hr.common.ThaiText#date} ("12 กันยายน 2569"), the
+ * same Thai-reader-facing formatting every notification-email date uses -- NEVER a raw
+ * {@code LocalDate.toString()} ISO string ("2026-09-12") concatenated into an otherwise all-Thai
+ * sentence. This class only does string substitution; it never formats a date itself.
  *
  * <p><b>Missing param fails loudly, not silently.</b> {@link #render} throws
  * {@link IllegalArgumentException} naming both the code and the missing key the instant a required
  * placeholder has no value -- a broken message must fail a test, never reach an employee as a raw
  * {@code {key}} placeholder.
+ *
+ * <p><b>Final copy rules (owner sign-off, 2026-09-09, V164):</b>
+ * <ul>
+ *   <li>No em/en dash anywhere in this class's prose -- an em/en dash in a sentence reads
+ *       machine-generated. Use plain spaces and connecting words instead. (This does NOT apply to
+ *       {@code ThaiText#dateRange}'s en dash between two dates in a date RANGE -- that is real
+ *       typography for a range, not prose, and is untouched.) {@code LeaveRuleMessagesTest} pins
+ *       this: no rendered message may contain U+2013 (EN DASH) or U+2014 (EM DASH).
+ *   <li>No comma before a section reference -- Thai separates with a space, not a comma:
+ *       {@code "(ระเบียบข้อ {section})"}, never {@code "(..., ระเบียบข้อ {section})"}.
+ *   <li>Section references render {@code "(ระเบียบข้อ {section})"}, never the earlier draft's
+ *       {@code "(§{section})"}.
+ * </ul>
  */
 final class LeaveRuleMessages {
     private LeaveRuleMessages() {
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // FINAL COPY -- WARN_UNPAID_* templates (V164, owner-approved CHANGE, wording signed off
+    // 2026-09-09). Every code below whose LeaveRuleCode#enforcement() is WARN_UNPAID_ALL ends with
+    // WARN_UNPAID_TAIL; every WARN_UNPAID_EXCESS code ends with WARN_UNPAID_EXCESS_TAIL -- two
+    // DIFFERENT tails, because the two groups end differently: an ALL code dockes the WHOLE request
+    // ({days} = total_days), while an EXCESS code docks only the amount OVER its own cap
+    // ({excessDays}) and the request otherwise still goes through the ordinary quota/paid-cap
+    // machinery. Do not duplicate either string into a case below; reference the constant. The two
+    // SICK document gates (SICK_CERTIFICATE_REQUIRED, SICK_NO_CERT_TOLERANCE_EXHAUSTED) additionally
+    // append SICK_CERT_CLOSER, telling the employee how to still get paid normally.
+    //
+    // {days} (WARN_UNPAID_TAIL) is the number of days that will be unpaid if this request is
+    // approved -- always total_days for a WARN_UNPAID_ALL code (see LeaveService#autoRejectNote's
+    // dominance-rule Javadoc for how unpaid_by_rule_days itself is computed). An EXCESS code's
+    // template no longer takes a {days} param at all -- ONLY {excessDays} -- since {excessDays} IS
+    // the figure WARN_UNPAID_EXCESS_TAIL needs; the earlier draft's "{days} carries the same value
+    // as {excessDays}" duplication has been dropped from both the templates and their call sites.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    private static final String WARN_UNPAID_TAIL =
+        "แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา {days} วันจะไม่ได้รับค่าจ้าง";
+    private static final String WARN_UNPAID_EXCESS_TAIL =
+        "ส่วนที่เกิน {excessDays} วันจะไม่ได้รับค่าจ้าง";
+    /** Appended (only) to the two SICK document gates -- tells the employee how to still be paid normally. */
+    private static final String SICK_CERT_CLOSER =
+        " แนบใบรับรองแพทย์เพื่อรับค่าจ้างตามปกติ";
+
     /**
      * Renders {@code code}'s Thai sentence, substituting every {@code {key}} placeholder in its
      * template from {@code params}. See this class's Javadoc for the param-formatting and
-     * missing-param contracts.
+     * missing-param contracts. {@code section} (§ code.sectionRef()) is injected automatically for
+     * every code -- a caller never needs to pass it explicitly.
      */
     static String render(LeaveRuleCode code, Map<String, String> params) {
+        Map<String, String> withSection = new HashMap<>(params);
+        withSection.putIfAbsent("section", code.sectionRef());
         return switch (code) {
             case ONCE_PER_EMPLOYMENT -> format(code, params,
                 "การ{leaveTypeNameTh}สามารถใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน "
@@ -69,65 +113,80 @@ final class LeaveRuleMessages {
                     + "กรุณาติดต่อฝ่ายบุคคลเพื่อบันทึกข้อมูลก่อนใช้สิทธิ์การลาประเภทนี้",
                 "leaveTypeNameTh");
 
-            case MIN_SERVICE_MONTHS -> format(code, params,
-                "การ{leaveTypeNameTh}ต้องมีอายุงานครบอย่างน้อย {minServiceMonths} เดือน "
-                    + "กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "leaveTypeNameTh", "minServiceMonths");
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            case MIN_SERVICE_MONTHS -> format(code, withSection,
+                "การ{leaveTypeNameTh}ต้องมีอายุงานครบอย่างน้อย {minServiceMonths} เดือน (ระเบียบข้อ {section}) "
+                    + WARN_UNPAID_TAIL,
+                "leaveTypeNameTh", "minServiceMonths", "section", "days");
 
             case PROBATION_HIRE_DATE_MISSING -> format(code, params,
                 "ไม่มีข้อมูลวันที่เริ่มงานในระบบ จึงไม่สามารถตรวจสอบสถานะการผ่านทดลองงานได้ "
                     + "กรุณาติดต่อฝ่ายบุคคลเพื่อบันทึกข้อมูลก่อนใช้สิทธิ์การ{leaveTypeNameTh}",
                 "leaveTypeNameTh");
 
-            case PROBATION_NOT_PASSED -> format(code, params,
-                "การ{leaveTypeNameTh}ต้องผ่านทดลองงานก่อน (คาดว่าจะผ่านทดลองงานวันที่ {probationEndsOn}) "
-                    + "กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "leaveTypeNameTh", "probationEndsOn");
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            // {probationEndsOn} arrives pre-formatted via ThaiText.date -- see this class's Javadoc.
+            case PROBATION_NOT_PASSED -> format(code, withSection,
+                "การ{leaveTypeNameTh}ต้องผ่านทดลองงานก่อน (คาดว่าจะผ่านวันที่ {probationEndsOn} "
+                    + "ระเบียบข้อ {section}) " + WARN_UNPAID_TAIL,
+                "leaveTypeNameTh", "probationEndsOn", "section", "days");
 
-            case FIRST_YEAR_MAX_DAYS -> format(code, params,
+            // WARN_UNPAID_EXCESS (V164): only {excessDays} -- see this class's WARN_UNPAID_TAIL
+            // block comment above for why an EXCESS template no longer also takes {days}.
+            case FIRST_YEAR_MAX_DAYS -> format(code, withSection,
                 "การ{leaveTypeNameTh}ในช่วง 12 เดือนแรกของการทำงาน ลาได้รวมไม่เกิน {effectiveCap} "
-                    + "วันต่อปี กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "leaveTypeNameTh", "effectiveCap");
+                    + "วันต่อปี (ระเบียบข้อ {section}) คำขอนี้ทำให้เกินสิทธิ์ " + WARN_UNPAID_EXCESS_TAIL,
+                "leaveTypeNameTh", "effectiveCap", "section", "excessDays");
 
-            case WEDDING_MAX_DAYS -> format(code, params,
-                "การลาเข้าพิธีสมรส (ของตนเองหรือบุตร) ลาได้ไม่เกิน {maxDays} วันต่อครั้ง "
-                    + "กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "maxDays");
+            // WARN_UNPAID_EXCESS (V164) -- see FIRST_YEAR_MAX_DAYS above for the {excessDays}-only note.
+            case WEDDING_MAX_DAYS -> format(code, withSection,
+                "การลาเข้าพิธีสมรส (ของตนเองหรือบุตร) ลาได้ไม่เกิน {maxDays} วันต่อครั้ง (ระเบียบข้อ {section}) "
+                    + "คำขอนี้ลา {totalDays} วัน " + WARN_UNPAID_EXCESS_TAIL,
+                "maxDays", "section", "totalDays", "excessDays");
 
-            case MAX_CONSECUTIVE_DAYS -> format(code, params,
-                "การ{leaveTypeNameTh}ติดต่อกันได้ไม่เกิน {maxConsecutiveDays} วันต่อครั้ง "
-                    + "กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "leaveTypeNameTh", "maxConsecutiveDays");
+            // WARN_UNPAID_EXCESS (V164, DORMANT -- see LeaveRuleCode's class Javadoc): see
+            // FIRST_YEAR_MAX_DAYS above for the {excessDays}-only note.
+            case MAX_CONSECUTIVE_DAYS -> format(code, withSection,
+                "การ{leaveTypeNameTh}ติดต่อกันได้ไม่เกิน {maxConsecutiveDays} วันต่อครั้ง (ระเบียบข้อ {section}) "
+                    + WARN_UNPAID_EXCESS_TAIL,
+                "leaveTypeNameTh", "maxConsecutiveDays", "section", "excessDays");
 
             case CONTIGUOUS_LEAVE_PAIR -> format(code, params,
                 "ไม่อนุญาตให้{leaveTypeNameTh}ติดต่อกับ{pairedTypeNameTh}โดยไม่มีวันทำงานคั่นระหว่างกัน "
                     + "กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
                 "leaveTypeNameTh", "pairedTypeNameTh");
 
-            case SICK_CERTIFICATE_WINDOW -> format(code, params,
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            // {certificateDeadline} arrives pre-formatted via ThaiText.date -- see this class's Javadoc.
+            case SICK_CERTIFICATE_WINDOW -> format(code, withSection,
                 "ต้องยื่นใบรับรองแพทย์ภายใน {certificateWindowDays} วันทำการนับจากวันที่เริ่มลาป่วย "
-                    + "(ภายในวันที่ {certificateDeadline}) กรุณาติดต่อฝ่ายบุคคลหากเป็นกรณียกเว้น",
-                "certificateWindowDays", "certificateDeadline");
+                    + "(ภายในวันที่ {certificateDeadline} ระเบียบข้อ {section}) คำขอนี้ยื่นเกินกำหนด "
+                    + WARN_UNPAID_TAIL,
+                "certificateWindowDays", "certificateDeadline", "section", "days");
 
-            case SICK_CERTIFICATE_REQUIRED -> format(code, params,
-                "การลาป่วยต้องแนบใบรับรองแพทย์ "
-                    + "กรุณาแนบใบรับรองแพทย์หรือติดต่อฝ่ายบุคคลเพื่อขอความช่วยเหลือ");
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            case SICK_CERTIFICATE_REQUIRED -> format(code, withSection,
+                "การลาป่วยต้องแนบใบรับรองแพทย์ (ระเบียบข้อ {section}) คำขอนี้ไม่มีใบรับรองแพทย์ "
+                    + WARN_UNPAID_TAIL + SICK_CERT_CLOSER,
+                "section", "days");
 
-            case SICK_NO_CERT_TOLERANCE_EXHAUSTED -> format(code, params,
-                "การลาป่วยโดยไม่มีใบรับรองแพทย์อนุโลมให้ลาได้ไม่เกิน {tolerance} ครั้งต่อเดือน "
-                    + "และใช้สิทธิ์นี้ครบแล้วในเดือนนี้ กรุณาแนบใบรับรองแพทย์หรือติดต่อฝ่ายบุคคลเพื่อขอความ"
-                    + "ช่วยเหลือ",
-                "tolerance");
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            case SICK_NO_CERT_TOLERANCE_EXHAUSTED -> format(code, withSection,
+                "การลาป่วยโดยไม่มีใบรับรองแพทย์อนุโลมให้ได้ไม่เกิน {tolerance} ครั้งต่อเดือน "
+                    + "และเดือนนี้ใช้ครบแล้ว (ระเบียบข้อ {section}) " + WARN_UNPAID_TAIL + SICK_CERT_CLOSER,
+                "tolerance", "section", "days");
 
-            case EMERGENCY_TOLERANCE_EXHAUSTED -> format(code, params,
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            case EMERGENCY_TOLERANCE_EXHAUSTED -> format(code, withSection,
                 "การลากิจฉุกเฉินโดยไม่แจ้งล่วงหน้าอนุโลมให้ได้ไม่เกิน {allowance} ครั้งต่อเดือน "
-                    + "และใช้สิทธิ์นี้ครบแล้วในเดือนนี้ กรุณาติดต่อหัวหน้างานหรือฝ่ายบุคคล",
-                "allowance");
+                    + "และเดือนนี้ใช้ครบแล้ว (ระเบียบข้อ {section}) " + WARN_UNPAID_TAIL,
+                "allowance", "section", "days");
 
-            case ADVANCE_NOTICE -> format(code, params,
-                "คำขอลาต้องยื่นล่วงหน้าอย่างน้อย {noticeDays} วันก่อนวันเริ่มลา "
-                    + "กรุณาติดต่อหัวหน้างานหรือฝ่ายบุคคลสำหรับการลากรณีเร่งด่วน",
-                "noticeDays");
+            // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
+            case ADVANCE_NOTICE -> format(code, withSection,
+                "การ{leaveTypeNameTh}ต้องยื่นล่วงหน้าอย่างน้อย {noticeDays} วัน (ระเบียบข้อ {section}) "
+                    + "คำขอนี้ยื่นไม่ทันกำหนด " + WARN_UNPAID_TAIL,
+                "leaveTypeNameTh", "noticeDays", "section", "days");
 
             case DEPARTMENT_COVERAGE -> format(code, params,
                 "คำขอนี้จะทำให้ไม่มีพนักงานคนอื่นในแผนกมาทำงานในวันที่ {uncoveredDate} "

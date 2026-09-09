@@ -510,10 +510,22 @@ public class LeaveRepository {
      * because it happens to touch this year at all. For every pre-V118 (necessarily single-year)
      * request this is byte-identical to the old parent-column query, since V118's backfill gave each
      * one exactly one child row carrying its own total_days.
+     *
+     * <p><b>V164 unpaid-by-rule exclusion (owner-approved change, 2026-09-09, owner ruling #1):</b>
+     * sums {@code lrqy.total_days - lrqy.unpaid_by_rule_days}, NOT plain {@code total_days} -- this is
+     * the fix that keeps unpaid-by-rule days from silently re-entering quota consumption through the
+     * back door of a LATER request in the same year. {@link LeaveService#computeQuotaSplit} already
+     * excludes them from the CURRENT request's own {@code quotaBoundedPaidDaysYear}; without this
+     * subtraction here too, a fully-unpaid-by-rule WARN request's whole {@code total_days} would still
+     * have counted as "used" the next time THIS method ran (e.g. for a second request the same
+     * employee/type/year), silently reducing quota the current request never actually consumed --
+     * exactly the failure ruling #1 names explicitly ("must not appear in sumUsedDays... consumption").
+     * {@code unpaid_by_rule_days} is 0 for every pre-V164 row (that column's own NO BACKFILL, and this
+     * subtraction is then a no-op), so this is behaviour-preserving for every row that predates V164.
      */
     public BigDecimal sumUsedDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
-            SELECT COALESCE(sum(lrqy.total_days), 0)::numeric(5,2)
+            SELECT COALESCE(sum(lrqy.total_days - lrqy.unpaid_by_rule_days), 0)::numeric(5,2)
               FROM hr.leave_request_quota_year lrqy
               JOIN hr.leave_request lr ON lr.leave_request_id = lrqy.leave_request_id
              WHERE lr.employee_id = :employeeId
@@ -659,11 +671,13 @@ public class LeaveRepository {
             jdbc.update("""
                 INSERT INTO hr.leave_request_quota_year (
                     leave_request_id, quota_year, total_days, paid_days, unpaid_days,
-                    quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days
+                    quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days,
+                    unpaid_by_rule_days
                 )
                 VALUES (
                     :leaveRequestId, :quotaYear, :totalDays, :paidDays, :unpaidDays,
-                    :quotaRemainingBefore, :quotaRemainingAfter, :carriedInDays, :ownQuotaDays
+                    :quotaRemainingBefore, :quotaRemainingAfter, :carriedInDays, :ownQuotaDays,
+                    :unpaidByRuleDays
                 )
                 """, new MapSqlParameterSource()
                 .addValue("leaveRequestId", leaveRequestId)
@@ -674,7 +688,8 @@ public class LeaveRepository {
                 .addValue("quotaRemainingBefore", split.quotaRemainingBefore())
                 .addValue("quotaRemainingAfter", split.quotaRemainingAfter())
                 .addValue("carriedInDays", split.carriedInDays())
-                .addValue("ownQuotaDays", split.ownQuotaDays()));
+                .addValue("ownQuotaDays", split.ownQuotaDays())
+                .addValue("unpaidByRuleDays", split.unpaidByRuleDays()));
         }
     }
 
@@ -693,7 +708,8 @@ public class LeaveRepository {
     public List<LeaveQuotaYearSplit> findQuotaYearSplits(long leaveRequestId) {
         return jdbc.query("""
             SELECT quota_year, total_days, paid_days, unpaid_days,
-                   quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days
+                   quota_remaining_before, quota_remaining_after, carried_in_days, own_quota_days,
+                   unpaid_by_rule_days
               FROM hr.leave_request_quota_year
              WHERE leave_request_id = :leaveRequestId
              ORDER BY quota_year
@@ -706,7 +722,8 @@ public class LeaveRepository {
                 rs.getObject("quota_remaining_before", BigDecimal.class),
                 rs.getObject("quota_remaining_after", BigDecimal.class),
                 rs.getObject("carried_in_days", BigDecimal.class),
-                rs.getObject("own_quota_days", BigDecimal.class)
+                rs.getObject("own_quota_days", BigDecimal.class),
+                rs.getObject("unpaid_by_rule_days", BigDecimal.class)
             ));
     }
 
@@ -1125,6 +1142,30 @@ public class LeaveRepository {
     }
 
     /**
+     * §5 WARN_UNPAID_* gates (V164, owner-approved change, 2026-09-09): persists the accumulated
+     * warnings and the resulting unpaid-by-rule day count for a request that submitted normally
+     * despite one or more WARN_UNPAID_ALL/WARN_UNPAID_EXCESS gates firing -- a small follow-up UPDATE
+     * by id, same shape as {@link #markEmergencyFiling}/{@link #recordAutoRejectReason} above and for
+     * the identical reason: kept OUT of {@link #create}'s own parameter list so every pre-existing
+     * caller/test of that method is unaffected by this addition. Called ONLY when {@code warnings} is
+     * non-empty -- {@code rule_warnings} stays NULL and {@code unpaid_by_rule_days} stays its SQL
+     * DEFAULT of 0 otherwise (the common case: no WARN gate fired), the same "no separate clear path
+     * needed" reasoning {@link #recordAutoRejectReason}'s Javadoc gives for {@code system_note_code}.
+     */
+    public void recordRuleWarnings(long leaveRequestId, List<LeaveRuleOutcome> warnings, BigDecimal unpaidByRuleDays) {
+        jdbc.update("""
+            UPDATE hr.leave_request
+               SET rule_warnings = CAST(:warnings AS jsonb),
+                   unpaid_by_rule_days = :unpaidByRuleDays,
+                   updated_at = now()
+             WHERE leave_request_id = :leaveRequestId
+            """, new MapSqlParameterSource()
+            .addValue("leaveRequestId", leaveRequestId)
+            .addValue("warnings", toWarningsJson(warnings))
+            .addValue("unpaidByRuleDays", unpaidByRuleDays));
+    }
+
+    /**
      * §5.2 emergency-filing exception (V125): rolling monthly count of this employee's PRIOR
      * requests of {@code leaveTypeCode} that were themselves approved via the emergency exception
      * ({@code emergency_filing = TRUE}), for the calendar month containing {@code requestStartDate}
@@ -1364,6 +1405,8 @@ public class LeaveRepository {
                    lr.emergency_filing,
                    lr.system_note_code,
                    lr.system_note_params,
+                   lr.rule_warnings,
+                   lr.unpaid_by_rule_days,
                    manager.is_active AS manager_is_active,
                    COALESCE(NULLIF(TRIM(manager.nickname), ''), manager.first_name_th) AS manager_display_name,
                    """
@@ -1454,7 +1497,11 @@ public class LeaveRepository {
             // LeaveService#withCanReviewFlag overwrites this on every DTO it returns; see its Javadoc.
             false,
             resolvePendingApproverRole(rs),
-            resolvePendingApproverName(rs)
+            resolvePendingApproverName(rs),
+            // V164 WARN_UNPAID_* gates: NULL rule_warnings (no warning fired, or a pre-V164 row -- NO
+            // BACKFILL) maps to List.of(), matching systemNoteParams' identical null-safe contract.
+            fromWarningsJson(rs.getString("rule_warnings")),
+            rs.getObject("unpaid_by_rule_days", BigDecimal.class)
         );
     }
 
@@ -1542,6 +1589,41 @@ public class LeaveRepository {
             });
         } catch (JsonProcessingException exception) {
             return Map.of();
+        }
+    }
+
+    /**
+     * §5 WARN_UNPAID_* gates (V164): serializes the accumulated {@link LeaveRuleOutcome} list for
+     * {@code rule_warnings} -- reuses {@link #SYSTEM_NOTE_PARAMS_MAPPER} (a plain, unconfigured
+     * mapper is equally sufficient for this shape too; see that field's own Javadoc for why this
+     * repository does not take an injected one). {@link LeaveRuleOutcome#code} (a {@link
+     * LeaveRuleCode} enum) serializes as its plain {@code name()} string by Jackson's default enum
+     * handling -- matching {@link #recordAutoRejectReason}'s {@code code.name()} precedent for
+     * {@code system_note_code}.
+     */
+    private String toWarningsJson(List<LeaveRuleOutcome> warnings) {
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.writeValueAsString(warnings == null ? List.of() : warnings);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize leave rule warnings", exception);
+        }
+    }
+
+    /**
+     * §5 WARN_UNPAID_* gates (V164): the read-side counterpart of {@link #toWarningsJson} for {@code
+     * rule_warnings} -- {@code null}/blank (no WARN gate fired, or a pre-V164 row, NO BACKFILL) maps
+     * to {@link List#of()}, never {@code null}, matching {@link LeaveRequestDto#ruleWarnings}'
+     * null-safe contract.
+     */
+    private List<LeaveRuleWarningDto> fromWarningsJson(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return SYSTEM_NOTE_PARAMS_MAPPER.readValue(json, new TypeReference<List<LeaveRuleWarningDto>>() {
+            });
+        } catch (JsonProcessingException exception) {
+            return List.of();
         }
     }
 }
