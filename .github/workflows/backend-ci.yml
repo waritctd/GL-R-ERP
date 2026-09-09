@@ -142,7 +142,16 @@ jobs:
       # to actually exercise the document-generation path. Mirrors backend/Dockerfile's Render setup.
       - name: Install LibreOffice (for PDF renderer tests)
         if: steps.changes.outputs.backend == 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-calc
+        # The runner image ships a Google Chrome apt source this job does not need. When that
+        # repo serves a Packages.gz whose hash disagrees with its own Release file, `apt-get
+        # update` exits 100 and takes this step -- and the whole job -- down before a single
+        # test compiles, for a package we never install. Observed 2026-09-09, blocking every PR
+        # in the repo. Dropping the source list first makes this step depend only on the Ubuntu
+        # archives it actually reads.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
 
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The
