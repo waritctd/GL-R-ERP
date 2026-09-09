@@ -106,11 +106,14 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void probationNotPassedAgreesOnBothSides() {
+    void probationNotPassedNeitherBlocksButSubmitStillWarns() {
         // Hired 5 days before "now" -- comfortably inside the 119-day default probation window (see
         // SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS), so PERSONAL's probation gate fires.
+        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated from "...AgreesOnBothSides" (preview.blocking()/submit.
+        // systemNoteCode() still agree, both null; the substance moved to submit's ruleWarnings).
         long employeeId = insertEmployee("PREV-PROB-001", LocalDate.parse("2026-06-26"), null);
-        assertPreviewAgreesWithSubmit(
+        assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-13", "2026-07-13", null, false, "PROBATION_NOT_PASSED");
     }
 
@@ -119,10 +122,12 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void weddingMaxDaysAgreesOnBothSides() {
+    void weddingMaxDaysNeitherBlocksButSubmitStillWarns() {
+        // V164 (owner-approved change, 2026-09-09): WEDDING_MAX_DAYS is WARN_UNPAID_EXCESS, not
+        // BLOCK -- renamed/updated from "...AgreesOnBothSides".
         long employeeId = insertEmployee("PREV-WED-001", LocalDate.parse("2015-01-01"), null);
         // 8-day span, over the 3-day wedding cap; well past PERSONAL's 1-day advance notice.
-        assertPreviewAgreesWithSubmit(
+        assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-13", "2026-07-20", "WEDDING", false, "WEDDING_MAX_DAYS");
     }
 
@@ -141,36 +146,42 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void sickNoCertificateToleranceExhaustedAgreesOnBothSides() {
+    void sickNoCertificateToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
+        // V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED is
+        // WARN_UNPAID_ALL, not BLOCK -- renamed/updated from "...AgreesOnBothSides".
         long employeeId = insertEmployee("PREV-SICK-001", LocalDate.parse("2015-01-01"), null);
         // 3 certificate-less SICK occasions already used this month (the seeded tolerance) -- the 4th
-        // must be refused on both sides.
+        // still fires the gate on both sides, just no longer as a rejection.
         seedActiveRequest(employeeId, "SICK", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED);
         seedActiveRequest(employeeId, "SICK", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED);
         seedActiveRequest(employeeId, "SICK", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED);
-        assertPreviewAgreesWithSubmit(
+        assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "SICK", "2026-07-13", "2026-07-13", null, false, "SICK_NO_CERT_TOLERANCE_EXHAUSTED");
     }
 
     @Test
-    void advanceNoticeAgreesOnBothSides() {
+    void advanceNoticeNeitherBlocksButSubmitStillWarns() {
+        // V164 (owner-approved change, 2026-09-09): ADVANCE_NOTICE is WARN_UNPAID_ALL, not BLOCK --
+        // renamed/updated from "...AgreesOnBothSides".
         long employeeId = insertEmployee("PREV-NOTICE-001", LocalDate.parse("2015-01-01"), null);
         // PERSONAL requires 1 day's notice; "today" (2026-07-01, the fixed clock) has none at all,
         // and the request is not declared emergency, so the plain notice gate fires.
-        assertPreviewAgreesWithSubmit(
+        assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, false, "ADVANCE_NOTICE");
     }
 
     @Test
-    void emergencyToleranceExhaustedAgreesOnBothSides() {
+    void emergencyToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
+        // V164 (owner-approved change, 2026-09-09): EMERGENCY_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL,
+        // not BLOCK -- renamed/updated from "...AgreesOnBothSides".
         long employeeId = insertEmployee("PREV-EMERG-001", LocalDate.parse("2015-01-01"), null);
         // 3 prior PERSONAL requests this month already used the emergency exception (emergency_filing
-        // = TRUE) -- the 4th same-day, no-notice, emergency-declared request must be refused on both
-        // sides via the tolerance-exhausted message, not the plain notice one.
+        // = TRUE) -- the 4th same-day, no-notice, emergency-declared request still fires the
+        // tolerance-exhausted gate on both sides, not the plain notice one.
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED));
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED));
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED));
-        assertPreviewAgreesWithSubmit(
+        assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, true, "EMERGENCY_TOLERANCE_EXHAUSTED");
     }
 
@@ -231,7 +242,15 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void previewWithNoDatesYetOnlyEvaluatesEligibilityGates() {
+    void previewWithNoDatesYetOnlyEvaluatesEligibilityGatesAndReportsNoBlockForAWarnOnlyEmployee() {
+        // V164 (owner-approved change, 2026-09-09): this employee's ONLY eligibility-gate hit is
+        // PROBATION_NOT_PASSED, which is WARN_UNPAID_ALL now, not BLOCK -- so this dateless preview's
+        // `blocking()` is correctly NULL (nothing here blocks the eventual submission any more),
+        // consistent with #submit's own post-V164 behaviour for the identical employee/type. See
+        // LeaveService#eligibilityRuleOutcome's Javadoc for why this dateless path cannot surface the
+        // WARN itself (no chosen dates yet to compute "how many days would be unpaid") -- this test
+        // was renamed from "...EligibilityGates" to make that narrowing explicit, not silently drop
+        // the original assertion.
         long employeeId = insertEmployee("PREV-NODATES-001", LocalDate.parse("2026-06-26"), null);
 
         LeavePreviewDto preview = leaveService.preview(
@@ -244,8 +263,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(preview.paidDays()).isNull();
         assertThat(preview.unpaidDays()).isNull();
         assertThat(preview.quotaYearSplits()).isEmpty();
-        assertThat(preview.blocking()).isNotNull();
-        assertThat(preview.blocking().code()).isEqualTo(LeaveRuleCode.PROBATION_NOT_PASSED);
+        assertThat(preview.blocking()).isNull();
     }
 
     // --- helpers ------------------------------------------------------------
@@ -281,6 +299,40 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(previewCode).isEqualTo(expectedCode);
             assertThat(submitted.status()).isEqualTo("AUTO_REJECTED");
         }
+    }
+
+    /**
+     * V164 (owner-approved change, 2026-09-09) companion to {@link #assertPreviewAgreesWithSubmit}:
+     * for a code whose {@link LeaveRuleCode#enforcement()} is WARN_UNPAID_ALL/WARN_UNPAID_EXCESS,
+     * BOTH sides now report "not blocking" ({@code preview.blocking() == null} and {@code
+     * submit.systemNoteCode() == null}) -- the original helper's core "agrees" claim still holds
+     * (asserted here identically), it is just no longer meaningful to compare it against {@code
+     * expectedCode}. What moved is where the gate's actual effect surfaces: {@link
+     * LeaveService#submit} still lands SUBMITTED, but with {@code expectedCode} present among {@code
+     * ruleWarnings} -- that is what this helper additionally proves, restoring the same "the fixture
+     * genuinely exercised the gate this test claims" coverage the old {@code expectedCode} equality
+     * used to provide.
+     */
+    private void assertPreviewAgreesNeitherBlocksButSubmitWarns(
+            long employeeId, String leaveTypeCode, String startDate, String endDate,
+            String purposeCode, boolean requestedAsEmergency, String expectedWarnCode) {
+        LeavePreviewDto preview = leaveService.preview(new LeavePreviewRequest(
+            leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate), employeeId,
+            purposeCode, requestedAsEmergency, false, LeavePreviewDepth.FULL, null), employee(employeeId));
+
+        LeaveRequestDto submitted = leaveService.submit(new SubmitLeaveRequest(
+            employeeId, leaveTypeCode, LocalDate.parse(startDate), LocalDate.parse(endDate),
+            "Integration test leave", null, null, null, null, null, null, null, purposeCode, requestedAsEmergency),
+            employee(employeeId));
+
+        assertThat(preview.blocking())
+            .as("a WARN_UNPAID_* code must not block preview either")
+            .isNull();
+        assertThat(submitted.systemNoteCode())
+            .as("preview's blocking code (null) must equal submit's system_note_code for the identical request")
+            .isNull();
+        assertThat(submitted.status()).isEqualTo("SUBMITTED");
+        assertThat(submitted.ruleWarnings()).extracting(LeaveRuleWarningDto::code).contains(expectedWarnCode);
     }
 
     private UserPrincipal employee(long employeeId) {

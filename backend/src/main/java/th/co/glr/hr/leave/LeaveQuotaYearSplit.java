@@ -44,6 +44,16 @@ import java.math.BigDecimal;
  * <p>{@code public} (Phase A0b, was package-private): {@code LeavePreviewDto} now carries a {@code
  * List<LeaveQuotaYearSplit>} in the {@code POST /api/leave/preview} response, so this needs to be
  * visible outside the package for Jackson to serialize it reliably. No other change.
+ *
+ * <p>{@code unpaidByRuleDays} (V164, owner-approved change, 2026-09-09): THIS YEAR's slice of the
+ * request's whole-request {@code unpaid_by_rule_days} (see {@code hr.leave_request}'s V164 column
+ * comment and {@link LeaveService#computeQuotaSplit}'s Javadoc for the latest-year-first allocation
+ * across years) -- a SUBSET of {@code unpaidDays}, never a third bucket. Owner ruling #1 (the
+ * "single most important correctness property" of V164) is enforced HERE, per year, not only on the
+ * request's own split: {@link LeaveRepository#sumUsedDays} subtracts this column so a WARN-ed
+ * request's unpaid-by-rule days never reduce a LATER request's remaining quota either -- see that
+ * method's Javadoc for why summing plain {@code totalDays} alone would have silently reintroduced
+ * quota consumption through the back door of a second, later request in the same year.
  */
 public record LeaveQuotaYearSplit(
     int quotaYear,
@@ -53,6 +63,7 @@ public record LeaveQuotaYearSplit(
     BigDecimal quotaRemainingBefore,
     BigDecimal quotaRemainingAfter,
     BigDecimal carriedInDays,
-    BigDecimal ownQuotaDays
+    BigDecimal ownQuotaDays,
+    BigDecimal unpaidByRuleDays
 ) {
 }

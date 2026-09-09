@@ -311,11 +311,19 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("1.00");
 
-        LeaveRequestDto refused = leaveService.submit(
+        // V164 (owner-approved change, 2026-09-09): FIRST_YEAR_MAX_DAYS is now WARN_UNPAID_EXCESS,
+        // not BLOCK -- this request's entire 2 working days are excess over the 1.00 effectiveCap
+        // (usedThisYear 1.00 + this request's 2.00 = 3.00, 2.00 over the 1.00 cap, capped at the
+        // request's own totalDays of 2.00), so it still submits, wholly unpaid by rule.
+        LeaveRequestDto warned = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-21"), // 2 working days
             employee(employeeId));
-        assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(refused.systemNoteCode()).isEqualTo("FIRST_YEAR_MAX_DAYS");
+        assertThat(warned.status()).isEqualTo("SUBMITTED");
+        assertThat(warned.systemNoteCode()).isNull();
+        assertThat(warned.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("FIRST_YEAR_MAX_DAYS");
+        assertThat(warned.unpaidByRuleDays()).isEqualByComparingTo("2.00");
+        assertThat(warned.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(warned.unpaidDays()).isEqualByComparingTo("2.00");
     }
 
     @Test
@@ -332,25 +340,38 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("3.00");
 
-        LeaveRequestDto refused = leaveService.submit(
+        // V164 (owner-approved change, 2026-09-09): see the identical WARN_UNPAID_EXCESS reasoning in
+        // personalLeaveFirstYearCapIsBoundByTheProratedQuotaWhenItIsBelowThreeDays above -- this
+        // request's whole 4 working days are excess over the 3.00 effectiveCap (usedThisYear 3.00 +
+        // this request's 4.00 = 7.00, 4.00 over the cap, capped at the request's own totalDays).
+        LeaveRequestDto warned = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-20", "2026-07-23"), // 4 working days
             employee(employeeId));
-        assertThat(refused.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(refused.systemNoteCode()).isEqualTo("FIRST_YEAR_MAX_DAYS");
+        assertThat(warned.status()).isEqualTo("SUBMITTED");
+        assertThat(warned.systemNoteCode()).isNull();
+        assertThat(warned.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("FIRST_YEAR_MAX_DAYS");
+        assertThat(warned.unpaidByRuleDays()).isEqualByComparingTo("4.00");
+        assertThat(warned.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(warned.unpaidDays()).isEqualByComparingTo("4.00");
     }
 
     @Test
-    void personalLeaveIsRefusedWithLessThanOneWorkingDayOfNotice() {
-        // FIXED_NOW is Wed 2026-07-01 09:00 Bangkok; PERSONAL requires 1 day of notice. Requesting
-        // leave for 2026-07-01 itself (same day, zero notice) must be refused.
+    void personalLeaveWarnsUnpaidWithLessThanOneWorkingDayOfNotice() {
+        // V164 (owner-approved change, 2026-09-09): ADVANCE_NOTICE is now WARN_UNPAID_ALL, not BLOCK
+        // -- renamed/updated in place from "...IsRefused...". FIXED_NOW is Wed 2026-07-01 09:00
+        // Bangkok; PERSONAL requires 1 day of notice. Requesting leave for 2026-07-01 itself (same
+        // day, zero notice) still submits, wholly unpaid by rule.
         long employeeId = insertEmployee("PERSONAL-NOTICE-001", LocalDate.parse("2015-01-01"));
 
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-01", "2026-07-01"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNoteCode()).isEqualTo("ADVANCE_NOTICE");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("ADVANCE_NOTICE");
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo(result.totalDays());
+        assertThat(result.paidDays()).isEqualByComparingTo("0.00");
     }
 
     @Test
@@ -427,11 +448,19 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(atCap.paidDays()).isEqualByComparingTo("3.00");
         assertThat(atCap.purposeCode()).isEqualTo("WEDDING");
 
+        // V164 (owner-approved change, 2026-09-09): WEDDING_MAX_DAYS is now WARN_UNPAID_EXCESS, not
+        // BLOCK -- only the 1 day beyond the 3-day cap is unpaid by rule; the other 3 still go
+        // through the ordinary quota machinery (7.00 quota, 3.00 already used by the atCap request
+        // above, 4.00 remaining -> paid in full).
         LeaveRequestDto overCap = leaveService.submit(
             submitRequestWithPurpose(employeeId, "PERSONAL", "2026-07-20", "2026-07-23", "WEDDING"),
             employee(employeeId));
-        assertThat(overCap.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(overCap.systemNoteCode()).isEqualTo("WEDDING_MAX_DAYS");
+        assertThat(overCap.status()).isEqualTo("SUBMITTED");
+        assertThat(overCap.systemNoteCode()).isNull();
+        assertThat(overCap.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("WEDDING_MAX_DAYS");
+        assertThat(overCap.unpaidByRuleDays()).isEqualByComparingTo("1.00");
+        assertThat(overCap.paidDays()).isEqualByComparingTo("3.00");
+        assertThat(overCap.unpaidDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
@@ -477,7 +506,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void emergencyPersonalLeaveIsApprovedAndPaidForTheFirstThreeOccasionsThisMonthAndRefusedForTheFourth() {
+    void emergencyPersonalLeaveIsApprovedAndPaidForTheFirstThreeOccasionsThisMonthAndWarnsUnpaidForTheFourth() {
         // FIXED_NOW is Wed 2026-07-01 09:00; PERSONAL requires 1 day of notice, so any date before
         // 2026-07-02 is late. Four distinct Mondays in June 2026 (all before that cutoff, all in the
         // SAME calendar month) stand in for four occasions of the same emergency-filing month.
@@ -492,10 +521,17 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
         }
 
+        // V164 (owner-approved change, 2026-09-09): EMERGENCY_TOLERANCE_EXHAUSTED is now
+        // WARN_UNPAID_ALL, not BLOCK -- the 4th occasion still submits, wholly unpaid by rule.
         LeaveRequestDto fourth = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
-        assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourth.systemNoteCode()).isEqualTo("EMERGENCY_TOLERANCE_EXHAUSTED");
+        assertThat(fourth.status()).isEqualTo("SUBMITTED");
+        assertThat(fourth.systemNoteCode()).isNull();
+        assertThat(fourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("EMERGENCY_TOLERANCE_EXHAUSTED");
+        assertThat(fourth.unpaidByRuleDays()).isEqualByComparingTo("1.00");
+        assertThat(fourth.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(fourth.unpaidDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
@@ -510,10 +546,14 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
             assertThat(result.status()).isEqualTo("SUBMITTED");
         }
-        // June is now fully used -- regression pin that the SAME-month 4th occasion is still refused.
+        // June is now fully used -- regression pin that the SAME-month 4th occasion still warns
+        // unpaid (V164, owner-approved change, 2026-09-09 -- EMERGENCY_TOLERANCE_EXHAUSTED is
+        // WARN_UNPAID_ALL, not BLOCK).
         LeaveRequestDto juneFourth = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
-        assertThat(juneFourth.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(juneFourth.status()).isEqualTo("SUBMITTED");
+        assertThat(juneFourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("EMERGENCY_TOLERANCE_EXHAUSTED");
 
         LeaveRequestDto mayFirst = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-05-04"), employee(employeeId));
@@ -529,16 +569,30 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void personalLeaveIsRefusedWhileTheEmployeeIsStillInProbation() {
+    void personalLeaveWarnsUnpaidWhileTheEmployeeIsStillInProbation() {
+        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is now WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated in place from "...IsRefused...". Hired 2026-06-20 (0 completed
+        // months by the request date) also means PERSONAL's own real prorated_first_year quota is
+        // 0.00 for this employee, so FIRST_YEAR_MAX_DAYS (also WARN, now WARN_UNPAID_EXCESS) fires
+        // TOO -- this is genuinely correct V164 behaviour (multiple warnings can accumulate on one
+        // request now that WARN no longer short-circuits), not a test artifact to narrow away. The
+        // dominance rule (owner ruling #3) still applies: PROBATION_NOT_PASSED (an ALL) dominates
+        // outright, so unpaidByRuleDays is still the WHOLE request, never summed with the EXCESS.
         long employeeId = insertEmployee("PERS-PROB-001", LocalDate.parse("2026-06-20"), 90);
 
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
-        assertThat(result.systemNote()).isNotBlank();
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.systemNote()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactlyInAnyOrder("PROBATION_NOT_PASSED", "FIRST_YEAR_MAX_DAYS");
+        assertThat(result.ruleWarnings()).allSatisfy(warning -> assertThat(warning.messageTh()).isNotBlank());
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("1.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
@@ -583,17 +637,21 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void personalLeaveIsRefusedOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
+    void personalLeaveWarnsUnpaidOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
         // Same NULL-probation_days fallback, pinned from the other side: hired one day later (118
-        // completed days, not 119) than the passing case above -> still short -> AUTO_REJECTED.
+        // completed days, not 119) than the passing case above -> still short -> WARNS UNPAID (V164,
+        // owner-approved change, 2026-09-09 -- PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK;
+        // renamed/updated in place from "...IsRefused...").
         long employeeId = insertEmployee("PERS-PROB-004", LocalDate.parse("2026-03-17"), null);
 
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("PROBATION_NOT_PASSED");
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
@@ -629,9 +687,11 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void personalLeaveIsRefusedOnConfirmDateItselfEvenThoughHireDatePlusProbationDaysWouldAllowIt() {
+    void personalLeaveWarnsUnpaidOnConfirmDateItselfEvenThoughHireDatePlusProbationDaysWouldAllowIt() {
         // Hired long ago with a short probation_days -- hire_date+probation_days alone would APPROVE
-        // this, but confirm_date is authoritative and the request date IS confirm_date.
+        // this, but confirm_date is authoritative and the request date IS confirm_date. V164
+        // (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK --
+        // renamed/updated in place from "...IsRefused...".
         long employeeId = insertEmployeeWithConfirmDate(
             "PERS-CONF-001", LocalDate.parse("2015-01-01"), 30, LocalDate.parse("2026-07-13"));
 
@@ -639,8 +699,10 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             submitRequest(employeeId, "PERSONAL", "2026-07-13", "2026-07-13"),
             employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNoteCode()).isEqualTo("PROBATION_NOT_PASSED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("PROBATION_NOT_PASSED");
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
