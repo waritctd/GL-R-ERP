@@ -176,6 +176,13 @@ function OwnRequestsSection({
     const canCancel = isOwn && request.status === 'SUBMITTED';
     const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
     const expanded = expandedId === request.id;
+    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status column
+    // and ReviewQueueTab.jsx's own mobile card (owner ruling, V164 follow-up) -- see either's own
+    // comment for why this reads `unpaidDays` (a §5 WARN gate's own unpaidByRuleDays is always a
+    // SUBSET of it -- LeaveRequestDto's Javadoc) rather than unpaidByRuleDays alone. This is the
+    // requester's OWN history view -- "part of my leave will be unpaid" matters here as much as it
+    // does on the approver's queue, and this card previously showed no such signal at all.
+    const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
@@ -184,8 +191,16 @@ function OwnRequestsSection({
           <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex shrink-0 items-center gap-1.5">
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <span className="flex shrink-0 items-start gap-1.5">
+            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
+                sharing one line in a narrow column is what forces truncation; stacking removes the
+                problem at every width with no breakpoint variant needed. */}
+            <span className="flex flex-col items-start gap-1">
+              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              {hasUnpaidDays ? (
+                <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
+              ) : null}
+            </span>
             <Button
               type="button"
               variant="icon"
