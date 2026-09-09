@@ -88,8 +88,86 @@ public final class PricingRequestDtos {
         // defaults to PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE"). See
         // PricingDecisionService#overrideItemProductType for who may set this and why it lives
         // here rather than on pricing_decision_item.
-        String productTypeOverride
+        String productTypeOverride,
+        // V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none). The next four fields are
+        // read-side only — none is written directly by create/update; PricingRequestRepository#
+        // findItems computes the first three fresh, per row, from a LIVE join against
+        // price_catalog.v_priceable_product (never from the catalog snapshot columns above, which
+        // can go stale the moment the CEO adds a collection default AFTER this line was created).
+        //
+        // resolvedThicknessMm is the SAME value LandedCostCalculator#resolveThicknessMm would see
+        // right now: thicknessMmOverride first, then the catalog's own COALESCEd thickness_mm
+        // (which already folds in collection_thickness_default). Null means the line is still
+        // unresolvable and blocks the CEO hop (see LandedCostCalculator#isFullyResolvable).
+        BigDecimal resolvedThicknessMm,
+        // Mirrors price_catalog.v_priceable_product.thickness_is_default exactly: true only when
+        // the CATALOG side of the resolution above came from a collection_thickness_default row
+        // rather than the product's own thickness_mm. Deliberately NOT folded together with
+        // thicknessMmOverride below — a caller wanting "was this hand-supplied in any form" checks
+        // BOTH fields, since they answer different questions (which catalog fallback fired, vs.
+        // whether THIS line has its own override) and conflating them would hide which one applies
+        // to a line that could in principle carry both.
+        boolean thicknessIsDefault,
+        // The line's own override (sales.pricing_request_item.thickness_mm_override, V164) — the
+        // ONLY thickness source for a line with no catalog link, and the source that outranks the
+        // catalog even for a linked line (see resolveThicknessMm's javadoc for why "most specific,
+        // hand-entered for this deal" wins). Null when never set.
+        BigDecimal thicknessMmOverride,
+        // price_catalog.v_priceable_product.sqm_per_piece for this line's resolved catalog link
+        // (null when unlinked, or linked to a row with none) — Change 2's prefill source for the
+        // "พื้นที่ต่อ 1 <หน่วย> (ตร.ม.)" input on the factory-quote response screen, read BEFORE the
+        // requestedQtySqm/requestedQty fallback.
+        BigDecimal catalogSqmPerPiece,
+        // SPEC-PREFILL.md ladder B/C (2026-09 "prefill everything" pass) — five more LIVE catalog
+        // reads, same v_priceable_product join as the four fields above and the same reason: these
+        // must reflect the catalog's CURRENT state, never a submit-time snapshot. All five are
+        // KNOWN (a fact read off the row), never estimated, so none needs a confidence label the
+        // way thicknessSuggestion below does.
+        //
+        // catalogProductName / catalogSizeRaw feed the frontend's own prefill (supplier product
+        // description, and deriveSqmPerPiece's geometric rung respectively) — see
+        // PricingRequestDetailPage.jsx's defaultResponseItems/prefillSqmPerUnit.
+        String catalogProductName,
+        String catalogSizeRaw,
+        // Ladder B rung 2 ("box ratio"): sqmPerBox is v_priceable_product.true_sqm_per_box, NOT the
+        // raw sqm_per_box column — already corrected for the per-linear-metre mislabelling (V153),
+        // the same column PricingRequestThicknessSuggestionService's box-weight rung reads via
+        // CatalogRepository#findThicknessEstimationInputs. pcsPerBox has no such correction to make
+        // (a piece count is a piece count regardless of price basis).
+        BigDecimal catalogSqmPerBox,
+        BigDecimal catalogPcsPerBox,
+        // Ladder B rung 4: v_priceable_product.sqm_per_linear_m (V153), populated ONLY for
+        // price_unit = 'per_linear_m' rows — its mere presence IS the "is this a per-linear-metre
+        // row" signal the frontend rung gates on, so no separate price_unit field is exposed.
+        BigDecimal catalogSqmPerLinearM,
+        // Ladder A: an ESTIMATED thickness (never a catalog fact) computed by
+        // PricingRequestThicknessSuggestionService ONLY when resolvedThicknessMm above is null —
+        // non-null here must never be treated as equivalent to a resolved thickness. Rendering this
+        // writes nothing; only PricingRequestItemThicknessService#setItemThickness, called once a
+        // human has seen and accepted it, does (SPEC-PREFILL.md's own governing distinction).
+        ThicknessSuggestionDto thicknessSuggestion
     ) {
+        /**
+         * Copies every field unchanged except {@code thicknessSuggestion} — the one field this DTO
+         * gains AFTER construction, once {@code PricingRequestThicknessSuggestionService} has
+         * queried the catalog for siblings/box-weight ingredients {@link
+         * PricingRequestRepository#findItems}'s single-row mapper has no way to fetch (they read
+         * OTHER rows, or raw base-table columns the read-time join does not carry). Records have no
+         * built-in "with" support; this is the one place that needs it, so it lives here rather
+         * than as full positional re-construction at every call site that needs it.
+         */
+        public PricingRequestItemDto withThicknessSuggestion(ThicknessSuggestionDto suggestion) {
+            return new PricingRequestItemDto(id, pricingRequestId, sourceTicketItemId, productId, variantId,
+                brand, model, productDescription, color, texture, size, factory, requestedQty, requestedQtySqm,
+                requestedUnit, requestedUnitBasis, quantityType, targetDeliveryDate, deliveryLocation,
+                specialRequirement, sortOrder, priceListVersionId, catalogPriceId, catalogBasePrice,
+                catalogCurrency, catalogEffectiveDate, resolvedFactoryId, resolvedFactoryName,
+                catalogProductCode, catalogBrand, catalogCollection, catalogModel, productTypeOverride,
+                resolvedThicknessMm, thicknessIsDefault, thicknessMmOverride, catalogSqmPerPiece,
+                catalogProductName, catalogSizeRaw, catalogSqmPerBox, catalogPcsPerBox, catalogSqmPerLinearM,
+                suggestion);
+        }
+
         /**
          * The factory this line is routed to, or {@code null} when it has none — the price-catalog
          * snapshot first, then Sales's own free text. This precedence was already written out by
@@ -125,6 +203,18 @@ public final class PricingRequestDtos {
             return fallback != null && !fallback.isBlank() ? fallback.trim() : null;
         }
     }
+
+    /**
+     * One ladder-A suggestion (SPEC-PREFILL.md) — {@code ThicknessEstimator#fromSiblings}/{@code
+     * #fromBoxWeight}'s output, carried onto {@code PricingRequestItemDto#thicknessSuggestion}
+     * unchanged. {@code thicknessMm} is the value a "บันทึก" click would submit if accepted as-is;
+     * {@code basis} is the Thai derivation text shown alongside it; {@code confidence} is one of
+     * {@code HIGH}/{@code MEDIUM}/{@code LOW}/{@code UNVALIDATED} (see {@code ThicknessEstimator}'s
+     * own Javadoc for the measured meaning of each). Never null when returned as a whole — a rung
+     * that yields nothing returns {@code Optional.empty()} to its caller, not a
+     * {@code ThicknessSuggestionDto} with null fields.
+     */
+    public record ThicknessSuggestionDto(BigDecimal thicknessMm, String basis, String confidence) {}
 
     public record PricingRequestEventDto(
         long id,

@@ -134,6 +134,14 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
             const status = pricingRequestStatusLabel(pr.status);
             const expanded = expandedId === pr.id;
             const detail = expanded ? detailQuery.data : null;
+            // Client-side mirror of PricingRequestService#submit's new thickness gate
+            // (owner-ruled scope change, 2026-09-06), using whatever item detail is ALREADY
+            // loaded from the expand toggle above rather than firing a new fetch per row — a
+            // collapsed row's gap still surfaces through the server's 422 via MutationError
+            // below; this only pre-empts the click once the row has been opened. The server gate
+            // in PricingRequestService#submit is the real enforcement either way.
+            const missingThicknessCount = (detail?.items ?? [])
+              .filter((item) => item.resolvedThicknessMm == null).length;
             return (
               <div key={pr.id} className="overflow-hidden rounded-lg border border-border bg-surface">
                 <button
@@ -169,11 +177,22 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                       <Button
                         type="button"
                         variant="secondary"
-                        disabled={submitMutation.isPending}
+                        disabled={submitMutation.isPending || missingThicknessCount > 0}
                         onClick={() => submitMutation.mutate(pr.id)}
                       >
                         ส่งให้ฝ่ายนำเข้า
                       </Button>
+                    ) : null}
+                    {canSubmitPricingRequest(user, pr) && missingThicknessCount > 0 ? (
+                      <p role="alert" className="basis-full text-2xs font-bold text-danger-dark">
+                        {`ส่งไม่ได้ — ยังไม่ได้ระบุความหนาของ ${missingThicknessCount} รายการ — `}
+                        {/* Plain <a>, not react-router's <Link>: this panel is mounted without a
+                            Router in its own test file, and a bare <a href> still lands correctly
+                            on the target route (a full navigation instead of a client-side one),
+                            which is an acceptable trade for not requiring every existing test here
+                            to grow a Router wrapper just for this one rarely-hit alert. */}
+                        <a href={`/pricing-requests/${pr.id}`} className="underline">ระบุความหนาที่นี่</a>
+                      </p>
                     ) : null}
                     {canCancelPricingRequest(user, pr) ? (
                       <Button

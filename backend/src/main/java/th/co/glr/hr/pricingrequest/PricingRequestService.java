@@ -251,6 +251,25 @@ public class PricingRequestService {
         }
         requests.snapshotCatalogSelections(id);
         items = requests.findItems(id);
+        // Every line must resolve a thickness before Sales may submit (owner-ruled scope change,
+        // 2026-09-06: the obligation moved from ฝ่ายนำเข้า to Sales at draft time — see
+        // PricingRequestItemThicknessService's class Javadoc). MUST run after
+        // snapshotCatalogSelections/the re-read directly above, never before: catalog_price_id is
+        // what that snapshot resolves, and resolvedThicknessMm's LEFT JOIN
+        // (PricingRequestRepository#findItems) keys off catalog_price_id ?? product_id — checking
+        // the pre-snapshot items would still see a stale (or absent) link and refuse a line that
+        // has actually just resolved. V156's uncostable-line safety net stays as a backstop for a
+        // line whose catalog link changes AFTER this point (e.g. a collection default the CEO
+        // later removes) — this gate only proves the thickness resolves right now, at submit time.
+        List<String> itemsMissingThickness = items.stream()
+            .filter(item -> item.resolvedThicknessMm() == null)
+            .map(PricingRequestService::itemLabel)
+            .toList();
+        if (!itemsMissingThickness.isEmpty()) {
+            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+                "ต้องระบุความหนาให้ครบทุกรายการก่อนส่งคำขอราคา: " + String.join(", ", itemsMissingThickness)
+                    + " — กรุณาระบุความหนาที่รายการดังกล่าวก่อนส่งคำขอราคาอีกครั้ง");
+        }
         // REMOVED 2026-08-11 (owner request): "Finding A" (financial-integrity review, commit 3)
         // used to require a fully-populated catalog snapshot on EVERY line here, 422-ing with
         // "ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา" otherwise. That made the
@@ -1023,6 +1042,41 @@ public class PricingRequestService {
     private static String identityErrorMessage(int zeroBasedIndex) {
         return "รายการที่ " + (zeroBasedIndex + 1)
             + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
+    }
+
+    /**
+     * "รายการที่ N (คำอธิบาย)" — mirrors {@code LandedCostCalculator#itemLabel}'s own format
+     * verbatim (see the spec this method implements: "name the offending line(s) the way
+     * LandedCostCalculator#itemLabel does"), so a line named in a submit()-time refusal reads
+     * identically to one named later in a costing-time refusal. Duplicated rather than shared:
+     * {@code LandedCostCalculator} lives in the {@code pricingcosting} package and this class is
+     * deliberately not given it as a collaborator — see {@code PricingRequestItemThicknessService}'s
+     * class Javadoc for why widening this class's constructor is worth avoiding (~30 test files
+     * construct it directly). This file already duplicates other small cross-aggregate facts on
+     * purpose for the same reason (see {@code SALES_ROLES}/{@code IMPORT_ROLES} above); keep the
+     * two formats in sync by inspection if either ever changes.
+     */
+    private static String itemLabel(PricingRequestItemDto requestItem) {
+        String brandModel = firstText(join(requestItem.brand(), requestItem.model()), null);
+        String description = firstText(brandModel, requestItem.productDescription());
+        return "รายการที่ " + requestItem.id() + (description != null ? " (" + description + ")" : "");
+    }
+
+    private static String join(String a, String b) {
+        if (!hasText(a)) {
+            return b;
+        }
+        if (!hasText(b)) {
+            return a;
+        }
+        return a.trim() + " " + b.trim();
+    }
+
+    private static String firstText(String first, String fallback) {
+        if (hasText(first)) {
+            return first.trim();
+        }
+        return hasText(fallback) ? fallback.trim() : null;
     }
 
     /**

@@ -28,6 +28,7 @@ import {
   quotationStatusLabel,
 } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
+import { deriveSqmPerPiece } from '../../utils/deriveSqmPerPiece.js';
 import { toUserErrorDescription, toUserErrorMessage } from '../../utils/userMessages.js';
 import {
   canActOnPricingDecision,
@@ -75,9 +76,21 @@ function isSales(user) {
   return user?.role === 'sales';
 }
 
+function isCeo(user) {
+  return user?.role === 'ceo';
+}
+
 function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
+
+// Mirrors PricingRequestItemThicknessService.CEO_EDITABLE_STATUSES exactly (owner-ruled scope
+// change, 2026-09-06) — the CEO fallback's wider window, DRAFT plus every Import/CEO stage up to
+// CEO_REVIEWING. Sales's own window is a single status (DRAFT), so it is inlined at its one call
+// site instead of getting a matching constant.
+const CEO_THICKNESS_STATUSES = [
+  'DRAFT', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING',
+];
 
 // Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
 // free text. `null` here is exactly what makes FactoryQuoteService.groupByFactory refuse to build
@@ -168,21 +181,84 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     const quotedUnit = item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
     return {
     pricingRequestItemId: item.pricingRequestItemId,
-    supplierProductCode: item.supplierProductCode ?? '',
-    supplierProductDescription: item.supplierProductDescription ?? '',
+    // Ladder C (SPEC-PREFILL.md, 2026-09): both KNOWN catalog facts, prefilled only when the
+    // server item itself carries none (re-opening an already-answered line never overwrites what
+    // Import typed) — same "server value wins, then prefill, then blank" shape every field below
+    // already uses.
+    supplierProductCode: item.supplierProductCode ?? requestItem.catalogProductCode ?? '',
+    supplierProductDescription: item.supplierProductDescription ?? prefillSupplierProductDescription(requestItem) ?? '',
     quotedQuantity: item.quotedQuantity ?? requestItem.requestedQty ?? 1,
     quotedUnit,
     unitBasis,
     rawUnitPrice: item.rawUnitPrice ?? '',
     currency: item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
-    sqmPerUnit: item.sqmPerUnit ?? '',
+    // Prefill only when untouched: item.sqmPerUnit (already recorded on the server) always wins
+    // first, so re-opening an already-answered line never overwrites what Import typed or saved.
+    sqmPerUnit: item.sqmPerUnit ?? prefillSqmPerUnit(requestItem) ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
     leadTimeText: item.leadTimeText ?? '',
     availabilityNote: item.availabilityNote ?? '',
     lineNote: item.lineNote ?? '',
     };
   });
+}
+
+// Change 2 (owner ruling, 2026-09) + SPEC-PREFILL.md ladder B (2026-09 "prefill everything" pass):
+// derive-and-prefill the "พื้นที่ต่อ 1 แผ่น (ตร.ม.)" input, but keep it TYPEABLE — prod has no
+// derivable source on some lines even after every rung below, so this is a convenience, not a
+// guarantee. Every rung here is KNOWN (a catalog fact), never estimated, so — unlike ladder A's
+// thickness suggestion — none needs a confidence label; try in order, stop at the first that
+// resolves, never overwrite what Import already typed or saved (see defaultResponseItems above).
+function prefillSqmPerUnit(requestItem) {
+  // Rung 1: the catalog's own sqm-per-piece — a real, resolved conversion factor for this line's
+  // linked product.
+  if (requestItem.catalogSqmPerPiece != null) return requestItem.catalogSqmPerPiece;
+  // Rung 2 ("box ratio"): 0 prod rows benefit today (measured) — every row that reaches here either
+  // lacks one of the two box figures or already resolved rung 1 — but costs nothing to check, and
+  // closes the gap for a row added after V153's one-time historical backfill ran (a manual
+  // ProductFormModal entry, or a later import). catalogSqmPerBox is ALREADY corrected for the
+  // per-linear-metre mislabelling (see PricingRequestItemDto#catalogSqmPerBox on the backend), so
+  // this division stays safe even for a per_linear_m row that also happens to carry a piece count.
+  const sqmPerBox = Number(requestItem.catalogSqmPerBox);
+  const pcsPerBox = Number(requestItem.catalogPcsPerBox);
+  if (Number.isFinite(sqmPerBox) && sqmPerBox > 0 && Number.isFinite(pcsPerBox) && pcsPerBox > 0) {
+    return sqmPerBox / pcsPerBox;
+  }
+  // Rung 3 ("geometric"): 215 prod rows benefit (measured). Reuses the SAME parser the
+  // ticket-creation แผ่น↔ตร.ม. toggle uses (TicketCreateModal.jsx) — see deriveSqmPerPiece's own
+  // docstring for exactly which size strings it accepts (millimetre WIDTHxHEIGHT only) and which
+  // it safely refuses (a three-dimension size, apostrophe-decimal junk, a centimetre-looking size).
+  const geometric = deriveSqmPerPiece(requestItem.catalogSizeRaw);
+  if (geometric != null) return geometric;
+  // Rung 4: sqm_per_linear_m (V153) is populated on the catalog row ONLY for price_unit =
+  // 'per_linear_m' rows — its mere presence on this field IS the "is this line a per-linear-metre
+  // row" signal (see PricingRequestItemDto#catalogSqmPerLinearM's own comment), so no separate
+  // basis check is needed here.
+  if (requestItem.catalogSqmPerLinearM != null) return requestItem.catalogSqmPerLinearM;
+  // Rung 5 (weak, last resort): the ratio Sales already entered (requestedQtySqm/requestedQty),
+  // which real data rarely carries (0 of prod's 7 rows, 12 of UAT's 32 do) but costs nothing to
+  // check.
+  const qtySqm = Number(requestItem.requestedQtySqm);
+  const qty = Number(requestItem.requestedQty);
+  if (Number.isFinite(qtySqm) && Number.isFinite(qty) && qty > 0) {
+    const ratio = qtySqm / qty;
+    if (Number.isFinite(ratio) && ratio > 0) return ratio;
+  }
+  // Rung 6: blank — never a guessed number.
+  return null;
+}
+
+// Ladder C (SPEC-PREFILL.md): the catalog's own product_name when the line has a resolved catalog
+// link, else brand + model — the SAME precedence PricingRequestItemDto#displayName() (backend) and
+// this page's own itemDisplayName() (above) use, so a prefilled description matches what the page
+// already shows for the line's own row.
+function prefillSupplierProductDescription(requestItem) {
+  if (requestItem.catalogProductName?.trim()) return requestItem.catalogProductName.trim();
+  const brand = (requestItem.catalogBrand ?? requestItem.brand)?.trim();
+  const model = (requestItem.catalogModel ?? requestItem.model)?.trim();
+  const name = [brand, model].filter(Boolean).join(' ');
+  return name || null;
 }
 
 function cleanNumber(value) {
@@ -267,15 +343,18 @@ function groupFactoryQuotesByFactory(factoryQuotes) {
 
 // One CSS-grid template shared by the column-header row and every item row beneath it (DESIGN.md
 // §13: "CSS-grid columns per table type keep alignment"), so ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน ·
-// ราคาที่เสนอ · ราคาที่อนุมัติ line up down the whole grouped list regardless of which factory a row
-// belongs to. Mobile-first, matching this file's own existing per-item response grid below
-// (`md:grid-cols-[1fr_auto_auto_auto]`): no columns at all below `md` (768px, this file's
-// established switch point), full 5-track grid from `md` up. `min-w-[720px]` gives the grid a
-// floor at tablet width — Panel's `flush` variant is `overflow-x-auto`, so a tight tablet card
-// scrolls this table horizontally inside itself rather than crushing the columns unreadable or
-// silently losing data off the edge (see Layout.jsx's own Panel comment on why that clip is
-// scroll, not hidden).
-const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[720px]';
+// ราคาที่เสนอ · ราคาที่อนุมัติ line up down the whole grouped list regardless of which
+// factory a row belongs to. Mobile-first, matching this file's own existing per-item response grid
+// below (`md:grid-cols-[1fr_auto_auto_auto]`): no columns at all below `md` (768px, this file's
+// established switch point), 5-track grid from `md` up. `min-w-[740px]` gives the grid a floor at
+// tablet width — Panel's `flush` variant is `overflow-x-auto`, so a tight tablet card scrolls this
+// table horizontally inside itself rather than crushing the columns unreadable or silently losing
+// data off the edge (see Layout.jsx's own Panel comment on why that clip is scroll, not hidden).
+//
+// Briefly 6 tracks (widened for a ความหนา column, owner ruling 2026-09) — an owner-ruled scope
+// change on 2026-09-06 moved that column to the sales-facing item list instead (ฝ่ายนำเข้า lost
+// the ability to set thickness entirely), so this surface narrowed back to 5.
+const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(150px,1.6fr)_minmax(120px,1.1fr)_100px_170px_150px] md:min-w-[740px]';
 
 /**
  * The factory-quote email composer, relocated into a modal behind each factory group's header
@@ -750,6 +829,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ itemId, factory }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factory }),
     'บันทึกโรงงานแล้ว',
   );
+  // Applies IMMEDIATELY to costing — no CEO approval step, no draft/confirm round trip the way the
+  // price/sqm inputs above have. Originally the ฝ่ายนำเข้า factory-quote response section's own
+  // cell; an owner-ruled scope change (2026-09-06) moved WHO may call this and WHERE it renders —
+  // sales now supplies it in the คำขอราคา draft ("รายการสินค้าและราคาตั้งต้น" section below),
+  // with the CEO as the only fallback — but this is still the SAME mutation/endpoint either side
+  // uses, so it stays declared once, up here.
+  const setItemThickness = useActionMutation(
+    ({ itemId, thicknessMm }) => api.pricingRequests.setItemThickness(pricingRequestId, itemId, { thicknessMm }),
+    'บันทึกความหนาแล้ว',
+  );
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างร่างอีเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างอีเมลแล้ว');
   // Manual-RFQ redesign: records that Import already sent this email themselves — see
@@ -1101,6 +1190,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // itemId -> the factory name Import is typing for that line. Same shape as `responseDrafts`
   // above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
+  // pricingRequestItemId -> the ความหนา (mm) being typed for a line with no resolved thickness
+  // yet — Sales's own DRAFT (owner-ruled scope change, 2026-09-06; the CEO fallback shares this
+  // same state on the wider window it may act in). Same shape as factoryDrafts — a key exists only
+  // once a change handler has written to it — and, like factoryDrafts, this saves IMMEDIATELY
+  // (setItemThickness.mutate) on submit rather than joining the price/sqm draft-then-ยืนยันราคาเสนอ
+  // flow that section still has.
+  const [thicknessDrafts, setThicknessDrafts] = useState({});
   // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
   // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
   // rather than beside the mutations above because it reads `request`, which is assigned just
@@ -1116,6 +1212,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => (request?.items ?? [])
       .map((item, index) => ({ item, position: index + 1 }))
       .filter((entry) => !itemFactoryName(entry.item)),
+    [request],
+  );
+  // Client-side mirror of PricingRequestService#submit's new thickness gate (owner-ruled scope
+  // change, 2026-09-06) — named here, with the item positions, so Sales sees WHICH lines block
+  // submit before clicking it rather than only after a 422 (the server gate in submit() is the
+  // real enforcement either way; this is purely so the reader is not surprised by it).
+  const missingThicknessItems = useMemo(
+    () => (request?.items ?? [])
+      .map((item, index) => ({ item, position: index + 1 }))
+      .filter((entry) => entry.item.resolvedThicknessMm == null),
     [request],
   );
   // Import owns this field, and only while the request is in its hands. NOT an authorization
@@ -1213,6 +1319,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const canEditPricingRequestAttachments = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
     && summary?.status === 'DRAFT';
+  // Mirrors PricingRequestItemThicknessService's SALES_EDITABLE_STATUSES / CEO_EDITABLE_STATUSES
+  // (owner-ruled scope change, 2026-09-06: "sales need to be forced to fill in the thickness, not
+  // import"). Sales is owner-scoped and DRAFT-only, the SAME shape as
+  // canEditPricingRequestAttachments above; the CEO is the fallback — never owner-scoped — across
+  // a wider window that also reaches a request already past DRAFT (V156's uncostable-line safety
+  // net means an old or otherwise-stuck request can still surface an unresolved line there).
+  // NOT an authorization decision by itself — the backend re-checks all of this — just whether to
+  // offer an input that would otherwise be refused.
+  const canSetItemThickness = (isSales(user)
+      && summary?.ticketCreatedById === user?.employeeId
+      && summary?.status === 'DRAFT')
+    || (isCeo(user) && CEO_THICKNESS_STATUSES.includes(summary?.status));
   const detailErrorStatus = apiStatus(detailQuery.error);
 
   if (detailQuery.isLoading) {
@@ -1345,12 +1463,44 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
             </p>
           ) : null}
+          {/* Owner-ruled scope change, 2026-09-06: submit() now refuses a DRAFT while any line
+              lacks a thickness — stated here BEFORE the "ส่งให้ฝ่ายนำเข้า" click (that control
+              lives on the deal page's PricingRequestPanel, not this one), the same "name it before
+              the 422" idiom the factory banner above already uses. Once past DRAFT this is no
+              longer a submit blocker (it already resolved, or the CEO fallback is now the one
+              acting on it), so the banner only shows while it still is one. */}
+          {missingThicknessItems.length && summary?.status === 'DRAFT' ? (
+            <p role="alert" className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+              {`ต้องระบุความหนาให้ครบก่อนส่งคำขอราคา — ยังไม่ได้ระบุ ${missingThicknessItems.length} รายการ: `}
+              {missingThicknessItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
+              {' — ระบุความหนาในรายการด้านล่างแล้วกดบันทึก'}
+            </p>
+          ) : null}
           {(request.items ?? []).map((item, index) => {
             const factoryName = itemFactoryName(item);
             // `position` is the 1-based row number the server counts too: findItems returns
             // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
             // sortOrder, so "รายการที่ N" means this exact row on both sides.
             const position = index + 1;
+            // Where a resolved thickness came from, for the reader to see it was supplied by hand
+            // rather than read off the product row. Deliberately two independent checks, not one
+            // merged flag — they answer different questions (which CATALOG fallback fired, vs.
+            // whether THIS line has its own override) and a line could in principle carry both.
+            const thicknessSource = item.thicknessMmOverride != null
+              ? 'ระบุเอง'
+              : item.thicknessIsDefault
+                ? 'ค่าเริ่มต้นของคอลเลกชัน'
+                : null;
+            // Ladder A (SPEC-PREFILL.md): backend-computed ESTIMATE, present only when
+            // resolvedThicknessMm is null. Rendering it writes nothing — only a "บันทึก" click
+            // does, through the SAME setItemThickness endpoint a hand-typed value already uses.
+            const thicknessSuggestion = item.thicknessSuggestion ?? null;
+            // The value the input actually shows/submits: whatever the viewer has typed wins
+            // outright (thicknessDrafts is only ever populated by this line's own onChange),
+            // falling back to the suggestion so a bare "บันทึก" click — with no typing at all —
+            // accepts it as-is. Never written to thicknessDrafts itself just by rendering.
+            const thicknessDraftValue = thicknessDrafts[item.id]
+              ?? (thicknessSuggestion?.thicknessMm != null ? String(thicknessSuggestion.thicknessMm) : '');
             return (
               <div
                 key={item.id}
@@ -1370,6 +1520,70 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   </span>
                   <span>Catalog: {item.catalogProductCode ?? '-'}</span>
                   <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
+                </div>
+                {/* Sales must supply ความหนา when the catalog resolves none (owner-ruled scope
+                    change, 2026-09-06 — moved here from ฝ่ายนำเข้า's factory-quote response
+                    section; see PricingRequestItemThicknessService's class Javadoc). Prefill
+                    (Ladder A), its confidence caption, and Equipe suppression are unchanged
+                    owner requirements — only the surface and the allowed role moved. */}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-bold text-text-muted">ความหนา:</span>
+                  {item.resolvedThicknessMm != null ? (
+                    <span className="text-text-secondary">
+                      {item.resolvedThicknessMm} มม.
+                      {thicknessSource ? ` (${thicknessSource})` : ''}
+                    </span>
+                  ) : canSetItemThickness ? (
+                    <div className="flex flex-col gap-1">
+                      <SafeForm
+                        className="flex flex-wrap items-center gap-1.5"
+                        onSubmit={() => setItemThickness.mutate(
+                          { itemId: item.id, thicknessMm: Number(thicknessDraftValue) },
+                          { onSuccess: () => setThicknessDrafts((cur) => {
+                            const next = { ...cur };
+                            delete next[item.id];
+                            return next;
+                          }) },
+                        )}
+                      >
+                        <input
+                          id={`pcr-item-thickness-${item.id}`}
+                          className="w-20"
+                          type="number"
+                          min="0.1"
+                          step="0.1"
+                          inputMode="decimal"
+                          required
+                          placeholder="มม."
+                          aria-label={`ความหนา รายการที่ ${position}`}
+                          aria-describedby={thicknessSuggestion ? `pcr-item-thickness-basis-${item.id}` : undefined}
+                          value={thicknessDraftValue}
+                          onChange={(e) => setThicknessDrafts((cur) => ({ ...cur, [item.id]: e.target.value }))}
+                        />
+                        <Button
+                          type="submit"
+                          variant="secondary"
+                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          disabled={setItemThickness.isPending || !(Number(thicknessDraftValue) > 0)}
+                        >
+                          บันทึก
+                        </Button>
+                      </SafeForm>
+                      {thicknessSuggestion ? (
+                        <span
+                          id={`pcr-item-thickness-basis-${item.id}`}
+                          className={cn(
+                            'text-2xs',
+                            thicknessSuggestion.confidence === 'HIGH' ? 'text-text-muted' : 'text-warning-dark',
+                          )}
+                        >
+                          ประมาณการ {thicknessSuggestion.thicknessMm} มม. — {thicknessSuggestion.basis}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="font-bold text-warning-dark">ยังไม่ระบุ</span>
+                  )}
                 </div>
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
@@ -1507,14 +1721,27 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // The email-draft fields live in FactoryEmailDraftModal now (its own lookup against
                 // `emailModalQuote`/`emailDrafts`, opened via setEmailModalQuoteId below) — no
                 // per-group emailDraft needed in this closure any more.
+                // Computed unconditionally (cheap — a map over a handful of items) so
+                // defaultCurrency below can read its resolved currency even on a FRESH draft; see
+                // that field's own comment for why the catalog fallback must run BEFORE 'THB'.
+                const seededItems = defaultResponseItems(current, requestItemById);
                 const draft = responseDrafts[current.id] ?? {
                   supplierQuoteRef: current.supplierQuoteRef ?? '',
-                  defaultCurrency: current.defaultCurrency ?? 'THB',
+                  // Ladder C (SPEC-PREFILL.md, 2026-09): prefer the group's own seeded items'
+                  // resolved currency — which already falls through to the linked catalog row's
+                  // currency (prod: EUR 22,240 rows, USD 215) via defaultResponseItems above —
+                  // rather than the hardcoded 'THB'. `current.defaultCurrency ?? 'THB'` alone
+                  // always produces a TRUTHY string ('THB' included), so the `groupCurrency =
+                  // draft.defaultCurrency || ...` read further below could never fall through to
+                  // the catalog currency on a brand-new (never-answered) quote — exactly the
+                  // €→฿ mismatch defaultResponseItems' own per-item chain was already built to
+                  // avoid, just one level up.
+                  defaultCurrency: current.defaultCurrency ?? seededItems[0]?.currency ?? 'THB',
                   paymentTerms: current.paymentTerms ?? '',
                   leadTimeText: current.leadTimeText ?? '',
                   revisionReason: '',
                   negotiationNote: current.negotiationNote ?? '',
-                  items: defaultResponseItems(current, requestItemById),
+                  items: seededItems,
                 };
                 // See confirmFactoryQuote's own doc comment: `responseDrafts[id]` exists in state
                 // only once a change handler has written to it, so its presence already means
@@ -1537,7 +1764,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // so this only reads as "mixed" if something mutated lines independently, which
                 // nothing below does any more (updateUnitBasis always writes every line at once).
                 const groupUnitBasis = draft.items[0]?.unitBasis ?? '';
-                const needsSqmPerUnit = groupUnitBasis === 'PER_SQM';
                 const groupCurrency = draft.defaultCurrency || draft.items[0]?.currency || 'THB';
                 const groupUnitLabel = unitBasisCatalog.find((option) => option.code === groupUnitBasis)?.label
                   ?? unitBasisLabel(groupUnitBasis);
@@ -1569,7 +1795,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     return next;
                   });
                 }
-
                 return (
                   <div key={group.key} className="border-t border-border-subtle first:border-t-0">
                     {/* Factory header: name, its item count, its contact email (current.emailTo —
@@ -1623,7 +1848,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             value={groupUnitBasis}
                             onChange={(e) => updateUnitBasis(e.target.value)}
                           >
-                            {unitBasisCatalog.map((option) => (
+                            {unitBasisCatalog.filter((option) => option.selectable).map((option) => (
                               <option key={option.code} value={option.code}>{`/ ${option.label}`}</option>
                             ))}
                           </select>
@@ -1697,20 +1922,40 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                   value={line.rawUnitPrice ?? ''}
                                   onChange={(e) => updateLine(index, { rawUnitPrice: e.target.value })}
                                 />
-                                {needsSqmPerUnit ? (
-                                  <input
-                                    id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
-                                    className="w-24"
-                                    type="number"
-                                    min="0.000001"
-                                    step="0.000001"
-                                    inputMode="decimal"
-                                    placeholder="ตร.ม./หน่วย"
-                                    aria-label={`ตร.ม./หน่วย ${itemRef}`}
-                                    value={line.sqmPerUnit ?? ''}
-                                    onChange={(e) => updateLine(index, { sqmPerUnit: e.target.value })}
-                                  />
-                                ) : null}
+                                {/* Change 2 (owner ruling, 2026-09): renders for EVERY line, every
+                                    unit basis — resolveSqmPerPiece needs this unconditionally
+                                    (freight/insurance are always priced per sqm), so gating the
+                                    input on PER_SQM hid it exactly where prod has the least
+                                    derivable data. Renamed: this is a conversion factor, not a
+                                    unit — never the bare "ตร.ม./หน่วย" string again.
+
+                                    ⚠️ The unit in this label is HARDCODED "แผ่น" and must stay
+                                    hardcoded. An earlier revision interpolated the line's own
+                                    quoted-unit label, which read correctly for a PER_PIECE line
+                                    and produced the nonsense "พื้นที่ต่อ 1 ตร.ม. (ตร.ม.)" for a
+                                    PER_SQM one — re-creating the exact ambiguity this rename
+                                    exists to remove (owner ruling, 2026-09-06, after seeing it in
+                                    a browser; jsdom cannot catch it because the markup is fine and
+                                    only the wording is wrong).
+
+                                    The value is ALWAYS m² per PIECE regardless of the basis the
+                                    factory quoted in — LandedCostCalculator.pricePerPiece
+                                    MULTIPLIES a PER_SQM price by it to reach a per-piece price,
+                                    quantityToPieces DIVIDES by it to reach a piece count, and the
+                                    calculator names its own parameter `sqmPerPiece`. So the
+                                    denominator is a piece, never the quoted unit. */}
+                                <input
+                                  id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
+                                  className="w-24"
+                                  type="number"
+                                  min="0.000001"
+                                  step="0.000001"
+                                  inputMode="decimal"
+                                  placeholder="พื้นที่ต่อ 1 แผ่น (ตร.ม.)"
+                                  aria-label={`พื้นที่ต่อ 1 แผ่น (ตร.ม.) ${itemRef}`}
+                                  value={line.sqmPerUnit ?? ''}
+                                  onChange={(e) => updateLine(index, { sqmPerUnit: e.target.value })}
+                                />
                               </div>
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>

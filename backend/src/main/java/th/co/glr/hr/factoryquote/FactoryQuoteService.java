@@ -540,13 +540,21 @@ public class FactoryQuoteService {
             "Factory response ready for costing: " + quote.factoryName());
         // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
         // quote is ready — LandedCostCalculator.isFullyResolvable is the SAME predicate
-        // LandedCostCalculator.calculate() itself requires, so "we said ready" and "the
-        // calculator can run" cannot drift apart. A multi-factory request does not advance until
-        // the LAST factory's quote is marked ready; re-reading summary is unnecessary since
-        // quotes.markReady above did not touch the pricing_request row itself. No advisory lock
-        // guards this check (unlike PricingDecisionService.startReview) — the worst case of two
-        // quotes being marked ready in the same instant is a missed auto-advance, not an illegal
-        // state, and the plan does not call for locking here.
+        // FactoryQuoteCarryForward shares, so those two call sites cannot drift apart from each
+        // other. A multi-factory request does not advance until the LAST factory's quote is marked
+        // ready; re-reading summary is unnecessary since quotes.markReady above did not touch the
+        // pricing_request row itself. No advisory lock guards this check (unlike
+        // PricingDecisionService.startReview) — the worst case of two quotes being marked ready in
+        // the same instant is a missed auto-advance, not an illegal state, and the plan does not
+        // call for locking here.
+        //
+        // V164 (2026-09) briefly ALSO required every item's thickness to resolve here, with an
+        // else-branch recording a "blocked on thickness" event for Import when it did not. An
+        // owner-ruled scope change on 2026-09-06 moved the thickness obligation to Sales
+        // (PricingRequestService#submit gates it before a request is ever visible here) and
+        // removed Import's ability to supply one at all — so a request reaching this method can no
+        // longer be blocked by an unresolved thickness, and that else-branch is gone with it. See
+        // LandedCostCalculator#isFullyResolvable's own Javadoc for the fuller history.
         if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
                 && landedCosts.isFullyResolvable(summary)) {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
@@ -683,9 +691,23 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการตอบกลับแบบ PER_BOX ต้องระบุ piecesPerBox");
             }
-            if (UnitBasis.PER_SQM.equals(unitBasis) && responseItem.sqmPerUnit() == null) {
+            // Widened from PER_SQM-only (owner-ruled change, 2026-09): sqmPerUnit is now required
+            // on EVERY line, regardless of unit basis — matching what
+            // LandedCostCalculator#resolveSqmPerPiece has always needed (freight/insurance are
+            // priced per sqm unconditionally; see that method's own javadoc). Before this, a
+            // PER_PIECE/PER_BOX/PER_LINEAR_M line with no sqmPerUnit sailed through receive() and
+            // only 422'd much later, at CEO costing time — a late, CEO-discovered failure for a gap
+            // Import could have been told about immediately. This turns it into an early,
+            // actionable import-stage 422 instead. Known, accepted narrowing: resolveSqmPerPiece
+            // also accepts requestItem.requestedQtySqm()/requestedQty() as a fallback when the quote
+            // itself carries no sqmPerUnit — this check does not look at the request side, so a line
+            // that would have costed fine via that fallback now needs sqmPerUnit supplied here too.
+            // Real data rarely populates requestedQtySqm (0 of prod's 7 rows, 12 of UAT's 32 do), so
+            // the practical impact is small, but it is a real narrowing, not merely a relocation.
+            if (responseItem.sqmPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
-                    "รายการตอบกลับแบบ PER_SQM ต้องระบุ sqmPerUnit");
+                    "รายการตอบกลับทุกแบบต้องระบุ sqmPerUnit (พื้นที่ต่อหน่วย ตร.ม.) "
+                        + "เนื่องจากใช้คำนวณค่าขนส่งและประกันภัยเสมอ ไม่ว่าหน่วยนับจะเป็นแบบใด");
             }
             if (UnitBasis.PER_LINEAR_M.equals(unitBasis) && responseItem.linearMPerUnit() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,

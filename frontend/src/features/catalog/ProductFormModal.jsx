@@ -147,11 +147,16 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
             </select>
           </FormField>
           <FormField label="หน่วย" htmlFor="pf-unit">
+            {/* Labels only, VALUES untouched (owner ruling, 2026-09) — 288 real prod
+                per_linear_m rows must stay recordable, so per_box/per_linear_m stay selectable
+                here even though the pricing-request unit pickers no longer offer them. ม² -> ตร.ม.
+                and ม. -> เมตร just correct the label text to the canonical Thai used everywhere
+                else in the app (UnitBasisMetaController, pricingRequestMeta.js). */}
             <select id="pf-unit" {...register('priceUnit')}>
-              <option value="per_sqm">ม²</option>
+              <option value="per_sqm">ตร.ม.</option>
               <option value="per_piece">แผ่น</option>
               <option value="per_box">กล่อง</option>
-              <option value="per_linear_m">ม.</option>
+              <option value="per_linear_m">เมตร</option>
             </select>
           </FormField>
         </div>

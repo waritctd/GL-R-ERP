@@ -2,6 +2,7 @@ package th.co.glr.hr.pricingrequest;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,6 +49,17 @@ public class UnitBasisMetaController {
         LABELS_TH.put(UnitBasis.PER_LINEAR_M, "เมตร");
     }
 
+    /**
+     * Owner ruling (2026-09): กล่อง/เมตร are no longer offered in NEW pickers — no row anywhere
+     * (prod or UAT) uses PER_BOX or PER_LINEAR_M, and both still need real conversion-factor
+     * inputs (piecesPerBox/linearMPerUnit) this app has never built. This is deliberately the ONLY
+     * change: {@link UnitBasis#VALUES} and every CHECK constraint stay at all four codes, so a
+     * legacy/foreign row already carrying one of these two still validates and still LABELS
+     * correctly via {@link #LABELS_TH} above — {@code selectable} governs pickers only. A single
+     * boolean flip here reverses the whole thing later.
+     */
+    private static final Set<String> SELECTABLE = Set.of(UnitBasis.PER_PIECE, UnitBasis.PER_SQM);
+
     private final SessionContext sessions;
 
     public UnitBasisMetaController(SessionContext sessions) {
@@ -58,15 +70,17 @@ public class UnitBasisMetaController {
     Map<String, Object> unitBases(HttpSession session) {
         sessions.requireUser(session);
         return Map.of("unitBases", LABELS_TH.entrySet().stream()
-            .map(e -> new UnitBasisMetaDto(e.getKey(), e.getValue()))
+            .map(e -> new UnitBasisMetaDto(e.getKey(), e.getValue(), SELECTABLE.contains(e.getKey())))
             .toList());
     }
 
     /**
      * One unit basis's code and Thai display label.
      *
-     * @param code  one of {@link UnitBasis}'s four canonical values
-     * @param label the Thai text a picker shows for it
+     * @param code       one of {@link UnitBasis}'s four canonical values
+     * @param label      the Thai text a picker shows for it
+     * @param selectable false for PER_BOX/PER_LINEAR_M (see {@link #SELECTABLE}) — a picker
+     *                   filters new choices on this; a label lookup for an existing value does not
      */
-    public record UnitBasisMetaDto(String code, String label) {}
+    public record UnitBasisMetaDto(String code, String label, boolean selectable) {}
 }

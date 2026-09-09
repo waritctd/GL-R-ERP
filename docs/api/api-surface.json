@@ -297,6 +297,7 @@
     "PUT /api/pricing-request-attachments/{attachmentId}/include-in-factory-email",
     "PUT /api/pricing-requests/{id}",
     "PUT /api/pricing-requests/{id}/items/{itemId}/factory",
+    "PUT /api/pricing-requests/{id}/items/{itemId}/thickness",
     "PUT /api/tickets/{id}/tracking",
     "PUT /api/tickets/{ticketId}/required-by-note"
   ],

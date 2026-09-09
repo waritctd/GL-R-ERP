@@ -13,6 +13,13 @@ public final class PricingRequestEventKind {
     // one. It is a routing decision, not metadata: it decides which factory gets asked for a
     // price, so it belongs in the audit trail beside the pickup and the factory-email events.
     public static final String PRICING_REQUEST_ITEM_FACTORY_SET = "PRICING_REQUEST_ITEM_FACTORY_SET";
+    // V164 (ฝ่ายนำเข้า must supply ความหนา when the catalog has none): import/ceo supplied or
+    // cleared a line's thickness — see PricingRequestItemThicknessService#setItemThickness. Also raised (with a
+    // different message, naming the still-unresolved item(s)) by FactoryQuoteService#
+    // markReadyForCosting when every factory quote is ready but the request still cannot advance
+    // to READY_FOR_CEO_REVIEW because a thickness gap remains, so Import sees WHY nothing moved
+    // instead of the auto-advance silently not firing.
+    public static final String PRICING_REQUEST_ITEM_THICKNESS_SET = "PRICING_REQUEST_ITEM_THICKNESS_SET";
     public static final String MORE_INFO_REQUESTED        = "MORE_INFO_REQUESTED";
     public static final String MORE_INFO_RESPONDED        = "MORE_INFO_RESPONDED";
     public static final String PRICING_REQUEST_CANCELLED  = "PRICING_REQUEST_CANCELLED";
@@ -73,7 +80,7 @@ public final class PricingRequestEventKind {
 
     public static final Set<String> VALUES = Set.of(
         PRICING_REQUEST_CREATED, PRICING_REQUEST_UPDATED, PRICING_REQUEST_SUBMITTED,
-        PRICING_REQUEST_PICKED_UP, PRICING_REQUEST_ITEM_FACTORY_SET,
+        PRICING_REQUEST_PICKED_UP, PRICING_REQUEST_ITEM_FACTORY_SET, PRICING_REQUEST_ITEM_THICKNESS_SET,
         MORE_INFO_REQUESTED, MORE_INFO_RESPONDED,
         PRICING_REQUEST_CANCELLED, PRICING_REQUEST_REVISED, FACTORY_EMAIL_READY, FACTORY_EMAIL_SENT,
         FACTORY_RESPONSE_RECEIVED, FACTORY_NEGOTIATION_STARTED,

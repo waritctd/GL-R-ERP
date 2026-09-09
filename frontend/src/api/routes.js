@@ -376,6 +376,10 @@ export const API_ROUTES = {
     // PricingRequestController.setItemFactory. Shaped like the CEO's per-item overrides above
     // (PUT .../items/{itemId}/...) because it writes exactly one field on one line.
     itemFactory: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/factory`,
+    // ฝ่ายนำเข้า (or CEO) supplies a hand-entered thickness for one line the catalog cannot
+    // resolve — mirrors PricingRequestController.setItemThickness. Same PUT .../items/{itemId}/...
+    // shape as itemFactory just above, for the same reason: one field on one line.
+    itemThickness: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/thickness`,
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,

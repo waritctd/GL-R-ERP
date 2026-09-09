@@ -21,12 +21,19 @@ const DEFAULT_QUANTITY_TYPE = 'ESTIMATE';
 // 'per_linear_m' | 'unknown') to our canonical UnitBasis code, for pre-filling the unit select
 // when a catalog product is picked. Falls back to the row's current basis for 'unknown' or any
 // unrecognised value, rather than guessing wrong.
+//
+// 'per_box'/'per_linear_m' fall through to `fallback` too now (owner ruling, 2026-09) — Change 3
+// removed PER_BOX/PER_LINEAR_M from the SELECTABLE unit-basis options (see UNIT_BASIS_OPTIONS'
+// own comment), so this pre-fill must never select a value the picker below no longer offers.
+// Deliberately NOT converting a per_linear_m catalog row into a sqm-basis pre-fill instead — that
+// would be inventing a linear-metre-to-sqm conversion this function has no data to do correctly.
+// Known consequence: this changes pre-fill behaviour for the 288 real prod catalog rows whose
+// price_unit is per_linear_m (273 REFIN, 15 CITY) — picking one of them no longer pre-selects a
+// unit basis at all, same as picking an 'unknown'-basis row already did.
 function unitBasisForPriceUnit(priceUnit, fallback) {
   switch (String(priceUnit ?? '').toLowerCase()) {
     case 'per_sqm': return 'PER_SQM';
     case 'per_piece': return 'PER_PIECE';
-    case 'per_box': return 'PER_BOX';
-    case 'per_linear_m': return 'PER_LINEAR_M';
     default: return fallback;
   }
 }
@@ -846,7 +853,7 @@ export function PricingRequestCreateModal({
                     หน่วย *
                     <select value={item.requestedUnitBasis ?? ''} onChange={(e) => updateUnitBasis(index, e.target.value)}>
                       <option value="">-- เลือกหน่วย --</option>
-                      {UNIT_BASIS_OPTIONS.map((option) => (
+                      {UNIT_BASIS_OPTIONS.filter((option) => option.selectable).map((option) => (
                         <option key={option.code} value={option.code}>{option.label}</option>
                       ))}
                     </select>

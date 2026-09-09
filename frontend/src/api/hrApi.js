@@ -885,6 +885,12 @@ export const api = {
     // see PricingRequestService#setItemFactory.
     setItemFactory: (id, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.itemFactory(id, itemId), { method: 'PUT', body: payload }),
+    // Import or CEO, per-item — routes `payload` ({ thicknessMm }) to
+    // price_catalog.collection_thickness_default (a catalog-linked line) or this line's own
+    // thickness_mm_override (an unlinked line); null clears whichever the line owns. See
+    // PricingRequestItemThicknessService for the routing rule and its 409.
+    setItemThickness: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemThickness(id, itemId), { method: 'PUT', body: payload }),
     generateFactoryEmailDrafts: (id) => apiRequest(API_ROUTES.pricingRequests.factoryEmailDrafts(id), { method: 'POST' }),
     listFactoryQuotes: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuotes(id)),
     getFactoryQuote: (id) => apiRequest(API_ROUTES.pricingRequests.factoryQuote(id)),

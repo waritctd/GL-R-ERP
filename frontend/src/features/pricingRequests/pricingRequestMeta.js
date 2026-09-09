@@ -129,11 +129,19 @@ export function quantityTypeLabel(value) {
 // the pricing-request / factory-quote / costing aggregate (financial-integrity review Finding
 // B, commit 3). requestedUnit stays a free-text display label alongside this canonical code —
 // PricingRequestCreateModal's unit input writes both from the same select.
+//
+// `selectable` (owner ruling, 2026-09): กล่อง/เมตร are no longer offered in NEW pickers — no row
+// anywhere (prod or UAT) uses PER_BOX or PER_LINEAR_M, and both still need real inputs
+// (piecesPerBox/linearMPerUnit) this app has never built. The four VALUES themselves are
+// UNCHANGED (288 real prod catalog rows are per_linear_m and must keep validating/labeling
+// correctly) — mirrors UnitBasisMetaController's own selectable flag. Pickers filter on this;
+// unitBasisLabel below does NOT, so an existing PER_BOX/PER_LINEAR_M value still renders its real
+// Thai label rather than falling back to the bare code.
 export const UNIT_BASIS_OPTIONS = [
-  { code: 'PER_PIECE', label: 'แผ่น' },
-  { code: 'PER_SQM', label: 'ตร.ม.' },
-  { code: 'PER_BOX', label: 'กล่อง' },
-  { code: 'PER_LINEAR_M', label: 'เมตร' },
+  { code: 'PER_PIECE', label: 'แผ่น', selectable: true },
+  { code: 'PER_SQM', label: 'ตร.ม.', selectable: true },
+  { code: 'PER_BOX', label: 'กล่อง', selectable: false },
+  { code: 'PER_LINEAR_M', label: 'เมตร', selectable: false },
 ];
 
 export function unitBasisLabel(value) {

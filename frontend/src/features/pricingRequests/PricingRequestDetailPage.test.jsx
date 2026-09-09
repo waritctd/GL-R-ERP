@@ -130,6 +130,16 @@ function buildRequest(overrides = {}) {
         targetDeliveryDate: null,
         deliveryLocation: null,
         specialRequirement: null,
+        // Resolved by default so every EXISTING test below (none of which is about thickness)
+        // renders a request with nothing outstanding. The scope change of 2026-09-06 moved the
+        // obligation from ฝ่ายนำเข้า to Sales, so this no longer has anything to do with
+        // ยืนยันราคาเสนอ (that button is not thickness-gated any more) — what it now keeps quiet is
+        // the SALES draft gate. The tests that exercise that gate build their own items with
+        // resolvedThicknessMm null: see draftNeedingThickness at the bottom of this file.
+        resolvedThicknessMm: 8,
+        thicknessIsDefault: false,
+        thicknessMmOverride: null,
+        catalogSqmPerPiece: null,
       },
     ],
   };
@@ -270,10 +280,13 @@ function setApiDefaults() {
   // factory-quote response unit select is built from at runtime (item 3 of this task's brief).
   api.meta.unitBases.mockResolvedValue({
     unitBases: [
-      { code: 'PER_PIECE', label: 'แผ่น' },
-      { code: 'PER_SQM', label: 'ตร.ม.' },
-      { code: 'PER_BOX', label: 'กล่อง' },
-      { code: 'PER_LINEAR_M', label: 'เมตร' },
+      // `selectable` (Change 3, owner ruling 2026-09): PER_BOX/PER_LINEAR_M are still served (an
+      // existing row with either basis must still label correctly) but the หน่วยราคา picker below
+      // filters them out — matching UnitBasisMetaController's real contract.
+      { code: 'PER_PIECE', label: 'แผ่น', selectable: true },
+      { code: 'PER_SQM', label: 'ตร.ม.', selectable: true },
+      { code: 'PER_BOX', label: 'กล่อง', selectable: false },
+      { code: 'PER_LINEAR_M', label: 'เมตร', selectable: false },
     ],
   });
 }
@@ -835,7 +848,11 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
   // Item 3 of this task's brief: the unit select is built from GET /api/meta/unit-bases at
   // runtime, not a hardcoded list, and changing it writes both unitBasis and quotedUnit together
   // (the same "one select, two fields" pattern PricingRequestCreateModal's updateUnitBasis uses).
-  it('offers the unit select built from the backend catalog, and changing it updates both unitBasis and quotedUnit on save', async () => {
+  // Change 3 (owner ruling, 2026-09): the select offers only the SELECTABLE codes now
+  // (PER_PIECE/PER_SQM) — PER_BOX/PER_LINEAR_M are removed from every NEW picker (no row anywhere,
+  // prod or UAT, uses either), even though all four still exist on the backend catalog this select
+  // is built from and still label correctly wherever an existing row already carries one.
+  it('offers only the SELECTABLE units from the backend catalog, and changing it updates both unitBasis and quotedUnit on save', async () => {
     const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: unitBasis PER_PIECE
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
@@ -845,17 +862,18 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     // — every line in the group shares it — but still built from the same backend catalog.
     const unitSelect = await screen.findByLabelText(/^หน่วย/);
     expect(within(unitSelect).getAllByRole('option').map((option) => option.value)).toEqual([
-      'PER_PIECE', 'PER_SQM', 'PER_BOX', 'PER_LINEAR_M',
+      'PER_PIECE', 'PER_SQM',
     ]);
 
-    fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
+    fireEvent.change(unitSelect, { target: { value: 'PER_SQM' } });
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/^พื้นที่ต่อ 1 แผ่น \(ตร\.ม\.\)/), { target: { value: '0.5' } });
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
       expect.objectContaining({
-        items: [expect.objectContaining({ unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' })],
+        items: [expect.objectContaining({ unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.' })],
       }),
     ));
   });
@@ -863,7 +881,18 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
   // The ตร.ม./หน่วย input this task's brief listed as already shipped, but which was not present
   // on origin/main — FactoryQuoteService requires sqmPerUnit for any PER_SQM line
   // (validateAndNormalizeResponseItems:727) and there was no way for Import to supply it.
-  it('shows the ตร.ม./หน่วย input only for a PER_SQM line, and includes it in the saved payload', async () => {
+  // Change 2 (owner ruling, 2026-09): the needsSqmPerUnit === 'PER_SQM' gate is gone — this input
+  // now renders for EVERY line, every unit basis (resolveSqmPerPiece needs it unconditionally),
+  // and is relabelled from the bare "ตร.ม./หน่วย" to "พื้นที่ต่อ 1 แผ่น (ตร.ม.)". This test used
+  // to be named "...only for a PER_SQM line"; it now proves the opposite half of that claim too —
+  // see the sibling test below for the PER_PIECE case.
+  //
+  // The label says แผ่น even here, on a PER_SQM line, and that is the POINT: the factor is m² per
+  // PIECE whatever the factory quoted in (LandedCostCalculator.pricePerPiece multiplies a PER_SQM
+  // price by it; quantityToPieces divides by it). Interpolating the line's own quoted unit shipped
+  // "พื้นที่ต่อ 1 ตร.ม. (ตร.ม.)" — caught in a browser, not here, because the markup was fine and
+  // only the wording was wrong. The negative assertion below is the regression guard.
+  it('labels the sqm-per-unit input แผ่น even on a PER_SQM line, and includes it in the saved payload', async () => {
     const quote = buildFactoryQuote({
       status: 'REQUESTED',
       items: [{
@@ -883,7 +912,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const sqmInput = screen.getByLabelText(/^ตร\.ม\.\/หน่วย/);
+    // The regression guard: never the self-referential "พื้นที่ต่อ 1 ตร.ม. (ตร.ม.)" again.
+    expect(screen.queryByLabelText(/^พื้นที่ต่อ 1 ตร\.ม\./)).toBeNull();
+    const sqmInput = screen.getByLabelText(/^พื้นที่ต่อ 1 แผ่น \(ตร\.ม\.\)/);
     fireEvent.change(sqmInput, { target: { value: '0.36' } });
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '120' } });
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
@@ -894,13 +925,13 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  it('does not show the ตร.ม./หน่วย input for a PER_PIECE line', async () => {
+  it('ALSO shows the พื้นที่ต่อ 1 แผ่น (ตร.ม.) input for a PER_PIECE line — Change 2 removed the PER_SQM-only gate', async () => {
     const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: unitBasis PER_PIECE
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByLabelText(/^ตร\.ม\.\/หน่วย/)).toBeNull();
+    expect(screen.getByLabelText(/^พื้นที่ต่อ 1 แผ่น \(ตร\.ม\.\)/)).not.toBeNull();
   });
 });
 
@@ -2310,5 +2341,63 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 
     expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน/)).toBeNull();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+  });
+});
+
+// ── Sales supplies ความหนา in the draft (owner-ruled SCOPE CHANGE, 2026-09-06) ────────────────
+//
+// The obligation moved from ฝ่ายนำเข้า to Sales: the input lives on the sales-facing item list of a
+// DRAFT request, and submit is blocked until every line resolves a thickness. These tests exist
+// because the move is invisible to every OTHER test in this file — buildRequest defaults
+// resolvedThicknessMm to 8 on both items, so the interesting state (a line with NO resolvable
+// thickness) is never built anywhere else and the whole surface would go unexercised.
+function draftNeedingThickness({ user = salesOwner, suggestion = null, status = 'DRAFT' } = {}) {
+  const base = buildRequest();
+  const request = buildRequest({
+    summary: { ...base.summary, status },
+    items: [
+      { ...base.items[0], resolvedThicknessMm: null, thicknessSuggestion: suggestion },
+      { ...base.items[1], resolvedThicknessMm: 8 },
+    ],
+  });
+  return { request, rendered: renderDetailPage({ user, request }) };
+}
+
+describe('PricingRequestDetailPage ความหนา — Sales fills it in the draft', () => {
+  it('offers the input to the owning sales rep on a DRAFT line with no resolvable thickness', async () => {
+    const { request } = draftNeedingThickness();
+    await waitForLoaded(request);
+
+    expect(screen.getByLabelText(/^ความหนา รายการที่ 1/)).not.toBeNull();
+    // The sibling line already resolves 8mm, so it must NOT offer an input — otherwise the gate
+    // would nag about a line that is already fine.
+    expect(screen.queryByLabelText(/^ความหนา รายการที่ 2/)).toBeNull();
+  });
+
+  it('blocks submit and names how many lines are still missing a thickness', async () => {
+    const { request } = draftNeedingThickness();
+    await waitForLoaded(request);
+
+    expect(screen.getByText(/ต้องระบุความหนาให้ครบก่อนส่งคำขอราคา/)).not.toBeNull();
+    expect(screen.getByText(/ยังไม่ได้ระบุ 1 รายการ/)).not.toBeNull();
+  });
+
+  it('prefills the estimator suggestion and shows the derivation it came from', async () => {
+    const { request } = draftNeedingThickness({
+      suggestion: { thicknessMm: 8, basis: 'ประมาณจากน้ำหนักกล่อง 14 กก. ÷ 0.756 ตร.ม.', confidence: 'HIGH' },
+    });
+    await waitForLoaded(request);
+
+    expect(screen.getByLabelText(/^ความหนา รายการที่ 1/).value).toBe('8');
+    // The basis is shown, not just the number — a reviewer must be able to see WHERE it came from
+    // before accepting it (SPEC-PREFILL.md's KNOWN-vs-ESTIMATED rule).
+    expect(screen.getByText(/ประมาณจากน้ำหนักกล่อง 14 กก/)).not.toBeNull();
+  });
+
+  it('does NOT offer the input to ฝ่ายนำเข้า — the entire point of the scope change', async () => {
+    const { request } = draftNeedingThickness({ user: importUser, status: 'IMPORT_REVIEWING' });
+    await waitForLoaded(request);
+
+    expect(screen.queryByLabelText(/^ความหนา รายการที่ 1/)).toBeNull();
   });
 });

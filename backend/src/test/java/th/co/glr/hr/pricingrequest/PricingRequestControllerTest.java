@@ -31,8 +31,18 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 
 class PricingRequestControllerTest {
     private final PricingRequestService service = mock(PricingRequestService.class);
+    // V164: no test below exercises PUT .../items/{itemId}/thickness — its own controller wiring
+    // (role/status/routing) is pinned by PricingRequestItemThicknessIntegrationTest against real
+    // Postgres instead. A plain mock is enough for this class's constructor to be satisfiable.
+    private final PricingRequestItemThicknessService itemThickness = mock(PricingRequestItemThicknessService.class);
+    // SPEC-PREFILL.md: get() now pipes its result through this collaborator. No test below cares
+    // about the ladder-A enrichment itself (that is PricingRequestThicknessSuggestionServiceTest's
+    // job) — a pass-through default answer (return whatever was passed in, unchanged) keeps every
+    // existing get()-based assertion in this file valid without restubbing each one.
+    private final PricingRequestThicknessSuggestionService thicknessSuggestions =
+        mock(PricingRequestThicknessSuggestionService.class, inv -> inv.getArgument(0));
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new PricingRequestController(service, new SessionContext()))
+        .standaloneSetup(new PricingRequestController(service, itemThickness, thicknessSuggestions, new SessionContext()))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 

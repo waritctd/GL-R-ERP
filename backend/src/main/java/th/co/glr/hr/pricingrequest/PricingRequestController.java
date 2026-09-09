@@ -30,6 +30,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRe
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemThicknessRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailResponse;
@@ -48,11 +49,18 @@ import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailR
 @RequestMapping("/api")
 public class PricingRequestController {
     private final PricingRequestService pricingRequests;
+    private final PricingRequestItemThicknessService itemThickness;
+    private final PricingRequestThicknessSuggestionService thicknessSuggestions;
     private final SessionContext sessions;
 
-    public PricingRequestController(PricingRequestService pricingRequests, SessionContext sessions) {
-        this.pricingRequests = pricingRequests;
-        this.sessions        = sessions;
+    public PricingRequestController(PricingRequestService pricingRequests,
+                                    PricingRequestItemThicknessService itemThickness,
+                                    PricingRequestThicknessSuggestionService thicknessSuggestions,
+                                    SessionContext sessions) {
+        this.pricingRequests      = pricingRequests;
+        this.itemThickness        = itemThickness;
+        this.thicknessSuggestions = thicknessSuggestions;
+        this.sessions             = sessions;
     }
 
     @PostMapping("/tickets/{ticketId}/pricing-requests")
@@ -83,10 +91,17 @@ public class PricingRequestController {
         return Map.of("items", pricingRequests.list(status, assignedImportId, activeOnly, user));
     }
 
+    /**
+     * The ONLY endpoint that attaches ladder-A thickness suggestions ({@link
+     * PricingRequestThicknessSuggestionService}) — see that class's own Javadoc for why every other
+     * mutation below (which all return the SAME {@link PricingRequestDetailResponse} shape) does
+     * not need the same wrapping: the detail page always invalidates-and-refetches through this GET
+     * after a successful mutation rather than reading the mutation's own response body.
+     */
     @GetMapping("/pricing-requests/{id}")
     PricingRequestDetailResponse get(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new PricingRequestDetailResponse(pricingRequests.get(id, user));
+        return new PricingRequestDetailResponse(thicknessSuggestions.attachSuggestions(pricingRequests.get(id, user)));
     }
 
     @PutMapping("/pricing-requests/{id}")
@@ -127,6 +142,24 @@ public class PricingRequestController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return new PricingRequestDetailResponse(pricingRequests.setItemFactory(id, itemId, request, user));
+    }
+
+    /**
+     * Sales (or CEO, as a fallback) supplies a hand-entered thickness for one line the catalog
+     * cannot resolve — see {@link PricingRequestItemThicknessService} for the routing/refuse rule
+     * and the authorization window per role. AUTHORIZATION CHANGE, 2026-09-06 (owner-ruled scope
+     * change): this used to be {@code import}/{@code ceo}; {@code import} is now refused and
+     * {@code sales} (owner-scoped, DRAFT only) supplies it instead.
+     */
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/thickness")
+    PricingRequestDetailResponse setItemThickness(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @Valid @RequestBody SetItemThicknessRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new PricingRequestDetailResponse(itemThickness.setItemThickness(id, itemId, request, user));
     }
 
     @PostMapping("/pricing-requests/{id}/cancel")
