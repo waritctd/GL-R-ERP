@@ -140,6 +140,14 @@ function TeamRequestsSection({
     const canCancel = isOwn && request.status === 'SUBMITTED';
     const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
     const expanded = expandedId === request.id;
+    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status column
+    // (which THIS tab's own desktop table already renders via buildLeaveRequestColumns) and as
+    // MyLeaveTab/ReviewQueueTab's mobile cards -- owner ruling, V164 follow-up. Without it this was
+    // the ONE leave-row surface left where a manager scanning their team on a phone saw no unpaid
+    // signal at all, while the same rows on their desktop did. Reads `unpaidDays`, not
+    // unpaidByRuleDays: a §5 WARN gate's unpaidByRuleDays is always a SUBSET of it, and what a
+    // reader needs here is how many days go unpaid, not which rule caused it.
+    const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
@@ -148,8 +156,16 @@ function TeamRequestsSection({
           <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex shrink-0 items-center gap-1.5">
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <span className="flex shrink-0 items-start gap-1.5">
+            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
+                sharing one line in a narrow column is what forces truncation; stacking removes the
+                problem at every width with no breakpoint variant needed. */}
+            <span className="flex flex-col items-start gap-1">
+              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              {hasUnpaidDays ? (
+                <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
+              ) : null}
+            </span>
             <Button
               type="button"
               variant="icon"

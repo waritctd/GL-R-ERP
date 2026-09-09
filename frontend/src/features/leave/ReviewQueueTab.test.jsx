@@ -1,7 +1,10 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach, beforeEach, describe, expect, it, vi,
+} from 'vitest';
 import { ReviewQueueTab } from './ReviewQueueTab.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
@@ -92,21 +95,86 @@ const submittedWithCertificate = {
   attachmentFileName: 'ใบรับรองแพทย์.pdf',
 };
 
+// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): a SUBMITTED request carrying one warning --
+// `messageTh` copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE template
+// (WARN_UNPAID_TAIL included), same reason CLAUDE.md gives for never hand-translating backend copy.
+const submittedWithWarning = {
+  id: 705,
+  employeeId: 6,
+  employeeName: 'ลูกทีม สี่',
+  employeeCode: 'GLR-006',
+  managerEmployeeId: 5,
+  leaveTypeCode: 'PERSONAL',
+  leaveTypeNameTh: 'ลากิจ',
+  startDate: '2026-08-20',
+  endDate: '2026-08-20',
+  totalDays: 1,
+  paidDays: 0,
+  unpaidDays: 1,
+  quotaRemainingAfter: 5,
+  status: 'SUBMITTED',
+  reason: 'ธุระด่วน',
+  ruleWarnings: [{
+    code: 'ADVANCE_NOTICE',
+    params: {
+      leaveTypeNameTh: 'ลากิจ', noticeDays: '3', section: '5', days: '1',
+    },
+    messageTh: 'การลากิจต้องยื่นล่วงหน้าอย่างน้อย 3 วัน (ระเบียบข้อ 5) คำขอนี้ยื่นไม่ทันกำหนด '
+      + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
+  }],
+  unpaidByRuleDays: 1,
+};
+
 // `actingUser` overrides the default division-manager persona -- only the pending-approver-note
 // tests need it (an hr actor sees a different note than the manager the row is waiting on).
+//
+// Wrapped in a MemoryRouter (V164 follow-up, 2026-09-09): a §5 WARN_UNPAID_* row's expanded detail
+// now renders LeaveRulePanel, which links to `/leave?tab=rules` via react-router's own <Link> --
+// with no router in the tree that throws (`useContext(...)` is null), not just render blank, so
+// every test needs this even the ones that never touch a warning.
 function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
-    <QueryClientProvider client={queryClient}>
-      <ReviewQueueTab user={actingUser} showToast={showToast} />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <ReviewQueueTab user={actingUser} showToast={showToast} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
   return queryClient;
 }
 
+// DataTable renders `mobileCard` only when useIsMobile() is true, and that hook reads
+// window.matchMedia -- unimplemented in jsdom, so it returns false and the DESKTOP table renders.
+// An unstubbed "mobile card" assertion therefore passes against leaveRequestTable.jsx's shared
+// desktop status column, which has carried the unpaid badge since before this branch, and proves
+// nothing about the card. Confirmed by mutation: with the card's gate forced permanently true, the
+// unstubbed version of this test stayed green. Restored in afterEach -- assigning matchMedia is a
+// global mutation that otherwise leaks into later tests and flips them to the mobile card.
+const originalMatchMedia = window.matchMedia;
+
+function stubMobileViewport() {
+  const listeners = new Set();
+  window.matchMedia = (query) => ({
+    matches: true,
+    media: query,
+    addEventListener: (_e, cb) => listeners.add(cb),
+    removeEventListener: (_e, cb) => listeners.delete(cb),
+    addListener: (cb) => listeners.add(cb),
+    removeListener: (cb) => listeners.delete(cb),
+    dispatchEvent: () => false,
+    onchange: null,
+  });
+}
+
 describe('ReviewQueueTab', () => {
+  afterEach(() => {
+    if (originalMatchMedia) window.matchMedia = originalMatchMedia;
+    else delete window.matchMedia;
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -345,6 +413,43 @@ describe('ReviewQueueTab', () => {
 
       resolveApprove({ request: { ...submittedUnderManager, status: 'APPROVED' } });
       await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(false));
+    });
+  });
+
+  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see the warning BEFORE
+  // approving, not after (owner ruling #2 -- LeaveRequestDto's own ruleWarnings Javadoc).
+  describe('§5 WARN_UNPAID_* gates (V164 follow-up)', () => {
+    it('shows the warning in the expanded row, and the confirm button states the unpaid days', async () => {
+      api.leave.list.mockResolvedValue({ requests: [submittedWithWarning] });
+      api.leave.approve.mockResolvedValue({ request: { ...submittedWithWarning, status: 'APPROVED' } });
+      renderReviewQueueTab();
+
+      await screen.findByText('ธุระด่วน');
+      // Not visible before the row is expanded -- it lives in renderExpanded, above the request's
+      // other detail fields.
+      expect(screen.queryByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
+      expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
+
+      // The row's own icon button and the ConfirmDialog's button do NOT share a label any more --
+      // the icon button (opens the dialog) stays plain "อนุมัติ", the dialog's real commit button
+      // states the pay consequence, so an approver cannot click past it unaware.
+      fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
+      const confirmButton = await screen.findByRole('button', { name: /อนุมัติ \(ไม่จ่ายค่าจ้าง/ });
+      fireEvent.click(confirmButton);
+
+      await waitFor(() => expect(api.leave.approve).toHaveBeenCalledWith(705, {}));
+    });
+
+    it("shows the stacked unpaid badge on the MOBILE CARD's collapsed row, alongside the status badge", async () => {
+      stubMobileViewport();
+      api.leave.list.mockResolvedValue({ requests: [submittedWithWarning] });
+      renderReviewQueueTab();
+
+      await screen.findByText('ธุระด่วน');
+      expect(await screen.findByText('รออนุมัติ')).not.toBeNull();
+      expect(await screen.findByText(/ไม่รับค่าจ้าง/)).not.toBeNull();
     });
   });
 });
