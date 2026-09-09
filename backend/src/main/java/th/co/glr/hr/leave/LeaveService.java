@@ -468,6 +468,25 @@ public class LeaveService {
      * computed, regardless of {@code depth} or whether dates were supplied -- both are scoped to the
      * CURRENT calendar month (see {@link #previewCounters}), not to the request's own dates, so
      * neither needs them.
+     *
+     * <p><b>{@code ruleWarnings}/{@code unpaidByRuleDays} (V164 follow-up, 2026-09-09):</b> the SAME
+     * §5 WARN_UNPAID_* signal {@link #submit} persists to {@code rule_warnings}/{@code
+     * unpaid_by_rule_days}, surfaced here so the pre-submit live check can show it too -- see {@link
+     * LeavePreviewDto}'s own Javadoc for the full field contract. Populated from the IDENTICAL {@link
+     * AutoRejectResult#warnings()}/{@link AutoRejectResult#unpaidByRuleDays()} {@link #autoRejectNote}
+     * returns for the dated path, so a previewed warning can never drift from what {@link #submit}
+     * would actually persist for the same arguments. The dateless path ({@code startDate}/{@code
+     * endDate} both {@code null}) deliberately reports NEITHER: {@link #eligibilityRuleOutcome} may
+     * still find a WARN gate (e.g. PROBATION_NOT_PASSED) against {@code LocalDate.now(clock)}, but
+     * every WARN message template needs {@code totalDays} to render its "N วันจะไม่ได้รับค่าจ้าง"
+     * clause, and a dateless call has no real {@code totalDays} to give it -- only a {@code
+     * BigDecimal.ZERO} placeholder (see {@link #personalProbationRuleOutcome}/the MIN_SERVICE_MONTHS
+     * branch above, both of which build that placeholder for exactly this reason). Surfacing that
+     * outcome's rendered sentence here would read as a genuine, false "0 days unpaid" answer, not an
+     * honest "not yet known" -- so this method reports an empty {@code ruleWarnings} and a {@code
+     * null} {@code unpaidByRuleDays} for a dateless call instead, the same "cannot know yet" reading
+     * already given to {@code totalDays}/{@code paidDays}/{@code unpaidDays} in that case. Only {@code
+     * eligibilityResult.blocking()} (always {@code null} for a WARN code) is surfaced dateless.
      */
     public LeavePreviewDto preview(LeavePreviewRequest request, UserPrincipal user) {
         if (request == null || request.leaveTypeCode() == null || request.leaveTypeCode().isBlank()) {
@@ -494,13 +513,17 @@ public class LeaveService {
             // V164: totalDays is genuinely unknown before dates are chosen -- pass null through to
             // #eligibilityRuleOutcome (see its Javadoc and #personalProbationRuleOutcome's identical
             // caveat). Only `.blocking()` is surfaced here; a WARN_UNPAID_ALL outcome among
-            // `.warnings()` is intentionally NOT shown by this dateless preview path (LeavePreviewDto
-            // carries no warnings field -- out of scope for this phase, see the WARN_UNPAID_* PR),
-            // which is consistent with #submit's own post-V164 behaviour: a WARN no longer blocks, so
-            // reporting `outcome = null` here (nothing blocking) is correct, not merely convenient.
+            // `.warnings()` is intentionally NOT shown by this dateless preview path -- see this
+            // method's own Javadoc ("ruleWarnings/unpaidByRuleDays" section) and LeavePreviewDto's
+            // Javadoc for why: every WARN message needs a real totalDays to render its day-count
+            // clause, which this call does not have, so reporting the outcome here would fabricate a
+            // "0 วัน" answer rather than an honest "not yet known" one. This IS consistent with
+            // #submit's own post-V164 behaviour: a WARN no longer blocks, so reporting `outcome = null`
+            // for `blocking` here (nothing blocking) is correct, not merely convenient.
             EligibilityResult eligibilityResult =
                 eligibilityRuleOutcome(leaveType, employeeId, LocalDate.now(clock), null);
-            return new LeavePreviewDto(eligibilityResult.blocking(), false, false, null, null, null, List.of(), counters);
+            return new LeavePreviewDto(
+                eligibilityResult.blocking(), false, false, null, null, null, List.of(), List.of(), null, counters);
         }
         validateDateRange(startDate, endDate);
 
@@ -525,9 +548,20 @@ public class LeaveService {
             employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved,
             quotaPoolPreference, autoReject.unpaidByRuleDays());
 
+        // V164 follow-up: mirrors AutoRejectResult#warnings()/#unpaidByRuleDays() exactly -- the SAME
+        // values #submit would persist for the identical request -- see this method's Javadoc and
+        // LeavePreviewDto's for the full contract. LeaveRuleWarningDto#from is its documented
+        // in-memory LeaveRuleOutcome -> DTO converter (until now unused -- LeaveRepository#mapRequest
+        // instead deserializes a SUBMITTED request's persisted rule_warnings jsonb straight into
+        // List<LeaveRuleWarningDto> via Jackson, since that path never has a live LeaveRuleOutcome to
+        // convert from); this is exactly the caller #from was written for.
+        List<LeaveRuleWarningDto> ruleWarnings = autoReject.warnings().stream()
+            .map(LeaveRuleWarningDto::from)
+            .toList();
         return new LeavePreviewDto(
             outcome, true, autoReject.coverageEvaluated(),
-            totalDays, split.paidDays(), split.unpaidDays(), split.quotaYearSplits(), counters);
+            totalDays, split.paidDays(), split.unpaidDays(), split.quotaYearSplits(),
+            ruleWarnings, autoReject.unpaidByRuleDays(), counters);
     }
 
     /**

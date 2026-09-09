@@ -237,6 +237,68 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.systemNoteCode()).isEqualTo("DEPARTMENT_COVERAGE");
     }
 
+    /**
+     * V164 preview follow-up (2026-09-09): combines an accumulating WARN gate (§5 advance notice,
+     * PERSONAL's real seeded 1-day requirement, unmet by filing the SAME day) with the one relational
+     * BLOCK gate (§5.3.2 department coverage) on the IDENTICAL request, to prove two things at once
+     * that a narrower fixture could each only assert in isolation:
+     *
+     * <ol>
+     *   <li><b>Wrong-way-round:</b> under FULL depth, the BLOCK wins outright and does NOT leak the
+     *       ADVANCE_NOTICE warning that accumulated before it fired -- {@link
+     *       LeaveService.AutoRejectResult}'s own dominance rule discards it (see
+     *       {@link LeaveService#departmentCoverageRuleOutcome}'s BLOCK-return call site's comment).
+     *   <li><b>QUICK depth does not corrupt WARN reporting:</b> the SAME request, previewed at QUICK
+     *       depth, skips {@code #departmentCoverageRuleOutcome} entirely (the documented cost, proven
+     *       in isolation by {@link #quickDepthSkipsDepartmentCoverageAndSaysSoExplicitly} above) --
+     *       and with the BLOCK never reached, the ADVANCE_NOTICE warning that fired earlier in the
+     *       SAME gate chain correctly reaches {@code ruleWarnings} instead. Department coverage is a
+     *       BLOCK-only {@link LeaveRuleCode} (never contributes to {@code warnings}), so skipping it
+     *       changes nothing about what warnings the earlier gates already found -- this is the
+     *       concrete proof of that claim, not an assumption.
+     * </ol>
+     */
+    @Test
+    void aBlockingGateDiscardsAnAccumulatedWarningButQuickDepthStillSurfacesItWhenTheBlockIsSkipped() {
+        long departmentId = insertDepartment("PREV-WCOV-DEPT-001");
+        long requester = insertEmployee("PREV-WCOV-EMP-001", LocalDate.parse("2015-01-01"), departmentId);
+        long colleagueA = insertEmployee("PREV-WCOV-EMP-002", LocalDate.parse("2015-01-01"), departmentId);
+        long colleagueB = insertEmployee("PREV-WCOV-EMP-003", LocalDate.parse("2015-01-01"), departmentId);
+        // Same-day PERSONAL leave for both colleagues -- the requester's own same-day PERSONAL request
+        // below would leave nobody else in the department at work on 2026-07-01.
+        seedActiveRequest(colleagueA, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.SUBMITTED);
+        seedActiveRequest(colleagueB, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.APPROVED);
+
+        // FULL depth: department coverage BLOCKs, and must not leak the ADVANCE_NOTICE warning that
+        // accumulated before it (today, 2026-07-01, is inside PERSONAL's 1-day notice requirement).
+        LeavePreviewDto fullPreview = leaveService.preview(new LeavePreviewRequest(
+            "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
+            null, false, false, LeavePreviewDepth.FULL, null), employee(requester));
+
+        assertThat(fullPreview.blocking()).isNotNull();
+        assertThat(fullPreview.blocking().code().name()).isEqualTo("DEPARTMENT_COVERAGE");
+        assertThat(fullPreview.coverageEvaluated()).isTrue();
+        assertThat(fullPreview.ruleWarnings())
+            .as("a BLOCK must not leak the ADVANCE_NOTICE warning that accumulated before it")
+            .isEmpty();
+
+        // QUICK depth, IDENTICAL request: coverage is skipped, so nothing blocks -- and the
+        // ADVANCE_NOTICE warning (unaffected by the skip) correctly surfaces instead.
+        LeavePreviewDto quickPreview = leaveService.preview(new LeavePreviewRequest(
+            "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
+            null, false, false, LeavePreviewDepth.QUICK, null), employee(requester));
+
+        assertThat(quickPreview.blocking()).as("QUICK depth must not surface the coverage rejection").isNull();
+        assertThat(quickPreview.coverageEvaluated()).as("must explicitly say the gate did not run").isFalse();
+        assertThat(quickPreview.ruleWarnings())
+            .as("skipping department coverage must not suppress the WARN gate that fired above it")
+            .extracting(LeaveRuleWarningDto::code)
+            .containsExactly("ADVANCE_NOTICE");
+        assertThat(quickPreview.unpaidByRuleDays())
+            .as("the whole 1-day request is unpaid by rule (WARN_UNPAID_ALL)")
+            .isEqualByComparingTo(BigDecimal.ONE);
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Nullable dates: only the eligibility gates can run
     // ─────────────────────────────────────────────────────────────────────
@@ -251,6 +313,12 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         // WARN itself (no chosen dates yet to compute "how many days would be unpaid") -- this test
         // was renamed from "...EligibilityGates" to make that narrowing explicit, not silently drop
         // the original assertion.
+        //
+        // V164 preview follow-up (2026-09-09): now ALSO the decision-(a) proof for the "0 วัน" bug
+        // this later branch closes -- ruleWarnings must be EMPTY (not a warning carrying a fabricated
+        // "0 วัน" sentence) and unpaidByRuleDays must be null (unknown, not zero), even though
+        // PROBATION_NOT_PASSED genuinely fired against LocalDate.now(clock) -- see LeavePreviewDto's/
+        // LeaveService#preview's Javadoc for why.
         long employeeId = insertEmployee("PREV-NODATES-001", LocalDate.parse("2026-06-26"), null);
 
         LeavePreviewDto preview = leaveService.preview(
@@ -264,6 +332,8 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(preview.unpaidDays()).isNull();
         assertThat(preview.quotaYearSplits()).isEmpty();
         assertThat(preview.blocking()).isNull();
+        assertThat(preview.ruleWarnings()).isEmpty();
+        assertThat(preview.unpaidByRuleDays()).isNull();
     }
 
     // --- helpers ------------------------------------------------------------
@@ -272,6 +342,14 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
      * Calls {@link LeaveService#preview} (FULL depth) then {@link LeaveService#submit} on the
      * IDENTICAL request, and asserts preview's blocking code equals submit's persisted {@code
      * system_note_code} -- {@code null} on both sides when {@code expectedCode} is {@code null}.
+     *
+     * <p>V164 follow-up (2026-09-09): also asserts {@code preview.ruleWarnings()} is EMPTY in every
+     * case this helper covers -- when {@code expectedCode == null} because no gate fired at all (the
+     * "clean request" case), and when {@code expectedCode != null} because every code this helper is
+     * used for is a BLOCK code, and a BLOCK always reports an empty {@code ruleWarnings} regardless of
+     * what accumulated before it fired (see {@link LeaveService.AutoRejectResult}'s dominance rule and
+     * {@link LeavePreviewDto}'s Javadoc). This is the wrong-way-round proof for every BLOCK-code
+     * fixture already in this class, not a special case built for just one of them.
      */
     private void assertPreviewAgreesWithSubmit(
             long employeeId, String leaveTypeCode, String startDate, String endDate,
@@ -289,8 +367,14 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(previewCode)
             .as("preview's blocking code must equal submit's system_note_code for the identical request")
             .isEqualTo(submitted.systemNoteCode());
+        assertThat(preview.ruleWarnings())
+            .as("a BLOCK code (or no gate at all) must never leak a ruleWarnings entry")
+            .isEmpty();
         if (expectedCode == null) {
             assertThat(preview.blocking()).isNull();
+            assertThat(preview.unpaidByRuleDays())
+                .as("a clean request must report ZERO unpaid-by-rule days, not null -- dates ARE known here")
+                .isEqualByComparingTo(BigDecimal.ZERO);
             // Leave requires approval (2026-08-05): a rule-passing submit now lands SUBMITTED, not
             // APPROVED -- this helper's subject is preview/submit agreement on the BLOCKING code,
             // which is unaffected by this change (see LeaveService#submit's own comment).
@@ -312,6 +396,12 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
      * ruleWarnings} -- that is what this helper additionally proves, restoring the same "the fixture
      * genuinely exercised the gate this test claims" coverage the old {@code expectedCode} equality
      * used to provide.
+     *
+     * <p>V164 preview follow-up (2026-09-09): now ALSO asserts {@code preview.ruleWarnings()} carries
+     * {@code expectedWarnCode} and {@code preview.unpaidByRuleDays()} equals {@code
+     * submitted.unpaidByRuleDays()} EXACTLY -- the whole point of this branch is that a caller can
+     * trust preview's warning/day-count BEFORE submitting, so this helper proves preview and submit
+     * agree on both, not merely that submit alone carries the warning.
      */
     private void assertPreviewAgreesNeitherBlocksButSubmitWarns(
             long employeeId, String leaveTypeCode, String startDate, String endDate,
@@ -333,6 +423,13 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .isNull();
         assertThat(submitted.status()).isEqualTo("SUBMITTED");
         assertThat(submitted.ruleWarnings()).extracting(LeaveRuleWarningDto::code).contains(expectedWarnCode);
+        assertThat(preview.ruleWarnings())
+            .as("preview must show the SAME warning submit will persist, before the employee commits")
+            .extracting(LeaveRuleWarningDto::code)
+            .contains(expectedWarnCode);
+        assertThat(preview.unpaidByRuleDays())
+            .as("preview's unpaid-by-rule day count must agree with what submit actually persists")
+            .isEqualByComparingTo(submitted.unpaidByRuleDays());
     }
 
     private UserPrincipal employee(long employeeId) {

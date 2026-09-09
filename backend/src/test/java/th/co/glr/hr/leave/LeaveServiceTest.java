@@ -2806,6 +2806,112 @@ class LeaveServiceTest {
             org.mockito.ArgumentMatchers.contains("ไม่มีพนักงานคนอื่นในแผนกมาทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // POST /api/leave/preview: ruleWarnings/unpaidByRuleDays mapping (V164 follow-up, 2026-09-09).
+    // LeavePreviewIntegrationTest carries the real-Postgres proof (real repository, real quota/
+    // warning arithmetic); these Mockito-level tests isolate #preview's DTO-mapping decision itself
+    // -- which of AutoRejectResult's warnings/unpaidByRuleDays end up on LeavePreviewDto, and the
+    // dateless-path decision that deliberately reports NEITHER (see LeavePreviewDto's/#preview's
+    // Javadoc for why: a dateless call has no real totalDays to render a WARN message's day-count
+    // clause with, and a fabricated "0 วัน" would be a false answer, not an honest "not yet known").
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void previewSurfacesRuleWarningsForADatedWarnTriggeringRequest() {
+        // Same fixture as submitWarnsUnpaidWhenMinimumServiceIsNotMet, but through #preview -- proves
+        // the pre-submit live check can show the SAME warning #submit would persist, before the
+        // employee commits (the gap this branch closes).
+        LeavePreviewRequest request = new LeavePreviewRequest(
+            "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
+            LeavePreviewDepth.FULL, null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("ORDINATION")).thenReturn(Optional.of(ordinationType()));
+        when(leaveRepository.hasOutstandingOrGrantedRequest(10L, "ORDINATION")).thenReturn(false);
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("ORDINATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("ORDINATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+
+        LeavePreviewDto preview = leaveService.preview(request, user("employee", 10L));
+
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.datesEvaluated()).isTrue();
+        assertThat(preview.coverageEvaluated()).isTrue();
+        assertThat(preview.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("MIN_SERVICE_MONTHS");
+        assertThat(preview.ruleWarnings().get(0).messageTh()).contains("อย่างน้อย 12 เดือน");
+        assertThat(preview.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void previewReturnsNoWarningsForACleanRequest() {
+        // The complement of the WARN-triggering test above: a request no §5 gate touches at all must
+        // report an empty ruleWarnings (never a null-vs-empty ambiguity) and a ZERO -- not null --
+        // unpaidByRuleDays, since dates ARE known here (matching AutoRejectResult#reject's/the
+        // dominance rule's own ZERO-for-clean-request convention, and LeaveRequestDto#unpaidByRuleDays'
+        // identical "0 when no WARN gate fired" precedent).
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+            .thenReturn(new BigDecimal("1.00"));
+
+        LeavePreviewDto preview = leaveService.preview(
+            new LeavePreviewRequest("VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
+                null, null, false, false, LeavePreviewDepth.FULL, null),
+            user("employee", 10L));
+
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.datesEvaluated()).isTrue();
+        assertThat(preview.ruleWarnings()).isEmpty();
+        assertThat(preview.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void previewDoesNotLeakAWarningWhenABlockingGateFires() {
+        // Wrong-way-round proof: a BLOCK code (§5.3.4 post-resignation) must report `blocking`
+        // non-null AND an EMPTY ruleWarnings. LeaveService.AutoRejectResult's own dominance rule
+        // discards any WARN accumulated before a BLOCK fires (a BLOCK wins outright -- see that
+        // record's Javadoc); this proves #preview's mapping does not reintroduce a leak on top of it.
+        LeavePreviewRequest request = new LeavePreviewRequest(
+            "VACATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
+            LeavePreviewDepth.FULL, null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(true);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+
+        LeavePreviewDto preview = leaveService.preview(request, user("employee", 10L));
+
+        assertThat(preview.blocking()).isNotNull();
+        assertThat(preview.blocking().code()).isEqualTo(LeaveRuleCode.RESIGNATION_GATE);
+        assertThat(preview.ruleWarnings()).isEmpty();
+    }
+
+    @Test
+    void previewReturnsNoWarningsWhenNoDatesAreChosenYet() {
+        // Same fixture as submitWarnsUnpaidWhenTheEmployeeIsStillInProbation (probation not passed as
+        // of FIXED_NOW), but called via #preview with NO dates chosen -- decision (a) for the "0 วัน"
+        // bug this branch closes (see LeavePreviewDto's/#preview's Javadoc): a dateless preview cannot
+        // honestly quantify how many days would be unpaid, so it must report NO warning at all rather
+        // than one whose rendered sentence would falsely claim "0 วัน".
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-06-20")));
+        when(leaveRepository.findProbationDays(10L)).thenReturn(Optional.of(90));
+
+        LeavePreviewDto preview = leaveService.preview(
+            new LeavePreviewRequest("PERSONAL", null, null, null, null, false, false, LeavePreviewDepth.FULL, null),
+            user("employee", 10L));
+
+        assertThat(preview.datesEvaluated()).isFalse();
+        assertThat(preview.coverageEvaluated()).isFalse();
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.ruleWarnings()).isEmpty();
+        assertThat(preview.unpaidByRuleDays()).isNull();
+        assertThat(preview.totalDays()).isNull();
+    }
+
     private SubmitLeaveRequest validSubmit(Long employeeId) {
         // Monday–Tuesday, 12 days after FIXED_NOW: 2 working days, well past the 7-day notice.
         return new SubmitLeaveRequest(
