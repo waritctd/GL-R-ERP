@@ -173,7 +173,13 @@ jobs:
       - name: Install Playwright OS deps only (browser cache hit)
         if: steps.changes.outputs.relevant == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
         working-directory: frontend
-        run: npx playwright install-deps chromium
+        # `playwright install-deps` shells out to `apt-get update`, so it inherits the same
+        # broken Google Chrome apt source described in backend-ci.yml's LibreOffice step.
+        # Playwright downloads its own browser binaries and only needs Ubuntu's OS libraries
+        # here, so that source list is dead weight either way.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          npx playwright install-deps chromium
 
       - name: Start backend (demo seed profile)
         if: steps.changes.outputs.relevant == 'true'
