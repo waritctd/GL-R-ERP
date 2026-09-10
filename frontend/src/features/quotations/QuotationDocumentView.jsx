@@ -9,7 +9,45 @@ import { dealQuotationStatusLabel, remainderModeLabel } from './quotationMeta.js
 // print their own label via `::before`. Plain `mobile:grid-cols-1` (the previous rule here) only
 // stacked the six columns into six rows apiece with no labels — the head row's six orphan
 // headings and every body value unlabelled.
-const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)] reflow-cards';
+// ── Column floors: FIXED, identical in every row, and NOT band-scoped ────────────────────────
+// Two separate problems, one line.
+//
+// 1. A money column must never be shrunk below its own text. Every numeric track used to be
+//    `minmax(0, …)`, which lets the grid do exactly that, and `.data-row > span` is `nowrap` with
+//    `text-overflow: ellipsis` — so the loss did not show up as overflow, it showed up as a
+//    silently truncated baht figure. Measured on the demo's ฿1,524,369.36 line, เป็นเงิน was cut
+//    at every table width under 850px, and (this is the part the first attempt got wrong) ALSO on
+//    desktop at 1041–1150px, where the sidebar returns. So the floors are deliberately ungated:
+//    they fix a clip that was never confined to the tablet band.
+//
+// 2. The floors must be FIXED lengths, not `min-content`. The head row and each data row are
+//    SEPARATE grid containers, so `min-content` sizes every row from ITS OWN numbers: a row
+//    holding ฿1,524,369.36 floors its last track wide and squeezes the rest, while the row below
+//    it does not. Right-aligned currency then staggers row to row, and the header sits over
+//    neither — measured at up to 23px of drift at 721px, and 19px at 1041px. On a view whose whole
+//    job is to look like the printed form, that reads as broken. Fixed floors give every row the
+//    identical track list, so the columns stay on one rail at any width.
+//
+// The values are the measured min-content of each column's WIDEST formattable value at the app's
+// 16px root (999,999 แผ่น · ฿999,999.99 · 99.99% · ฿999,999.99 · ฿999,999,999.99 → 90/88/54/88/123px),
+// rounded up — EXCEPT เป็นเงิน, which is sized for the FALLBACK font rather than Sarabun. Sarabun
+// arrives from Google Fonts with `display=swap`, so during the swap window, and permanently on the
+// on-prem deployment if that host cannot reach fonts.googleapis.com, `system-ui` renders instead
+// and every figure is ~14% wider: ฿99,999,999.99 measures 114px in Sarabun but 130.5px in the
+// fallback. A 7.75rem/124px floor covers Sarabun and silently clips the fallback from about ฿10M a
+// line upward, which a large project reaches. 8.25rem/132px covers both. It costs รายละเอียด 8px
+// at the narrowest in-band width, which is the right trade: the description wraps, the total does
+// not. They total 28.5rem; with gaps and panel padding that leaves ~100px for รายละเอียด in
+// the narrowest in-band container (655px at a 721px viewport), which is fine because รายละเอียด is
+// the one column that WRAPS — it is meant to absorb the squeeze, which is why it keeps `minmax(0, …)`.
+//
+// `tablet:min-w-0` then releases `.reflow-cards`'s shared 900px floor for 721–1040px. THAT part is
+// band-scoped, and it is safe only because of the floors above: the table now shrinks to what its
+// numbers actually need instead of scrolling 245px sideways inside a 655px container (owner review,
+// 2026-09-10). styles.css loads in `layer(legacy)`, so the utility wins on layer order without
+// `!important`. Below 721px none of this applies — that band's own `min-width: 0 !important` and
+// `grid-template-columns: 1fr !important` turn these rows into labelled cards.
+const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
 
 /**
  * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation --
