@@ -143,6 +143,25 @@ public final class DealQuotationLines {
                 deadline.getYear() + 543);
     }
 
+    /**
+     * The FLAT baht amount to echo back on an ADJUSTMENT row, so a GET→PUT round-trip of such a
+     * row survives (review fix F2). A flat adjustment has no column of its own — its figure lives
+     * in {@code unit_price}/{@code amount} exactly like any other row's price — so it is recovered
+     * here from the stored price rather than duplicated into the schema.
+     *
+     * @return {@code null} on any row that is not a flat ADJUSTMENT, including a PERCENTAGE
+     *     adjustment (which round-trips through {@code adjustmentPct}). Exactly one of the two is
+     *     ever non-null, which is what keeps the echoed payload legal under
+     *     {@code DealQuotationService#requirePriceValidForType}'s "exactly one of percent / flat".
+     */
+    public static BigDecimal flatAdjustmentAmount(String lineType, BigDecimal adjustmentPct,
+                                                  BigDecimal unitPrice) {
+        if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType) || adjustmentPct != null) {
+            return null;
+        }
+        return unitPrice;
+    }
+
     private static boolean blank(String s) {
         return s == null || s.isBlank();
     }

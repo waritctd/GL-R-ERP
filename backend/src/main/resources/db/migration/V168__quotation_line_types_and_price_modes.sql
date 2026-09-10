@@ -76,7 +76,12 @@ ALTER TABLE sales.quotation_item ADD COLUMN adjustment_deadline DATE;
 -- ── Backfill: this feature's own rows only ────────────────────────────────────────────────────
 -- Scoped to origin = 'DEAL_DIRECT' (V165's tag) so it can never touch a legacy ticket-item row or
 -- a Step-4 / pricing-chain row — neither of which this code reads, and both of which would be
--- mislabelled by a blanket UPDATE. The IS NULL guards make both statements inert on replay.
+-- mislabelled by a blanket UPDATE. The IS NULL guards make these TWO UPDATE statements inert on
+-- replay -- and only them. The five ADD COLUMNs above carry no IF NOT EXISTS and would ERROR if
+-- this file ran a second time, so "inert on replay" is a statement about the backfill, never about
+-- the migration as a whole. Under Flyway a migration never replays, so this is precision about what
+-- the SQL does, not a deploy risk; it is spelled out because the loose phrasing was read the other
+-- way in review.
 UPDATE sales.quotation
    SET price_mode = 'NET'
  WHERE origin = 'DEAL_DIRECT'

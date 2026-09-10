@@ -199,7 +199,7 @@ class DealQuotationRenderAdapterV3Test {
             new BigDecimal("2.78"), 10, 10, 10, null, netPrice, netPrice.multiply(BigDecimal.TEN),
             "กระเบื้อง รุ่น A", "ขนาด 60x60x2 cm.", "(จำนวน 10 แผ่น)",
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "แผ่น", specialPriceSqm, null, null,
-            DealQuotationLines.specialPriceLine(specialPriceSqm));
+            DealQuotationLines.specialPriceLine(specialPriceSqm), null);
     }
 
     private DealQuotationItemDto withDiscountPct(DealQuotationItemDto src, BigDecimal pct) {
@@ -211,7 +211,7 @@ class DealQuotationRenderAdapterV3Test {
             src.piecesPerSqm(), src.piecesBeforeWastage(), src.piecesAfterWastage(), src.piecesFinal(),
             src.boxes(), src.netUnitPrice(), src.lineAmount(), src.descriptionLine(), src.sizeLine(),
             src.calculationLine(), src.lineType(), src.quantity(), src.unit(), src.specialPriceSqm(),
-            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine());
+            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine(), src.adjustmentAmount());
     }
 
     private DealQuotationItemDto reseq(DealQuotationItemDto src, int seq) {
@@ -223,7 +223,7 @@ class DealQuotationRenderAdapterV3Test {
             src.piecesPerSqm(), src.piecesBeforeWastage(), src.piecesAfterWastage(), src.piecesFinal(),
             src.boxes(), src.netUnitPrice(), src.lineAmount(), src.descriptionLine(), src.sizeLine(),
             src.calculationLine(), src.lineType(), src.quantity(), src.unit(), src.specialPriceSqm(),
-            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine());
+            src.adjustmentPct(), src.adjustmentDeadline(), src.specialPriceLine(), src.adjustmentAmount());
     }
 
     private DealQuotationItemDto plain() {
@@ -232,7 +232,7 @@ class DealQuotationRenderAdapterV3Test {
             null, null, null, null, null, 0, 0, 0, null,
             new BigDecimal("50000.00"), new BigDecimal("50000.00"),
             "Transportation Charges from China to Male Port, Maldives", null, null,
-            WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "JOB", null, null, null, null);
+            WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "JOB", null, null, null, null, null);
     }
 
     private DealQuotationItemDto adjustment() {
@@ -242,7 +242,7 @@ class DealQuotationRenderAdapterV3Test {
             new BigDecimal("38198.21"), new BigDecimal("-38198.21"),
             "ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569", null, null,
             WastageCalculator.LINE_TYPE_ADJUSTMENT, new BigDecimal("-1"), null, null,
-            new BigDecimal("3"), LocalDate.of(2026, 7, 31), null);
+            new BigDecimal("3"), LocalDate.of(2026, 7, 31), null, null);
     }
 
     private DealQuotationDto quotation(String priceMode, List<DealQuotationItemDto> items) {
