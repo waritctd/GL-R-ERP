@@ -329,4 +329,105 @@ class WastageCalculatorTest {
         assertThat(WastageCalculator.parseSqmPerPieceFromSize("600x1200 mm")).isEqualByComparingTo("0.72");
         assertThat(WastageCalculator.parseSqmPerPieceFromSize("600x1200mm")).isEqualByComparingTo("0.72");
     }
+
+    // ── quotation v3 (owner feedback pass 3, 2026-09-11) — SPECIAL_SQM + ADJUSTMENT ──────────
+
+    /**
+     * THE pinned test for S1's ราคาพิเศษ formula. All FOUR of the owner's independent documents,
+     * to the satang. The v3 spec is explicit that a formula reproducing only SOME of these is
+     * wrong — the naive "strip VAT, then multiply by ตร.ม./แผ่น" reading gets #1 and #2 right and
+     * both 0.72 cases wrong, so a two-case test would have passed it.
+     */
+    @Test
+    void netPerPieceFromSpecialSqm_reproducesAllFourOwnerDocuments() {
+        // QN6900704-2 item 1 — ราคาพิเศษ 1,350 บาท/ตร.ม., 0.36 ตร.ม./แผ่น (2.78 แผ่น/ตร.ม.)
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("1350"), new BigDecimal("0.36"))).isEqualByComparingTo("453.84");
+        // QN6900704-2 item 2 — ราคาพิเศษ 1,400
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("1400"), new BigDecimal("0.36"))).isEqualByComparingTo("470.65");
+        // QN6900648 — ราคาพิเศษ 1,800, 0.72 ตร.ม./แผ่น (1.39 แผ่น/ตร.ม.)
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
+        // QN6900981-1 — ราคาพิเศษ 790
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("790"), new BigDecimal("0.72"))).isEqualByComparingTo("531.16");
+    }
+
+    /**
+     * The ROUNDING ORDER, pinned separately from the four figures above so a regression names its
+     * own cause. Rounding the ตร.ม./แผ่น reciprocal to 2dp FIRST is what makes QN6900648 come out
+     * at 1,210.25: dividing by the unrounded 1.3888… gives 1,211.21 instead — 96 satang OVER the
+     * printed figure, i.e. this rounding is worth real money on a line, not a cosmetic digit.
+     */
+    @Test
+    void netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne() {
+        BigDecimal exact = new BigDecimal("1800").divide(new BigDecimal("1.07"), 10, java.math.RoundingMode.HALF_UP)
+            .divide(BigDecimal.ONE.divide(new BigDecimal("0.72"), 10, java.math.RoundingMode.HALF_UP),
+                2, java.math.RoundingMode.HALF_UP);
+        assertThat(exact).isEqualByComparingTo("1211.21");
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
+    }
+
+    /** ...and the VAT-stripped figure must NOT be rounded to 2dp before the division — a third
+     * rounding there costs QN6900648 one satang (1,210.24 against the printed 1,210.25). */
+    @Test
+    void netPerPieceFromSpecialSqm_doesNotRoundTheVatStrippedFigureFirst() {
+        BigDecimal roundedFirst = new BigDecimal("1800")
+            .divide(new BigDecimal("1.07"), 2, java.math.RoundingMode.HALF_UP)
+            .divide(new BigDecimal("1.39"), 2, java.math.RoundingMode.HALF_UP);
+        assertThat(roundedFirst).isEqualByComparingTo("1210.24");
+        assertThat(WastageCalculator.netPerPieceFromSpecialSqm(
+            new BigDecimal("1800"), new BigDecimal("0.72"))).isEqualByComparingTo("1210.25");
+    }
+
+    @Test
+    void netPerPieceFromSpecialSqm_rejectsNonPositiveOrMissingInputs() {
+        assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(null, new BigDecimal("0.36")))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(BigDecimal.ZERO, new BigDecimal("0.36")))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(new BigDecimal("-1"), new BigDecimal("0.36")))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(new BigDecimal("1350"), null))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.netPerPieceFromSpecialSqm(new BigDecimal("1350"), BigDecimal.ZERO))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** The reciprocal is a DIVISOR in the money math now, so its 2dp value is pinned in its own
+     * right — these are the very figures the printed sub-line carries ("ตร.ม.ๆละ 2.78 แผ่น"). */
+    @Test
+    void piecesPerSqm_roundsTheReciprocalTo2dp() {
+        assertThat(WastageCalculator.piecesPerSqm(new BigDecimal("0.36"))).isEqualByComparingTo("2.78");
+        assertThat(WastageCalculator.piecesPerSqm(new BigDecimal("0.72"))).isEqualByComparingTo("1.39");
+    }
+
+    /**
+     * S3's ส่วนลดพิเศษ, pinned against the owner's own QN6900704-2: 3% of
+     * 149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56 is 38,198.21, exactly the
+     * printed figure. (The unrounded product is 38,198.2068, so this also pins HALF_UP.)
+     */
+    @Test
+    void adjustmentAmount_reproducesTheOwnersPrintedDiscount() {
+        BigDecimal base = new BigDecimal("149767.20")
+            .add(new BigDecimal("96012.60"))
+            .add(new BigDecimal("528269.76"))
+            .add(new BigDecimal("499224.00"));
+        assertThat(base).isEqualByComparingTo("1273273.56");
+        assertThat(WastageCalculator.adjustmentAmount(base, new BigDecimal("3")))
+            .isEqualByComparingTo("38198.21");
+    }
+
+    @Test
+    void adjustmentAmount_returnsThePositiveMagnitude_andHandlesAZeroBase() {
+        // The sign lives in the row's quantity (-1), never here.
+        assertThat(WastageCalculator.adjustmentAmount(new BigDecimal("1000"), new BigDecimal("10")))
+            .isEqualByComparingTo("100.00");
+        assertThat(WastageCalculator.adjustmentAmount(BigDecimal.ZERO, new BigDecimal("3")))
+            .isEqualByComparingTo("0.00");
+        assertThatThrownBy(() -> WastageCalculator.adjustmentAmount(new BigDecimal("1000"), null))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
 }

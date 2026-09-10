@@ -63,6 +63,10 @@ public final class DealQuotationDtos {
         Integer validityDays,
         LocalDate validityDate,
         String customerNotes,
+        /** "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3 (V168). Never null on the wire; a
+         * stored NULL (every pre-V168 row) normalises to NET on read. Per-QUOTATION, because in
+         * all nine of the owner's documents every tile row shares one mode. */
+        String priceMode,
         BigDecimal subtotalAmount,
         BigDecimal vatAmount,
         BigDecimal grandTotal,
@@ -124,9 +128,46 @@ public final class DealQuotationDtos {
         BigDecimal netUnitPrice,
         BigDecimal lineAmount,
         // Printed-line text (DealQuotationLines) — served here so the frontend never has to
-        // reimplement the wastage/description phrasing.
+        // reimplement the wastage/description phrasing. sizeLine and calculationLine are null on
+        // a PLAIN or ADJUSTMENT row, which has no size and no wastage arithmetic to print.
         String descriptionLine,
         String sizeLine,
-        String calculationLine
+        String calculationLine,
+
+        // ── quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────
+        /** "TILE" | "PLAIN" | "ADJUSTMENT". Never null on the wire — a stored NULL (every pre-V168
+         * row) is normalised to TILE on read, so the client never has to know about the default. */
+        String lineType,
+        /** The printed จำนวน for EVERY row type: {@code piecesFinal} for a TILE row, the rep's own
+         * quantity for PLAIN, and −1 for an ADJUSTMENT. Prefer this over {@code piecesFinal},
+         * which is a TILE-only piece count and reads 0 on the other two. */
+        BigDecimal quantity,
+        /** The printed หน่วย — "แผ่น" for a TILE row, the rep's own (JOB/Bags/Barrels/ชุด) for
+         * PLAIN, and null for an ADJUSTMENT, which prints an EMPTY unit cell. */
+        String unit,
+        /** SPECIAL_SQM rows only — the ราคาพิเศษ the rep typed, in บาท per ตร.ม. INCLUDING VAT. */
+        BigDecimal specialPriceSqm,
+        /** ADJUSTMENT rows only — the percent, when the adjustment was entered as one. */
+        BigDecimal adjustmentPct,
+        /** ADJUSTMENT rows only — the "สั่งซื้อภายใน" date. */
+        LocalDate adjustmentDeadline,
+        /** SPECIAL_SQM rows only — "(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)", the sub-line
+         * the owner's documents carry under such a row. Null in every other mode. */
+        String specialPriceLine,
+        /**
+         * ADJUSTMENT rows entered as a FLAT baht amount — the positive magnitude, mirroring
+         * {@code ItemInput.adjustmentAmount}. Null on every other row, INCLUDING a percentage
+         * adjustment (which round-trips through {@code adjustmentPct} instead), so exactly one of
+         * the two is ever non-null and the "exactly one of percent / flat" rule is satisfied by
+         * echoing what we returned.
+         *
+         * <p>Added by review fix F2, which is about the GET→PUT round-trip. Relaxing the
+         * unitPrice rejection alone fixes only the percentage case: a flat adjustment stores its
+         * figure in {@code unit_price}/{@code amount} and has NO dedicated column, so before this
+         * field the client had no way to hand the amount back and the PUT 400'd on "must be a
+         * percent or an amount". Derived on read rather than stored — see V168's note on why a
+         * duplicate column would only invite drift.
+         */
+        BigDecimal adjustmentAmount
     ) {}
 }

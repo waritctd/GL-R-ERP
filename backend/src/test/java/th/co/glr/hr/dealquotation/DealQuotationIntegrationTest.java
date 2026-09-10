@@ -1462,4 +1462,752 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         @Override
         public void sendWithAttachments(String to, String subject, String body, List<Attachment> attachments) {}
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Quotation v3 (owner feedback pass 3, 2026-09-11) — price modes, PLAIN and ADJUSTMENT rows.
+    //
+    // Every negative case below is written WRONG-WAY-ROUND per CLAUDE.md: it asserts what the
+    // service must REFUSE, not what it accepts. These run through the REAL DealQuotationService
+    // against a REAL Postgres (AbstractPostgresIntegrationTest), so they prove the rule survives
+    // into the stored row, not merely that a branch was taken.
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /** S1, end to end: the owner's QN6900704-2 item 1 — ราคาพิเศษ 1,350 บาท/ตร.ม. incl. VAT on a
+     * 60x60 tile (0.36 ตร.ม./แผ่น) prints คงเหลือ 453.84. Asserted off the row READ BACK from
+     * Postgres, so the column round-trip is covered too, not just the in-memory computation. */
+    @Test
+    void specialSqmMode_reproducesTheOwnersPrintedNetPrice_throughTheDatabase() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "1350"))),
+            salesActor);
+
+        assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.netUnitPrice()).isEqualByComparingTo("453.84");
+        assertThat(item.lineAmount()).isEqualByComparingTo("4538.40"); // 453.84 x 10 แผ่น
+        // ราคา stays the CATALOG LIST price the rep typed — it is not overwritten by the special.
+        assertThat(item.unitPrice()).isEqualByComparingTo("2000.00");
+        assertThat(item.specialPriceSqm()).isEqualByComparingTo("1350");
+        assertThat(item.specialPriceLine())
+            .isEqualTo("(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
+        // The percentage discount is cleared, not left stale — the ส่วนลด column reads "พิเศษ".
+        assertThat(item.discountPct()).isNull();
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("4538.40");
+    }
+
+    /** S1: DIRECT_NET keeps the list price in ราคา and stores the rep's typed net in คงเหลือ. */
+    @Test
+    void directNetMode_keepsTheListPrice_andStoresTheTypedNet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("2000.00", 10, "777.50"))),
+            salesActor);
+
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.unitPrice()).isEqualByComparingTo("2000.00");
+        assertThat(item.netUnitPrice()).isEqualByComparingTo("777.50");
+        assertThat(item.lineAmount()).isEqualByComparingTo("7775.00");
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("7775.00");
+    }
+
+    /** NET mode is untouched by v3 — the default when no mode is sent, and the arithmetic is the
+     * pre-v3 one. Guards against the new switch silently changing today's documents. */
+    @Test
+    void netMode_isTheDefault_andItsArithmeticIsUnchanged() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+        assertThat(created.items().get(0).lineAmount()).isEqualByComparingTo("1000.00");
+        assertThat(created.items().get(0).unit()).isEqualTo("แผ่น");
+        assertThat(created.items().get(0).quantity()).isEqualByComparingTo("10");
+        assertThat(created.items().get(0).lineType()).isEqualTo(WastageCalculator.LINE_TYPE_TILE);
+    }
+
+    /** S2: a PLAIN row carries description/quantity/unit/price and NONE of the tile machinery. */
+    @Test
+    void plainRow_hasNoTileMachinery_andAmountIsQuantityTimesNetPrice() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                plainItem("Transportation Charges from China to Male Port, Maldives", "1", "JOB", "50000.00"),
+                plainItem("Mapei Adhesive (20kg/Bag)", "85", "Bags", "450.00"))),
+            salesActor);
+
+        DealQuotationItemDto freight = created.items().get(1);
+        assertThat(freight.lineType()).isEqualTo(WastageCalculator.LINE_TYPE_PLAIN);
+        assertThat(freight.descriptionLine())
+            .isEqualTo("Transportation Charges from China to Male Port, Maldives");
+        assertThat(freight.quantity()).isEqualByComparingTo("1");
+        assertThat(freight.unit()).isEqualTo("JOB");
+        assertThat(freight.lineAmount()).isEqualByComparingTo("50000.00");
+        // None of the tile machinery: no size line, no wastage/calculation line, no catalog link,
+        // no ตร.ม./แผ่น, no แผ่น/กล่อง.
+        assertThat(freight.sizeLine()).isNull();
+        assertThat(freight.calculationLine()).isNull();
+        assertThat(freight.catalogPriceId()).isNull();
+        assertThat(freight.sqmPerPiece()).isNull();
+        assertThat(freight.piecesPerSqm()).isNull();
+        assertThat(freight.piecesPerBox()).isNull();
+        assertThat(freight.boxes()).isNull();
+
+        DealQuotationItemDto mapei = created.items().get(2);
+        assertThat(mapei.quantity()).isEqualByComparingTo("85");
+        assertThat(mapei.lineAmount()).isEqualByComparingTo("38250.00"); // 85 x 450
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("89250.00"); // 1000 + 50000 + 38250
+    }
+
+    /** S2: a fractional PLAIN quantity must survive — the reason `quantity` is a BigDecimal and
+     * not an int. An int would have thrown ArithmeticException on the read path instead. */
+    @Test
+    void plainRow_acceptsAFractionalQuantity() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10),
+                plainItem("ค่าบริการตัดกระเบื้องตามแบบ", "2.5", "ชม.", "400.00"))),
+            salesActor);
+        DealQuotationItemDto cut = created.items().get(1);
+        assertThat(cut.quantity()).isEqualByComparingTo("2.5");
+        assertThat(cut.lineAmount()).isEqualByComparingTo("1000.00");
+    }
+
+    /**
+     * S3, pinned against the owner's QN6900704-2: 3% of the four preceding line amounts
+     * (149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56) is 38,198.21, and the row
+     * prints จำนวน −1, no unit, a POSITIVE ราคา/คงเหลือ and a NEGATIVE เป็นเงิน.
+     */
+    @Test
+    void adjustmentRow_isDerivedFromThePrecedingRows_andPrintsTheOwnersFigure() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItem("รายการที่ 1", "1", "ชุด", "149767.20"),
+                plainItem("รายการที่ 2", "1", "ชุด", "96012.60"),
+                plainItem("รายการที่ 3", "1", "ชุด", "528269.76"),
+                plainItem("รายการที่ 4", "1", "ชุด", "499224.00"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+
+        DealQuotationItemDto adj = created.items().get(4);
+        assertThat(adj.lineType()).isEqualTo(WastageCalculator.LINE_TYPE_ADJUSTMENT);
+        assertThat(adj.descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+        assertThat(adj.quantity()).isEqualByComparingTo("-1");
+        assertThat(adj.unit()).isNull();                          // no หน่วย at all
+        assertThat(adj.unitPrice()).isEqualByComparingTo("38198.21");    // ราคา — POSITIVE
+        assertThat(adj.netUnitPrice()).isEqualByComparingTo("38198.21"); // คงเหลือ — POSITIVE
+        assertThat(adj.lineAmount()).isEqualByComparingTo("-38198.21");  // เป็นเงิน — NEGATIVE
+        assertThat(adj.adjustmentPct()).isEqualByComparingTo("3");
+        assertThat(adj.adjustmentDeadline()).isEqualTo(LocalDate.of(2026, 7, 31));
+
+        // The document total nets the discount out — and so, therefore, does the VAT and the
+        // grand total. (Both are computed FROM the subtotal, not summed from the per-line vat
+        // columns, so a negative line reduces the tax the customer is charged rather than being
+        // taxed separately. Pinned because getting this wrong would over-charge VAT on every
+        // discounted document while every other assertion here still passed.)
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("1235075.35"); // 1273273.56 - 38198.21
+        assertThat(created.vatAmount()).isEqualByComparingTo("86455.27");        // 7% of the NET subtotal
+        assertThat(created.grandTotal()).isEqualByComparingTo("1321530.62");
+    }
+
+    /** S3: a flat baht adjustment, the alternative to a percentage. */
+    @Test
+    void adjustmentRow_acceptsAFlatBahtAmount() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10), adjustmentFlatItem("250.00", "ส่วนลดตามตกลง"))),
+            salesActor);
+        DealQuotationItemDto adj = created.items().get(1);
+        assertThat(adj.descriptionLine()).isEqualTo("ส่วนลดตามตกลง");
+        assertThat(adj.unitPrice()).isEqualByComparingTo("250.00");
+        assertThat(adj.lineAmount()).isEqualByComparingTo("-250.00");
+        assertThat(adj.adjustmentPct()).isNull();
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("750.00");
+    }
+
+    /**
+     * ⚠️ ORDERING IS LOAD-BEARING. An adjustment applies to the rows ABOVE it, so it must sort
+     * LAST whatever order the client sent — otherwise its base is whatever happened to precede it
+     * in the payload, and the same document totals differently depending on row order in the UI.
+     */
+    @Test
+    void adjustmentRow_sortsLast_whateverOrderTheClientSends() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                adjustmentPctItem("10", null),                 // sent FIRST
+                sampleItem("100.00", 10),                      // 1,000
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), // 500
+            salesActor);
+
+        assertThat(created.items()).extracting(DealQuotationItemDto::lineType)
+            .containsExactly(WastageCalculator.LINE_TYPE_TILE, WastageCalculator.LINE_TYPE_PLAIN,
+                WastageCalculator.LINE_TYPE_ADJUSTMENT);
+        assertThat(created.items()).extracting(DealQuotationItemDto::seq).containsExactly(1, 2, 3);
+        // 10% of (1000 + 500), NOT 10% of nothing — which is what a first-position adjustment
+        // would have computed had the reorder not happened.
+        assertThat(created.items().get(2).lineAmount()).isEqualByComparingTo("-150.00");
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("1350.00");
+    }
+
+    /**
+     * Two adjustments do NOT compound: each is a percentage of the same NON-adjustment subtotal.
+     * ⚠️ This is the one behaviour in this pass the owner has not ruled on — flagged in the PR
+     * body. Pinned here so that if she chooses compounding, this test names the decision rather
+     * than the change slipping in unnoticed.
+     */
+    @Test
+    void twoAdjustments_doNotCompound() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),                    // 1,000
+                adjustmentPctItem("10", null),
+                adjustmentPctItem("5", null))),
+            salesActor);
+
+        assertThat(created.items().get(1).lineAmount()).isEqualByComparingTo("-100.00"); // 10% of 1000
+        // 5% of 1,000 = 50.00. Compounding would make it 5% of 900 = 45.00.
+        assertThat(created.items().get(2).lineAmount()).isEqualByComparingTo("-50.00");
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("850.00");
+    }
+
+    /** A document of nothing but adjustments has no base to discount — refuse it rather than
+     * silently writing a ฿0 discount line. */
+    @Test
+    void adjustmentOnly_document_isRejected() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(adjustmentPctItem("3", null))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    // ── Type-aware price validation, wrong-way-round ────────────────────────────────────────
+
+    /**
+     * The regression guard for the {@code @DecimalMin("0.01")} that was removed from
+     * {@code ItemInput.unitPrice}: a TILE row must STILL refuse a non-positive or missing price.
+     *
+     * <p>⚠️ <b>Mutation-checked, and the result is worth recording:</b> deleting the TILE/PLAIN
+     * price guard from {@code DealQuotationService#requirePriceValidForType} does NOT red this
+     * test. On the create path a bad price is caught a second time by
+     * {@code #requireItemComplete}'s own "ราคาต่อหน่วย" check, which pre-dates v3. That
+     * belt-and-braces is welcome, but it means THIS test does not isolate the new rule — the two
+     * that do are {@link #tileRow_withNonPositivePrice_isRejectedOnTheCalculateLinePreviewToo}
+     * (the preview path skips completeness entirely) and
+     * {@link #plainRow_withNonPositiveOrMissingPrice_isRejected} (a PLAIN row has no completeness
+     * check to fall back on). Those two are the real guard; keep this one as the statement of
+     * intent, but do not read a green here as evidence the guard exists.
+     */
+    @Test
+    void tileRow_withNonPositiveOrMissingPrice_isStillRejected() {
+        for (BigDecimal bad : new BigDecimal[]{BigDecimal.ZERO, new BigDecimal("-5"), null}) {
+            assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(List.of(itemMissing(b -> b.withUnitPrice(bad)))), salesActor))
+                .as("TILE unitPrice = %s", bad)
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /** ...and on the LENIENT preview path too. calculate-line used to 400 on a zero price via the
+     * bean annotation; moving the rule must not have quietly loosened that. */
+    @Test
+    void tileRow_withNonPositivePrice_isRejectedOnTheCalculateLinePreviewToo() {
+        assertThatThrownBy(() -> quotationService.calculateLine(
+            itemMissing(b -> b.withUnitPrice(BigDecimal.ZERO)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        assertThatThrownBy(() -> quotationService.calculateLine(
+            itemMissing(b -> b.withUnitPrice(null)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void plainRow_withNonPositiveOrMissingPrice_isRejected() {
+        for (String bad : new String[]{"0", "-5"}) {
+            assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(List.of(sampleItem("100.00", 10),
+                    plainItem("ค่าขนส่ง", "1", "JOB", bad))), salesActor))
+                .as("PLAIN unitPrice = %s", bad)
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        }
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10),
+                plainItem("ค่าขนส่ง", "1", "JOB", null))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * An ADJUSTMENT's amount is DERIVED, and a client-supplied {@code unitPrice} on such a row is
+     * IGNORED — not refused (review fix F2). It used to 400, which made the round-trip below
+     * impossible; the caller still cannot dictate the discount, because
+     * {@code #buildAdjustmentItem} never reads {@code unitPrice} at all.
+     *
+     * <p>Written wrong-way-round in the sense that matters here: the assertion is that the absurd
+     * 99,999.00 the client sent has NO effect on the stored figure, which stays the derived 3% of
+     * the rows above. A fix that "accepted" the price by using it would fail this.
+     */
+    @Test
+    void adjustmentRow_withARepSuppliedPrice_ignoresIt_andStillDerivesTheAmount() {
+        ItemInput handPriced = new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal("99999.00"), null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, null, null, null, null, null,
+            new BigDecimal("3"), null, null);
+
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10), handPriced)), salesActor);
+
+        DealQuotationItemDto adj = created.items().get(1);
+        assertThat(adj.unitPrice()).isEqualByComparingTo("30.00");    // 3% of 1,000 — NOT 99,999.00
+        assertThat(adj.lineAmount()).isEqualByComparingTo("-30.00");
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("970.00");
+    }
+
+    /** Exactly one of percent / flat amount — neither and both are both errors. */
+    @Test
+    void adjustmentRow_needsExactlyOneOfPercentAndFlatAmount() {
+        ItemInput neither = adjustmentItem(null, null, null, null);
+        ItemInput both = adjustmentItem(new BigDecimal("3"), new BigDecimal("500"), null, null);
+        for (ItemInput bad : List.of(neither, both)) {
+            assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(List.of(sampleItem("100.00", 10), bad)), salesActor))
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @Test
+    void adjustmentRow_withANonPositivePercentOrAmount_isRejected() {
+        for (ItemInput bad : List.of(
+                adjustmentItem(BigDecimal.ZERO, null, null, null),
+                adjustmentItem(null, BigDecimal.ZERO, null, null),
+                adjustmentItem(null, new BigDecimal("-5"), null, null))) {
+            assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(List.of(sampleItem("100.00", 10), bad)), salesActor))
+                .isInstanceOf(ApiException.class)
+                .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    /** A price mode whose own price is missing must 400, NEVER fall back to the list price —
+     * a silent fallback would quote the customer the undiscounted figure. */
+    @Test
+    void specialSqmMode_withoutASpecialPrice_isRejected_notSilentlyFallenBackToTheListPrice() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(sampleItem("2000.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ราคาพิเศษ");
+
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "0"))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void directNetMode_withoutATypedNet_isRejected() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(sampleItem("2000.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ราคาสุทธิ");
+    }
+
+    // ── submit / revision over the new row types ────────────────────────────────────────────
+
+    /** submit re-checks the STORED rows. Its tile completeness rule must NOT be applied to a
+     * PLAIN or ADJUSTMENT row — without the type switch, every document containing a freight line
+     * would be un-submittable because it has no รุ่น/สี/ผิว/ขนาด. */
+    @Test
+    void submit_acceptsADocumentContainingPlainAndAdjustmentRows() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
+    /** A PLAIN row missing its description is still refused at submit — the type switch narrows
+     * the rule, it does not remove it. Written by breaking the stored row directly, the way a
+     * legacy/pre-rule row would exist. */
+    @Test
+    void submit_stillRejectsAPlainRowWithNoDescription() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10),
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), salesActor);
+        jdbc.update("""
+            UPDATE sales.quotation_item SET description = NULL
+             WHERE quotation_id = :id AND line_type = 'PLAIN'
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายละเอียด");
+    }
+
+    /** A revision copies the parent's rows VERBATIM — adjustments included, at their approved
+     * figure, rather than re-deriving them. */
+    @Test
+    void createRevision_carriesPriceModeAndEveryRowTypeVerbatim() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "1350"),
+                    plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
+                    adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+        quotationService.submit(created.id(), salesActor);
+        quotationService.approve(created.id(), new ApproveRequest("ok"), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.createRevision(created.id(), salesActor);
+        assertThat(revision.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        assertThat(revision.items()).extracting(DealQuotationItemDto::lineType)
+            .containsExactly(WastageCalculator.LINE_TYPE_TILE, WastageCalculator.LINE_TYPE_PLAIN,
+                WastageCalculator.LINE_TYPE_ADJUSTMENT);
+        assertThat(revision.items().get(0).netUnitPrice()).isEqualByComparingTo("453.84");
+        assertThat(revision.items().get(0).specialPriceSqm()).isEqualByComparingTo("1350");
+        assertThat(revision.items().get(2).lineAmount())
+            .isEqualByComparingTo(created.items().get(2).lineAmount());
+        assertThat(revision.subtotalAmount()).isEqualByComparingTo(created.subtotalAmount());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════
+    // Review fixes F1 / F2 / F3 — the UPDATE path.
+    //
+    // ⚠️ The v3 update() path had NO coverage at all until these landed: replacing
+    // `resolvePriceMode(request.priceMode())` at DealQuotationService#update with a hardcoded
+    // PRICE_MODE_NET left the whole suite green while silently repricing every SPECIAL_SQM and
+    // DIRECT_NET document a rep edits. Every test in this block runs through the REAL service
+    // against a REAL Postgres, and the first three are the ones that red under that mutation.
+    //
+    // MUTATION-CHECK RECORD (actually run against a real Postgres, not simulated; each reverted
+    // with an editor, never `git checkout --`, because these worktrees are shared). Baseline for
+    // all four: 216 green across th.co.glr.hr.dealquotation.*Test + QuotationRendererTest.
+    //
+    //   MC1  update()'s price mode hardcoded to PRICE_MODE_NET  -> exactly 4 red, ALL NEW:
+    //        update_withNoPriceMode_keepsTheStoredSpecialSqmMode_andRepricesNothing,
+    //        ...keepsTheStoredDirectNetMode..., update_withAnExplicitPriceMode_switchesTheDocumentBothWays,
+    //        getThenPutVerbatim_roundTripsASpecialSqmDocument. Nothing else moved.
+    //   MC2  the ADJUSTMENT "cannot supply a price" throw put back -> exactly 3 red:
+    //        adjustmentRow_withARepSuppliedPrice_ignoresIt_andStillDerivesTheAmount and both
+    //        getThenPutVerbatim_* round-trips.
+    //   MC3  the negative-subtotal guard disabled (signum() < -1) -> exactly 3 red:
+    //        twoAdjustments_drivingTheSubtotalNegative_areRejected,
+    //        aFlatAdjustmentLargerThanTheDocument_isRejected, update_drivingTheSubtotalNegative_isRejected.
+    //   MC4  each of the three @Digits removed in turn (DealQuotationRequests) -> exactly ONE red
+    //        each, the matching case in DealQuotationRequestsValidationTest.
+    // ══════════════════════════════════════════════════════════════════════════════════════
+
+    /**
+     * F1: a rep creates a SPECIAL_SQM quotation, reopens the draft, edits ONE header field and
+     * saves without re-sending {@code priceMode}. Nothing about the money may move.
+     *
+     * <p>Before the fix the document repriced: 453.84 → 2,000.00 per แผ่น, {@code
+     * special_price_sqm} to NULL, the ราคาพิเศษ sub-line gone, ส่วนลด พิเศษ→Net, subtotal 4.4×.
+     */
+    @Test
+    void update_withNoPriceMode_keepsTheStoredSpecialSqmMode_andRepricesNothing() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "1350"))),
+            salesActor);
+
+        // The obvious client edit: same items, a changed note, NO priceMode field on the wire.
+        DealQuotationDto saved = quotationService.update(created.id(),
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+                "แก้หมายเหตุ", List.of(specialSqmItem("2000.00", 10, "1350"))),
+            salesActor);
+
+        assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        DealQuotationItemDto item = saved.items().get(0);
+        assertThat(item.netUnitPrice()).isEqualByComparingTo("453.84");
+        assertThat(item.specialPriceSqm()).isEqualByComparingTo("1350");
+        assertThat(item.specialPriceLine())
+            .isEqualTo("(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
+        assertThat(item.discountPct()).isNull();          // ส่วนลด stays "พิเศษ", never flips to Net
+        assertThat(item.lineAmount()).isEqualByComparingTo("4538.40");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("4538.40");
+        // Re-read from Postgres rather than trusting the returned object: the column, not the DTO.
+        assertThat(quotationService.get(created.id(), salesActor).priceMode())
+            .isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+    }
+
+    /**
+     * F1, DIRECT_NET — the worse half. The rep-typed net is deliberately NOT stored in a column of
+     * its own (it IS final_unit_price), so once an update overwrites it with the list price there
+     * is nothing left to recover it from.
+     */
+    @Test
+    void update_withNoPriceMode_keepsTheStoredDirectNetMode_andRepricesNothing() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("2000.00", 10, "777.50"))),
+            salesActor);
+
+        DealQuotationDto saved = quotationService.update(created.id(),
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+                "แก้หมายเหตุ", List.of(directNetItem("2000.00", 10, "777.50"))),
+            salesActor);
+
+        assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_DIRECT_NET);
+        assertThat(saved.items().get(0).unitPrice()).isEqualByComparingTo("2000.00");
+        assertThat(saved.items().get(0).netUnitPrice()).isEqualByComparingTo("777.50");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("7775.00");
+    }
+
+    /** F1: an EXPLICIT mode still wins — that is what lets a rep switch a draft's mode at all.
+     * Both directions, because keeping the stored mode must not become "ignore what was sent". */
+    @Test
+    void update_withAnExplicitPriceMode_switchesTheDocumentBothWays() {
+        DealQuotationDto net = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("2000.00", 10))), salesActor);
+        assertThat(net.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+
+        DealQuotationDto toSpecial = quotationService.update(net.id(),
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "1350"))),
+            salesActor);
+        assertThat(toSpecial.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        assertThat(toSpecial.items().get(0).netUnitPrice()).isEqualByComparingTo("453.84");
+
+        DealQuotationDto backToNet = quotationService.update(net.id(),
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_NET,
+                List.of(sampleItem("2000.00", 10))),
+            salesActor);
+        assertThat(backToNet.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+        assertThat(backToNet.items().get(0).netUnitPrice()).isEqualByComparingTo("2000.00");
+        assertThat(backToNet.items().get(0).specialPriceSqm()).isNull();
+    }
+
+    /** F1: the pre-v3 case — a NET document updated with no mode stays NET. Deliberately does NOT
+     * red under the hardcode mutation (NET is NET either way); it is here to pin that "keep the
+     * stored mode" did not change today's behaviour for the 99% of documents that are NET. */
+    @Test
+    void update_withNoPriceMode_onANetDocument_staysNet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto saved = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("1000.00");
+    }
+
+    /**
+     * F2: GET a document containing BOTH kinds of adjustment, hand every item back VERBATIM, and
+     * the save must succeed with nothing moved.
+     *
+     * <p>Two separate traps sit on this path and both had to be fixed for it to pass:
+     * <ol>
+     *   <li>{@code mapItem} returns {@code unitPrice} = the derived amount on an ADJUSTMENT row
+     *       (the ราคา column has to print it) and the service used to REFUSE a supplied price on
+     *       exactly that row — a contract that 400s the caller for echoing a field we sent.</li>
+     *   <li>A FLAT adjustment's amount had no field on the DTO at all, so there was nothing to
+     *       echo and the PUT failed the "exactly one of percent / flat" rule instead. Hence
+     *       {@code DealQuotationItemDto.adjustmentAmount}.</li>
+     * </ol>
+     */
+    @Test
+    void getThenPutVerbatim_roundTripsADocumentContainingBothKindsOfAdjustment() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),                                 // 1,000
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),               //   500
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)),        //   -45 (3% of 1,500)
+                adjustmentFlatItem("250.00", "ส่วนลดตามตกลง"))),           //  -250
+            salesActor);
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("1205.00");
+
+        DealQuotationDto fetched = quotationService.get(created.id(), salesActor);
+        DealQuotationDto saved = quotationService.update(created.id(),
+            upsertRequest(fetched.items().stream()
+                .map(item -> echoBack(item, fetched.priceMode())).toList()),
+            salesActor);
+
+        assertThat(saved.items()).extracting(DealQuotationItemDto::lineType)
+            .containsExactly(WastageCalculator.LINE_TYPE_TILE, WastageCalculator.LINE_TYPE_PLAIN,
+                WastageCalculator.LINE_TYPE_ADJUSTMENT, WastageCalculator.LINE_TYPE_ADJUSTMENT);
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("1000.00");
+        assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("500.00");
+        assertThat(saved.items().get(2).lineAmount()).isEqualByComparingTo("-45.00");
+        assertThat(saved.items().get(3).lineAmount()).isEqualByComparingTo("-250.00");
+        assertThat(saved.items().get(2).descriptionLine())
+            .isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+        assertThat(saved.items().get(2).adjustmentPct()).isEqualByComparingTo("3");
+        assertThat(saved.items().get(2).adjustmentDeadline()).isEqualTo(LocalDate.of(2026, 7, 31));
+        assertThat(saved.items().get(3).descriptionLine()).isEqualTo("ส่วนลดตามตกลง");
+        assertThat(saved.items().get(3).adjustmentAmount()).isEqualByComparingTo("250.00");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo(created.subtotalAmount());
+    }
+
+    /** F2: the same round-trip on a SPECIAL_SQM document, which additionally exercises F1's
+     * keep-the-stored-mode (the echoed payload carries no {@code priceMode}). */
+    @Test
+    void getThenPutVerbatim_roundTripsASpecialSqmDocument() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(specialSqmItem("2000.00", 10, "1350"),
+                    adjustmentPctItem("3", null))),
+            salesActor);
+
+        DealQuotationDto fetched = quotationService.get(created.id(), salesActor);
+        DealQuotationDto saved = quotationService.update(created.id(),
+            upsertRequest(fetched.items().stream()
+                .map(item -> echoBack(item, fetched.priceMode())).toList()),
+            salesActor);
+
+        assertThat(saved.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        assertThat(saved.items().get(0).netUnitPrice()).isEqualByComparingTo("453.84");
+        assertThat(saved.items().get(0).specialPriceSqm()).isEqualByComparingTo("1350");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo(created.subtotalAmount());
+    }
+
+    /**
+     * F3 — ⚠️ a NEW rule the owner has not ruled on, flagged in the PR body next to the
+     * "two adjustments do not compound" question it falls out of.
+     *
+     * <p>Because adjustments do not compound, each one takes the FULL non-adjustment base — so two
+     * 60% rows take 120% and the document ends up owing the customer money. Refused.
+     */
+    @Test
+    void twoAdjustments_drivingTheSubtotalNegative_areRejected() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),          // 1,000
+                adjustmentPctItem("60", null),     //  -600
+                adjustmentPctItem("60", null))),   //  -600  => -200
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ติดลบ");
+    }
+
+    /** F3: a FLAT adjustment is bounded only by {@code @DecimalMax("99999999")} and bears no
+     * relation to the document's own size, so it is the easier of the two paths to hit. */
+    @Test
+    void aFlatAdjustmentLargerThanTheDocument_isRejected() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10),
+                adjustmentFlatItem("1000000.00", "ส่วนลดตามตกลง"))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ติดลบ");
+    }
+
+    /** F3, the boundary: EXACTLY zero is allowed. A 100% discount is at least an intelligible
+     * document to issue; only a NEGATIVE grand total is refused. */
+    @Test
+    void anAdjustmentTakingTheSubtotalToExactlyZero_isAccepted() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10), adjustmentPctItem("100", null))),
+            salesActor);
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("0.00");
+    }
+
+    /** F3 applies on UPDATE too, not only on create — the same {@code buildItems} is the single
+     * gate, and a draft edited into the negative would otherwise slip past. */
+    @Test
+    void update_drivingTheSubtotalNegative_isRejected() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10),
+                adjustmentFlatItem("5000.00", "ส่วนลดตามตกลง"))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ติดลบ");
+
+        // ...and the draft is untouched, because buildItems runs BEFORE the header compare-and-set.
+        assertThat(quotationService.get(created.id(), salesActor).subtotalAmount())
+            .isEqualByComparingTo("1000.00");
+    }
+
+    // ── v3 fixtures ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * What an honest UI does on save: hand every field the GET returned straight back. Mirrors
+     * {@code DealQuotationItemDto} onto {@code ItemInput} one-for-one, with the two mappings the
+     * DTO cannot make for itself:
+     * <ul>
+     *   <li>{@code description} comes from {@code descriptionLine} — the same field under the two
+     *       names it has on the way out and the way in.</li>
+     *   <li>{@code directNetPrice} comes from {@code netUnitPrice}. There is no {@code
+     *       directNetPrice} on the DTO ON PURPOSE (V168: the typed net IS final_unit_price, and a
+     *       second column could only drift), so this mapping is the caller's job — recoverable,
+     *       unlike a flat adjustment's amount, which is why THAT one needed a DTO field.</li>
+     * </ul>
+     */
+    private ItemInput echoBack(DealQuotationItemDto src, String priceMode) {
+        boolean directNetTile = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
+            && WastageCalculator.LINE_TYPE_TILE.equals(src.lineType());
+        return new ItemInput(src.locationLabel(), src.catalogPriceId(), src.productCode(), src.brand(),
+            src.model(), src.color(), src.texture(), src.sizeText(), src.thicknessMm(), src.sqmPerPiece(),
+            src.quantityMode(), src.areaSqm(), src.piecesInput(), src.wastageMode(), src.wastageValue(),
+            src.piecesPerBox(), src.unitPrice(), src.discountPct(), src.originCountry(),
+            src.leadTimeMinDays(), src.leadTimeMaxDays(), src.itemNotes(),
+            src.lineType(), src.descriptionLine(), src.quantity(), src.unit(), src.specialPriceSqm(),
+            directNetTile ? src.netUnitPrice() : null,
+            src.adjustmentPct(), src.adjustmentDeadline(), src.adjustmentAmount());
+    }
+
+    private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            "หมายเหตุทดสอบ", priceMode, items);
+    }
+
+    /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */
+    private ItemInput specialSqmItem(String listPrice, int pieces, String specialPerSqm) {
+        ItemInput base = sampleItem(listPrice, pieces);
+        return new ItemInput(base.locationLabel(), base.catalogPriceId(), base.productCode(), base.brand(),
+            base.model(), base.color(), base.texture(), base.sizeText(), base.thicknessMm(), base.sqmPerPiece(),
+            base.quantityMode(), base.areaSqm(), base.piecesInput(), base.wastageMode(), base.wastageValue(),
+            base.piecesPerBox(), base.unitPrice(), base.discountPct(), base.originCountry(),
+            base.leadTimeMinDays(), base.leadTimeMaxDays(), base.itemNotes(),
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
+    private ItemInput directNetItem(String listPrice, int pieces, String directNet) {
+        ItemInput base = sampleItem(listPrice, pieces);
+        return new ItemInput(base.locationLabel(), base.catalogPriceId(), base.productCode(), base.brand(),
+            base.model(), base.color(), base.texture(), base.sizeText(), base.thicknessMm(), base.sqmPerPiece(),
+            base.quantityMode(), base.areaSqm(), base.piecesInput(), base.wastageMode(), base.wastageValue(),
+            base.piecesPerBox(), base.unitPrice(), base.discountPct(), base.originCountry(),
+            base.leadTimeMinDays(), base.leadTimeMaxDays(), base.itemNotes(),
+            WastageCalculator.LINE_TYPE_TILE, null, null, null, null,
+            new BigDecimal(directNet), null, null, null);
+    }
+
+    /** S2 — description/quantity/unit/price and nothing else. */
+    private ItemInput plainItem(String description, String quantity, String unit, String unitPrice) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            unitPrice == null ? null : new BigDecimal(unitPrice), null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    private ItemInput adjustmentPctItem(String pct, LocalDate deadline) {
+        return adjustmentItem(new BigDecimal(pct), null, deadline, null);
+    }
+
+    private ItemInput adjustmentFlatItem(String amount, String description) {
+        return adjustmentItem(null, new BigDecimal(amount), null, description);
+    }
+
+    private ItemInput adjustmentItem(BigDecimal pct, BigDecimal flatAmount, LocalDate deadline,
+                                     String description) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, description, null, null, null, null,
+            pct, deadline, flatAmount);
+    }
 }

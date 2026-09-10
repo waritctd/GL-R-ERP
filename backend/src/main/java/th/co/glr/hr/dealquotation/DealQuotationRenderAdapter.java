@@ -58,7 +58,7 @@ public final class DealQuotationRenderAdapter {
 
         List<RenderItem> items = quotation.items().stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq()))
-            .map(DealQuotationRenderAdapter::toRenderItem)
+            .map(item -> toRenderItem(item, quotation.priceMode()))
             .toList();
 
         // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
@@ -75,22 +75,79 @@ public final class DealQuotationRenderAdapter {
             attnLine, phoneLine, quotation.projectName(), items, remarkLines(quotation), signatories, true);
     }
 
-    private static RenderItem toRenderItem(DealQuotationItemDto item) {
-        BigDecimal pct = item.discountPct();
-        String discountLabel = (pct == null || pct.signum() == 0) ? "Net" : formatPct(pct) + "%";
-        // layout-spec §2: sizeLine is null (not blank) when the item has no thickness — its size
-        // already went inline on descriptionLine instead — so the printed line list must OMIT the
-        // row entirely rather than emit a blank one.
+    /**
+     * One printed row, for any of the three v3 line types.
+     *
+     * <p>Every null-guarded {@code lines.add} below follows layout-spec §2's contract: a printed
+     * line that does not apply is {@code null}, NOT blank, and the caller must omit the row
+     * entirely rather than emit an empty one. A PLAIN or ADJUSTMENT row has no size line and no
+     * calculation line at all, so both are null there and only the description prints; a
+     * SPECIAL_SQM tile adds the ราคาพิเศษ sub-line the owner's documents carry.
+     *
+     * <p>{@code quantity}/{@code unit} rather than {@code piecesFinal}/"แผ่น": the printed จำนวน
+     * and หน่วย are per-row now. A TILE row sets quantity = piecesFinal and unit = "แผ่น", so this
+     * is byte-identical to the previous expression for every pre-v3 document; an ADJUSTMENT row
+     * carries −1 and a NULL unit, which the renderer prints as an EMPTY unit cell.
+     */
+    private static RenderItem toRenderItem(DealQuotationItemDto item, String priceMode) {
         List<String> lines = new ArrayList<>();
         lines.add(item.descriptionLine());
         if (item.sizeLine() != null) {
             lines.add(item.sizeLine());
         }
-        lines.add(item.calculationLine());
+        if (item.calculationLine() != null) {
+            lines.add(item.calculationLine());
+        }
+        if (item.specialPriceLine() != null) {
+            lines.add(item.specialPriceLine());
+        }
         return new RenderItem(
             item.locationLabel(), lines,
-            BigDecimal.valueOf(item.piecesFinal()), "แผ่น", item.unitPrice(), discountLabel,
+            item.quantity(), printedUnit(item), item.unitPrice(), discountLabel(item, priceMode),
             item.netUnitPrice(), item.lineAmount());
+    }
+
+    /**
+     * The หน่วย cell. The distinction between {@code null} and {@code ""} is load-bearing here and
+     * must not be collapsed: {@code QuotationRenderer#fillItemMainRow} treats a NULL unit as "use
+     * the default แผ่น" and an EMPTY unit as "print nothing". An ADJUSTMENT row stores no unit at
+     * all (raw_unit NULL), and the owner's ส่วนลดพิเศษ line prints a BLANK หน่วย — so a non-tile
+     * row's missing unit is mapped to "" here, never passed through as null.
+     */
+    private static String printedUnit(DealQuotationItemDto item) {
+        boolean tile = item.lineType() == null
+            || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+        if (item.unit() != null) {
+            return item.unit();
+        }
+        return tile ? "แผ่น" : "";
+    }
+
+    /**
+     * The ส่วนลด column. Owner feedback pass 3: it reads <b>พิเศษ</b> for a SPECIAL_SQM row, and for
+     * a DIRECT_NET row whose net actually differs from the list price; it stays {@code Net} /
+     * {@code N%} in NET mode, exactly as before.
+     *
+     * <p>The price mode only governs TILE rows. A PLAIN row follows its OWN discount (normally
+     * absent, so "Net") whatever mode the document is in — that is what lets a ราคาพิเศษ document
+     * still carry an ordinary freight line. An ADJUSTMENT row prints "Net" because its ราคา and
+     * คงเหลือ are literally equal; the discount IS the row, not a modifier on it.
+     */
+    private static String discountLabel(DealQuotationItemDto item, String priceMode) {
+        BigDecimal pct = item.discountPct();
+        boolean tile = item.lineType() == null
+            || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+        if (tile) {
+            if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
+                return "พิเศษ";
+            }
+            if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)) {
+                boolean differs = item.unitPrice() != null && item.netUnitPrice() != null
+                    && item.unitPrice().compareTo(item.netUnitPrice()) != 0;
+                return differs ? "พิเศษ" : "Net";
+            }
+        }
+        return (pct == null || pct.signum() == 0) ? "Net" : formatPct(pct) + "%";
     }
 
     // ── remarks (8 lines) — docs/sales/quotation-v2-plan.md "Printed lines"; 4/5/6/8 are the template's own

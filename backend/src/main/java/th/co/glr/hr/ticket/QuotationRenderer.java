@@ -694,7 +694,12 @@ public class QuotationRenderer {
         setStr(sh, r, 1, firstLine != null ? firstLine : ""); // B: description (first physical line)
         BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
         setNum(sh, r, 2, qty.doubleValue());                              // C: qty
-        setStr(sh, r, 3, nullSafe(item.unit(), "แผ่น"));                  // D: unit
+        // Quotation v3: a NULL unit still falls back to "แผ่น" (no caller has ever passed null,
+        // so nothing changes for them), but an EXPLICITLY EMPTY unit now prints an empty cell.
+        // That distinction is what the ADJUSTMENT row needs: the owner's ส่วนลดพิเศษ line carries
+        // จำนวน −1 and NO หน่วย, and the previous nullSafe(s, fallback) — which treats blank and
+        // null alike — would have stamped "แผ่น" onto it.
+        setStr(sh, r, 3, item.unit() != null ? item.unit() : "แผ่น");     // D: unit
         setNum(sh, r, 4, orZero(item.unitPrice()));                       // E: unit price
         setStr(sh, r, 6, item.discountLabel() != null ? item.discountLabel() : "Net"); // G: ส่วนลด
         setNum(sh, r, 7, orZero(item.netUnitPrice()));                    // H: คงเหลือ (net)

@@ -125,6 +125,17 @@ public class DealQuotationRepository {
         return (max == null ? 0 : max) + 1;
     }
 
+    /**
+     * One row about to be written to {@code sales.quotation_item}, with every derived number
+     * already computed by {@code DealQuotationService}.
+     *
+     * <p>Quotation v3 (2026-09-11) added {@code lineType} and the fields the two non-tile row
+     * types need. Note what is NOT here: {@code piecesBeforeWastage}/{@code piecesAfterWastage}/
+     * {@code piecesFinal}/{@code boxes} stay {@code int}/{@code Integer} because they are TILE
+     * concepts — a PLAIN or ADJUSTMENT row carries 0/null in them and prints its {@code quantity}
+     * instead. {@code quantity} is the ONE printed จำนวน for every row type (a TILE row sets it to
+     * its own {@code piecesFinal}, so the two can never disagree).
+     */
     public record NewItem(
         String locationLabel, Long catalogPriceId, String productCode,
         String brand, String model, String color, String texture, String sizeText,
@@ -135,7 +146,10 @@ public class DealQuotationRepository {
         BigDecimal unitPrice, BigDecimal discountPct, BigDecimal netUnitPrice, BigDecimal lineAmount,
         BigDecimal vat, BigDecimal lineTotal,
         String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
-        String descriptionLine
+        String descriptionLine,
+        // ── quotation v3 ──────────────────────────────────────────────────────────────────────
+        String lineType, BigDecimal quantity, String unit,
+        BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline
     ) {}
 
     /** The ผู้สั่งซื้อ snapshot written onto {@code sales.quotation} (V167) — see {@link
@@ -154,7 +168,7 @@ public class DealQuotationRepository {
         ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
-        String customerNotes, BigDecimal subtotal, Long parentQuotationId, int revisionNo,
+        String customerNotes, String priceMode, BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
     @Transactional
@@ -172,14 +186,14 @@ public class DealQuotationRepository {
                  customer_name, customer_address, customer_tax_id, customer_phone,
                  contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
-                 validity_days, customer_notes, parent_quotation_id, updated_at)
+                 validity_days, customer_notes, price_mode, parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, 'THB', :version,
                  'DRAFT', 'UNSPECIFIED', :revisionNo, 'DEAL_DIRECT', :createdById, :salesRepId,
                  :customerName, :customerAddress, :customerTaxId, :customerPhone,
                  :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
-                 :validityDays, :customerNotes, :parentQuotationId, now())
+                 :validityDays, :customerNotes, :priceMode, :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -206,6 +220,7 @@ public class DealQuotationRepository {
                 .addValue("creditDays", p.creditDays())
                 .addValue("validityDays", p.validityDays())
                 .addValue("customerNotes", p.customerNotes())
+                .addValue("priceMode", p.priceMode())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -228,8 +243,15 @@ public class DealQuotationRepository {
                 .addValue("color", item.color())
                 .addValue("texture", item.texture())
                 .addValue("size", item.sizeText())
-                .addValue("rawUnit", "แผ่น")
-                .addValue("qty", BigDecimal.valueOf(item.piecesFinal()))
+                // v3: the printed หน่วย is now per-row, not the hardcoded "แผ่น" it used to be —
+                // a PLAIN row carries JOB/Bags/Barrels/ชุด and an ADJUSTMENT row carries none at
+                // all (NULL, which the renderer prints as an EMPTY cell rather than falling back).
+                .addValue("rawUnit", item.unit())
+                // v3: quantity, not piecesFinal. For a TILE row the service sets quantity =
+                // piecesFinal so this is byte-identical to the previous expression; for PLAIN it
+                // is the rep's own จำนวน, and for ADJUSTMENT it is −1 (which is precisely what
+                // makes amount = quantity × netPrice come out negative).
+                .addValue("qty", item.quantity())
                 .addValue("unitPrice", item.unitPrice())
                 .addValue("amount", item.lineAmount())
                 .addValue("salesDiscount", item.unitPrice().subtract(item.netUnitPrice()))
@@ -256,7 +278,12 @@ public class DealQuotationRepository {
                 .addValue("originCountry", item.originCountry())
                 .addValue("leadTimeMinDays", item.leadTimeMinDays())
                 .addValue("leadTimeMaxDays", item.leadTimeMaxDays())
-                .addValue("itemNotes", item.itemNotes());
+                .addValue("itemNotes", item.itemNotes())
+                // ── quotation v3 (V168) ──────────────────────────────────────────────────────
+                .addValue("lineType", item.lineType())
+                .addValue("specialPriceSqm", item.specialPriceSqm())
+                .addValue("adjustmentPct", item.adjustmentPct())
+                .addValue("adjustmentDeadline", item.adjustmentDeadline());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.quotation_item
@@ -265,14 +292,16 @@ public class DealQuotationRepository {
                  location_label, catalog_price_id, product_code, thickness_mm, sqm_per_piece,
                  quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
                  pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
-                 lead_time_min_days, lead_time_max_days, item_notes)
+                 lead_time_min_days, lead_time_max_days, item_notes,
+                 line_type, special_price_sqm, adjustment_pct, adjustment_deadline)
             VALUES
                 (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
                  :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
                  :locationLabel, :catalogPriceId, :productCode, :thicknessMm, :sqmPerPiece,
                  :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
                  :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
-                 :leadTimeMinDays, :leadTimeMaxDays, :itemNotes)
+                 :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
+                 :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline)
             """, batch);
     }
 
@@ -295,7 +324,8 @@ public class DealQuotationRepository {
     public int updateHeader(long quotationId, ContactSnapshot contact, CustomerSnapshot customer,
                             String deptCode, String unitCode,
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
-                            Integer validityDays, String customerNotes, BigDecimal subtotal) {
+                            Integer validityDays, String customerNotes, String priceMode,
+                            BigDecimal subtotal) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -305,7 +335,8 @@ public class DealQuotationRepository {
                    dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
-                   customer_notes = :customerNotes, total_amount = :subtotal, updated_at = now()
+                   customer_notes = :customerNotes, price_mode = :priceMode,
+                   total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
             new MapSqlParameterSource()
@@ -326,6 +357,7 @@ public class DealQuotationRepository {
                 .addValue("creditDays", creditDays)
                 .addValue("validityDays", validityDays)
                 .addValue("customerNotes", customerNotes)
+                .addValue("priceMode", priceMode)
                 .addValue("subtotal", subtotal));
     }
 
@@ -528,7 +560,8 @@ public class DealQuotationRepository {
                    quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
                    unit_price, discount_pct, origin_country, lead_time_min_days, lead_time_max_days,
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
-                   final_unit_price, amount
+                   final_unit_price, amount,
+                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline
               FROM sales.quotation_item
              WHERE quotation_id = :id
              ORDER BY seq
@@ -545,7 +578,8 @@ public class DealQuotationRepository {
                    quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
                    unit_price, discount_pct, origin_country, lead_time_min_days, lead_time_max_days,
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
-                   final_unit_price, amount
+                   final_unit_price, amount,
+                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline
               FROM sales.quotation_item
              WHERE quotation_id IN (:ids)
              ORDER BY quotation_id, seq
@@ -572,7 +606,7 @@ public class DealQuotationRepository {
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
                    q.dept_code, q.unit_code, q.offer_date, q.deposit_percent, q.remainder_mode,
-                   q.credit_days, q.validity_days, q.validity_date, q.customer_notes,
+                   q.credit_days, q.validity_days, q.validity_date, q.customer_notes, q.price_mode,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
                        AS approver_has_signature
@@ -638,6 +672,9 @@ public class DealQuotationRepository {
             nullableInt(rs, "validity_days"),
             rs.getObject("validity_date", LocalDate.class),
             rs.getString("customer_notes"),
+            // NULL price_mode (every pre-V168 row) reads as NET — see V168's own comment.
+            rs.getString("price_mode") == null
+                ? WastageCalculator.PRICE_MODE_NET : rs.getString("price_mode"),
             subtotal,
             vatTotal,
             grandTotal,
@@ -655,18 +692,62 @@ public class DealQuotationRepository {
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
         int piecesBeforeWastage = rs.getInt("pieces_before_wastage");
         int piecesAfterWastage = rs.getInt("pieces_after_wastage");
-        int piecesFinal = rs.getBigDecimal("pieces_final").intValueExact();
         BigDecimal sqmPerPiece = rs.getBigDecimal("sqm_per_piece");
         String wastageMode = rs.getString("wastage_mode");
         BigDecimal wastageValue = rs.getBigDecimal("wastage_value");
+        // v3: piecesPerSqm now comes from WastageCalculator rather than an inline reciprocal here.
+        // It is a DIVISOR in the SPECIAL_SQM money math, so the printed ตร.ม./แผ่น and the price
+        // computed from it must be the same number — see WastageCalculator#piecesPerSqm's Javadoc.
         BigDecimal piecesPerSqm = sqmPerPiece != null && sqmPerPiece.signum() > 0
-            ? BigDecimal.ONE.divide(sqmPerPiece, 2, java.math.RoundingMode.HALF_UP) : null;
+            ? WastageCalculator.piecesPerSqm(sqmPerPiece) : null;
         String model = rs.getString("model");
         String color = rs.getString("color");
         String texture = rs.getString("texture");
         String productCode = rs.getString("product_code");
         String sizeText = rs.getString("size");
         BigDecimal thicknessMm = rs.getBigDecimal("thickness_mm");
+
+        // ── quotation v3 (V168) ──────────────────────────────────────────────────────────────
+        // NULL line_type reads as TILE: every pre-V168 row, and every row written by a build that
+        // predates this feature, keeps behaving exactly as it does today with no data rewrite.
+        String lineType = rs.getString("line_type");
+        if (lineType == null) {
+            lineType = WastageCalculator.LINE_TYPE_TILE;
+        }
+        boolean tile = WastageCalculator.LINE_TYPE_TILE.equals(lineType);
+        BigDecimal quantity = rs.getBigDecimal("pieces_final"); // the `qty` column, aliased
+        // piecesFinal stays an int for TILE rows (it is a piece COUNT and always whole). For a
+        // PLAIN row the quantity may legitimately be fractional and for an ADJUSTMENT it is −1, so
+        // intValueExact() — which THROWS on a non-integral value — must not be reached for those.
+        // The printed จำนวน for every row type is `quantity`; piecesFinal is TILE-only.
+        int piecesFinal = tile && quantity != null ? quantity.intValueExact() : 0;
+        String storedDescription = rs.getString("description");
+        BigDecimal specialPriceSqm = rs.getBigDecimal("special_price_sqm");
+        BigDecimal adjustmentPct = rs.getBigDecimal("adjustment_pct");
+        LocalDate adjustmentDeadline = rs.getObject("adjustment_deadline", LocalDate.class);
+
+        if (!tile) {
+            // A non-tile row has no รุ่น/สี/ผิว/ขนาด and no wastage arithmetic: its description was
+            // composed once at write time (rep-typed for PLAIN, derived for ADJUSTMENT) and stored,
+            // and there is no size line or calculation line to print at all.
+            return new DealQuotationItemDto(
+                rs.getLong("quotation_item_id"), rs.getInt("seq"), rs.getString("location_label"),
+                nullableLong(rs, "catalog_price_id"), productCode, rs.getString("brand"), model, color,
+                texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm,
+                nullableInt(rs, "pieces_input"), wastageMode, wastageValue, piecesPerBox,
+                rs.getBigDecimal("unit_price"), rs.getBigDecimal("discount_pct"),
+                rs.getString("origin_country"), nullableInt(rs, "lead_time_min_days"),
+                nullableInt(rs, "lead_time_max_days"), rs.getString("item_notes"),
+                piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                nullableInt(rs, "boxes"), rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"),
+                storedDescription, null, null,
+                lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
+                adjustmentDeadline, null,
+                // Review fix F2: a FLAT adjustment's amount has no column of its own, so echo it
+                // back off unit_price or a GET→PUT round-trip of the row cannot be saved.
+                DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct,
+                    rs.getBigDecimal("unit_price")));
+        }
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),
             rs.getInt("seq"),
@@ -702,7 +783,14 @@ public class DealQuotationRepository {
             DealQuotationLines.descriptionLine(model, color, texture, productCode, sizeText, thicknessMm),
             DealQuotationLines.sizeLine(sizeText, thicknessMm),
             DealQuotationLines.calculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-                wastageMode, wastageValue, piecesFinal, piecesPerBox)
+                wastageMode, wastageValue, piecesFinal, piecesPerBox),
+            lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
+            adjustmentDeadline,
+            DealQuotationLines.specialPriceLine(specialPriceSqm),
+            // Always null on this branch — it is the TILE branch, and only an ADJUSTMENT row can
+            // carry a flat amount. Routed through the same helper anyway so the two branches can
+            // never disagree about the rule.
+            DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
         );
     }
 

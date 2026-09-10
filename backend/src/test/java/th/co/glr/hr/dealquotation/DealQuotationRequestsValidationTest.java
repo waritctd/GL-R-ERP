@@ -32,15 +32,25 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validItem().discountPct(new BigDecimal("-1")).build());
     }
 
+    /**
+     * Quotation v3: {@code unitPrice} is DELIBERATELY no longer bean-validated. It used to carry
+     * {@code @NotNull @DecimalMin("0.01")}, which could not survive the ADJUSTMENT row type — an
+     * adjustment has no rep-typed price at all, so a blanket annotation would 400 the very row
+     * this pass adds.
+     *
+     * <p>This test asserts the ABSENCE on purpose, so that anyone who "restores" the annotation
+     * (a reasonable-looking fix from the outside) fails here and is sent to read why. The rule
+     * itself did NOT go away — it moved to {@code DealQuotationService#requirePriceValidForType},
+     * where it is type-aware, and is pinned wrong-way-round against the real Java service and a
+     * real Postgres by {@code DealQuotationIntegrationTest}'s v3 price-validation tests. Bean
+     * validation cannot express "positive for TILE and PLAIN, absent for ADJUSTMENT" without a
+     * validation-groups setup this change does not introduce.
+     */
     @Test
-    void unitPriceZeroOrNegative_isRejected() {
-        assertViolated(validItem().unitPrice(BigDecimal.ZERO).build());
-        assertViolated(validItem().unitPrice(new BigDecimal("-5")).build());
-    }
-
-    @Test
-    void unitPriceNull_isRejected() {
-        assertViolated(validItem().unitPrice(null).build());
+    void unitPrice_isNoLongerBeanValidated_becauseTheRuleIsNowTypeAware() {
+        assertThat(VALIDATOR.validate(validItem().unitPrice(null).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validItem().unitPrice(BigDecimal.ZERO).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validItem().unitPrice(new BigDecimal("-5")).build())).isEmpty();
     }
 
     @Test
@@ -73,6 +83,39 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validItem().texture("x".repeat(256)).build());
         assertViolated(validItem().sizeText("x".repeat(256)).build());
         assertViolated(validItem().brand("x".repeat(256)).build());
+    }
+
+    /**
+     * Review fix F4 — {@code @Digits} matching the LIVE column, on the three v3 numeric fields
+     * that lacked it. {@code sales.quotation_item.qty} is NUMERIC(12,2): send 1.005 and the amount
+     * is computed from 1.005 while Postgres stores 1.01, so the printed row stops multiplying out
+     * (จำนวน 1.01 × คงเหลือ X ≠ เป็นเงิน) — an arithmetic error the customer can check.
+     *
+     * <p>{@code unitPrice}/{@code discountPct} deliberately NOT covered here: that instance is
+     * pre-existing, not v3's, and tightening it would be a scope widening.
+     */
+    @Test
+    void quantityBeyondTwoDecimals_isRejected_matchingTheQtyColumn() {
+        assertViolated(validItem().quantity(new BigDecimal("1.005")).build());
+        assertThat(VALIDATOR.validate(validItem().quantity(new BigDecimal("1.01")).build())).isEmpty();
+    }
+
+    /** {@code special_price_sqm} is NUMERIC(12,2), and the value is printed VERBATIM on the
+     * ราคาพิเศษ sub-line — a 3dp input would print one figure and store another. */
+    @Test
+    void specialPriceSqmBeyondTwoDecimals_isRejected_matchingTheColumn() {
+        assertViolated(validItem().specialPriceSqm(new BigDecimal("1350.005")).build());
+        assertThat(VALIDATOR.validate(validItem().specialPriceSqm(new BigDecimal("1350.99")).build()))
+            .isEmpty();
+    }
+
+    /** {@code adjustment_pct} is NUMERIC(6,3) — three decimals, not two: an adjustment percent is
+     * applied to a whole-document base where the third place is worth about a baht. */
+    @Test
+    void adjustmentPctBeyondThreeDecimals_isRejected_matchingTheColumn() {
+        assertViolated(validItem().adjustmentPct(new BigDecimal("3.0005")).build());
+        assertThat(VALIDATOR.validate(validItem().adjustmentPct(new BigDecimal("3.125")).build()))
+            .isEmpty();
     }
 
     @Test
@@ -156,12 +199,22 @@ class DealQuotationRequestsValidationTest {
         ItemBuilder areaSqm(BigDecimal v) { areaSqm = v; return this; }
         ItemBuilder piecesInput(Integer v) { piecesInput = v; return this; }
         ItemBuilder piecesPerBox(Integer v) { piecesPerBox = v; return this; }
+        ItemBuilder quantity(BigDecimal v) { quantity = v; return this; }
+        ItemBuilder specialPriceSqm(BigDecimal v) { specialPriceSqm = v; return this; }
+        ItemBuilder adjustmentPct(BigDecimal v) { adjustmentPct = v; return this; }
+
+        // v3 fields, all null on a plain tile row -- the canonical constructor is used (rather
+        // than the 22-argument legacy one) so the v3 bounds are actually reachable from here.
+        private BigDecimal quantity = null;
+        private BigDecimal specialPriceSqm = null;
+        private BigDecimal adjustmentPct = null;
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,
                 sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
                 wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
-                leadTimeMaxDays, itemNotes);
+                leadTimeMaxDays, itemNotes,
+                null, null, quantity, null, specialPriceSqm, null, adjustmentPct, null, null);
         }
     }
 
