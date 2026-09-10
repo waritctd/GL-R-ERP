@@ -142,7 +142,7 @@ class PricingDecisionStartReviewRollbackIntegrationTest extends AbstractPostgres
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
         decisionRepository = new PricingDecisionRepository(jdbc);
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย โรลแบ็ก", "sales-rollback@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า โรลแบ็ก", "import-rollback@glr.co.th", "PCIM", "ฝ่ายนำเข้า");

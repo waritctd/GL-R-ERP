@@ -161,7 +161,7 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
             costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         decisions = transactional(decisionService);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper,
-            customers, new QuotationRenderer(), pricingRequestService);
+            customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         long salesRepId = createEmployee(employees, "พนักงานขาย โอเวอร์ไรด์", "sales-override-validation@glr.co.th",
             "SALES", "แผนกขาย");

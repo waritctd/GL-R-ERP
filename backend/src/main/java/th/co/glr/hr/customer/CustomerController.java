@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import th.co.glr.hr.auth.DealEntryAccess;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
@@ -25,17 +27,22 @@ public class CustomerController {
     private final ProjectRepository  projects;
     private final CustomerService    customerService;
     private final SessionContext     sessions;
+    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- the three create() endpoints
+    // below use this; nothing else on this controller does.
+    private final EmployeeAuthRepository employeeAuth;
 
     public CustomerController(CustomerRepository customers,
                               ContactRepository contacts,
                               ProjectRepository projects,
                               CustomerService customerService,
-                              SessionContext sessions) {
+                              SessionContext sessions,
+                              EmployeeAuthRepository employeeAuth) {
         this.customers       = customers;
         this.contacts        = contacts;
         this.projects        = projects;
         this.customerService = customerService;
         this.sessions        = sessions;
+        this.employeeAuth    = employeeAuth;
     }
 
     // P0 fix: this used to be sessions.requireUser(session) and nothing else — authenticated but
@@ -52,12 +59,12 @@ public class CustomerController {
 
     @PostMapping
     Map<String, CustomerDto> create(@Valid @RequestBody CreateCustomerRequest req, HttpSession session) {
-        // Customer/contact/project creation is the sales deal-entry flow (TicketCreateModal);
-        // gate it to the sales role, mirroring TicketService.create. Previously any role (incl.
-        // employee) could write. The three reads below are now gated too (CustomerService,
-        // requireRole) — they used to be open to any authenticated user, but that was an
-        // oversight, not a recorded product decision (unlike CatalogController's #205/#388).
-        sessions.requireAnyRole(sessions.requireUser(session), "sales");
+        // Customer/contact/project creation is the deal-entry flow (TicketCreateModal /
+        // /quotations/new). Previously any role (incl. employee) could write; then narrowed to
+        // sales-only, mirroring the old TicketService.create. Owner ruling 2026-09-10 widened this
+        // to sales/sales_manager/canCreateQuotation-grant — see DealEntryAccess's own Javadoc. The
+        // three reads below are gated the same way (CustomerService).
+        DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and
         // violates NOT NULL; coalesce so a create that omits branch succeeds (mirrors the mock).
         return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), branchOrDefault(req.branch()), req.phone()));
@@ -80,7 +87,7 @@ public class CustomerController {
     Map<String, ContactDto> createContact(@PathVariable long customerId,
                                           @Valid @RequestBody CreateContactRequest req,
                                           HttpSession session) {
-        sessions.requireAnyRole(sessions.requireUser(session), "sales");
+        DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         return Map.of("contact", contacts.create(customerId,
             req.firstName(), req.lastName(), req.position(), req.email(), req.phone()));
     }
@@ -96,7 +103,7 @@ public class CustomerController {
     Map<String, ProjectDto> createProject(@PathVariable long customerId,
                                           @Valid @RequestBody CreateProjectRequest req,
                                           HttpSession session) {
-        sessions.requireAnyRole(sessions.requireUser(session), "sales");
+        DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         return Map.of("project", projects.create(customerId, req.name()));
     }
 

@@ -76,7 +76,7 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
         factoryQuotes = new FactoryQuoteRepository(jdbc);
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย การ์ด2", "sales-guard2@glr.co.th", "SALES", "แผนกขาย");
         salesActor = actor(salesRepId, "sales");

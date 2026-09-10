@@ -11,6 +11,10 @@ package th.co.glr.hr.auth;
  * <p>It is a <strong>hint for rendering only</strong>. Every admin endpoint re-checks
  * {@code hr.employee.is_admin} live against the database, so a client that forges this flag gains
  * exactly nothing — see {@code ActivityLogService.requireAdmin}.
+ *
+ * <p>{@code canCreateQuotation} is the same shape for the per-employee "can create quotations"
+ * capability (owner ruling, Ploy 2026-09-09): a hint only, re-checked live by
+ * {@code th.co.glr.hr.dealquotation.DealQuotationService} on every request.
  */
-public record AuthResponse(UserPrincipal user, boolean admin) {
+public record AuthResponse(UserPrincipal user, boolean admin, boolean canCreateQuotation) {
 }

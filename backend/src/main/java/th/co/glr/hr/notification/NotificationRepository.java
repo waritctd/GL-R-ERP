@@ -188,7 +188,12 @@ public class NotificationRepository {
         // do NOT go through this map: they carry an explicit title straight into
         // NotificationService#notify, the same call shape leave/overtime/welfare/attendance-
         // correction use, not the ticket-scoped fan-out this map serves.
-        Map.entry("TAX_ALLOWANCE_SUBMITTED", "มีแบบ ล.ย.01 รอ HR ตรวจสอบ")
+        Map.entry("TAX_ALLOWANCE_SUBMITTED", "มีแบบ ล.ย.01 รอ HR ตรวจสอบ"),
+        // Quotation v2 (direct deal quotation, V165) -- see TicketEventKind's DEAL_QUOTATION_*
+        // constants for why these are notification `type`s only, not ticket_event kinds.
+        Map.entry("DEAL_QUOTATION_SUBMITTED", "ใบเสนอราคารออนุมัติ"),
+        Map.entry("DEAL_QUOTATION_APPROVED", "ใบเสนอราคาได้รับอนุมัติแล้ว"),
+        Map.entry("DEAL_QUOTATION_REJECTED", "ใบเสนอราคาไม่ได้รับอนุมัติ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -197,6 +202,25 @@ public class NotificationRepository {
 
     public void notifyEmployeeForPricingRequest(long employeeId, long pricingRequestId, String type, String message) {
         notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
+    }
+
+    /**
+     * Quotation v2 (direct deal quotation): {@link #notifyEmployee}/{@link #notifyByRole} both hard-
+     * code their own link shape ({@code /tickets/{id}}), which is wrong for a notification about a
+     * document that lives at its own URL ({@code /quotations/{id}}). Public so
+     * {@code th.co.glr.hr.dealquotation.DealQuotationService} can route there without a second
+     * ticket-shaped link. Deliberately named distinctly from the private single-employee overload
+     * below (which this delegates to) rather than overloading on parameter count, since a caller
+     * passing a bare link vs. a ticketId at the same position would otherwise be an easy transposition
+     * bug to make invisible.
+     */
+    public void notifyEmployeeAtLink(long employeeId, String type, String message, String link) {
+        notifyEmployeeAt(employeeId, type, message, link);
+    }
+
+    /** Quotation v2 counterpart to {@link #notifyEmployeeAtLink}, for {@link #notifyByRole}. */
+    public void notifyByRoleAtLink(String role, String type, String message, String link) {
+        notifyByRoleInternal(role, type, message, link);
     }
 
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {

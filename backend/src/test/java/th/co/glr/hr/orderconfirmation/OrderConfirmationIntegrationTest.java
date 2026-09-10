@@ -167,7 +167,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
 
         ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         quotationRepository = new CustomerQuotationRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,
