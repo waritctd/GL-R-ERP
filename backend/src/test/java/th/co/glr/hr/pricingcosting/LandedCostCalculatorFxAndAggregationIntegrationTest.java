@@ -116,7 +116,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
             tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         salesRepId = createEmployee(employees, "พนักงานขาย FX", "sales-fx-agg@glr.co.th", "SALES", "แผนกขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า FX", "import-fx-agg@glr.co.th", "PCIM", "ฝ่ายนำเข้า");

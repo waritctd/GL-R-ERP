@@ -59,5 +59,17 @@ public final class TicketEventKind {
     // payment pipeline.
     public static final String ORDER_CONFIRMED_FROM_QUOTATION = "ORDER_CONFIRMED_FROM_QUOTATION";
 
+    // Quotation v2 (direct deal quotation, V165): NOTIFICATION `type` values only (hr.notification.
+    // type), NOT sales.ticket_event.kind values -- never pass these into TicketRepository#addEvent*,
+    // whose `kind` column is DB-constrained by chk_event_kind (V78) and does not list these three.
+    // Plain ticket events for this feature reuse existing, already-valid kinds instead (SUBMITTED/
+    // REJECTED/CANCELLED/REVISION_REQUESTED/QUOTATION_ISSUED) -- see DealQuotationService. Declared
+    // here anyway, alongside every other event/notification vocabulary this class already holds
+    // (e.g. PricingRequestEventKind's identical dual use), with Thai titles in
+    // NotificationRepository.TICKET_EVENT_TITLES.
+    public static final String DEAL_QUOTATION_SUBMITTED = "DEAL_QUOTATION_SUBMITTED";
+    public static final String DEAL_QUOTATION_APPROVED  = "DEAL_QUOTATION_APPROVED";
+    public static final String DEAL_QUOTATION_REJECTED  = "DEAL_QUOTATION_REJECTED";
+
     private TicketEventKind() {}
 }

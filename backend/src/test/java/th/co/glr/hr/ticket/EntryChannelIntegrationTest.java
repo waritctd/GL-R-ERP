@@ -63,7 +63,7 @@ class EntryChannelIntegrationTest extends AbstractPostgresIntegrationTest {
         // PricingRequestService is never reached by create() or setEntryChannel(); it exists
         // only to satisfy the constructor.
         ticketService = new TicketService(tickets, new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            new ObjectMapper(), customers, new QuotationRenderer(), mock(PricingRequestService.class));
+            new ObjectMapper(), customers, new QuotationRenderer(), mock(PricingRequestService.class), new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

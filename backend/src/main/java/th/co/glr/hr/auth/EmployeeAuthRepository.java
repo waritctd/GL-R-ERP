@@ -85,6 +85,30 @@ public class EmployeeAuthRepository {
         return Boolean.TRUE.equals(admin);
     }
 
+    /**
+     * Whether this employee holds the per-employee "can create quotations" capability (owner
+     * ruling, Ploy 2026-09-09 — ภิญญดา, employee 144, QC&amp;ISO / role {@code qc}, needs to create
+     * deal quotations without being given the {@code sales} or {@code sales_manager} role).
+     *
+     * <p>Same shape and same discipline as {@link #isAdmin}: a live read against
+     * {@code hr.employee.can_create_quotation}, restricted to active rows, decided fresh on every
+     * call rather than trusted from the session principal (which is captured at login and would
+     * otherwise go stale the moment a grant is added or revoked).
+     * This IS a security gate: {@code th.co.glr.hr.auth.DealEntryAccess} and
+     * {@code th.co.glr.hr.dealquotation.DealQuotationService} both call it live at decision time
+     * (deal / customer / project creation and every quotation write). {@link AuthResponse} also
+     * carries the result as a UI hint, exactly as {@code admin} does, but the hint is never trusted.
+     */
+    public boolean canCreateQuotation(long employeeId) {
+        Boolean granted = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.employee
+                 WHERE employee_id = :id AND is_active AND can_create_quotation
+            )
+            """, Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(granted);
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""

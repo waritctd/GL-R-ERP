@@ -6,14 +6,18 @@ import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 import th.co.glr.hr.customer.CustomerDto;
 
@@ -214,10 +218,12 @@ class QuotationRendererTest {
 
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // Flow layout: items occupy rows 9..(9+count-1); the footer block (whose subtotal is
-            // originally at 0-based row 37) is relocated by delta = (9 + count) - 22, so the subtotal
-            // lands at row 37 + delta = 24 + count. Col I → index 8.
-            int subtotalRow = 24 + count;
+            // Flow layout: items occupy rows 9..(9+count-1); the footer block (whose subtotal sits
+            // at 0-based row 38 — SUBTOTAL_ROW, post-H3's permanent +1 row shift for line 3's new
+            // continuation row; see QuotationRenderer#FOOTER_END's own comment) is relocated by
+            // delta = (9 + count) - 22, so the subtotal lands at row 38 + delta = 25 + count.
+            // Col I → index 8.
+            int subtotalRow = 25 + count;
             double subtotalCell = sheet.getRow(subtotalRow).getCell(8).getNumericCellValue();
             assertThat(BigDecimal.valueOf(subtotalCell).setScale(2, RoundingMode.HALF_UP))
                 .isEqualByComparingTo(expectedTotal.setScale(2, RoundingMode.HALF_UP));
@@ -284,6 +290,520 @@ class QuotationRendererTest {
             assertThat(second).isEqualTo("กระเบื้อง รุ่น Stone สี เทาเข้ม ขนาด 60x60 ซม. หยาบ");
             assertThat(second).doesNotContain("ซม. cm.");
         }
+    }
+
+    // ── model path (QuotationRenderModel, signatureLabelsV2 = true) ──────────────────────
+
+    @Test
+    void modelPath_locationHeadingPrintedOnceForTwoItemsSharingLabel_threeLinesEachAndDiscountLabels()
+            throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item1 = renderItem("หน้าบ้าน",
+            List.of("กระเบื้อง รุ่น Elegance สี ขาวนวล ผิว ด้าน", "ขนาด 60x120x2 cm. (ขนาดโดยประมาณ)",
+                "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดลงกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)"),
+            new BigDecimal("268"), new BigDecimal("500.00"), "Net", new BigDecimal("500.00"), new BigDecimal("134000.00"));
+        QuotationRenderModel.RenderItem item2 = renderItem("หน้าบ้าน",
+            List.of("กระเบื้อง รุ่น Stone สี เทาเข้ม ผิว หยาบ", "ขนาด 60x60x0.9 cm. (ขนาดโดยประมาณ)",
+                "(จำนวน 124 แผ่น = 345 แผ่น) (บรรจุ 5 แผ่น/กล่อง)"),
+            new BigDecimal("345"), new BigDecimal("300.00"), "10%", new BigDecimal("270.00"), new BigDecimal("93150.00"));
+
+        QuotationRenderModel model = modelWithItems(List.of(item1, item2),
+            List.of(
+                "1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  16/7/2569",
+                "2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน",
+                "3.กำหนดส่งมอบสินค้า : รายการที่ 1-2 ระยะเวลานำเข้า 75-90 วัน",
+                "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.",
+                "5.สีและลวดลายของกระเบื้อง อาจแตกต่างจากตัวอย่างได้เล็กน้อย  เนื่องจากเป็นสินค้าคนละ LOT การผลิต",
+                "6.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า",
+                "7.กำหนดยืนยันราคา 45 วัน นับจากวันที่ในใบเสนอราคา",
+                "8.เงื่อนไขประกอบใบเสนอราคา ตามเอกสารแนบ"),
+            new QuotationRenderModel.Signatories("ผู้พิมพ์ ทดสอบ", "พนักงานขาย ทดสอบ", "ราม อิฐรัตน์", null, null));
+
+        byte[] pdf = renderer.toPdf(model);
+        String text = strip(pdf);
+        String flat = text.replaceAll("\\s+", "");
+
+        // Heading printed exactly once even though two items share it.
+        assertThat(countOccurrences(text, "หน้าบ้าน")).isEqualTo(1);
+        // All three description lines of BOTH items survive.
+        assertThat(flat).contains("รุ่นElegance");
+        assertThat(flat).contains("รุ่นStone");
+        assertThat(text).contains("(ขนาดโดยประมาณ)");
+        assertThat(flat).contains("60x120x2cm.");
+        assertThat(flat).contains("60x60x0.9cm.");
+        assertThat(flat).contains("บรรจุ4แผ่น/กล่อง");
+        // Discount column: "Net" for item1 (0%), "10%" for item2.
+        assertThat(text).contains("Net");
+        assertThat(text).contains("10%");
+        // Remark lines 2/3/7 as composed.
+        assertThat(flat).contains("เครดิต30วัน");
+        assertThat(flat).contains("รายการที่1-2ระยะเวลานำเข้า75-90วัน");
+        assertThat(flat).contains("กำหนดยืนยันราคา45วัน");
+        // v2 signature labels + approver name in parens.
+        assertThat(text).contains("ผู้ตรวจ");
+        assertThat(text).contains("ผู้อนุมัติ");
+        assertThat(flat).contains("(รามอิฐรัตน์)");
+        assertThat(text).doesNotContain("พนักงานขาย____"); // the legacy label text is GONE, not just added-to
+    }
+
+    /**
+     * H1 regression: {@code underlineCache} used to be a FIELD on this @Component-singleton
+     * class, holding {@link org.apache.poi.ss.usermodel.CellStyle}s bound to whichever
+     * {@code Workbook} the FIRST render happened to open. A second render on a heading-bearing
+     * model, through the SAME renderer instance (exactly what happens in production —
+     * {@code DealQuotationService#sendApprovalEmail} re-renders the PDF through the SAME injected
+     * singleton after the approving transaction commits), threw "This Style does not belong to
+     * the supplied Workbook" the moment the stale style touched the second workbook. Renders
+     * TWICE, deliberately reusing {@code renderer} (never constructing a fresh
+     * {@code QuotationRenderer}), with a heading on both calls so {@code underlinedStyle} is
+     * actually exercised each time.
+     */
+    @Test
+    void modelPath_secondRenderWithHeadingThroughTheSameRendererInstance_doesNotThrow() {
+        QuotationRenderModel.RenderItem item = renderItem("ชั้น 1", threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] first = renderer.toXls(model);
+        byte[] second = renderer.toXls(model); // SAME renderer instance — the regression case.
+
+        assertThat(first).isNotEmpty();
+        assertThat(second).isNotEmpty();
+    }
+
+    /**
+     * H2/layout-spec §5 regression, REBUILT: the signature block is now THREE merged A:I rows
+     * (S1 labels, S2 names, S3 dates), each built from four equal-PIXEL-width text slots — not
+     * four discrete merged COLUMN ranges (git history: {@code SIG_COL_RANGES}, A:B/C:D/E:G/H:I,
+     * put ผู้พิมพ์ alone behind column B — over half the page — while the other three were
+     * crammed into the remaining 45%). Asserts the single labels-row string carries all four
+     * labels IN ORDER, the names row carries the checked-by/approved-by names in order, and the
+     * anchored approver signature picture's absolute pixel start sits within the ผู้อนุมัติ slot
+     * (the third of four equal-width quarters, 50%-75% of the row) — never at or past the
+     * ผู้สั่งซื้อ slot that starts at 75%, i.e. never over the customer's own box.
+     */
+    @Test
+    void modelPath_approverSignatureImage_anchorsWithinTheApproverSlot_notOverCustomerSlot() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", onePixelPng(), "image/png"));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+            var pictures = hssf.getDrawingPatriarch().getChildren();
+            org.apache.poi.hssf.usermodel.HSSFPicture signature = null;
+            for (var shape : pictures) {
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() >= 40) { // the letterhead/cert images sit near row 0
+                    signature = pic;
+                }
+            }
+            assertThat(signature).as("approver signature picture should have been anchored").isNotNull();
+
+            // Row 44 (0-based, post-H3-shift LABELS_ROW) is now ONE merged A:I cell carrying all
+            // four labels in a single string, in order — not a per-label merged column range.
+            String labelsRowText = sheet.getRow(44).getCell(0).getStringCellValue();
+            assertThat(labelsRowText).contains("ผู้พิมพ์", "ผู้ตรวจ", "ผู้อนุมัติ", "ผู้สั่งซื้อ");
+            int idxPrinted = labelsRowText.indexOf("ผู้พิมพ์");
+            int idxChecked = labelsRowText.indexOf("ผู้ตรวจ");
+            int idxApproved = labelsRowText.indexOf("ผู้อนุมัติ");
+            int idxCustomer = labelsRowText.indexOf("ผู้สั่งซื้อ");
+            assertThat(idxPrinted).isLessThan(idxChecked);
+            assertThat(idxChecked).isLessThan(idxApproved);
+            assertThat(idxApproved).isLessThan(idxCustomer);
+
+            // Row 45 (SALESPERSON_FORMULA_ROW / names row) is likewise ONE merged A:I cell — the
+            // approver's name must land after the checked-by name.
+            String namesRowText = sheet.getRow(45).getCell(0).getStringCellValue();
+            assertThat(namesRowText).contains("(A)", "(B)", "(ราม อิฐรัตน์)");
+            assertThat(namesRowText.indexOf("(B)")).isLessThan(namesRowText.indexOf("(ราม อิฐรัตน์)"));
+
+            // The signature's absolute pixel start (col1/dx1 converted the same way
+            // #scaleSignaturePicture reads it back) must fall within the ผู้อนุมัติ slot — the
+            // third quarter of the A..I row (50%-75% of its total width) — strictly before the
+            // ผู้สั่งซื้อ slot that starts at 75%.
+            double totalWidthPx = 0;
+            for (int c = 0; c <= 8; c++) totalWidthPx += sheet.getColumnWidthInPixels(c);
+            var anchor = signature.getClientAnchor();
+            double startPx = 0;
+            for (int c = 0; c < anchor.getCol1(); c++) startPx += sheet.getColumnWidthInPixels(c);
+            startPx += (anchor.getDx1() / 1024.0) * sheet.getColumnWidthInPixels(anchor.getCol1());
+
+            assertThat(startPx)
+                .as("signature must anchor within the ผู้อนุมัติ slot (40%-75% of the row), "
+                    + "never at/after ผู้สั่งซื้อ's 75%")
+                .isGreaterThan(totalWidthPx * 0.40)
+                .isLessThan(totalWidthPx * 0.75);
+        }
+    }
+
+    /**
+     * M6: the signature image was never scaled — an oversized upload (e.g. a raw phone-camera
+     * photo) rendered at its own natural pixel size, which can dwarf the whole ผู้อนุมัติ box or
+     * even the page. Renders a deliberately huge 2000×800 real PNG and asserts the anchored
+     * picture's column span stays narrow (a handful of columns, not dozens) — i.e. it was scaled
+     * down to the ~30mm target box rather than left at its natural size.
+     */
+    @Test
+    void modelPath_oversizedSignatureImage_scaledToTheTargetBox_notNaturalSize() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        byte[] oversizedPng = realPng(2000, 800);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", oversizedPng, "image/png"));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+            org.apache.poi.hssf.usermodel.HSSFPicture signature = null;
+            for (var shape : hssf.getDrawingPatriarch().getChildren()) {
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() >= 40) {
+                    signature = pic;
+                }
+            }
+            assertThat(signature).as("approver signature picture should have been anchored").isNotNull();
+            var anchor = signature.getClientAnchor();
+            // A 2000px-wide image left at natural size would span dozens of these columns (even
+            // the sheet's widest column, B, is well under 2000px); scaled to ~30mm it must stay
+            // within a handful of columns of its start.
+            assertThat(anchor.getCol2() - anchor.getCol1())
+                .as("scaled signature should span only a few columns, not the whole natural width")
+                .isLessThanOrEqualTo(4);
+        }
+    }
+
+    /** A real, valid PNG at an arbitrary size — {@code Workbook#addPicture} and
+     * {@code Picture#getImageDimension()} both need genuine IHDR/IDAT/IEND bytes, not a
+     * placeholder. */
+    private byte[] realPng(int width, int height) throws Exception {
+        var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        var out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", out);
+        return out.toByteArray();
+    }
+
+    @Test
+    void modelPath_paginatesAndKeepsPageFooter_forManyItems() throws Exception {
+        requireLibreOffice();
+        // 30, not 12: the layout-spec §3 remark compaction (REMARK_V2_COMPACT_SHIFT) shrank the
+        // footer by 7 rows, so a 12-item/36-row document now fits on ONE page at a scale still
+        // above MIN_SCALE (a real improvement — fewer documents need to paginate at all). Needs
+        // enough rows to still genuinely exceed one page after that shrink.
+        List<QuotationRenderModel.RenderItem> items = new ArrayList<>();
+        for (int i = 1; i <= 30; i++) {
+            items.add(renderItem(null,
+                List.of("กระเบื้อง รุ่น Model" + i, "ขนาด 60x60 cm. (ขนาดโดยประมาณ)", "(จำนวน 10 แผ่น = 10 แผ่น)"),
+                BigDecimal.TEN, new BigDecimal("10.00"), "Net", new BigDecimal("10.00"), new BigDecimal("100.00")));
+        }
+        QuotationRenderModel model = modelWithItems(items,
+            List.of("1.x", "2.x", "3.x", "4.x", "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] pdf = renderer.toPdf(model);
+        String text = strip(pdf);
+        assertThat(text).contains("Model1");
+        assertThat(text).contains("Model30");
+        assertThat(text).contains("หน้า"); // "หน้า &P/&N" paginated footer
+    }
+
+    @Test
+    void modelPath_emittedRowCountMatchesThreeItemsThreeLinesTwoHeadings() throws Exception {
+        // 3 items x 3 description lines each = 9 rows, + 2 heading rows (items 1&2 share one
+        // heading, item 3 starts a new one) = 11 emitted rows -- within the native 13-row budget,
+        // so the footer stays anchored (no move) and rows past the emitted count get cleared.
+        QuotationRenderModel.RenderItem item1 = renderItem("โซนเอ", threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel.RenderItem item2 = renderItem("โซนเอ", threeLines("B"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel.RenderItem item3 = renderItem("โซนบี", threeLines("C"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item1, item2, item3),
+            List.of("1.x", "2.x", "3.x"), new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // Row 9 (0-based): heading "โซนเอ", no sequence number in column A.
+            assertThat(sheet.getRow(9).getCell(1).getStringCellValue()).isEqualTo("โซนเอ");
+            assertThat(cellIsEmpty(sheet, 9, 0)).isTrue();
+            // Row 10: item1's main row, seq = 1 (v2 always numbers, even inside a heading group).
+            assertThat(sheet.getRow(10).getCell(0).getNumericCellValue()).isEqualTo(1.0);
+            // Rows 11-12: item1's continuation lines (description lines 2 and 3).
+            assertThat(sheet.getRow(11).getCell(1).getStringCellValue()).isEqualTo("descB-A");
+            assertThat(sheet.getRow(12).getCell(1).getStringCellValue()).isEqualTo("descC-A");
+            // Row 13: item2's main row (same heading as item1 -- NOT repeated), seq = 2.
+            assertThat(sheet.getRow(13).getCell(0).getNumericCellValue()).isEqualTo(2.0);
+            // Row 16: new heading "โซนบี" for item3.
+            assertThat(sheet.getRow(16).getCell(1).getStringCellValue()).isEqualTo("โซนบี");
+            assertThat(sheet.getRow(17).getCell(0).getNumericCellValue()).isEqualTo(3.0);
+            // Rows 20 (9 + 11 emitted) and 21 -- past the emitted content -- are cleared, not
+            // showing template placeholder leftovers.
+            assertThat(cellIsEmpty(sheet, 20, 1)).isTrue();
+            assertThat(cellIsEmpty(sheet, 21, 1)).isTrue();
+        }
+    }
+
+    /**
+     * layout-spec §3 regression: line 3 (กำหนดส่งมอบสินค้า, a DYNAMIC composed list of lead-time
+     * groups) used to have no continuation row of its own, so a long list wrapped straight into
+     * line 4's border — the reviewer's original reference render showed exactly this. The FIX
+     * (layout-spec §3) is not a second row: every v2/full-remarks line is now ONE merged B..I cell
+     * — 8x the width of column B alone — so a long composed line 3 fits on its own single packed
+     * row (REMARK_HEAD_ROWS[0] + 2) without wrapping or clobbering line 4's row
+     * (REMARK_HEAD_ROWS[0] + 3), which sit immediately adjacent with the compaction in place.
+     */
+    @Test
+    void modelPath_longLine3_fitsOnItsOwnPackedRow_withoutWrappingOrClobberingLine4() throws Exception {
+        String longLine3 = "3.กำหนดส่งมอบสินค้า : "
+            + "รายการที่ 1 ระยะเวลานำเข้า 75-90 วัน  "
+            + "รายการที่ 2 ระยะเวลานำเข้า 75-90 วัน  "
+            + "รายการที่ 3 ระยะเวลานำเข้า 75-90 วัน  "
+            + "รายการที่ 4 ระยะเวลานำเข้า 75-90 วัน  "
+            + "รายการที่ 5 ระยะเวลานำเข้า 75-90 วัน";
+        assertThat(longLine3.length()).isGreaterThan(62); // would have exercised the OLD wrap path
+
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        String line4 = "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.";
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of(
+                "1.x", "2.x", longLine3, line4, "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // REMARK_HEAD_ROWS[0] = 23 -- line 3 is the 3rd packed line (index 2) => row 25.
+            String head = sheet.getRow(25).getCell(1).getStringCellValue();
+            // The WHOLE composed string survives on the ONE row -- no split, nothing dropped.
+            assertThat(head).isEqualTo(longLine3);
+            for (int i = 1; i <= 5; i++) {
+                assertThat(head.replaceAll("\\s+", "")).contains(("รายการที่" + i + "ระยะเวลานำเข้า75-90วัน"));
+            }
+
+            // Line 4 sits on the VERY NEXT row (26), immediately adjacent -- no gap, no clobbering.
+            assertThat(sheet.getRow(26).getCell(1).getStringCellValue()).isEqualTo(line4);
+        }
+    }
+
+    /**
+     * layout-spec §3: every one of the 8 v2/full-remarks lines is written into a merged B..I range
+     * (not left as a plain column-B cell) — the full table width, so a composed line never needs
+     * to wrap. Checks all 8 packed rows (REMARK_HEAD_ROWS[0]..+7 — the compaction leaves them
+     * consecutive, see REMARK_V2_COMPACT_SHIFT's Javadoc).
+     */
+    @Test
+    void modelPath_eachRemarkLine_isOneMergedRangeSpanningTheFullTableWidth() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item),
+            List.of("1.x", "2.x", "3.x", "4.x", "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            for (int i = 0; i < 8; i++) {
+                int row = 23 + i; // REMARK_HEAD_ROWS[0] .. +7
+                assertThat(mergedRange(sheet, row)).as("remark line " + (i + 1) + " (row " + row + ")")
+                    .isEqualTo(new int[]{row, row, 1, 8}); // B..I
+            }
+        }
+    }
+
+    /**
+     * layout-spec §3: the box must close DIRECTLY under the last remark line — no blank/bordered
+     * "phantom" row between line 8 and รวมเป็นเงิน. With the compaction in place the totals row
+     * sits immediately after the 8 packed remark rows (23..30), i.e. at row 31 (SUBTOTAL_ROW=38
+     * minus the 7-row compaction shift).
+     */
+    @Test
+    void modelPath_noTrailingEmptyRow_betweenLastRemarkLineAndTotals() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item),
+            List.of("1.x", "2.x", "3.x", "4.x", "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // Row 30 -- the last packed remark line (8) -- holds real text.
+            assertThat(sheet.getRow(30).getCell(1).getStringCellValue()).isEqualTo("8.x");
+            // Row 31 -- immediately next -- is the totals row: has the computed subtotal, not blank.
+            assertThat(sheet.getRow(31).getCell(8).getNumericCellValue()).isEqualTo(10.0);
+        }
+    }
+
+    /**
+     * layout-spec §1: from the column-title row down to the last remark line there are ONLY
+     * vertical column lines and the outer box — no horizontal rule under any item/description/
+     * remark row. Spot-checks an interior item continuation row and an interior remark row both
+     * carry no bottom border.
+     */
+    @Test
+    void modelPath_interiorItemAndRemarkRows_carryNoBottomBorder() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item),
+            List.of("1.x", "2.x", "3.x", "4.x", "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // Row 10 -- item1's 2nd description line ("descB-A") -- an interior item row.
+            assertThat(sheet.getRow(10).getCell(1).getCellStyle().getBorderBottom())
+                .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+            // Row 25 -- packed remark line 3 -- an interior remark row.
+            assertThat(sheet.getRow(25).getCell(1).getCellStyle().getBorderBottom())
+                .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+    }
+
+    /**
+     * layout-spec §5, REBUILT: each of the three signature rows (labels, names, dates) is now ONE
+     * merged A:I cell built from four equal-PIXEL-width text slots — not four discrete merged
+     * COLUMN ranges (git history: A:B/C:D/E:G/H:I, which put ผู้พิมพ์ alone behind column B, over
+     * half the page). Checked on all three rows the block writes.
+     */
+    @Test
+    void modelPath_signatureBlock_writesOneMergedAtoIRangePerRow_notFourDiscreteColumnRanges() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // LABELS_ROW=44, SALESPERSON_FORMULA_ROW(names)=45, DATE_ROW=46 -- footerShift=0 here
+            // ("1.x" is a single line, not the full 8-line v2 remark set).
+            for (int row : new int[]{44, 45, 46}) {
+                assertThat(mergedRange(sheet, row, 0))
+                    .as("row " + row + " should be ONE merged A:I range, not four discrete ones")
+                    .isEqualTo(new int[]{row, row, 0, 8});
+            }
+        }
+    }
+
+    /** Finds the merged region starting at (row, col) if any, else null. */
+    private int[] mergedRange(org.apache.poi.ss.usermodel.Sheet sheet, int row, int col) {
+        for (int i = 0; i < sheet.getNumMergedRegions(); i++) {
+            var m = sheet.getMergedRegion(i);
+            if (m.getFirstRow() == row && m.getFirstColumn() == col) {
+                return new int[]{m.getFirstRow(), m.getLastRow(), m.getFirstColumn(), m.getLastColumn()};
+            }
+        }
+        return null;
+    }
+
+    /** Finds the merged region starting at (row, col 1 -- the B..I remark convention). */
+    private int[] mergedRange(org.apache.poi.ss.usermodel.Sheet sheet, int row) {
+        return mergedRange(sheet, row, 1);
+    }
+
+    /**
+     * The template ALREADY carries embedded images (logo/certs) — a signature-image anchor must
+     * not corrupt the drawing layer they live in. Asserts the rendered workbook still has AT
+     * LEAST the template's original picture count (equal + 1 for the new signature, or equal if
+     * the (documented, logged) fallback path had to kick in — either way, nothing was lost).
+     */
+    @Test
+    void modelPath_approverSignatureImage_survivesTemplatePictures() throws Exception {
+        int originalPictureCount;
+        try (var in = new ClassPathResource("templates/quotation_template.xls").getInputStream();
+             var wb = WorkbookFactory.create(in)) {
+            originalPictureCount = ((HSSFWorkbook) wb).getAllPictures().size();
+        }
+        assertThat(originalPictureCount).isGreaterThan(0);
+
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", onePixelPng(), "image/png"));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            int newCount = ((HSSFWorkbook) wb).getAllPictures().size();
+            assertThat(newCount).isGreaterThanOrEqualTo(originalPictureCount);
+        }
+    }
+
+    @Test
+    void modelPath_approverSignatureImage_addsAnXObjectToTheRenderedPdf() throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel.Signatories noSignatureImage =
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", null, null);
+        QuotationRenderModel.Signatories withSignatureImage =
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", onePixelPng(), "image/png");
+
+        int xObjectsWithout = countXObjects(renderer.toPdf(modelWithItems(List.of(item), List.of("1.x"), noSignatureImage)));
+        int xObjectsWith = countXObjects(renderer.toPdf(modelWithItems(List.of(item), List.of("1.x"), withSignatureImage)));
+
+        assertThat(xObjectsWith).isGreaterThan(xObjectsWithout);
+    }
+
+    private int countXObjects(byte[] pdf) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            int count = 0;
+            for (var page : doc.getPages()) {
+                for (var ignored : page.getResources().getXObjectNames()) {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
+    /** A minimal, real, valid 1×1 transparent PNG — magic bytes + a real IHDR/IDAT/IEND chain, not
+     * a placeholder string, so {@code Workbook#addPicture} has genuine image bytes to embed. */
+    private byte[] onePixelPng() {
+        return Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    }
+
+    private List<String> threeLines(String tag) {
+        return List.of("descA-" + tag, "descB-" + tag, "descC-" + tag);
+    }
+
+    private boolean cellIsEmpty(org.apache.poi.ss.usermodel.Sheet sheet, int row, int col) {
+        var r = sheet.getRow(row);
+        if (r == null) return true;
+        var c = r.getCell(col);
+        return c == null || c.getCellType() == org.apache.poi.ss.usermodel.CellType.BLANK;
+    }
+
+    private int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
+    }
+
+    private QuotationRenderModel.RenderItem renderItem(String heading, List<String> descriptionLines,
+            BigDecimal qty, BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
+        return new QuotationRenderModel.RenderItem(heading, descriptionLines, qty, "แผ่น", unitPrice,
+            discountLabel, netUnitPrice, amount);
+    }
+
+    private QuotationRenderModel modelWithItems(List<QuotationRenderModel.RenderItem> items,
+            List<String> remarkLines, QuotationRenderModel.Signatories signatories) {
+        return new QuotationRenderModel(
+            LocalDate.of(2026, 7, 16), "QN-2026-0099", "P003", "D002",
+            "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.   เลขที่ผู้เสียภาษี : 0105542000000",
+            "โทร. 02-000-0000", "Showroom V2 Project", items, remarkLines, signatories, true);
     }
 
     private TicketItemDto itemWithAttributes(int seq, String brand, String model, String color,

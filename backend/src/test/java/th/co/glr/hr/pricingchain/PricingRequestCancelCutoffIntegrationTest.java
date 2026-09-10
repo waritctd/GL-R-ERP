@@ -165,7 +165,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             new PricingCostingRepository(jdbc), tickets, fxRates, notifications, landedCosts, formulaEngine);
 
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
         quotationService = new CustomerQuotationService(new CustomerQuotationRepository(jdbc), pricingRequests,
             decisions, tickets, ticketService, customers, new QuotationRenderer(), notifications, new th.co.glr.hr.customerquotation.DiscountApprovalRepository(jdbc));
 

@@ -837,6 +837,11 @@ public class TicketRepository {
               FROM sales.quotation q
               JOIN hr.employee e ON e.employee_id = q.issued_by
              WHERE q.ticket_id = :id
+               -- Quotation v2 (direct deal quotation, V165): direct-flow rows have their own
+               -- listing (th.co.glr.hr.dealquotation.DealQuotationRepository) and their own panel
+               -- on the ticket-detail documents tab -- excluded here so they do not also show up
+               -- in the legacy pricing-chain quotation list (DealLegacyQuotations.jsx).
+               AND q.origin IS DISTINCT FROM 'DEAL_DIRECT'
              ORDER BY q.issued_at DESC, q.quotation_id DESC
             """,
             Map.of("id", ticketId),

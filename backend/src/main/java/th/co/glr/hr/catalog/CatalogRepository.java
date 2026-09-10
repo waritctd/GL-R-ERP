@@ -155,7 +155,8 @@ public class CatalogRepository {
             SELECT pp.price_id, f.factory_id, f.name AS factory_name,
                    pp.product_code, pp.grade, pp.collection, pp.product_name,
                    pp.color, pp.surface, pp.size_raw,
-                   pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece
+                   pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece,
+                   pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code
               FROM price_catalog.product_prices pp
               JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
               JOIN price_catalog.factories           f   ON f.factory_id   = pp.factory_id
@@ -187,7 +188,11 @@ public class CatalogRepository {
                 rs.getBigDecimal("price"),
                 rs.getString("currency"),
                 rs.getString("price_unit"),
-                rs.getBigDecimal("sqm_per_piece")
+                rs.getBigDecimal("sqm_per_piece"),
+                rs.getBigDecimal("thickness_mm"),
+                rs.getBigDecimal("pcs_per_box"),
+                rs.getBigDecimal("sqm_per_box"),
+                rs.getString("origin_country_code")
             )
         );
     }
