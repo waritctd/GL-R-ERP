@@ -6200,6 +6200,22 @@ export const api = {
         },
       });
     },
+
+    // Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) -- "not supported in mock mode",
+    // same stance as payroll's downloadPayslip/downloadPayslipsZip above: the quota block must read
+    // the REAL LeaveService#balanceFor numbers (#914), and this mock does not reimplement that
+    // day-math well enough to hand back a PDF worth trusting. A stub also keeps this file from
+    // growing a THIRD restatement of the day-count -> "1 วัน 4 ชม. 30 น." formatting rule (Java's
+    // LeaveDayMath#formatDuration, the frontend's own leaveFormatting.js) that could quietly drift
+    // from either. Verify the real download against the real Java service, never against this.
+    async downloadMyReport() {
+      requireSession();
+      throw new Error('ดาวน์โหลดรายงานใบลาไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
+    async downloadTeamReport() {
+      requireSession();
+      throw new Error('ดาวน์โหลดรายงานใบลาไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
+    },
   },
 
   // Mirrors OvertimeController + OvertimeService (overtime/) — see

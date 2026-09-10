@@ -276,6 +276,109 @@ public class LeaveService {
     }
 
     /**
+     * GET /api/leave/reports/me.pdf (printable leave-records report, 2026-09): the CALLING
+     * employee's own section for {@code year}/optional {@code month} -- always exactly one
+     * {@link LeaveReportEmployeeDto}, since there is no {@code employeeId} parameter anywhere on
+     * this path (the employee id comes from the session, same self-scoping shape as
+     * {@link LeaveController#calendarContext}). There is therefore no authorization DECISION to
+     * make here beyond "does this account have an employee record at all" ({@link
+     * #requireEmployeeId}) -- no caller-supplied id ever reaches {@link #buildReportSection}.
+     *
+     * <p>Reuses {@link #balances} (own-record branch) for the quota block and {@link
+     * LeaveRepository#findRequests} for the row list -- the SAME data {@code /api/leave/balances}
+     * and {@code /api/leave} already serve this employee, not a re-derivation.
+     */
+    public List<LeaveReportEmployeeDto> ownLeaveReport(UserPrincipal user, Integer year, Integer month) {
+        long employeeId = requireEmployeeId(user);
+        int resolvedYear = resolveReportYear(year);
+        validateReportMonth(month);
+        List<LeaveBalanceDto> balances = balances(user, employeeId, resolvedYear);
+        LeaveEmployeeOption self = selfOption(employeeId);
+        LocalDate from = reportPeriodStart(resolvedYear, month);
+        LocalDate to = reportPeriodEnd(resolvedYear, month);
+        return List.of(buildReportSection(
+            employeeId, self.employeeCode(), self.employeeName(), balances, from, to));
+    }
+
+    /**
+     * GET /api/leave/reports/team.pdf (printable leave-records report, 2026-09): ONE grouped PDF's
+     * worth of per-employee sections, owner ruling -- every direct report in a single document, not
+     * one PDF per person. Deliberately built on {@link #teamBalances} rather than a fresh scope
+     * query: {@code teamBalances} already resolves "who is my team" via {@link
+     * LeaveRepository#findEmployeeOptions} (self OR {@code reports_to_employee_id} = actor, or every
+     * active employee for hr/ceo -- see that method's own Javadoc for why this must not become a
+     * second, independently-written predicate) AND already produces the exact {@link LeaveBalanceDto}
+     * list the quota block must print. This method adds nothing to the SCOPE decision -- the one and
+     * only place an employee id enters this method is the list {@code teamBalances} already vetted,
+     * so there is no NEW authorization predicate for a caller-supplied id to slip past.
+     *
+     * <p>Per-employee division/hire-date/rows are then read directly off {@link LeaveRepository}
+     * (no re-check against {@link #canAccessEmployee}) -- reading them is safe precisely because
+     * every {@code employeeId} driving those reads came out of the already-vetted {@code
+     * teamBalances} list, never off the HTTP request.
+     *
+     * <p>An empty team (a manager with no active direct reports, or HR/CEO in a company with only
+     * themselves) is not an error -- {@link LeaveReportRenderer} prints a page saying so, matching
+     * {@link #teamBalances}'s own "empty list, not an error" contract.
+     */
+    public List<LeaveReportEmployeeDto> teamLeaveReport(UserPrincipal user, Integer year, Integer month) {
+        requireEmployeeId(user);
+        int resolvedYear = resolveReportYear(year);
+        validateReportMonth(month);
+        LocalDate from = reportPeriodStart(resolvedYear, month);
+        LocalDate to = reportPeriodEnd(resolvedYear, month);
+        return teamBalances(user, resolvedYear).stream()
+            .map(member -> buildReportSection(
+                member.employeeId(), member.employeeCode(), member.employeeName(), member.balances(), from, to))
+            .toList();
+    }
+
+    /** {@link #ownLeaveReport}/{@link #teamLeaveReport} shared assembly -- {@code employeeId} must
+     * already be authorization-vetted by the caller (self, or a {@code teamBalances} row); this
+     * method performs no access check of its own. */
+    private LeaveReportEmployeeDto buildReportSection(
+            long employeeId, String employeeCode, String employeeName,
+            List<LeaveBalanceDto> balances, LocalDate from, LocalDate to) {
+        LeaveContactDefaultsDto contact = leaveRepository.findContactDefaults(employeeId).orElse(null);
+        LocalDate hireDate = leaveRepository.findHireDate(employeeId).orElse(null);
+        List<LeaveRequestDto> requests = leaveRepository.findRequests(
+            new LeaveFilter(employeeId, null, from, to, null));
+        return new LeaveReportEmployeeDto(
+            employeeId, employeeCode, employeeName,
+            contact == null ? null : contact.divisionTh(),
+            hireDate, balances, requests);
+    }
+
+    /** {@code employeeOptions}' own "self" row (code/name/department) for {@code employeeId} --
+     * reuses {@link LeaveRepository#findEmployeeOptions} the same way {@link #teamBalances} does,
+     * rather than a third source for an employee's display name. */
+    private LeaveEmployeeOption selfOption(long employeeId) {
+        return leaveRepository.findEmployeeOptions(employeeId, false).stream()
+            .filter(LeaveEmployeeOption::self)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
+    }
+
+    private int resolveReportYear(Integer year) {
+        return year == null ? LocalDate.now(clock).getYear() : year;
+    }
+
+    private void validateReportMonth(Integer month) {
+        if (month != null && (month < 1 || month > 12)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "เดือนไม่ถูกต้อง");
+        }
+    }
+
+    private LocalDate reportPeriodStart(int year, Integer month) {
+        return month == null ? LocalDate.of(year, 1, 1) : LocalDate.of(year, month, 1);
+    }
+
+    private LocalDate reportPeriodEnd(int year, Integer month) {
+        LocalDate start = reportPeriodStart(year, month);
+        return month == null ? LocalDate.of(year, 12, 31) : start.withDayOfMonth(start.lengthOfMonth());
+    }
+
+    /**
      * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
      * position/department/division -- same access predicate as {@link #balances}: own record, HR/CEO,
      * or the employee's direct manager.

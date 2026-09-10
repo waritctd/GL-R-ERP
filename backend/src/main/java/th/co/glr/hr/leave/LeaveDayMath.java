@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -583,5 +584,64 @@ final class LeaveDayMath {
             yearly.forEach((month, days) -> combined.merge(month, days, BigDecimal::add));
         }
         return combined;
+    }
+
+    // ── Display formatting (leave-records report, 2026-09) ──────────────────────────────────
+    //
+    // A stored day count is a NUMERIC(5,2) whose fraction came from the SAME 480-worked-minutes-
+    // per-day divisor every method above uses (see WORKED_MINUTES_PER_DAY), so 0.38 means "3
+    // ชั่วโมง" of an eight-hour day, not "38% of a day" -- printing it as a bare decimal makes the
+    // reader do that division in their head. This is a PORT of the frontend's
+    // leaveFormatting.js#formatDays (same divisor, same 5-minute snap, same drop-zero-units rule),
+    // not a re-derivation of the day-math rule itself: the fraction is already settled by the time
+    // it reaches here (submit-time, via the boundary/span methods above), and this method only
+    // re-expresses that already-computed BigDecimal back into the unit it was computed from. Do
+    // NOT change the divisor or rounding here independently of leaveFormatting.js -- the two must
+    // stay in lock-step or the printed PDF and the portal screen would read different totals for
+    // the same stored value, which is exactly what the #914 quota-block reuse in
+    // LeaveReportRenderer is trying to avoid for the quota figures it also runs through this
+    // method.
+    //
+    // Units are the PDF's own abbreviated forms (ชม./น.), not leaveFormatting.js's full words
+    // (ชั่วโมง/นาที) -- the brief's own worked examples ("1 วัน 4 ชม. 30 น.") use the short form, and
+    // a printed page has no hover/wrap affordance a web table has, so the shorter unit reads better
+    // on paper. The DAYS/HOURS/MINUTES shape (drop a zero-valued unit rather than print it) is
+    // otherwise identical to the frontend.
+    //
+    // The 5-minute snap step exists for the same reason it exists in leaveFormatting.js: a stored
+    // 2dp day count cannot carry a finer signal than +/-2.4 minutes, so reconstructing to the exact
+    // minute would print quantisation noise as though it were data.
+    private static final long DISPLAY_MINUTE_STEP = 5;
+
+    /**
+     * A stored day count as "1 วัน 4 ชม. 30 น." / "4 ชม. 30 น." / "1 วัน" (never a decimal, never a
+     * trailing zero-valued unit). {@code null} reads as zero, matching {@code formatDaysOrDash}'s
+     * frontend sibling's "genuinely zero vs not known" split being the CALLER's job, not this
+     * method's -- a caller that must distinguish "no leave" from "not computed" should check for
+     * {@code null} itself before calling this.
+     */
+    static String formatDuration(BigDecimal days) {
+        BigDecimal value = days == null ? BigDecimal.ZERO : days;
+        BigDecimal rawMinutes = value.abs().multiply(BigDecimal.valueOf(WORKED_MINUTES_PER_DAY));
+        long steps = rawMinutes.divide(BigDecimal.valueOf(DISPLAY_MINUTE_STEP), 0, RoundingMode.HALF_UP)
+            .longValueExact();
+        long totalMinutes = steps * DISPLAY_MINUTE_STEP;
+        if (totalMinutes == 0) {
+            return "0 วัน";
+        }
+        long wholeDays = totalMinutes / WORKED_MINUTES_PER_DAY;
+        long restMinutes = totalMinutes % WORKED_MINUTES_PER_DAY;
+        List<String> parts = new ArrayList<>();
+        if (wholeDays > 0) {
+            parts.add(wholeDays + " วัน");
+        }
+        if (restMinutes >= 60) {
+            parts.add((restMinutes / 60) + " ชม.");
+        }
+        if (restMinutes % 60 > 0) {
+            parts.add((restMinutes % 60) + " น.");
+        }
+        String sign = value.signum() < 0 ? "-" : "";
+        return sign + String.join(" ", parts);
     }
 }

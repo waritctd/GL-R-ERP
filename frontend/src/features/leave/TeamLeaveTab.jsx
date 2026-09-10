@@ -17,6 +17,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import { LeaveFilterBar } from './LeaveFilterBar.jsx';
+import { LeaveReportDownload } from './LeaveReportDownload.jsx';
 import {
   formatDateRange, formatDays, todayIso,
 } from './leaveFormatting.js';
@@ -434,6 +435,8 @@ export function TeamLeaveTab({ user, showToast }) {
           ? 'โควตาวันลาคงเหลือของพนักงานแต่ละคนจะแสดงที่นี่เมื่อมีข้อมูล'
           : 'เมื่อมีพนักงานที่รายงานตรงต่อคุณ โควตาวันลาคงเหลือของแต่ละคนจะแสดงที่นี่'}
       />
+
+      <LeaveReportDownload scope="team" showToast={showToast} />
 
       {/* Directly above the history table -- the one section it governs. */}
       <LeaveFilterBar

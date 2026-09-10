@@ -312,6 +312,26 @@ export const api = {
     // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
     // reads on this namespace (balances/list) rather than positional (from, to) args.
     calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
+    // Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) -- see routes.js's comment on the
+    // scope. `params` is { year, month } (month optional, whole-year when omitted); read as a blob
+    // (a PDF), same fetch-not-apiRequest shape as downloadPayslip/downloadAttachment above. Mirrors
+    // LeaveController#ownReportPdf / #teamReportPdf.
+    downloadMyReport: async (params) => {
+      const res = await fetch(withQuery(API_ROUTES.leave.reportMe, params), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดรายงานใบลาไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+    downloadTeamReport: async (params) => {
+      const res = await fetch(withQuery(API_ROUTES.leave.reportTeam, params), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดรายงานใบลาไม่สำเร็จ');
+      }
+      return res.blob();
+    },
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
