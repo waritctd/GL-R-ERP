@@ -144,6 +144,12 @@ export const queryKeys = {
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
   // CEO discount-approval workflow, Phase 2 (V155): per-line approval status for one quotation.
   discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). A sibling key space to
+  // pricingRequests'/customerQuotations' above, never sharing an entry with them.
+  dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
+  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? ''],
+  dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
+  employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
   // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the

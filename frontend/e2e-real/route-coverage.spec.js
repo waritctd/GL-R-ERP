@@ -55,6 +55,13 @@ const ROUTES = [
   '/tickets/1/deposit',
   '/pricing-requests',
   '/pricing-requests/1',
+  // Quotation v2 (direct deal quotation, PR #907/#908). '/quotations/1' is deliberately a
+  // placeholder: the demo seed has no sales.quotation row with origin='DEAL_DIRECT', so this
+  // asserts the detail page handles "no such record" with its error panel rather than an error
+  // boundary — the case the header calls out as worth asserting in its own right.
+  '/quotations',
+  '/quotations/new',
+  '/quotations/1',
   '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
   '/commissions',
   '/finance',
