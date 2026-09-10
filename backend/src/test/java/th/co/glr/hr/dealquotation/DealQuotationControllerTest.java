@@ -99,7 +99,7 @@ class DealQuotationControllerTest {
             id, number, 1L, "DRAFT", 1, null,
             6L, "Sales", 6L, "Sales", "081-234-5678",
             null, null, null, null, null,
-            LocalDate.now(), "Customer", null, null, null, null, "Project",
+            LocalDate.now(), "Customer", null, null, null, null, null, null, null, "Project",
             null, null, null, null, null, null, null, null, null,
             java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, "THB",
             false, List.of(), null, null);

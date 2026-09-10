@@ -35,14 +35,24 @@ public final class DealQuotationDtos {
         String approvedByName,
         Instant approvedAt,
         String approvalNote,
-        // Approved date, else today — see docs/sales/quotation-v2-plan.md's Data section ("quotationDate in
-        // the DTO = approved date, else today").
+        // The date the sales rep CREATED the quotation (Bangkok), for EVERY status — owner
+        // feedback F8, 2026-09-10, "for วันที่ at the top of the page it should be the date it was
+        // created by the sale". Was "approved date, else today" until then; the header cell the
+        // renderer prints follows the same rule (DealQuotationRenderAdapter#toRenderModel), so the
+        // UI and the document always agree. NOT offerDate (remark 1, วันที่รับจำนวน), which is a
+        // separate rep-editable date.
         LocalDate quotationDate,
         String customerName,
         String customerAddress,
         String customerTaxId,
         String customerPhone,
+        // ผู้สั่งซื้อ — the FROZEN snapshot V167 stores at create/update (owner feedback F2,
+        // 2026-09-10), never a live read of the ticket's contact; null only on a pre-V167 row
+        // whose ticket had no contact, which submit() refuses until one is chosen.
+        Long contactId,
         String contactName,
+        String contactPhone,
+        String contactEmail,
         String projectName,
         String deptCode,
         String unitCode,
@@ -61,6 +71,22 @@ public final class DealQuotationDtos {
         List<DealQuotationItemDto> items,
         Instant createdAt,
         Instant updatedAt
+    ) {}
+
+    /**
+     * Per-status counts for the caller's OWN list scope (owner feedback F5, 2026-09-10: "for
+     * สถานะ make it ทั้งหมด, รออนุมัติ, แก้, ยกเลิก" — the list page's tab labels carry counts). Same
+     * scope rule as {@code GET /api/deal-quotations} (sales: own deals only), computed in ONE SQL
+     * statement so the tabs never need a second full fetch. {@code needsRework} = DRAFT rows sent
+     * back with a reason ({@code approvalNote}) OR revisions in progress ({@code parentQuotationId}),
+     * exactly the {@code needsRework=true} filter's own definition.
+     */
+    public record DealQuotationCountsDto(
+        long all,
+        long pendingApproval,
+        long needsRework,
+        long cancelled,
+        long approved
     ) {}
 
     /** {@link DealQuotationRequests.ItemInput}'s fields, plus what the server computed for it. */
