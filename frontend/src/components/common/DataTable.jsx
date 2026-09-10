@@ -47,6 +47,50 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), 'th');
 }
 
+/**
+ * A comparable value for a column that has no `sortAccessor`, derived from what its `render`
+ * actually produces.
+ *
+ * Sorting used to fall back to `render` itself, so any column whose render returns a React ELEMENT
+ * handed `defaultCompare` two objects; both stringified to "[object Object]", every comparison
+ * returned 0, and the sort was a no-op. The failure was silent and looked like success — the header
+ * still took `aria-sort="ascending"` and its active styling while the rows sat still. Measured on
+ * /quotations: เลขที่, ยอดรวม and สถานะ all reported ascending and did not move; วันที่ worked only
+ * because its render happened to return a bare string. Eight columns across five pages were affected
+ * (also HolidaysTab, WorkSchedulesTab, PricingRequestQueuePage and TaxAllowanceReviewPage).
+ *
+ * Two steps, and the order matters:
+ *   1. flatten the element to its text, which is what the reader sees and therefore what they expect
+ *      to be sorting by;
+ *   2. if that text is a formatted NUMBER, compare it as one. Text alone is not enough — money
+ *      renders as `฿1,790,714.29`, and comparing that against `฿600,616.00` as text puts the larger
+ *      figure first, which is a wrong answer rather than a missing one.
+ *
+ * Deliberately confined to the fallback path. A column that supplies its own `sortAccessor` keeps
+ * exactly its current behaviour, so this cannot re-order anything that was already sorting correctly.
+ */
+function comparableFromRendered(rendered) {
+  const text = textFromRendered(rendered);
+  const numeric = numericFromFormatted(text);
+  return numeric == null ? text : numeric;
+}
+
+/**
+ * `"฿1,790,714.29"` → `1790714.29`; `"12.5%"` → `12.5`; `"อนุมัติแล้ว"` → null.
+ *
+ * Only currency symbols, thousands separators, percent signs and surrounding whitespace are
+ * stripped. Anything else left over means this is text that merely contains digits — a document
+ * number like `QT-2026-0005-2`, a size like `60x120` — and it must stay text, or the sort silently
+ * changes meaning.
+ */
+function numericFromFormatted(text) {
+  if (typeof text !== 'string') return null;
+  const stripped = text.replace(/[\s,\u00a0฿%$]/g, '');
+  if (stripped === '' || !/^[+-]?\d*\.?\d+$/.test(stripped)) return null;
+  const value = Number(stripped);
+  return Number.isFinite(value) ? value : null;
+}
+
 function textFromRendered(value) {
   if (value == null || typeof value === 'boolean') return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -294,7 +338,12 @@ export function DataTable({
     sortingFn: (rowA, rowB, columnId) => {
       const sourceColumn = columnMap.get(columnId);
       if (!sourceColumn) return 0;
-      const accessor = sourceColumn.sortAccessor || sourceColumn.render;
+      // NOT `sortAccessor || render` — see comparableFromRendered. Falling back to `render` fed
+      // `defaultCompare` React elements, which compare equal to each other, so the sort silently
+      // did nothing on every column that renders anything richer than a bare string.
+      const accessor = typeof sourceColumn.sortAccessor === 'function'
+        ? sourceColumn.sortAccessor
+        : (row) => comparableFromRendered(sourceColumn.render(row));
       return defaultCompare(accessor(rowA.original), accessor(rowB.original));
     },
   })), [columns, columnMap, searchable]);
