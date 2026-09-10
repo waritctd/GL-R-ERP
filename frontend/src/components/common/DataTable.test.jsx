@@ -150,11 +150,22 @@ describe('DataTable', () => {
     it('compares a formatted money cell numerically, not as text', () => {
       // Text alone is not enough, and this is the case that proves it: as text `฿1,790,714.29`
       // sorts BEFORE `฿600,616.00`, which is a wrong answer rather than a missing one.
+      // Zero and a negative are in here deliberately. With only positive non-zero values, two
+      // parser branches go untested and stay green when broken: `numeric == null` weakened to
+      // `!numeric` sends ฿0.00 down the text path, and dropping `[+-]?` sends a negative down it.
+      // A draft quotation with no items renders ฿0.00, so neither is hypothetical.
       const rows = [
         { id: 1, total: 1790714.29 },
         { id: 2, total: 600616 },
         { id: 3, total: 29583.36 },
         { id: 4, total: 2032870.7 },
+        { id: 5, total: 0 },
+        // TWO negatives, not one. With a single negative the test stays green even when the sign is
+        // dropped from the number pattern: it falls back to text, and Thai collation happens to
+        // place `฿-…` first anyway, so the expectation is unchanged. These two discriminate —
+        // numerically -9,999 precedes -1,234, but as text `฿-1,234.00` precedes `฿-9,999.00`.
+        { id: 6, total: -1234 },
+        { id: 7, total: -9999 },
       ];
       const baht = (n) => `฿${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       render(
@@ -174,7 +185,8 @@ describe('DataTable', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Total/ }));
       expect(screen.getAllByRole('cell').map((el) => el.textContent)).toEqual([
-        '฿29,583.36', '฿600,616.00', '฿1,790,714.29', '฿2,032,870.70',
+        '฿-9,999.00', '฿-1,234.00', '฿0.00', '฿29,583.36', '฿600,616.00', '฿1,790,714.29',
+        '฿2,032,870.70',
       ]);
     });
 
@@ -210,6 +222,37 @@ describe('DataTable', () => {
       fireEvent.click(screen.getByRole('button', { name: /Number/ }));
       expect(screen.getAllByRole('cell').map((el) => el.textContent))
         .toEqual(['QT-2026-0009', 'QT-2026-0009-1', 'QT-2026-0010']);
+    });
+
+    it('warns instead of silently doing nothing when a cell has no text children', () => {
+      // The original bug in a new disguise: a component carrying its content in a PROP rather than
+      // in children flattens to '' for every row, so every comparison ties. This shape is real —
+      // PayrollPage's `MoneyCode({ value })` and TicketListPage's `<DaysBadge stageUpdatedAt=…/>`
+      // are both DataTable cells of exactly this kind (both safe today, because both columns supply
+      // their own sortAccessor). Nothing can recover the
+      // text from an arbitrary prop, so the failure is made LOUD instead of silent.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      function MoneyCode({ value }) { return <code>{value.toFixed(2)}</code>; }
+      const rows = [{ id: 1, total: 2 }, { id: 2, total: 1 }];
+      render(
+        <DataTable
+          columns={[{
+            key: 'total',
+            header: 'Total',
+            sortable: true,
+            render: (row) => <MoneyCode value={row.total} />,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Total/ }));
+      expect(warn).toHaveBeenCalled();
+      expect(warn.mock.calls[0][0]).toContain('sortAccessor');
+      warn.mockRestore();
     });
 
     it('does not change how a column WITH a sortAccessor compares', () => {

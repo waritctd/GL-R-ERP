@@ -69,10 +69,42 @@ function defaultCompare(a, b) {
  * Deliberately confined to the fallback path. A column that supplies its own `sortAccessor` keeps
  * exactly its current behaviour, so this cannot re-order anything that was already sorting correctly.
  */
-function comparableFromRendered(rendered) {
+function comparableFromRendered(rendered, columnKey) {
+  // Review raised a Date regression here — `defaultCompare` compares Dates chronologically and
+  // flattening one to text would sort it by WEEKDAY NAME. Checked, and it cannot happen: a `render`
+  // returning a bare Date makes React throw "Objects are not valid as a React child" before any of
+  // this runs, so no column can have that shape. A Date reaches the comparator only through
+  // `sortAccessor` (TicketListPage does exactly that), which is the untouched path. No guard added,
+  // because a guard nothing can reach is a guard nothing can test.
   const text = textFromRendered(rendered);
+
+  // ⚠️ KNOWN LIMIT, and it is the original bug in a new disguise. `textFromRendered` reads an
+  // element's CHILDREN, so a component that carries its content in a PROP instead — PayrollPage's
+  // `MoneyCode({ value })` is exactly this shape — flattens to '' for every row, every comparison
+  // ties, and the sort is a silent no-op again. Nothing can recover the text from an arbitrary
+  // prop, so the honest move is to make the failure loud instead of silent: such a column needs its
+  // own `sortAccessor`. No current column without an accessor has this shape.
+  if (text === '' && isValidElement(rendered) && rendered.props?.children === undefined) {
+    warnUnsortableOnce(columnKey, rendered);
+  }
+
   const numeric = numericFromFormatted(text);
   return numeric == null ? text : numeric;
+}
+
+const warnedColumns = new Set();
+
+/** Dev-only, once per column: a silent no-op sort is the exact failure this file exists to remove. */
+function warnUnsortableOnce(columnKey, rendered) {
+  if (!import.meta.env?.DEV) return;
+  const key = String(columnKey);
+  if (warnedColumns.has(key)) return;
+  warnedColumns.add(key);
+  const name = rendered?.type?.name || rendered?.type || 'component';
+  console.warn(
+    `[DataTable] column "${key}" renders <${name}> with no text children, so sorting it has nothing `
+    + 'to compare and will not reorder anything. Give the column a `sortAccessor`.',
+  );
 }
 
 /**
@@ -343,7 +375,7 @@ export function DataTable({
       // did nothing on every column that renders anything richer than a bare string.
       const accessor = typeof sourceColumn.sortAccessor === 'function'
         ? sourceColumn.sortAccessor
-        : (row) => comparableFromRendered(sourceColumn.render(row));
+        : (row) => comparableFromRendered(sourceColumn.render(row), columnId);
       return defaultCompare(accessor(rowA.original), accessor(rowB.original));
     },
   })), [columns, columnMap, searchable]);
