@@ -9,8 +9,11 @@ SET search_path = hr, public;
 -- narrow for a real case HR flagged: ลาพักร้อน starting 13:00 on day 1 (afternoon only) and running
 -- through the FULL of day 2 -- a genuine 1.5-day request that today can only be filed as two separate
 -- leave requests. This migration relaxes the schema to permit a timed request to span multiple
--- calendar days; LeaveService/LeaveDayMath (Java side, same PR) compute the actual day-fraction total
--- against each day's OWN resolved WorkSchedule length, not a hardcoded 8-hour workday.
+-- calendar days; LeaveService/LeaveDayMath (Java side, same PR) compute the day-fraction total as
+-- (clock hours in the span MINUS any overlap with the 12:30-13:30 break) / 8, capped at 1.00 per
+-- date. Owner ruling, 2026-09-10: the divisor is a flat 8-hour worked day, NOT the schedule's own
+-- clock span -- an earlier draft of this header said the opposite and was superseded. 12:30-13:30
+-- is company-wide and exists ONLY for this arithmetic; attendance still models no break at all.
 --
 -- 1) chk_leave_time_single_day is DROPPED outright, not merely relaxed -- there is no longer any
 --    schema-level restriction on how many calendar days a timed (start_time IS NOT NULL) request may
