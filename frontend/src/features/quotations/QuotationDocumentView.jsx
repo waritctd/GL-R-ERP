@@ -14,7 +14,7 @@ const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minm
 /**
  * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation --
  * the plan's "Read view (non-draft) shows the same data as a clean document-like summary with the
- * signature block names (ผู้พิมพ์ / ผู้ตรวจ / ผู้อนุมัติ)".
+ * signature block names (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย)".
  */
 export function QuotationDocumentView({ quotation }) {
   const status = dealQuotationStatusLabel(quotation.docStatus);
@@ -94,11 +94,11 @@ export function QuotationDocumentView({ quotation }) {
             <strong className="block mt-6 border-t border-border pt-2">{quotation.createdByName ?? '-'}</strong>
           </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้ตรวจ</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span>
             <strong className="block mt-6 border-t border-border pt-2">{quotation.salesRepName ?? '-'}</strong>
           </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้อนุมัติ</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้จัดการฝ่ายขาย</span>
             <strong className="block mt-6 border-t border-border pt-2">
               {quotation.docStatus === 'APPROVED' ? (quotation.approvedByName ?? '-') : ''}
             </strong>

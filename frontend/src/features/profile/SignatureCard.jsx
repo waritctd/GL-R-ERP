@@ -10,7 +10,7 @@ const ACCEPTED_TYPES = ['image/png', 'image/jpeg'];
 
 /**
  * "ลายเซ็นสำหรับใบเสนอราคา" -- Quotation v2's approver signature (hr.employee_signature, V166,
- * QUOTATION-V2-PLAN.md), anchored into the approved PDF's ผู้อนุมัติ box. Visible only to the
+ * QUOTATION-V2-PLAN.md), anchored into the approved PDF's ผู้จัดการฝ่ายขาย box (owner ruling 2026-09-10: the form's standard labels). Visible only to the
  * user themself, and only when their role is ceo or sales_manager (the plan's approver roles) --
  * see ProfilePage.jsx's own gate before mounting this; there is no separate read-gate here
  * because `getSignature` returns a URL to render, not data this component fetches and could leak.
