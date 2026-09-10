@@ -47,14 +47,43 @@ public final class DealQuotationRenderAdapter {
             ? quotation.createdAt().atZone(BANGKOK).toLocalDate()
             : LocalDate.now(BANGKOK);
 
-        String salesLine = "Sales/" + nullSafe(quotation.salesRepName()) + " T." + nullSafe(quotation.salesRepPhone());
+        boolean english = WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(quotation.documentLanguage());
 
-        String contactPart = !blank(quotation.contactName())
-            ? "คุณ" + quotation.contactName().trim() + "   /   " : "";
-        String taxIdPart = !blank(quotation.customerTaxId())
-            ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
-        String attnLine = contactPart + nullSafe(quotation.customerName()) + taxIdPart;
-        String phoneLine = !blank(quotation.customerPhone()) ? "โทร. " + quotation.customerPhone().trim() : "";
+        // The rep's own name follows the document too: her English sample prints
+        // "Sales/Jannet T.080-7767707", the same shape as the Thai "Sales/เจนเนต".
+        String salesLine = "Sales/" + nullSafe(displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english))
+            + " T." + nullSafe(quotation.salesRepPhone());
+
+        String attnLine;
+        String phoneLine;
+        if (english) {
+            // F-SM-008 header block, read off QN6900902-6: the template's A5 label cell becomes
+            // "Attn :" (see QuotationRenderer#writeEnglishHeaderLabels) and B5 carries the contact
+            // and the customer; B6 carries "Address : ...", "E : ..." and the telephone as ONE
+            // line, because the template has exactly TWO free rows here and her samples print
+            // three labelled lines. Flagged in the PR: with a genuine F-SM-008.xls each would get
+            // its own row.
+            String contactPart = !blank(quotation.contactName()) ? quotation.contactName().trim() + "   /   " : "";
+            attnLine = contactPart + nullSafe(quotation.customerName());
+            List<String> parts = new ArrayList<>();
+            if (!blank(quotation.customerAddress())) {
+                parts.add("Address : " + quotation.customerAddress().trim().replace('\n', ' '));
+            }
+            if (!blank(quotation.contactEmail())) {
+                parts.add("E : " + quotation.contactEmail().trim());
+            }
+            if (!blank(quotation.customerPhone())) {
+                parts.add("Tel. " + quotation.customerPhone().trim());
+            }
+            phoneLine = String.join("   ", parts);
+        } else {
+            String contactPart = !blank(quotation.contactName())
+                ? "คุณ" + quotation.contactName().trim() + "   /   " : "";
+            String taxIdPart = !blank(quotation.customerTaxId())
+                ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
+            attnLine = contactPart + nullSafe(quotation.customerName()) + taxIdPart;
+            phoneLine = !blank(quotation.customerPhone()) ? "โทร. " + quotation.customerPhone().trim() : "";
+        }
 
         List<RenderItem> items = quotation.items().stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq()))
@@ -64,15 +93,25 @@ public final class DealQuotationRenderAdapter {
         // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
         // created / submitted / approved (F4), each only once it exists -- a DRAFT prints only
         // ผู้พิมพ์'s, and ผู้สั่งซื้อ's stays dotted for the customer's pen.
+        // v3b: on an ENGLISH document each signatory prints its hr.employee first_name_en/
+        // last_name_en, FALLING BACK to the Thai name when those are blank — an empty signature
+        // slot on a customer-facing document is worse than a Thai name on an English page. The
+        // ผู้สั่งซื้อ slot is the CUSTOMER's contact, not an employee: there is no English name
+        // stored for it anywhere, so it prints the snapshot as typed in either language.
         Signatories signatories = new Signatories(
-            quotation.createdByName(), quotation.salesRepName(), quotation.approvedByName(),
+            displayName(quotation.createdByName(), quotation.createdByNameEn(), english),
+            displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english),
+            displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             blank(quotation.contactName()) ? null : quotation.contactName().trim(),
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
         return new QuotationRenderModel(
             issueDate, quotation.number(), quotation.deptCode(), quotation.unitCode(), salesLine,
-            attnLine, phoneLine, quotation.projectName(), items, remarkLines(quotation), signatories, true);
+            attnLine, phoneLine, quotation.projectName(), items,
+            english ? englishRemarkLines(quotation) : remarkLines(quotation), signatories, true,
+            english ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            quotation.currency());
     }
 
     /**
@@ -231,10 +270,148 @@ public final class DealQuotationRenderAdapter {
         groups.add("รายการที่ " + range + " ระยะเวลานำเข้า " + min + "-" + max + " วัน");
     }
 
+    // ── v3b: the ENGLISH remark block (F-SM-008) ─────────────────────────────────────────────
+
+    /**
+     * The English หมายเหตุ block, modelled on the owner's QN6900902-6 and QN6900933.
+     *
+     * <p>⚠️ <b>A LIST OF LINES, deliberately — not a template with computed numbering.</b> Her own
+     * numbering is irregular in BOTH samples and irregular in DIFFERENT ways: QN6900902-6 runs
+     * 1, 2, 3, (two unnumbered bank lines), SWIFT, 5, 6, 7 — <b>there is no 4 at all</b>; QN6900933
+     * runs 1, 2, 3, (bank lines), SWIFT, 4, 5. Any code that numbered these itself would print a
+     * document that matches neither. So the numbers are part of the line TEXT, the bank block is
+     * simply unnumbered lines like hers, and a later "renumber them properly" ruling is an edit to
+     * these strings rather than a change to any logic. Flagged in the PR for her confirmation.
+     *
+     * <p>Exactly 8 lines, which is {@code QuotationRenderer#REMARK_HEAD_ROWS.length} — the count
+     * that triggers the v2 compaction path (all-8-lines, one merged row each, no continuation
+     * rows). Fewer would fall back to the legacy 3-line layout and leave the template's own Thai
+     * continuation rows visible on an English page.
+     *
+     * <p>Lines 1/2/3 and the validity line are COMPUTED from the same header fields the Thai block
+     * uses, so an English document reports the same deposit / lead time / validity the Thai one
+     * would. The bank block is fixed text.
+     */
+    private static List<String> englishRemarkLines(DealQuotationDto quotation) {
+        LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        String remainderText = "CREDIT".equals(quotation.remainderMode())
+            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
+            : "the balance before or upon delivery";
+        int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+
+        List<String> lines = new ArrayList<>();
+        lines.add("1.The quantities above are as received on " + shortEnglishDate(offerDate)
+            + ". Please re-confirm the actual quantities with your installer before ordering.");
+        lines.add("2.A deposit of " + depositPct + "% is required upon order confirmation, "
+            + remainderText + ".");
+        lines.add(englishLeadTimeLine(quotation.items()));
+        lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
+        lines.add("5.Price validity : " + validityDays + " days from the date of this quotation.");
+        lines.add("6.Actual tile sizes may vary slightly from the sizes stated above, within ISO "
+            + "and TIS tolerances.");
+        lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
+            + "different production lots.");
+        lines.add("8.Goods sold are not returnable or exchangeable. Please check the order "
+            + "carefully before confirming or signing for delivery.");
+        return lines;
+    }
+
+    /**
+     * ⚠️ <b>THE BANK BLOCK IS DELIBERATELY NOT TRANSCRIBED — ask the owner.</b> Both of her English
+     * samples carry an unnumbered three-line bank block (beneficiary / bank + branch / SWIFT) after
+     * remark 3, and it is the one part of this document a customer would actually wire money
+     * against. The spec does not quote those particulars and this repository holds them nowhere, so
+     * inventing a plausible-looking account number, bank branch or SWIFT code would put fabricated
+     * banking details on a customer-facing document — the one failure mode here that is not
+     * recoverable by re-issuing the quotation.
+     *
+     * <p>This line stands in its place and is true as written. When the owner supplies the real
+     * block, replace this single constant with the three lines and widen
+     * {@link #englishRemarkLines} accordingly (it is capped at
+     * {@code QuotationRenderer#REMARK_HEAD_ROWS.length} = 8 rows, so two of the numbered lines
+     * below would need to merge, exactly as her own samples merge theirs). Flagged at the top of
+     * the PR's risks.
+     */
+    private static final String BANK_BLOCK_PLACEHOLDER_LINE =
+        "4.Payment by telegraphic transfer. Full bank details are issued with the proforma invoice.";
+
+    private static final String EN_LINE3_FALLBACK =
+        "3.Goods are in stock at the factory in Italy; shipping time is approximately 90 days.";
+
+    /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
+     * Kept as its own method rather than parameterising the Thai one: the two differ in every
+     * literal, and a shared method with four language ternaries reads worse than two flat ones. */
+    private static String englishLeadTimeLine(List<DealQuotationItemDto> items) {
+        List<DealQuotationItemDto> ordered = items.stream()
+            .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
+        List<String> groups = new ArrayList<>();
+        Integer groupMin = null;
+        Integer groupMax = null;
+        Integer groupFirstSeq = null;
+        Integer groupLastSeq = null;
+        for (DealQuotationItemDto item : ordered) {
+            Integer min = item.leadTimeMinDays();
+            Integer max = item.leadTimeMaxDays();
+            boolean hasLeadTime = min != null && max != null;
+            boolean continuesGroup = hasLeadTime && groupMin != null
+                && min.equals(groupMin) && max.equals(groupMax) && item.seq() == groupLastSeq + 1;
+            if (continuesGroup) {
+                groupLastSeq = item.seq();
+            } else {
+                flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
+                if (hasLeadTime) {
+                    groupMin = min;
+                    groupMax = max;
+                    groupFirstSeq = item.seq();
+                    groupLastSeq = item.seq();
+                } else {
+                    groupMin = null;
+                    groupMax = null;
+                    groupFirstSeq = null;
+                    groupLastSeq = null;
+                }
+            }
+        }
+        flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
+        return groups.isEmpty() ? EN_LINE3_FALLBACK : "3.Delivery : " + String.join("  ", groups);
+    }
+
+    private static void flushEnglishGroup(List<String> groups, Integer min, Integer max,
+                                          Integer first, Integer last) {
+        if (min == null) {
+            return;
+        }
+        String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
+        groups.add(range + " approximately " + min + "-" + max + " days");
+    }
+
+    /**
+     * The signature/sales name for this document: the ENGLISH name on an English document, the
+     * Thai one otherwise — and the Thai one anyway when the employee has no English name recorded,
+     * because a blank signature slot on a customer-facing document is worse than a Thai name on an
+     * English page. Owner-visible consequence, stated in the PR: an employee with no
+     * {@code first_name_en} prints in Thai on the English form until HR fills it in.
+     */
+    static String displayName(String thai, String english, boolean useEnglish) {
+        if (useEnglish && !blank(english)) {
+            return english.trim();
+        }
+        return thai;
+    }
+
     // LOW: zero-pad dd/mm ("01/09/2569", not "1/9/2569") -- same fix as
     // QuotationRenderer#shortThaiDate (its own separate copy, for the legacy remark-line path).
     private static String shortThaiDate(LocalDate d) {
         return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear() + 543);
+    }
+
+    /** ⚠️ The English remark date. {@code dd/MM/yyyy} — a <b>CE</b> year, where
+     * {@link #shortThaiDate} adds 543 for the Buddhist era. Getting this wrong is the single
+     * easiest mistake on the English form (the owner's spec says so in as many words), so the two
+     * live next to each other here rather than one being reused with a flag. */
+    private static String shortEnglishDate(LocalDate d) {
+        return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear());
     }
 
     private static String formatPct(BigDecimal value) {

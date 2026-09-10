@@ -47,6 +47,41 @@ public final class WastageCalculator {
     /** The rep types the per-piece net price directly; the ราคา column still shows the list price. */
     public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
 
+    // ── Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH document ────────────────────
+    /** The Thai document, form F-SM-002 (03). The default, and the ONLY behaviour before V169. */
+    public static final String DOCUMENT_LANGUAGE_TH = "TH";
+    /** The English document, form F-SM-008 (01): USD, no VAT row, English labels and remarks. */
+    public static final String DOCUMENT_LANGUAGE_EN = "EN";
+
+    public static final String CURRENCY_THB = "THB";
+    public static final String CURRENCY_USD = "USD";
+
+    /**
+     * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
+     * thing (ภาษาเอกสาร) and the rest follows. {@code DealQuotationService#resolveCurrency} lets an
+     * explicit request override it; this is only the default.
+     */
+    public static String defaultCurrencyFor(String documentLanguage) {
+        return DOCUMENT_LANGUAGE_EN.equals(documentLanguage) ? CURRENCY_USD : CURRENCY_THB;
+    }
+
+    /**
+     * The VAT rate a document of this language carries: 7% for TH, ZERO for EN.
+     *
+     * <p>⚠️ <b>This is the ASSUMPTION, not a discovered rule</b>, and it is flagged as such in the
+     * PR body and in V169's own header: VAT follows the LANGUAGE, with no separate switch, because
+     * none of the owner's samples shows an English document WITH VAT or a Thai one WITHOUT. If the
+     * fourth combination is ever needed it is a new column, not a reinterpretation of this one.
+     *
+     * <p>Every VAT decision on the deal-quotation path routes through here rather than reading
+     * {@link #VAT_RATE} directly, so "an EN document has no VAT" cannot be true in one place and
+     * false in another — the document total, the per-item stored vat column and the printed
+     * footer all ask the same question.
+     */
+    public static BigDecimal vatRateFor(String documentLanguage) {
+        return DOCUMENT_LANGUAGE_EN.equals(documentLanguage) ? BigDecimal.ZERO : VAT_RATE;
+    }
+
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final Pattern SIZE_PATTERN = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[xX×]\\s*(\\d+(?:\\.\\d+)?)");
@@ -279,7 +314,15 @@ public final class WastageCalculator {
     }
 
     public static BigDecimal vat(BigDecimal subtotal) {
-        return round2((subtotal == null ? BigDecimal.ZERO : subtotal).multiply(VAT_RATE));
+        return vat(subtotal, DOCUMENT_LANGUAGE_TH);
+    }
+
+    /** v3b: the document-level VAT for a quotation in {@code documentLanguage} — 7% on a TH
+     * document, ZERO on an EN one (see {@link #vatRateFor}). The one-argument overload above is
+     * the TH-only shape every pre-v3b caller keeps using unchanged. */
+    public static BigDecimal vat(BigDecimal subtotal, String documentLanguage) {
+        return round2((subtotal == null ? BigDecimal.ZERO : subtotal)
+            .multiply(vatRateFor(documentLanguage)));
     }
 
     public static BigDecimal grandTotal(BigDecimal subtotal, BigDecimal vat) {

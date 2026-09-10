@@ -144,6 +144,22 @@ public final class DealQuotationRequests {
         @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET",
             message = "ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET")
         String priceMode,
+        /**
+         * "TH" (default when null) | "EN" — quotation v3b (V169). TH prints the Thai F-SM-002 with
+         * its 7% VAT row; EN prints the English F-SM-008 in USD with NO VAT row. The ONE thing the
+         * rep picks: {@code currency} and the VAT treatment both default from it.
+         */
+        @Pattern(regexp = "TH|EN", message = "ต้องเป็น TH หรือ EN")
+        String documentLanguage,
+        /**
+         * "THB" | "USD" — optional; defaults from {@code documentLanguage} (TH→THB, EN→USD) in
+         * {@code DealQuotationService#resolveCurrency}, which also REFUSES a combination the forms
+         * do not have (a THB English document or a USD Thai one). Kept on the wire rather than
+         * being purely derived so a later "EN document billed in THB" ruling is a service change,
+         * not another schema column.
+         */
+        @Pattern(regexp = "THB|USD", message = "ต้องเป็น THB หรือ USD")
+        String currency,
         @NotEmpty List<@Valid ItemInput> items
     ) {
         /** The pre-v3 shape (no {@code priceMode}) — same legacy-constructor device as
@@ -155,6 +171,17 @@ public final class DealQuotationRequests {
                                           List<ItemInput> items) {
             this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, customerNotes, null, items);
+        }
+
+        /** The pre-v3b shape (priceMode but no language/currency) — defaults both to null, which
+         * reads as a TH/THB document, i.e. exactly what every v3 client already sends. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String customerNotes,
+                                          String priceMode, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, customerNotes, priceMode, null, null, items);
         }
     }
 

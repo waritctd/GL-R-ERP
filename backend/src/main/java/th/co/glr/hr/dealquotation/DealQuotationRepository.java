@@ -168,7 +168,8 @@ public class DealQuotationRepository {
         ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
-        String customerNotes, String priceMode, BigDecimal subtotal, Long parentQuotationId, int revisionNo,
+        String customerNotes, String priceMode, String documentLanguage, String currency,
+        BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
     @Transactional
@@ -186,14 +187,16 @@ public class DealQuotationRepository {
                  customer_name, customer_address, customer_tax_id, customer_phone,
                  contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
-                 validity_days, customer_notes, price_mode, parent_quotation_id, updated_at)
+                 validity_days, customer_notes, price_mode, document_language,
+                 parent_quotation_id, updated_at)
             VALUES
-                (:ticketId, :number, :salesRepId, now(), :totalAmount, 'THB', :version,
+                (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', 'UNSPECIFIED', :revisionNo, 'DEAL_DIRECT', :createdById, :salesRepId,
                  :customerName, :customerAddress, :customerTaxId, :customerPhone,
                  :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
-                 :validityDays, :customerNotes, :priceMode, :parentQuotationId, now())
+                 :validityDays, :customerNotes, :priceMode, :documentLanguage,
+                 :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -221,6 +224,11 @@ public class DealQuotationRepository {
                 .addValue("validityDays", p.validityDays())
                 .addValue("customerNotes", p.customerNotes())
                 .addValue("priceMode", p.priceMode())
+                // v3b: currency was a hardcoded 'THB' LITERAL in the VALUES list until V169 — it
+                // is a real parameter now, defaulted from the document language by
+                // DealQuotationService#resolveCurrency (TH->THB, EN->USD).
+                .addValue("documentLanguage", p.documentLanguage())
+                .addValue("currency", p.currency())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -325,7 +333,7 @@ public class DealQuotationRepository {
                             String deptCode, String unitCode,
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
                             Integer validityDays, String customerNotes, String priceMode,
-                            BigDecimal subtotal) {
+                            String documentLanguage, String currency, BigDecimal subtotal) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -336,6 +344,7 @@ public class DealQuotationRepository {
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
                    customer_notes = :customerNotes, price_mode = :priceMode,
+                   document_language = :documentLanguage, currency = :currency,
                    total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
@@ -358,6 +367,8 @@ public class DealQuotationRepository {
                 .addValue("validityDays", validityDays)
                 .addValue("customerNotes", customerNotes)
                 .addValue("priceMode", priceMode)
+                .addValue("documentLanguage", documentLanguage)
+                .addValue("currency", currency)
                 .addValue("subtotal", subtotal));
     }
 
@@ -597,16 +608,24 @@ public class DealQuotationRepository {
             SELECT q.quotation_id, q.number, q.ticket_id, q.doc_status, q.quotation_revision_no,
                    q.parent_quotation_id, q.created_by,
                    NULLIF(TRIM(CONCAT_WS(' ', cb.first_name_th, cb.last_name_th)), '') AS created_by_name,
+                   -- v3b: the ENGLISH document's signature names. NULLIF(TRIM(...)) so an employee
+                   -- with blank English names reads as SQL NULL here rather than an empty string,
+                   -- which is what lets DealQuotationRenderAdapter fall back to the Thai name with
+                   -- a plain null check instead of a blank test at every call site.
+                   NULLIF(TRIM(CONCAT_WS(' ', cb.first_name_en, cb.last_name_en)), '') AS created_by_name_en,
                    q.sales_rep_id,
                    NULLIF(TRIM(CONCAT_WS(' ', rep.first_name_th, rep.last_name_th)), '') AS sales_rep_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', rep.first_name_en, rep.last_name_en)), '') AS sales_rep_name_en,
                    rep.phone AS sales_rep_phone,
                    q.submitted_at, q.approved_by,
                    NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '') AS approved_by_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_en, ap.last_name_en)), '') AS approved_by_name_en,
                    q.approved_at, q.approval_note,
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
                    q.dept_code, q.unit_code, q.offer_date, q.deposit_percent, q.remainder_mode,
                    q.credit_days, q.validity_days, q.validity_date, q.customer_notes, q.price_mode,
+                   q.document_language,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
                        AS approver_has_signature
@@ -619,7 +638,14 @@ public class DealQuotationRepository {
 
     private DealQuotationDto mapQuotation(ResultSet rs, List<DealQuotationItemDto> items) throws SQLException {
         BigDecimal subtotal = rs.getBigDecimal("total_amount") != null ? rs.getBigDecimal("total_amount") : BigDecimal.ZERO;
-        BigDecimal vatTotal = WastageCalculator.vat(subtotal);
+        // v3b: NULL document_language (every pre-V169 row) reads as TH — see V169's own comment.
+        String documentLanguage = rs.getString("document_language") == null
+            ? WastageCalculator.DOCUMENT_LANGUAGE_TH : rs.getString("document_language");
+        // ⚠️ The VAT rate is a function of the LANGUAGE, not a constant: an EN/F-SM-008 document
+        // has no VAT row at all, so vatTotal is ZERO and grandTotal == subtotal there. Routed
+        // through WastageCalculator#vat(subtotal, language) so the DTO, the stored per-item vat
+        // column and the printed footer can never disagree about it.
+        BigDecimal vatTotal = WastageCalculator.vat(subtotal, documentLanguage);
         // total_amount is the persisted subtotal (server-recomputed on every write — see
         // DealQuotationService); vat/grand are always DERIVED from it here, never stored
         // separately, so they can never drift from the subtotal they belong to.
@@ -645,12 +671,15 @@ public class DealQuotationRepository {
             nullableLong(rs, "parent_quotation_id"),
             rs.getLong("created_by"),
             rs.getString("created_by_name"),
+            rs.getString("created_by_name_en"),
             rs.getLong("sales_rep_id"),
             rs.getString("sales_rep_name"),
+            rs.getString("sales_rep_name_en"),
             rs.getString("sales_rep_phone"),
             instant(rs, "submitted_at"),
             approvedById,
             rs.getString("approved_by_name"),
+            rs.getString("approved_by_name_en"),
             approvedAt,
             rs.getString("approval_note"),
             quotationDate,
@@ -675,6 +704,7 @@ public class DealQuotationRepository {
             // NULL price_mode (every pre-V168 row) reads as NET — see V168's own comment.
             rs.getString("price_mode") == null
                 ? WastageCalculator.PRICE_MODE_NET : rs.getString("price_mode"),
+            documentLanguage,
             subtotal,
             vatTotal,
             grandTotal,

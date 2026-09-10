@@ -27,12 +27,20 @@ public final class DealQuotationDtos {
         Long parentQuotationId,
         long createdById,
         String createdByName,
+        /** {@code hr.employee.first_name_en + last_name_en}, or null when the employee has none —
+         * quotation v3b (2026-09-11). The ENGLISH document's signature block prints these and
+         * FALLS BACK to the Thai name when blank, rather than printing an empty slot; the Thai
+         * document never looks at them. Served on the DTO rather than resolved at render time so
+         * the adapter stays the pure function it is documented to be. */
+        String createdByNameEn,
         long salesRepId,
         String salesRepName,
+        String salesRepNameEn,
         String salesRepPhone,
         Instant submittedAt,
         Long approvedById,
         String approvedByName,
+        String approvedByNameEn,
         Instant approvedAt,
         String approvalNote,
         // The date the sales rep CREATED the quotation (Bangkok), for EVERY status — owner
@@ -67,6 +75,13 @@ public final class DealQuotationDtos {
          * stored NULL (every pre-V168 row) normalises to NET on read. Per-QUOTATION, because in
          * all nine of the owner's documents every tile row shares one mode. */
         String priceMode,
+        /** "TH" | "EN" — quotation v3b (V169). Never null on the wire; a stored NULL (every
+         * pre-V169 row) normalises to TH on read, which is the Thai F-SM-002 every document has
+         * been until now. It is the ONE choice a rep makes: {@code currency} defaults from it
+         * (TH→THB, EN→USD) and so does the VAT treatment — {@code vatAmount} is ZERO and
+         * {@code grandTotal == subtotalAmount} on an EN document, because the English form carries
+         * no VAT row at all. */
+        String documentLanguage,
         BigDecimal subtotalAmount,
         BigDecimal vatAmount,
         BigDecimal grandTotal,
