@@ -168,9 +168,22 @@ describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10
       const fixed = classes.match(/minmax\(\d+(?:\.\d+)?rem,/g) ?? [];
       expect(fixed, `${what}: each numeric column needs its own fixed floor`).toHaveLength(5);
 
-      // Order matters: รายละเอียด is the FIRST track. A floored first column would stop the
+      // The WHOLE track list, pinned literally — counting floors is not enough. Shrinking all
+      // five to `minmax(1rem, …)`, or permuting them so เป็นเงิน gets ส่วนลด's 3.5rem, keeps the
+      // counts above intact and the suite green while silently clipping เป็นเงิน again by 27px
+      // and 49px respectively (both measured in a browser at 721px, with no overflow and no
+      // scrollbar to show for it). The magnitudes ARE the fix, so the magnitudes are the guard.
+      //
+      // The five values are the measured min-content of each column's widest formattable value at
+      // the app's 16px root, rounded up: 999,999 แผ่น 90px · ฿999,999.99 88px · 99.99% 54px ·
+      // ฿999,999.99 88px · ฿999,999,999.99 123px — except เป็นเงิน, sized for the FALLBACK font
+      // (130.5px) rather than Sarabun, see the source comment. Re-measure before changing any, and
+      // keep รายละเอียด's `minmax(0,3fr)` FIRST — a floored first column would stop the
       // description wrapping and put the squeeze straight back on the money.
-      expect(classes).toContain('grid-cols-[minmax(0,3fr)_minmax(');
+      expect(classes).toContain(
+        'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)'
+        + '_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)]',
+      );
     }
   });
 

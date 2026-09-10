@@ -30,7 +30,14 @@ import { dealQuotationStatusLabel, remainderModeLabel } from './quotationMeta.js
 //
 // The values are the measured min-content of each column's WIDEST formattable value at the app's
 // 16px root (999,999 แผ่น · ฿999,999.99 · 99.99% · ฿999,999.99 · ฿999,999,999.99 → 90/88/54/88/123px),
-// rounded up. They total 28.5rem; with gaps and panel padding that leaves ~100px for รายละเอียด in
+// rounded up — EXCEPT เป็นเงิน, which is sized for the FALLBACK font rather than Sarabun. Sarabun
+// arrives from Google Fonts with `display=swap`, so during the swap window, and permanently on the
+// on-prem deployment if that host cannot reach fonts.googleapis.com, `system-ui` renders instead
+// and every figure is ~14% wider: ฿99,999,999.99 measures 114px in Sarabun but 130.5px in the
+// fallback. A 7.75rem/124px floor covers Sarabun and silently clips the fallback from about ฿10M a
+// line upward, which a large project reaches. 8.25rem/132px covers both. It costs รายละเอียด 8px
+// at the narrowest in-band width, which is the right trade: the description wraps, the total does
+// not. They total 28.5rem; with gaps and panel padding that leaves ~100px for รายละเอียด in
 // the narrowest in-band container (655px at a 721px viewport), which is fine because รายละเอียด is
 // the one column that WRAPS — it is meant to absorb the squeeze, which is why it keeps `minmax(0, …)`.
 //
@@ -40,7 +47,7 @@ import { dealQuotationStatusLabel, remainderModeLabel } from './quotationMeta.js
 // 2026-09-10). styles.css loads in `layer(legacy)`, so the utility wins on layer order without
 // `!important`. Below 721px none of this applies — that band's own `min-width: 0 !important` and
 // `grid-template-columns: 1fr !important` turn these rows into labelled cards.
-const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(7.75rem,1fr)] tablet:min-w-0 reflow-cards';
+const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
 
 /**
  * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation --
