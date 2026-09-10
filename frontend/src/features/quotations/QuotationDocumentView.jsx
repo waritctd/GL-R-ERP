@@ -9,7 +9,24 @@ import { dealQuotationStatusLabel, remainderModeLabel } from './quotationMeta.js
 // print their own label via `::before`. Plain `mobile:grid-cols-1` (the previous rule here) only
 // stacked the six columns into six rows apiece with no labels — the head row's six orphan
 // headings and every body value unlabelled.
-const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)] reflow-cards';
+// The five numeric columns carry a `min-content` floor; only รายละเอียด may be squeezed.
+// `minmax(0,…)` on a money column lets the grid shrink it BELOW its own text, and `.data-row >
+// span` is `nowrap` + `ellipsis`, so the overflow is not visible as overflow — it is a silently
+// truncated baht figure. Measured on the demo's ฿1,524,369.36 line: เป็นเงิน was cut at every
+// table width under 850px, which is the whole reason the shared 900px floor below exists.
+// รายละเอียด keeps `minmax(0,…)` because it WRAPS, so it can absorb the squeeze without losing
+// anything.
+//
+// `tablet:min-w-0` then releases that shared floor for the 721–1040px band. `styles.css` gives
+// `.reflow-cards` `min-width: 900px` there for every table that uses it, and this six-column
+// document does not fit 900px inside a 655px container — it scrolled 245px sideways at 721px,
+// hiding เป็นเงิน entirely (owner review, 2026-09-10). The floor is safe to drop HERE, and only
+// here, because the columns above now defend their own width: the table shrinks to what its
+// numbers actually need and รายละเอียด wraps. styles.css loads in `layer(legacy)`, so this
+// utility wins on layer order without `!important`. Below 721px nothing changes — that band's
+// own `min-width: 0 !important` and `grid-template-columns: 1fr !important` turn these rows into
+// labelled cards, which is verified separately.
+const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(min-content,0.8fr)_minmax(min-content,0.9fr)_minmax(min-content,0.6fr)_minmax(min-content,0.9fr)_minmax(min-content,1fr)] tablet:min-w-0 reflow-cards';
 
 /**
  * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation --

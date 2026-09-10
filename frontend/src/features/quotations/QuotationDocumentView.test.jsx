@@ -124,6 +124,54 @@ function docQuotation(overrides = {}) {
   };
 }
 
+describe('QuotationDocumentView tablet-band column floors (owner review V5, 2026-09-10)', () => {
+  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe the bug
+  // this pins: at 721px the six-column document was forced to `.reflow-cards`'s shared 900px floor
+  // inside a 655px container and scrolled 245px sideways, hiding เป็นเงิน entirely. That was
+  // measured in a real browser and can only be RE-measured in one. This is a TEXT guard on the
+  // two class-string decisions that fix it, so a later edit cannot quietly drop them:
+  //
+  //   1. the five NUMERIC columns carry a `min-content` floor, so the grid can never shrink a
+  //      baht figure below its own text (รายละเอียด keeps `minmax(0,…)` — it wraps, so it is the
+  //      column that should absorb the squeeze);
+  //   2. `tablet:min-w-0` releases the shared 900px floor for 721–1040px, which is only safe
+  //      BECAUSE of (1).
+  //
+  // Drop either and the browser regresses while this file stays green unless it checks the string.
+  function itemGridClasses(container) {
+    const head = container.querySelector('.table-head');
+    expect(head, 'no .table-head to read the grid classes from').toBeTruthy();
+    return head.className;
+  }
+
+  it('floors every money column at min-content and lets only รายละเอียด be squeezed', () => {
+    const { container } = render(<QuotationDocumentView quotation={quotation} />);
+    const classes = itemGridClasses(container);
+
+    // One `minmax(0,…)` — รายละเอียด, the wrapping column — and five `minmax(min-content,…)`.
+    const shrinkable = classes.match(/minmax\(0,/g) ?? [];
+    const floored = classes.match(/minmax\(min-content,/g) ?? [];
+    expect(shrinkable, 'only รายละเอียด may shrink below its content').toHaveLength(1);
+    expect(floored, 'the five numeric columns must each carry a min-content floor').toHaveLength(5);
+
+    // Order matters: รายละเอียด is the FIRST track. A floored first column would stop the
+    // description wrapping and put the squeeze back on the money.
+    expect(classes).toContain('grid-cols-[minmax(0,3fr)_minmax(min-content,');
+  });
+
+  it('releases the shared 900px .reflow-cards floor in the 721-1040px band', () => {
+    const { container } = render(<QuotationDocumentView quotation={quotation} />);
+    const classes = itemGridClasses(container);
+
+    expect(classes).toContain('tablet:min-w-0');
+    // Still opted into the card reflow: below 721px the rows must become labelled cards, which
+    // the mobile-card-reflow suite above is what actually proves.
+    expect(classes).toContain('reflow-cards');
+    // The head row and the data rows must share the grid, or they stop lining up.
+    expect(container.querySelector('.data-row').className).toContain('tablet:min-w-0');
+  });
+});
+
 describe('QuotationDocumentView ตำแหน่งติดตั้ง grouping (F1)', () => {
   it('prints the heading once per RUN of equal labels, not once per row', () => {
     const { container } = render(<QuotationDocumentView quotation={docQuotation({
