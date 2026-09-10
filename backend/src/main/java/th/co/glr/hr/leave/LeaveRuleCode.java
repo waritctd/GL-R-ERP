@@ -28,51 +28,90 @@ package th.co.glr.hr.leave;
  * non-NULL value today. Kept here anyway, per this phase's brief: the gate itself is not being
  * removed or pruned, only its rejection message is being restructured -- deleting the code because
  * it is dormant would be a scope change this phase does not make.
+ *
+ * <p><b>{@link #enforcement()} (V164, owner-approved change, 2026-09-09):</b> 10 of these 17 codes no
+ * longer BLOCK the request at all -- see {@link LeaveRuleEnforcement}'s class Javadoc for the
+ * BLOCK/WARN_UNPAID_ALL/WARN_UNPAID_EXCESS distinction and V164's migration comment for the owner's
+ * stated reasoning per code. The mapping below is settled and owner-approved; it is not something a
+ * future reader should "simplify" back to all-BLOCK or infer from declaration order -- the
+ * enforcement column is independent of, and orthogonal to, the ordering invariant described above.
  */
 public enum LeaveRuleCode {
-    /** §5.6 ORDINATION: usable only once during the employee's whole employment. */
-    ONCE_PER_EMPLOYMENT("5.6"),
-    /** §5.3.4: VACATION/PERSONAL are refused once a resignation has been submitted. */
-    RESIGNATION_GATE("5.3.4"),
-    /** §5.2/§5.3: a prorated-first-year type (VACATION, PERSONAL) cannot be quoted without hire_date. */
-    HIRE_DATE_MISSING_PRORATED("5.2/3"),
-    /** §5.3: a min-service-months type cannot verify eligibility without hire_date. */
-    HIRE_DATE_MISSING_MIN_SERVICE("5.3"),
-    /** §5.3: fewer than the type's required completed months of service. */
-    MIN_SERVICE_MONTHS("5.3"),
-    /** §5.2 PERSONAL probation gate: neither confirm_date nor hire_date on file. */
-    PROBATION_HIRE_DATE_MISSING("5.2"),
-    /** §5.2 PERSONAL probation gate: probation not yet passed as of the request's start date. */
-    PROBATION_NOT_PASSED("5.2"),
-    /** §5.2 first-year total-days cap (under-1-year employees, effective cap = min(prorated quota, firstYearMaxDays)). */
-    FIRST_YEAR_MAX_DAYS("5.2"),
-    /** §5.2 wedding-leave cap: own marriage or a child's, at most 3 days per request. */
-    WEDDING_MAX_DAYS("5.2"),
-    /** §5.2 (pre-2567 wording, superseded by FIRST_YEAR_MAX_DAYS for PERSONAL): a type's own max_consecutive_days. */
-    MAX_CONSECUTIVE_DAYS("5.2"),
-    /** §5.3.3: VACATION/PERSONAL may not be taken immediately before or after one another. */
-    CONTIGUOUS_LEAVE_PAIR("5.3.3"),
-    /** §5.1 SICK: a certificate was filed, but after its working-day filing deadline. */
-    SICK_CERTIFICATE_WINDOW("5.1"),
-    /** §5.1 SICK: no certificate attached, and the type allows no no-certificate tolerance. */
-    SICK_CERTIFICATE_REQUIRED("5.1"),
-    /** §5.1 SICK: no certificate attached, and this month's no-certificate occasion tolerance is used up. */
-    SICK_NO_CERT_TOLERANCE_EXHAUSTED("5.1"),
-    /** §5.2 PERSONAL emergency-filing exception: this month's emergency occasion allowance is used up. */
-    EMERGENCY_TOLERANCE_EXHAUSTED("5.2"),
-    /** §5: the type's own advance-notice-days requirement was not met, and no emergency exception applies. */
-    ADVANCE_NOTICE("5"),
-    /** §5.3.2: approving this request would leave nobody else in the department at work on some day. */
-    DEPARTMENT_COVERAGE("5.3.2");
+    /** §5.6 ORDINATION: usable only once during the employee's whole employment. BLOCK: backed by the
+     *  DB unique index ux_leave_once_per_employment (V116), deliberately not dropped by V164. */
+    ONCE_PER_EMPLOYMENT("5.6", LeaveRuleEnforcement.BLOCK),
+    /** §5.3.4: VACATION/PERSONAL are refused once a resignation has been submitted. BLOCK: protects
+     *  handover, which docking pay does not achieve (owner ruling, V164). */
+    RESIGNATION_GATE("5.3.4", LeaveRuleEnforcement.BLOCK),
+    /** §5.2/§5.3: a prorated-first-year type (VACATION, PERSONAL) cannot be quoted without hire_date.
+     *  BLOCK: missing data in HR's OWN records, not an employee violation (owner ruling, V164). */
+    HIRE_DATE_MISSING_PRORATED("5.2/3", LeaveRuleEnforcement.BLOCK),
+    /** §5.3: a min-service-months type cannot verify eligibility without hire_date. BLOCK: same
+     *  missing-HR-data reasoning as HIRE_DATE_MISSING_PRORATED (owner ruling, V164). */
+    HIRE_DATE_MISSING_MIN_SERVICE("5.3", LeaveRuleEnforcement.BLOCK),
+    /** §5.3: fewer than the type's required completed months of service. WARN_UNPAID_ALL (V164, owner
+     *  ruling): the request now still submits, unpaid in full if approved. */
+    MIN_SERVICE_MONTHS("5.3", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.2 PERSONAL probation gate: neither confirm_date nor hire_date on file. BLOCK: missing data
+     *  in HR's OWN records, not an employee violation (owner ruling, V164). */
+    PROBATION_HIRE_DATE_MISSING("5.2", LeaveRuleEnforcement.BLOCK),
+    /** §5.2 PERSONAL probation gate: probation not yet passed as of the request's start date.
+     *  WARN_UNPAID_ALL (V164, owner ruling): the request now still submits, unpaid in full if
+     *  approved. */
+    PROBATION_NOT_PASSED("5.2", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.2 first-year total-days cap (under-1-year employees, effective cap = min(prorated quota,
+     *  firstYearMaxDays)). WARN_UNPAID_EXCESS (V164, owner ruling): only the days beyond the
+     *  effective cap are unpaid. */
+    FIRST_YEAR_MAX_DAYS("5.2", LeaveRuleEnforcement.WARN_UNPAID_EXCESS),
+    /** §5.2 wedding-leave cap: own marriage or a child's, at most 3 days per request.
+     *  WARN_UNPAID_EXCESS (V164, owner ruling): only the days beyond the 3-day cap are unpaid. */
+    WEDDING_MAX_DAYS("5.2", LeaveRuleEnforcement.WARN_UNPAID_EXCESS),
+    /** §5.2 (pre-2567 wording, superseded by FIRST_YEAR_MAX_DAYS for PERSONAL): a type's own
+     *  max_consecutive_days. WARN_UNPAID_EXCESS (V164, owner ruling) -- see this enum's class Javadoc
+     *  and V164's migration comment: DORMANT, implemented for completeness only. */
+    MAX_CONSECUTIVE_DAYS("5.2", LeaveRuleEnforcement.WARN_UNPAID_EXCESS),
+    /** §5.3.3: VACATION/PERSONAL may not be taken immediately before or after one another. BLOCK:
+     *  stops leave-stringing, which docking pay does not achieve (owner ruling, V164). */
+    CONTIGUOUS_LEAVE_PAIR("5.3.3", LeaveRuleEnforcement.BLOCK),
+    /** §5.1 SICK: a certificate was filed, but after its working-day filing deadline.
+     *  WARN_UNPAID_ALL (V164, owner ruling): the request now still submits, unpaid in full if
+     *  approved. */
+    SICK_CERTIFICATE_WINDOW("5.1", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.1 SICK: no certificate attached, and the type allows no no-certificate tolerance.
+     *  WARN_UNPAID_ALL (V164, owner ruling). */
+    SICK_CERTIFICATE_REQUIRED("5.1", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.1 SICK: no certificate attached, and this month's no-certificate occasion tolerance is used
+     *  up. WARN_UNPAID_ALL (V164, owner ruling). */
+    SICK_NO_CERT_TOLERANCE_EXHAUSTED("5.1", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.2 PERSONAL emergency-filing exception: this month's emergency occasion allowance is used
+     *  up. WARN_UNPAID_ALL (V164, owner ruling). */
+    EMERGENCY_TOLERANCE_EXHAUSTED("5.2", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5: the type's own advance-notice-days requirement was not met, and no emergency exception
+     *  applies. WARN_UNPAID_ALL (V164, owner ruling). */
+    ADVANCE_NOTICE("5", LeaveRuleEnforcement.WARN_UNPAID_ALL),
+    /** §5.3.2: approving this request would leave nobody else in the department at work on some day.
+     *  BLOCK: an operational rule protecting the department, not a pay rule (owner ruling, V164). */
+    DEPARTMENT_COVERAGE("5.3.2", LeaveRuleEnforcement.BLOCK);
 
     private final String sectionRef;
+    private final LeaveRuleEnforcement enforcement;
 
-    LeaveRuleCode(String sectionRef) {
+    LeaveRuleCode(String sectionRef, LeaveRuleEnforcement enforcement) {
         this.sectionRef = sectionRef;
+        this.enforcement = enforcement;
     }
 
     /** The governing §5 announcement section, e.g. {@code "5.3.3"} -- see this enum's class Javadoc. */
     public String sectionRef() {
         return sectionRef;
+    }
+
+    /**
+     * BLOCK (auto-rejects, unchanged pre-V164 behaviour) or WARN_UNPAID_ALL/WARN_UNPAID_EXCESS
+     * (V164: submits normally, carrying a warning) -- see {@link LeaveRuleEnforcement}'s class
+     * Javadoc for what each means and {@link LeaveService#autoRejectNote} for how it is dispatched.
+     */
+    public LeaveRuleEnforcement enforcement() {
+        return enforcement;
     }
 }

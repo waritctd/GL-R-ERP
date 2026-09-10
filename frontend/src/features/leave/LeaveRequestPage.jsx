@@ -21,7 +21,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { addDaysIso, formatThaiDate } from '../../utils/format.js';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
-import { LeaveRulePanel } from './LeaveRulePanel.jsx';
+import { LeaveRulePanel, LeaveRuleWarningList } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
 import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
 
@@ -70,6 +70,16 @@ function typeGatingConditionText(leaveType) {
 // Maps a blocking LeaveRuleOutcome to the step-2 field it should attach beneath -- "per-field
 // placement, not one banner". Only one outcome is ever blocking at a time (LeaveService#preview
 // returns the FIRST gate hit, same as #submit), so this only ever picks one target per response.
+//
+// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the three SICK_* codes and
+// EMERGENCY_TOLERANCE_EXHAUSTED this function special-cases are no longer LeaveRuleEnforcement.BLOCK
+// -- see LeaveRuleCode.java's enforcement() column -- so `preview.blocking` can never actually carry
+// one of them any more, and this function's only real caller (`step2BlockingTarget` below) never
+// reaches those two branches in practice today. Left in place rather than pruned: this function's
+// contract is "map ANY code to its field", the mapping itself is still correct if the backend's
+// enforcement column ever changes again, and step2Warnings/step3Warnings (below) render every
+// warning as one list rather than per-field, so there is no live per-field WARN routing to build
+// here instead.
 function step2FieldTarget(code) {
   if (['SICK_CERTIFICATE_WINDOW', 'SICK_CERTIFICATE_REQUIRED', 'SICK_NO_CERT_TOLERANCE_EXHAUSTED'].includes(code)) {
     return 'attachment';
@@ -471,6 +481,14 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step2Preview = step2PreviewQuery.data ?? null;
   const step2Blocking = step2Preview?.blocking ?? null;
   const step2BlockingTarget = step2Blocking ? step2FieldTarget(step2Blocking.code) : null;
+  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): non-blocking -- the request still submits
+  // -- so these never gate `canAdvanceStep1`/advanceFromStep2 the way step2Blocking does. Read only
+  // when nothing is blocking (LeavePreviewDto's own contract: a non-null `blocking` always pairs
+  // with an EMPTY ruleWarnings, so this guard is defensive, not load-bearing) and never fabricated
+  // for a dateless call -- `step2Preview.ruleWarnings` is `[]` there by the DTO's own design (see
+  // LeavePreviewDto's Javadoc), which already reads correctly as "nothing to show" with no extra
+  // branching here.
+  const step2Warnings = !step2Blocking ? (step2Preview?.ruleWarnings ?? []) : [];
   const step2Fetching = step2PreviewQuery.isFetching;
   // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
   // previewErrorMessage's own comment.
@@ -553,6 +571,13 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
   // read as a clean pass because `step3Blocking` happens to be null on an errored query.
   const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
+  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the SAME "never both non-null blocking and
+  // non-empty ruleWarnings" contract step2Warnings reads on -- see that constant's own comment.
+  // THIS is the figure that decides the submit button's own label below (owner ruling: "ส่งคำขอ
+  // (ไม่รับค่าจ้าง)" once any warning is present) -- step 3 is the terminal FULL preview immediately
+  // before the real submit, so it is the authoritative source for that decision, not step 2's own
+  // QUICK snapshot.
+  const step3Warnings = !step3Blocking ? (step3Preview?.ruleWarnings ?? []) : [];
 
   const balance = useMemo(() => {
     const type = leaveTypes.find((t) => t.code === leaveTypeCode);
@@ -977,11 +1002,30 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 ) : null}
               </div>
 
-              {!step2Blocking && step2Preview ? (
+              {/* Also suppressed when a §5 WARN gate fired (V164 follow-up), not only when a
+                  BLOCK did. This green "ผ่านเงื่อนไขแล้ว" used to render directly ABOVE the amber
+                  "…วันลา N วันจะไม่ได้รับค่าจ้าง" panel below, which reads as a contradiction: the
+                  request does pass (nothing stops submission), but telling someone their leave
+                  CLEARED the checks immediately before telling them it will be unpaid is the wrong
+                  thing for them to take away. The warning panel is the whole message in that case;
+                  a "passed" line only belongs here when there is genuinely nothing to flag. */}
+              {!step2Blocking && step2Warnings.length === 0 && step2Preview ? (
                 <div className={formGridSpan2}>
                   <p className="m-0 text-sm font-semibold text-success-dark">
                     ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว ({formatDays(step2Preview.totalDays)})
                   </p>
+                </div>
+              ) : null}
+
+              {/* §5 WARN_UNPAID_* gates (V164 follow-up): the request would still submit, but part
+                  (or all) of it becomes unpaid if approved -- shown as early as step 2's own
+                  debounced check, not held back until step 3's terminal review, so the employee
+                  sees the consequence while they can still change dates/attachments to avoid it.
+                  Same aria-live="polite" region as the rest of step 2 -- see that div's own
+                  comment. */}
+              {step2Warnings.length > 0 ? (
+                <div className={formGridSpan2}>
+                  <LeaveRuleWarningList warnings={step2Warnings} />
                 </div>
               ) : null}
             </div>
@@ -1016,6 +1060,19 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
               {step3Error ? (
                 <div role="alert">
                   <PreviewErrorNotice message={step3Error} />
+                </div>
+              ) : null}
+
+              {/* §5 WARN_UNPAID_* gates (V164 follow-up): non-blocking -- submit stays enabled --
+                  but this is the LAST thing shown before the employee commits, so it sits with the
+                  same prominence as a blocking verdict would (right below it, ahead of the plain
+                  totalDays/paidDays/unpaidDays summary box further down) rather than folded into
+                  that box. aria-live="polite" rather than role="alert": nothing here BLOCKS the
+                  action a screen reader user is about to take, so it should not interrupt like the
+                  step3Blocking/step3Error alerts above. */}
+              {step3Warnings.length > 0 ? (
+                <div aria-live="polite">
+                  <LeaveRuleWarningList warnings={step3Warnings} />
                 </div>
               ) : null}
 
@@ -1132,7 +1189,12 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 disabled={createMutation.isPending || Boolean(step3Blocking) || Boolean(step3Error) || step3PreviewQuery.isFetching}
               >
                 <Icon name="plus" />
-                ส่งคำขอ
+                {/* Owner-approved copy (V164 follow-up): a warning never disables submit -- the
+                    BLOCK path above is unchanged -- but nobody should submit without seeing the
+                    pay consequence spelled out on the button itself, not only in the panel above
+                    it. Keyed off step3Warnings (the terminal FULL preview), never step2Warnings'
+                    own QUICK snapshot. */}
+                {step3Warnings.length > 0 ? 'ส่งคำขอ (ไม่รับค่าจ้าง)' : 'ส่งคำขอ'}
               </Button>
             </div>
           </Panel>

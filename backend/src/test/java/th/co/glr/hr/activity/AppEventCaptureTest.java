@@ -8,6 +8,9 @@ import ch.qos.logback.classic.spi.LoggingEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -18,15 +21,26 @@ import org.slf4j.LoggerFactory;
  * <p>Two of these are safety properties rather than features. The level filter and the single-frame
  * rule are what keep {@code hr.app_event} from becoming a full log mirror on a web page; V159 says
  * so in the schema and this says so in a test that fails if someone widens either.
+ *
+ * <p><strong>Uses its own {@link AppEventBuffer}, never {@link AppEventBuffer#shared()}.</strong>
+ * The shared instance is JVM-wide, and {@code reuseForks=true} means this class can share a surefire
+ * fork with any {@code @SpringBootTest} that boots an {@link AppEventWriter} — whose {@code
+ * @PostConstruct} attaches a {@link DatabaseLogAppender} to the root logger and starts a daemon
+ * thread that drains the shared buffer for the rest of the fork's life. Against the shared buffer
+ * that thread steals events between {@code doAppend} and this class's own drain, and keeps the queue
+ * below capacity so nothing is ever counted as dropped — see
+ * {@link #assertionsSurviveACompetingDrainerOfTheSharedBuffer} below, which reproduces exactly that.
+ * A private instance makes every assertion here independent of what else is running in the JVM.
  */
 class AppEventCaptureTest {
 
+    private AppEventBuffer buffer;
     private DatabaseLogAppender appender;
 
     @BeforeEach
     void setUp() {
-        AppEventBuffer.resetForTest();
-        appender = new DatabaseLogAppender();
+        buffer = new AppEventBuffer();
+        appender = new DatabaseLogAppender(buffer);
         appender.setContext((LoggerContext) LoggerFactory.getILoggerFactory());
         appender.start();
     }
@@ -102,7 +116,50 @@ class AppEventCaptureTest {
 
         List<AppEvent> captured = drain();
         assertThat(captured).hasSizeLessThanOrEqualTo(5_000);
-        assertThat(AppEventBuffer.droppedCount()).isPositive();
+        assertThat(buffer.droppedCount()).isPositive();
+    }
+
+    @Test
+    void assertionsSurviveACompetingDrainerOfTheSharedBuffer() throws InterruptedException {
+        // Regression test for the flake this class used to have: a background thread draining
+        // AppEventBuffer.shared() — exactly what AppEventWriter#drainForever does once any
+        // @SpringBootTest in this surefire fork boots one — must not be able to touch what this
+        // test observes, because setUp() gave this test its own buffer instead of the shared one.
+        AtomicBoolean running = new AtomicBoolean(true);
+        CountDownLatch drainerStarted = new CountDownLatch(1);
+        AppEventBuffer sharedBuffer = AppEventBuffer.shared();
+        Thread foreignDrainer = new Thread(() -> {
+            drainerStarted.countDown();
+            while (running.get()) {
+                try {
+                    AppEvent stolen = sharedBuffer.poll(20);
+                    if (stolen != null) {
+                        List<AppEvent> discarded = new ArrayList<>();
+                        discarded.add(stolen);
+                        sharedBuffer.drainTo(discarded, 199);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }, "app-event-writer-simulator");
+        foreignDrainer.setDaemon(true);
+        foreignDrainer.start();
+        drainerStarted.await();
+
+        try {
+            appender.doAppend(event(Level.WARN, "something looked wrong", null));
+            appender.doAppend(event(Level.ERROR, "something broke", null));
+            Thread.sleep(200); // give the foreign drainer every chance to steal from THIS buffer
+
+            List<AppEvent> captured = drain();
+            assertThat(captured).extracting(AppEvent::level).containsExactly("WARN", "ERROR");
+        } finally {
+            running.set(false);
+            foreignDrainer.interrupt();
+            foreignDrainer.join(TimeUnit.SECONDS.toMillis(2));
+        }
     }
 
     @Test
@@ -133,7 +190,7 @@ class AppEventCaptureTest {
 
     private List<AppEvent> drain() {
         List<AppEvent> sink = new ArrayList<>();
-        AppEventBuffer.drainTo(sink, 10_000);
+        buffer.drainTo(sink, 10_000);
         return sink;
     }
 }

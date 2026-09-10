@@ -126,10 +126,15 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         // resigned employee is genuinely APPROVED under V124, which would also prove "unaffected" but
         // more weakly -- an approval has no systemNote to inspect at all), this keeps proving the
         // STRONGER, harder-to-fake claim the original test intended: even when a certificate-less SICK
-        // request DOES get auto-rejected, for an unrelated SICK-specific reason, the rejection note is
+        // request DOES fire the SICK-specific tolerance gate, for an unrelated reason, that gate is
         // never contaminated with resignation wording. Seeds 3 prior certificate-less SICK occasions
-        // this month so the 4th is refused on the tolerance, not the (now non-existent for a first
+        // this month so the 4th fires the tolerance gate, not the (now non-existent for a first
         // occasion) blanket certificate rule.
+        //
+        // V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED is now
+        // WARN_UNPAID_ALL, not BLOCK -- so the 4th request is SUBMITTED, not AUTO_REJECTED, and the
+        // warning (not systemNoteCode, which stays NULL for a non-rejected request) is where this
+        // test now looks for the "never contaminated with RESIGNATION_GATE" proof.
         long resignedEmployee = insertEmployee("RES-SICK-001", LocalDate.parse("2015-01-01"), null);
         insertResignation(resignedEmployee);
         seedActiveRequest(resignedEmployee, "SICK", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED);
@@ -139,13 +144,17 @@ class LeaveRelationalRulesIntegrationTest extends AbstractPostgresIntegrationTes
         LeaveRequestDto result = leaveService.submit(
             submitRequest(resignedEmployee, "SICK", "2026-07-13", "2026-07-13"), employee(resignedEmployee));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        // A resigned-but-SICK request is never itself rejected -- systemNoteCode (the AUTO_REJECTED
+        // reason) stays NULL, never RESIGNATION_GATE.
+        assertThat(result.systemNoteCode()).isNull();
         // The stronger, code-based version of the original "not contaminated with resignation
-        // wording" claim: not merely that the (now-Thai) system_note text happens not to contain the
-        // word "resignation", but that the STRUCTURED reason is unambiguously the SICK tolerance gate,
-        // never RESIGNATION_GATE.
-        assertThat(result.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-        assertThat(result.systemNoteCode()).isNotEqualTo("RESIGNATION_GATE");
+        // wording" claim: not merely that the (now-Thai) warning text happens not to contain the
+        // word "resignation", but that the STRUCTURED reason is unambiguously the SICK tolerance
+        // gate, never RESIGNATION_GATE.
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED")
+            .doesNotContain("RESIGNATION_GATE");
     }
 
     // ─────────────────────────────────────────────────────────────────────

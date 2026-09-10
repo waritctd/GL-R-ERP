@@ -13,6 +13,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import { formatDateRange, formatDays, todayIso } from './leaveFormatting.js';
+import { LeaveRuleWarningList } from './LeaveRulePanel.jsx';
 import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   PendingApproverNote, renderLeaveRequestExpanded,
@@ -306,6 +307,12 @@ export function ReviewQueueTab({ user, showToast }) {
     const cancellable = canManagerCancelRequest(request, user, canReviewAll);
     const expanded = expandedId === request.id;
     const rowSaving = pendingRowId === request.id;
+    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status
+    // column (owner ruling, V164 follow-up) -- see that column's own comment for why this reads
+    // `unpaidDays` (the request's total unpaid figure, of which a §5 WARN gate's own
+    // unpaidByRuleDays is always a SUBSET -- LeaveRequestDto's Javadoc) rather than
+    // unpaidByRuleDays alone: either source of unpaid days deserves the same visibility here.
+    const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
@@ -317,8 +324,17 @@ export function ReviewQueueTab({ user, showToast }) {
           <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
-          <span className="flex shrink-0 items-center gap-1.5">
-            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          <span className="flex shrink-0 items-start gap-1.5">
+            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
+                sharing one line in a narrow column is what forces truncation; stacking removes the
+                problem at every width with no breakpoint variant needed. See
+                leaveRequestTable.jsx's matching desktop status column for the same treatment. */}
+            <span className="flex flex-col items-start gap-1">
+              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              {hasUnpaidDays ? (
+                <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
+              ) : null}
+            </span>
             <Button
               variant="icon"
               aria-expanded={expanded}
@@ -381,6 +397,16 @@ export function ReviewQueueTab({ user, showToast }) {
   const confirmRequest = allRequests.find((item) => item.id === confirmState?.id)
     ?? actionableRequests.find((item) => item.id === confirmState?.id);
 
+  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): owner-approved copy -- the CONFIRM button
+  // is the actual commit action (the row's own icon button only OPENS this dialog), so the pay
+  // consequence belongs on the button the approver actually clicks, not only in the warning panel
+  // above. `unpaidByRuleDays` is a SUBSET of the request's own unpaidDays (see LeaveRequestDto's
+  // Javadoc) -- reading it, not totalDays, keeps this label accurate even alongside an ordinary
+  // quota-exceedance unpaid amount the request may ALSO carry.
+  const approveConfirmLabel = Number(confirmRequest?.unpaidByRuleDays || 0) > 0
+    ? `อนุมัติ (ไม่จ่ายค่าจ้าง ${formatDays(confirmRequest.unpaidByRuleDays)})`
+    : 'อนุมัติ';
+
   return (
     <>
       <CompactStatRow
@@ -440,6 +466,17 @@ export function ReviewQueueTab({ user, showToast }) {
                     className="mb-3"
                   />
                 ) : null}
+                {/* §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see this
+                    BEFORE approving, not only after (owner ruling #2 -- see LeaveRequestDto's own
+                    ruleWarnings Javadoc). Placed first, above the request's other detail fields, so
+                    expanding a row to review it surfaces the pay consequence immediately -- the
+                    approve/reject icon buttons live in this row's own actions column (always
+                    visible, not gated on expand), and this is the context an approver should read
+                    before reaching for either one. Owner ruling: show ALL warnings, not just the
+                    first -- see LeaveRuleWarningList's own comment. */}
+                {request.ruleWarnings?.length > 0 ? (
+                  <LeaveRuleWarningList warnings={request.ruleWarnings} className="mb-3" />
+                ) : null}
                 {renderLeaveRequestExpanded(request)}
                 {request.attachmentId ? (
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2">
@@ -483,6 +520,15 @@ export function ReviewQueueTab({ user, showToast }) {
                 <span>จำนวนวันลา</span>
                 <span className="font-mono">{formatDays(confirmRequest.totalDays)}</span>
               </div>
+              {/* §5 WARN_UNPAID_* gates (V164 follow-up): same figure the confirm button's own
+                  label below reads -- repeated here, in the line-item breakdown, so the number on
+                  the button is never the first place it appears. */}
+              {Number(confirmRequest.unpaidByRuleDays || 0) > 0 ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--color-warning-dark)' }}>
+                  <span>ไม่จ่ายค่าจ้าง (เงื่อนไข §5)</span>
+                  <span className="font-mono">{formatDays(confirmRequest.unpaidByRuleDays)}</span>
+                </div>
+              ) : null}
               {/* Next-step copy quoted from api.leave.approve (src/api/mockApi.js): it only sets
                   status -> APPROVED plus the reviewer stamp -- it does not recompute
                   quotaRemainingAfter, which was already fixed at create() time. */}
@@ -490,7 +536,7 @@ export function ReviewQueueTab({ user, showToast }) {
             </div>
           );
         })()}
-        confirmLabel="อนุมัติ"
+        confirmLabel={approveConfirmLabel}
         busy={saving}
         onConfirm={confirmApprove}
         onCancel={() => setConfirmState(null)}
