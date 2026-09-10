@@ -5661,6 +5661,31 @@ export const api = {
       return delay({ balances: db.leaveTypes.map((type) => leaveBalance(employeeId, type, year)) });
     },
 
+    // Manager team-quota summary (2026-09) -- mirrors LeaveService#teamBalances, which reuses
+    // LeaveRepository.findEmployeeOptions() for scope rather than a new predicate. SAME scope
+    // filter as employees() above (self + stored-FK reports_to only, or every active employee for
+    // hr/ceo), with the actor's own row dropped afterwards -- a "team" summary is about direct
+    // reports, not the manager themselves. Do not restate the scope filter a third time here; keep
+    // it byte-for-byte with employees()'s own filter so the two can never drift apart.
+    async teamBalances(params = {}) {
+      const user = requireSession();
+      const includeAll = ['hr', 'ceo'].includes(user.role);
+      const year = Number(params.year || new Date().getFullYear());
+      return delay({
+        team: db.employees
+          .filter((employee) => employee.active)
+          .filter((employee) => includeAll || employee.id === user.employeeId || managerIdForEmployee(employee) === user.employeeId)
+          .filter((employee) => employee.id !== user.employeeId)
+          .map((employee) => ({
+            employeeId: employee.id,
+            employeeCode: employee.code,
+            employeeName: employee.nameTh,
+            departmentName: employee.departmentTh,
+            balances: db.leaveTypes.map((type) => leaveBalance(employee.id, type, year)),
+          })),
+      });
+    },
+
     // Sub-day leave + paper-form contact block (2026-07-25): same access predicate as balances().
     async contactDefaults(params = {}) {
       const user = requireSession();

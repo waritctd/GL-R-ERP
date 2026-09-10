@@ -234,6 +234,45 @@ public class LeaveService {
     }
 
     /**
+     * GET /api/leave/balances/team (manager team-quota summary, 2026-09): {@link #balanceFor} for
+     * every leave type, for every employee the actor is allowed to see as "their team" -- direct
+     * reports only (owner ruling: NOT the whole division), or every active employee for HR/CEO,
+     * exactly parity with {@link #employeeOptions}'s own reach.
+     *
+     * <p>Deliberately reuses {@link LeaveRepository#findEmployeeOptions} for the scope decision
+     * rather than writing a second SQL predicate for "who is my team" -- that query's {@code WHERE
+     * e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId} is the
+     * SAME {@code reports_to_employee_id} comparison {@link #isDirectManager} makes for the
+     * single-employee {@link #balances} endpoint, just expressed as a batch WHERE clause instead of
+     * a per-row Java branch -- see this method's own doc note on why that distinction matters. The
+     * {@code !option.self()} filter below is NOT a security decision (every row {@code
+     * findEmployeeOptions} returns is already access-permitted for this actor); it only drops the
+     * actor's own row so "my team" does not include the actor reporting on themselves. A manager
+     * with no active direct reports gets an empty list, not an error -- {@code findEmployeeOptions}
+     * still returns their own (self-only) row, which the filter then removes.
+     *
+     * <p>This repository query never restates the scope in a NEW predicate the way {@code
+     * managesEmployee} was once independently restated in three separate SQL statements that never
+     * called it (see that defect's writeup) -- {@link #employeeOptions} and this method call the
+     * exact same {@link LeaveRepository} method.
+     */
+    public List<LeaveTeamMemberBalanceDto> teamBalances(UserPrincipal user, Integer requestedYear) {
+        long actorEmployeeId = requireEmployeeId(user);
+        int year = requestedYear == null ? LocalDate.now(clock).getYear() : requestedYear;
+        List<LeaveTypeDto> types = leaveRepository.findLeaveTypes();
+        return leaveRepository.findEmployeeOptions(actorEmployeeId, canViewAll(user)).stream()
+            .filter(option -> !option.self())
+            .map(option -> new LeaveTeamMemberBalanceDto(
+                option.employeeId(),
+                option.employeeCode(),
+                option.employeeName(),
+                option.departmentName(),
+                types.stream().map(type -> balanceFor(option.employeeId(), year, type)).toList()
+            ))
+            .toList();
+    }
+
+    /**
      * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
      * position/department/division -- same access predicate as {@link #balances}: own record, HR/CEO,
      * or the employee's direct manager.

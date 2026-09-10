@@ -18,6 +18,10 @@ public final class LeaveResponses {
     public record LeaveBalancesResponse(List<LeaveBalanceDto> balances) {
     }
 
+    /** GET /api/leave/balances/team -- see {@link LeaveService#teamBalances}. */
+    public record LeaveTeamBalancesResponse(List<LeaveTeamMemberBalanceDto> team) {
+    }
+
     public record LeaveTypesResponse(List<LeaveTypeDto> leaveTypes) {
     }
 
