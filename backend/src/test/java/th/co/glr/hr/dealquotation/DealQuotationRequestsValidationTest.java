@@ -183,7 +183,7 @@ class DealQuotationRequestsValidationTest {
         UpsertBuilder validityDays(Integer v) { validityDays = v; return this; }
 
         UpsertDealQuotationRequest build() {
-            return new UpsertDealQuotationRequest(deptCode, unitCode, offerDate, depositPercent, remainderMode,
+            return new UpsertDealQuotationRequest(null, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, customerNotes, items);
         }
     }

@@ -34,10 +34,17 @@ public final class DealQuotationRenderAdapter {
 
     public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
                                                       String approverSignatureMime) {
-        // B4 date = approved date; drafts (not yet approved) print today — docs/sales/quotation-v2-plan.md
-        // "Printed lines" header section.
-        LocalDate issueDate = quotation.approvedAt() != null
-            ? quotation.approvedAt().atZone(BANGKOK).toLocalDate()
+        // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status —
+        // owner feedback F8, 2026-09-10: "for วันที่ at the top of the page it should be the date
+        // it was created by the sale". It used to print the APPROVED date once approved (and
+        // today's date before that), which made an approved document appear to have been quoted on
+        // the day the manager got round to it. Mirrors DealQuotationRepository#mapQuotation's
+        // quotationDate so the UI and the document can never disagree. The remark-1 offer date
+        // (วันที่รับจำนวน) is a DIFFERENT, rep-editable date and stays untouched — see
+        // #remarkLines. createdAt is sales.quotation.issued_at, NOT NULL since V59; the
+        // today-fallback is defensive only.
+        LocalDate issueDate = quotation.createdAt() != null
+            ? quotation.createdAt().atZone(BANGKOK).toLocalDate()
             : LocalDate.now(BANGKOK);
 
         String salesLine = "Sales/" + nullSafe(quotation.salesRepName()) + " T." + nullSafe(quotation.salesRepPhone());
@@ -54,9 +61,14 @@ public final class DealQuotationRenderAdapter {
             .map(DealQuotationRenderAdapter::toRenderItem)
             .toList();
 
+        // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
+        // created / submitted / approved (F4), each only once it exists -- a DRAFT prints only
+        // ผู้พิมพ์'s, and ผู้สั่งซื้อ's stays dotted for the customer's pen.
         Signatories signatories = new Signatories(
             quotation.createdByName(), quotation.salesRepName(), quotation.approvedByName(),
-            approverSignaturePng, approverSignatureMime);
+            blank(quotation.contactName()) ? null : quotation.contactName().trim(),
+            approverSignaturePng, approverSignatureMime,
+            bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
         return new QuotationRenderModel(
             issueDate, quotation.number(), quotation.deptCode(), quotation.unitCode(), salesLine,
@@ -172,6 +184,10 @@ public final class DealQuotationRenderAdapter {
         // Not thread-safe -- DecimalFormat never shared, mirrors DealQuotationLines' own discipline.
         DecimalFormat format = new DecimalFormat("#,##0.##", DecimalFormatSymbols.getInstance(Locale.US));
         return format.format(value);
+    }
+
+    private static LocalDate bangkokDate(java.time.Instant instant) {
+        return instant == null ? null : instant.atZone(BANGKOK).toLocalDate();
     }
 
     private static boolean blank(String s) {

@@ -19,10 +19,14 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.ContactSnapshot;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.InsertDraftParams;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.NewItem;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
@@ -73,6 +77,7 @@ public class DealQuotationService {
     private final DealQuotationRepository quotations;
     private final TicketRepository tickets;
     private final CustomerRepository customers;
+    private final ContactRepository contacts;
     private final NotificationRepository notifications;
     /** The per-employee "can create quotations" capability gate (owner ruling, Ploy 2026-09-09) —
      * read LIVE at decision time via {@link EmployeeAuthRepository#canCreateQuotation}, never from
@@ -89,7 +94,8 @@ public class DealQuotationService {
     private final String appBaseUrl;
 
     public DealQuotationService(DealQuotationRepository quotations, TicketRepository tickets,
-                                CustomerRepository customers, NotificationRepository notifications,
+                                CustomerRepository customers, ContactRepository contacts,
+                                NotificationRepository notifications,
                                 NotificationEmailService approvalMailer,
                                 th.co.glr.hr.ticket.QuotationRenderer renderer,
                                 EmployeeAuthRepository employeeAuth,
@@ -98,6 +104,7 @@ public class DealQuotationService {
         this.quotations = quotations;
         this.tickets = tickets;
         this.customers = customers;
+        this.contacts = contacts;
         this.notifications = notifications;
         this.approvalMailer = approvalMailer;
         this.renderer = renderer;
@@ -115,6 +122,7 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         requireEditAccess(actor, ticket);
         quotations.lockTicket(ticketId);
+        ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         List<NewItem> items = buildItems(request.items());
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
@@ -123,6 +131,7 @@ public class DealQuotationService {
             ticketId, number, actor.id(), ticket.createdById(),
             ticket.customerName(), customer != null ? customer.address() : null,
             customer != null ? customer.taxId() : null, customer != null ? customer.phone() : null,
+            contact,
             ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
@@ -154,13 +163,30 @@ public class DealQuotationService {
     /** The approver queue (sales_manager/ceo/import/account see everything; sales sees only their
      * own deals' quotations; a {@code canCreateQuotation}-granted employee sees everything, same
      * as sales_manager — the grant is "any deal", not "own deal only"). */
-    public List<DealQuotationDto> search(List<String> statuses, UserPrincipal actor) {
+    public List<DealQuotationDto> search(List<String> statuses, boolean needsRework, UserPrincipal actor) {
+        return quotations.search(statuses, listOwnerScope(actor), needsRework);
+    }
+
+    /** Per-status counts for the list page's tab labels (owner feedback F5, 2026-09-10) — the
+     * SAME scope decision as {@link #search}, so a tab's count is always the size of the list
+     * that tab would show. */
+    public DealQuotationCountsDto counts(UserPrincipal actor) {
+        return quotations.counts(listOwnerScope(actor));
+    }
+
+    /**
+     * The ONE list-scope decision {@link #search} and {@link #counts} share: a
+     * {@code canCreateQuotation}-granted employee sees everything (the grant is "any deal");
+     * otherwise the caller must hold a {@link #VIEW_ROLES} role, and {@code sales} is scoped to
+     * deals they created (returns their own id as the owner filter); every other view role is
+     * unrestricted (null).
+     */
+    private Long listOwnerScope(UserPrincipal actor) {
         boolean grant = hasQuotationGrant(actor);
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        Long ownerFilter = (!grant && "sales".equals(actor.role())) ? actor.id() : null;
-        return quotations.search(statuses, ownerFilter);
+        return (!grant && "sales".equals(actor.role())) ? actor.id() : null;
     }
 
     /** Rule: server recomputes every number, always — this is the stateless preview the item
@@ -179,12 +205,14 @@ public class DealQuotationService {
     @Transactional
     public DealQuotationDto update(long id, UpsertDealQuotationRequest request, UserPrincipal actor) {
         DealQuotationDto existing = requireQuotation(id);
-        requireEditAccessForQuotation(actor, existing);
+        TicketSummaryDto ticket = requireTicketSummary(existing.ticketId());
+        requireEditAccess(actor, ticket);
+        ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
         List<NewItem> items = buildItems(request.items());
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
-        int rows = quotations.updateHeader(id, blankToNull(request.deptCode()), blankToNull(request.unitCode()),
+        int rows = quotations.updateHeader(id, contact, blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()), subtotal);
         if (rows == 0) {
@@ -209,6 +237,12 @@ public class DealQuotationService {
         requireEditAccessForQuotation(actor, quotation);
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
+        }
+        // ผู้สั่งซื้อ is mandatory (owner feedback F2): create/update already refuse a draft with no
+        // resolvable contact, so this only ever catches a row that predates V167 on a ticket that
+        // had no contact -- it stays a draft until the rep saves it with one.
+        if (quotation.contactId() == null || isBlank(quotation.contactName())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
         }
         // Item completeness rule, re-checked over the STORED rows: create/update already enforce
         // this on write (#buildItem), but a row can predate this rule (created before this
@@ -333,6 +367,9 @@ public class DealQuotationService {
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
+            // The parent's frozen snapshot, verbatim -- the rep re-chooses (or the ticket's
+            // contact re-defaults) only on the revision's own next save through #update.
+            new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
             source.customerNotes(), source.subtotalAmount(), source.id(), nextRevisionNo, items));
@@ -452,6 +489,38 @@ public class DealQuotationService {
                 action.run();
             }
         });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // ผู้สั่งซื้อ — owner feedback F2 (2026-09-10): mandatory, snapshotted (V167).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —
+     * precedence: the request's own {@code contactId}, else the contact the draft already carries
+     * ({@code existingContactId}, update only), else the deal's contact
+     * ({@code sales.ticket.contact_id}). None → 400 "กรุณาระบุผู้สั่งซื้อ" (the owner's rule: a
+     * quotation cannot be saved without one). The contact must exist and belong to the deal's
+     * customer — a contact id from another customer is a client bug or a probe, refused as 400 with
+     * the same wording so nothing about other customers' contacts leaks. The name/phone/email are
+     * read NOW and written onto the quotation; a later edit of the contact row never changes the
+     * document (see V167's header for why that matters for an approved, emailed PDF).
+     */
+    private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
+        Long contactId = requestedContactId != null ? requestedContactId
+            : existingContactId != null ? existingContactId
+            : ticket.contactId();
+        if (contactId == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+        }
+        ContactDto contact = contacts.findById(contactId)
+            .filter(c -> ticket.customerId() != null && c.customerId() == ticket.customerId())
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ"));
+        String name = blankToNull(contact.fullName());
+        if (name == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+        }
+        return new ContactSnapshot(contact.id(), name, blankToNull(contact.phone()), blankToNull(contact.email()));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

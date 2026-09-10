@@ -72,12 +72,31 @@ public record QuotationRenderModel(
      * legacy render always passes all three null, which combined with
      * {@code signatureLabelsV2 = false} keeps the template's own labels and prints no names at
      * all, matching the pre-existing behaviour byte-for-byte).
+     *
+     * <p>Owner feedback pass 1 (2026-09-10): slot 4 (ผู้สั่งซื้อ) prints the deal's contact as
+     * {@code orderedBy} — F2, "use that name to auto fill in the name for signature" — and the
+     * "วันที่…" row is filled per slot from {@code printedOn} (created), {@code checkedOn}
+     * (submitted) and {@code approvedOn} (approved) — F4, "also autofill in the dates". Each date
+     * is nullable and prints the dotted placeholder when absent (a DRAFT carries only ผู้พิมพ์'s);
+     * ผู้สั่งซื้อ's date is always the placeholder (the customer signs on paper). The five-argument
+     * constructor is the pre-feedback shape — no ordered-by name, no dates — kept for the legacy
+     * wrappers and the many existing callers.
      */
     public record Signatories(
         String printedBy,
         String checkedBy,
         String approvedBy,
+        String orderedBy,
         byte[] approverSignaturePng,
-        String approverSignatureMime
-    ) {}
+        String approverSignatureMime,
+        LocalDate printedOn,
+        LocalDate checkedOn,
+        LocalDate approvedOn
+    ) {
+        public Signatories(String printedBy, String checkedBy, String approvedBy,
+                           byte[] approverSignaturePng, String approverSignatureMime) {
+            this(printedBy, checkedBy, approvedBy, null, approverSignaturePng, approverSignatureMime,
+                null, null, null);
+        }
+    }
 }

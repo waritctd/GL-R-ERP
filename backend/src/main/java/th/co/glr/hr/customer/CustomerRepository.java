@@ -80,4 +80,36 @@ public class CustomerRepository {
         long id = keyHolder.getKey().longValue();
         return new CustomerDto(id, name, taxId, address, branch, phone);
     }
+
+    /**
+     * PATCH-shaped update (owner feedback F7, 2026-09-10): only the fields the caller actually
+     * sent are written — a {@code null} argument means "leave this column alone", which is what
+     * {@code COALESCE(:x, column)} expresses in one statement without a read-modify-write race.
+     * A non-null BLANK is a real value and DOES overwrite (that is how a rep clears a wrong tax id
+     * or phone); {@code name} and {@code branch} are {@code NOT NULL} in V16's DDL, so
+     * {@code CustomerController} rejects a blank for those two before reaching this method.
+     *
+     * <p>Returns {@link Optional#empty()} when no row matched, so the controller can answer 404
+     * rather than a silent 200 on a customer id that does not exist.
+     */
+    public Optional<CustomerDto> update(long id, String name, String taxId, String address,
+                                        String branch, String phone) {
+        int updated = jdbc.update("""
+            UPDATE customers.customer
+               SET name    = COALESCE(:name, name),
+                   tax_id  = COALESCE(:taxId, tax_id),
+                   address = COALESCE(:address, address),
+                   branch  = COALESCE(:branch, branch),
+                   phone   = COALESCE(:phone, phone)
+             WHERE customer_id = :id
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("name", name)
+                .addValue("taxId", taxId)
+                .addValue("address", address)
+                .addValue("branch", branch)
+                .addValue("phone", phone));
+        return updated == 0 ? Optional.empty() : findById(id);
+    }
 }

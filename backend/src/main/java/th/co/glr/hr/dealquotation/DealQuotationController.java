@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
@@ -62,11 +63,24 @@ public class DealQuotationController {
         return Map.of("items", quotations.listForTicket(ticketId, user));
     }
 
+    /** {@code needsRework=true} (owner feedback F5, 2026-09-10) narrows to the "แก้" bucket —
+     * DRAFT rows sent back with a reason or revisions in progress — server-side, composed with
+     * {@code status} (AND); see {@code DealQuotationRepository#search}. */
     @GetMapping("/deal-quotations")
     Map<String, List<DealQuotationDto>> search(@RequestParam(required = false) List<String> status,
+                                               @RequestParam(required = false, defaultValue = "false") boolean needsRework,
                                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("items", quotations.search(status, user));
+        return Map.of("items", quotations.search(status, needsRework, user));
+    }
+
+    /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
+     * needsRework, cancelled, approved}} — so the list page's tabs carry counts without a second
+     * full fetch (owner feedback F5). Same scope rules as {@link #search}. */
+    @GetMapping("/deal-quotations/counts")
+    DealQuotationCountsDto counts(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return quotations.counts(user);
     }
 
     @GetMapping("/deal-quotations/{id}")

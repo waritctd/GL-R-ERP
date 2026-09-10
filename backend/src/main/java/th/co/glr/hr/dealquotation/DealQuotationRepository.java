@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 
@@ -137,9 +138,14 @@ public class DealQuotationRepository {
         String descriptionLine
     ) {}
 
+    /** The ผู้สั่งซื้อ snapshot written onto {@code sales.quotation} (V167) — see {@link
+     * DealQuotationService#resolveContact}; a revision copies its parent's verbatim. */
+    public record ContactSnapshot(Long contactId, String name, String phone, String email) {}
+
     public record InsertDraftParams(
         long ticketId, String number, long createdById, long salesRepId,
         String customerName, String customerAddress, String customerTaxId, String customerPhone,
+        ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
         String customerNotes, BigDecimal subtotal, Long parentQuotationId, int revisionNo,
@@ -157,13 +163,15 @@ public class DealQuotationRepository {
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, issued_at, total_amount, currency, quotation_version,
                  doc_status, recipient_type, quotation_revision_no, origin, created_by, sales_rep_id,
-                 customer_name, customer_address, customer_tax_id, customer_phone, project_name,
+                 customer_name, customer_address, customer_tax_id, customer_phone,
+                 contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
                  validity_days, customer_notes, parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, 'THB', :version,
                  'DRAFT', 'UNSPECIFIED', :revisionNo, 'DEAL_DIRECT', :createdById, :salesRepId,
-                 :customerName, :customerAddress, :customerTaxId, :customerPhone, :projectName,
+                 :customerName, :customerAddress, :customerTaxId, :customerPhone,
+                 :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
                  :validityDays, :customerNotes, :parentQuotationId, now())
             """,
@@ -179,6 +187,10 @@ public class DealQuotationRepository {
                 .addValue("customerAddress", p.customerAddress())
                 .addValue("customerTaxId", p.customerTaxId())
                 .addValue("customerPhone", p.customerPhone())
+                .addValue("contactId", p.contact() != null ? p.contact().contactId() : null)
+                .addValue("contactName", p.contact() != null ? p.contact().name() : null)
+                .addValue("contactPhone", p.contact() != null ? p.contact().phone() : null)
+                .addValue("contactEmail", p.contact() != null ? p.contact().email() : null)
                 .addValue("projectName", p.projectName())
                 .addValue("deptCode", p.deptCode())
                 .addValue("unitCode", p.unitCode())
@@ -264,12 +276,14 @@ public class DealQuotationRepository {
 
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller
      * could forget (mirrors {@code CustomerQuotationRepository.updateHeader}'s contract). */
-    public int updateHeader(long quotationId, String deptCode, String unitCode, LocalDate offerDate,
-                            Integer depositPercent, String remainderMode, Integer creditDays,
+    public int updateHeader(long quotationId, ContactSnapshot contact, String deptCode, String unitCode,
+                            LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
                             Integer validityDays, String customerNotes, BigDecimal subtotal) {
         return jdbc.update("""
             UPDATE sales.quotation
-               SET dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
+               SET contact_id = :contactId, contact_name = :contactName,
+                   contact_phone = :contactPhone, contact_email = :contactEmail,
+                   dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
                    customer_notes = :customerNotes, total_amount = :subtotal, updated_at = now()
@@ -277,6 +291,10 @@ public class DealQuotationRepository {
             """,
             new MapSqlParameterSource()
                 .addValue("id", quotationId)
+                .addValue("contactId", contact.contactId())
+                .addValue("contactName", contact.name())
+                .addValue("contactPhone", contact.phone())
+                .addValue("contactEmail", contact.email())
                 .addValue("deptCode", deptCode)
                 .addValue("unitCode", unitCode)
                 .addValue("offerDate", offerDate)
@@ -380,17 +398,32 @@ public class DealQuotationRepository {
     }
 
     /**
+     * The "แก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a reason
+     * ({@code approval_note}, cleared again on the next submit) OR a revision still in progress
+     * ({@code parent_quotation_id}). ONE definition, shared by {@link #search}'s
+     * {@code needsRework} filter and {@link #counts} so the tab's count can never disagree with
+     * the rows the tab lists.
+     */
+    private static final String NEEDS_REWORK_PREDICATE =
+        "(q.doc_status = 'DRAFT' AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))";
+
+    /**
      * Approver-queue / own-list search. {@code statuses} null or empty means "any status".
      * {@code ownerTicketCreatedById} non-null scopes to deals created by that employee (the "own
      * deals only" rule for the {@code sales} role — see {@code DealQuotationService}); null means
-     * no owner restriction (the approver queue).
+     * no owner restriction (the approver queue). {@code needsRework} narrows to
+     * {@link #NEEDS_REWORK_PREDICATE} — server-side, so the list page's "แก้" tab is never a
+     * client-side post-filter over a truncated list; it composes with {@code statuses} (AND).
      */
-    public List<DealQuotationDto> search(List<String> statuses, Long ownerTicketCreatedById) {
+    public List<DealQuotationDto> search(List<String> statuses, Long ownerTicketCreatedById, boolean needsRework) {
         MapSqlParameterSource params = new MapSqlParameterSource();
         StringBuilder where = new StringBuilder("q.origin = 'DEAL_DIRECT'");
         if (statuses != null && !statuses.isEmpty()) {
             where.append(" AND q.doc_status IN (:statuses)");
             params.addValue("statuses", statuses);
+        }
+        if (needsRework) {
+            where.append(" AND ").append(NEEDS_REWORK_PREDICATE);
         }
         if (ownerTicketCreatedById != null) {
             where.append(" AND t.created_by = :ownerId");
@@ -403,6 +436,34 @@ public class DealQuotationRepository {
              ORDER BY q.quotation_id DESC
             """.formatted(where), params, (rs, rowNum) -> rs.getLong("quotation_id"));
         return hydrate(ids);
+    }
+
+    /**
+     * Per-status counts over the SAME scope as {@link #search} with no status filter — the same
+     * {@code t.created_by} owner clause (null = unrestricted), the same origin filter, the same
+     * {@link #NEEDS_REWORK_PREDICATE} — in one statement with conditional aggregates. {@code all}
+     * counts every row in scope regardless of status (SUPERSEDED etc. included), matching what
+     * {@code search(null, owner, false)} returns.
+     */
+    public DealQuotationCountsDto counts(Long ownerTicketCreatedById) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String ownerClause = "";
+        if (ownerTicketCreatedById != null) {
+            ownerClause = " AND t.created_by = :ownerId";
+            params.addValue("ownerId", ownerTicketCreatedById);
+        }
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) AS all_count,
+                   COUNT(*) FILTER (WHERE q.doc_status = 'PENDING_APPROVAL') AS pending_count,
+                   COUNT(*) FILTER (WHERE %s) AS rework_count,
+                   COUNT(*) FILTER (WHERE q.doc_status = 'CANCELLED') AS cancelled_count,
+                   COUNT(*) FILTER (WHERE q.doc_status = 'APPROVED') AS approved_count
+              FROM sales.quotation q
+              JOIN sales.ticket t ON t.ticket_id = q.ticket_id
+             WHERE q.origin = 'DEAL_DIRECT'%s
+            """.formatted(NEEDS_REWORK_PREDICATE, ownerClause), params,
+            (rs, rowNum) -> new DealQuotationCountsDto(rs.getLong("all_count"), rs.getLong("pending_count"),
+                rs.getLong("rework_count"), rs.getLong("cancelled_count"), rs.getLong("approved_count")));
     }
 
     /**
@@ -486,7 +547,7 @@ public class DealQuotationRepository {
                    NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '') AS approved_by_name,
                    q.approved_at, q.approval_note,
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
-                   NULLIF(TRIM(CONCAT_WS(' ', ct.first_name, ct.last_name)), '') AS contact_name,
+                   q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
                    q.dept_code, q.unit_code, q.offer_date, q.deposit_percent, q.remainder_mode,
                    q.credit_days, q.validity_days, q.validity_date, q.customer_notes,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
@@ -496,8 +557,6 @@ public class DealQuotationRepository {
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
-              LEFT JOIN sales.ticket t ON t.ticket_id = q.ticket_id
-              LEFT JOIN customers.contact ct ON ct.contact_id = t.contact_id
             """;
     }
 
@@ -509,8 +568,14 @@ public class DealQuotationRepository {
         // separately, so they can never drift from the subtotal they belong to.
         BigDecimal grandTotal = WastageCalculator.grandTotal(subtotal, vatTotal);
         Instant approvedAt = instant(rs, "approved_at");
-        LocalDate quotationDate = approvedAt != null
-            ? approvedAt.atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate()
+        Instant createdAt = instant(rs, "created_at");
+        // Owner feedback F8 (2026-09-10): the header date is the date the sales rep CREATED the
+        // quotation, for EVERY status -- it used to be the approved date once approved, else
+        // today. DealQuotationRenderAdapter#toRenderModel derives the printed B4 cell the same
+        // way, so the list/detail UI and the printed document can never disagree. offerDate
+        // (remark 1) is a separate, rep-editable date and is unaffected.
+        LocalDate quotationDate = createdAt != null
+            ? createdAt.atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate()
             : LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
         long approvedByRaw = rs.getLong("approved_by");
         Long approvedById = rs.wasNull() ? null : approvedByRaw;
@@ -536,7 +601,10 @@ public class DealQuotationRepository {
             rs.getString("customer_address"),
             rs.getString("customer_tax_id"),
             rs.getString("customer_phone"),
+            nullableLong(rs, "contact_id"),
             rs.getString("contact_name"),
+            rs.getString("contact_phone"),
+            rs.getString("contact_email"),
             rs.getString("project_name"),
             rs.getString("dept_code"),
             rs.getString("unit_code"),
@@ -553,7 +621,7 @@ public class DealQuotationRepository {
             rs.getString("currency"),
             rs.getBoolean("approver_has_signature"),
             items,
-            instant(rs, "created_at"),
+            createdAt,
             instant(rs, "updated_at")
         );
     }
