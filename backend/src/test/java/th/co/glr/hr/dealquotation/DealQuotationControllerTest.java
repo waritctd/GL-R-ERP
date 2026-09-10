@@ -101,6 +101,7 @@ class DealQuotationControllerTest {
             null, null, null, null, null,
             LocalDate.now(), "Customer", null, null, null, null, null, null, null, "Project",
             null, null, null, null, null, null, null, null, null,
+            "NET",
             java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, "THB",
             false, List.of(), null, null);
     }

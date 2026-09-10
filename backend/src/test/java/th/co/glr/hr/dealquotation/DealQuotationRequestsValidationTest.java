@@ -32,15 +32,25 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validItem().discountPct(new BigDecimal("-1")).build());
     }
 
+    /**
+     * Quotation v3: {@code unitPrice} is DELIBERATELY no longer bean-validated. It used to carry
+     * {@code @NotNull @DecimalMin("0.01")}, which could not survive the ADJUSTMENT row type — an
+     * adjustment has no rep-typed price at all, so a blanket annotation would 400 the very row
+     * this pass adds.
+     *
+     * <p>This test asserts the ABSENCE on purpose, so that anyone who "restores" the annotation
+     * (a reasonable-looking fix from the outside) fails here and is sent to read why. The rule
+     * itself did NOT go away — it moved to {@code DealQuotationService#requirePriceValidForType},
+     * where it is type-aware, and is pinned wrong-way-round against the real Java service and a
+     * real Postgres by {@code DealQuotationIntegrationTest}'s v3 price-validation tests. Bean
+     * validation cannot express "positive for TILE and PLAIN, absent for ADJUSTMENT" without a
+     * validation-groups setup this change does not introduce.
+     */
     @Test
-    void unitPriceZeroOrNegative_isRejected() {
-        assertViolated(validItem().unitPrice(BigDecimal.ZERO).build());
-        assertViolated(validItem().unitPrice(new BigDecimal("-5")).build());
-    }
-
-    @Test
-    void unitPriceNull_isRejected() {
-        assertViolated(validItem().unitPrice(null).build());
+    void unitPrice_isNoLongerBeanValidated_becauseTheRuleIsNowTypeAware() {
+        assertThat(VALIDATOR.validate(validItem().unitPrice(null).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validItem().unitPrice(BigDecimal.ZERO).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validItem().unitPrice(new BigDecimal("-5")).build())).isEmpty();
     }
 
     @Test

@@ -70,6 +70,9 @@ public class DealQuotationService {
     private static final Logger log = LoggerFactory.getLogger(DealQuotationService.class);
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
+    // v3: a PLAIN row applies its own discount percent the same way WastageCalculator does
+    // for a tile (which keeps its own copy of this, being a no-Spring pure class).
+    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
     private static final Set<String> EDIT_ROLES = Set.of("sales", "sales_manager");
     private static final Set<String> APPROVE_ROLES = Set.of("sales_manager", "ceo");
@@ -124,7 +127,8 @@ public class DealQuotationService {
         requireEditAccess(actor, ticket);
         quotations.lockTicket(ticketId);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
-        List<NewItem> items = buildItems(request.items());
+        String priceMode = resolvePriceMode(request.priceMode());
+        List<NewItem> items = buildItems(request.items(), priceMode);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
         String number = quotations.nextQuotationCode();
@@ -136,7 +140,7 @@ public class DealQuotationService {
             ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
-            subtotal, null, 1, items));
+            priceMode, subtotal, null, 1, items));
         return requireQuotation(id);
     }
 
@@ -196,7 +200,12 @@ public class DealQuotationService {
         if (!EDIT_ROLES.contains(actor.role()) && !hasQuotationGrant(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        return toItemDto(0L, 0, buildItem(input));
+        // The preview endpoint carries no quotation, so it has no per-quotation price mode to
+        // read. Infer it from the row itself: a ราคาพิเศษ means SPECIAL_SQM, a typed net means
+        // DIRECT_NET, and neither means NET. This keeps `POST .../calculate-line`'s request shape
+        // unchanged (no new endpoint, no new parameter) and cannot disagree with the saved
+        // document, because #buildTileItem reads exactly the same two fields.
+        return toItemDto(0L, 0, buildItem(input, null, inferPriceMode(input), BigDecimal.ZERO));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -209,7 +218,8 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(existing.ticketId());
         requireEditAccess(actor, ticket);
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
-        List<NewItem> items = buildItems(request.items());
+        String priceMode = resolvePriceMode(request.priceMode());
+        List<NewItem> items = buildItems(request.items(), priceMode);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
@@ -221,7 +231,8 @@ public class DealQuotationService {
         int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()), subtotal);
+            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
+            priceMode, subtotal);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -379,7 +390,8 @@ public class DealQuotationService {
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
-            source.customerNotes(), source.subtotalAmount(), source.id(), nextRevisionNo, items));
+            source.customerNotes(), source.priceMode(), source.subtotalAmount(), source.id(),
+            nextRevisionNo, items));
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
             "สร้างใบเสนอราคาฉบับแก้ไข " + newNumber + " จาก " + source.number());
         return requireQuotation(newId);
@@ -555,24 +567,76 @@ public class DealQuotationService {
     // Item arithmetic — the ONLY place ItemInput -> WastageCalculator.Input is assembled.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    private List<NewItem> buildItems(List<ItemInput> inputs) {
+    /**
+     * Builds every row, in PRINTED order, and derives each ADJUSTMENT row from the rows it applies
+     * to. Quotation v3 (owner feedback pass 3, 2026-09-11).
+     *
+     * <p><b>Ordering is load-bearing.</b> An adjustment is a percentage of the lines ABOVE it, so
+     * every ADJUSTMENT row is moved to the END here — stably, preserving the rep's own relative
+     * order among them and among the rows they apply to. The sequence numbers are assigned AFTER
+     * that move, so the stored {@code seq}, the printed row order and the arithmetic can never
+     * disagree, whatever order the client happened to send.
+     *
+     * <p><b>Two adjustments do NOT compound.</b> {@code adjustmentBase} accumulates only
+     * NON-adjustment line amounts, so a second ส่วนลดพิเศษ is a percentage of the same original
+     * subtotal as the first, never of the first-discounted figure. That is the simplest defensible
+     * reading — it makes two 3% rows mean 6%, not 5.91% — and it is the one behaviour in this pass
+     * the owner has NOT ruled on. ⚠️ Flagged in the PR body for her confirmation; if she wants
+     * compounding, the change is to add the adjustment's own (negative) lineAmount to the base.
+     */
+    private List<NewItem> buildItems(List<ItemInput> inputs, String priceMode) {
         if (inputs == null || inputs.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ");
         }
-        List<NewItem> items = new ArrayList<>();
-        int seq = 0;
+        List<ItemInput> ordered = new ArrayList<>();
+        List<ItemInput> adjustments = new ArrayList<>();
         for (ItemInput input : inputs) {
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType(input))) {
+                adjustments.add(input);
+            } else {
+                ordered.add(input);
+            }
+        }
+        if (ordered.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ใบเสนอราคาต้องมีรายการสินค้าอย่างน้อยหนึ่งรายการ ก่อนจะใส่ส่วนลดพิเศษได้");
+        }
+        ordered.addAll(adjustments);
+
+        List<NewItem> items = new ArrayList<>();
+        BigDecimal adjustmentBase = BigDecimal.ZERO;
+        int seq = 0;
+        for (ItemInput input : ordered) {
             seq++;
-            items.add(buildItem(input, seq));
+            NewItem item = buildItem(input, seq, priceMode, adjustmentBase);
+            if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+                adjustmentBase = adjustmentBase.add(item.lineAmount());
+            }
+            items.add(item);
         }
         return items;
     }
 
-    /** {@code calculate-line}'s stateless preview — see {@link #calculateLine}'s own Javadoc for
-     * why this stays lenient (no row number = no completeness check; the editor calls this on
-     * every keystroke, often with the row still half-typed). */
-    private NewItem buildItem(ItemInput input) {
-        return buildItem(input, null);
+    /** {@code null}/blank {@code lineType} reads as TILE — every pre-v3 client keeps working
+     * unchanged, and the default is the row type 99% of quotations are made of. */
+    private String lineType(ItemInput input) {
+        return isBlank(input.lineType()) ? WastageCalculator.LINE_TYPE_TILE : input.lineType().trim();
+    }
+
+    /** {@code null}/blank reads as NET — today's behaviour, and what every pre-v3 row stores. */
+    private String resolvePriceMode(String priceMode) {
+        return isBlank(priceMode) ? WastageCalculator.PRICE_MODE_NET : priceMode.trim();
+    }
+
+    /** See {@link #calculateLine} — the stateless preview has no quotation to read a mode off. */
+    private String inferPriceMode(ItemInput input) {
+        if (input.specialPriceSqm() != null) {
+            return WastageCalculator.PRICE_MODE_SPECIAL_SQM;
+        }
+        if (input.directNetPrice() != null) {
+            return WastageCalculator.PRICE_MODE_DIRECT_NET;
+        }
+        return WastageCalculator.PRICE_MODE_NET;
     }
 
     /**
@@ -595,7 +659,21 @@ public class DealQuotationService {
      * be strict while calculate-line stays lenient; a bean annotation cannot express that
      * distinction without a validation-groups setup this change does not introduce.
      */
-    private NewItem buildItem(ItemInput input, Integer rowNumber) {
+    private NewItem buildItem(ItemInput input, Integer rowNumber, String priceMode, BigDecimal adjustmentBase) {
+        String lineType = lineType(input);
+        // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
+        // why this is not gated on rowNumber the way the completeness check is.
+        requirePriceValidForType(input, lineType, priceMode, rowNumber);
+        return switch (lineType) {
+            case WastageCalculator.LINE_TYPE_PLAIN -> buildPlainItem(input, rowNumber);
+            case WastageCalculator.LINE_TYPE_ADJUSTMENT -> buildAdjustmentItem(input, rowNumber, adjustmentBase);
+            case WastageCalculator.LINE_TYPE_TILE -> buildTileItem(input, rowNumber, priceMode);
+            default -> throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ประเภทรายการไม่ถูกต้อง: " + lineType);
+        };
+    }
+
+    private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode) {
         BigDecimal sqmPerPiece = resolveSqmPerPiece(input);
         if (rowNumber != null) {
             requireItemComplete(rowNumber, input, sqmPerPiece);
@@ -613,8 +691,34 @@ public class DealQuotationService {
             // otherwise reached the generic 500 handler instead of this 400.
             throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
         }
-        BigDecimal vat = money2(result.lineAmount().multiply(VAT_RATE));
-        BigDecimal lineTotal = result.lineAmount().add(vat);
+
+        // v3: the PIECE arithmetic above is mode-independent — only the money changes. WastageCalculator
+        // #calculate still owns netUnitPrice for NET mode (list price × (1 − discount)); the two new
+        // modes replace it and recompute the line amount from the SAME piecesFinal, so a mode switch
+        // can never silently change a quantity.
+        BigDecimal netUnitPrice = result.netUnitPrice();
+        BigDecimal discountPct = input.discountPct();
+        BigDecimal specialPriceSqm = null;
+        if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
+            specialPriceSqm = input.specialPriceSqm();
+            try {
+                netUnitPrice = WastageCalculator.netPerPieceFromSpecialSqm(specialPriceSqm, sqmPerPiece);
+            } catch (IllegalArgumentException e) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+            }
+            // The printed ส่วนลด is "พิเศษ", not a percentage — there is no percent to store, and a
+            // stale one from a previous NET-mode save must not survive the switch.
+            discountPct = null;
+        } else if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)) {
+            netUnitPrice = money2(input.directNetPrice());
+            discountPct = null;
+        }
+        BigDecimal lineAmount = WastageCalculator.PRICE_MODE_NET.equals(priceMode)
+            ? result.lineAmount()
+            : money2(netUnitPrice.multiply(BigDecimal.valueOf(result.piecesFinal())));
+
+        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        BigDecimal lineTotal = lineAmount.add(vat);
         String descriptionLine = DealQuotationLines.descriptionLine(input.model(), input.color(), input.texture(),
             input.productCode(), input.sizeText(), input.thicknessMm());
         return new NewItem(
@@ -624,10 +728,99 @@ public class DealQuotationService {
             input.quantityMode(), input.areaSqm(), input.piecesInput(),
             input.wastageMode(), input.wastageValue(), input.piecesPerBox(),
             result.piecesBeforeWastage(), result.piecesAfterWastage(), result.piecesFinal(), result.boxes(),
-            input.unitPrice(), input.discountPct(), result.netUnitPrice(), result.lineAmount(),
+            input.unitPrice(), discountPct, netUnitPrice, lineAmount,
             vat, lineTotal,
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
-            descriptionLine);
+            descriptionLine,
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()), "แผ่น",
+            specialPriceSqm, null, null);
+    }
+
+    /**
+     * S2 — a PLAIN row: description, quantity, unit, unit price, and NONE of the tile machinery.
+     * No wastage, no ตร.ม./แผ่น, no แผ่น/กล่อง, no auto-composed description, no catalog link.
+     * Freight (1 JOB), Mapei consumables (Bags/Barrels), the cut service, sanitary-ware ชุด rows.
+     *
+     * <p>{@code amount = quantity × netPrice}, with the row's own discount applied to the unit
+     * price exactly as {@code WastageCalculator#calculate} does for a tile — the discount is
+     * normally absent, which prints "Net".
+     */
+    private NewItem buildPlainItem(ItemInput input, Integer rowNumber) {
+        if (rowNumber != null) {
+            List<String> missing = new ArrayList<>();
+            if (isBlank(input.description())) missing.add("รายละเอียด");
+            if (input.quantity() == null || input.quantity().signum() <= 0) missing.add("จำนวน");
+            if (isBlank(input.unit())) missing.add("หน่วย");
+            if (!missing.isEmpty()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "รายการที่ " + rowNumber + ": ขาด " + String.join(", ", missing));
+            }
+        }
+        BigDecimal quantity = input.quantity() == null ? BigDecimal.ONE : input.quantity();
+        BigDecimal discountPct = input.discountPct() == null ? BigDecimal.ZERO : input.discountPct();
+        BigDecimal netUnitPrice = money2(input.unitPrice().multiply(
+            BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP))));
+        BigDecimal lineAmount = money2(netUnitPrice.multiply(quantity));
+        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        return new NewItem(
+            input.locationLabel(), null, null,
+            null, null, null, null, null,
+            null, null,
+            null, null, null,
+            null, null, null,
+            0, 0, 0, null,
+            input.unitPrice(), input.discountPct(), netUnitPrice, lineAmount,
+            vat, lineAmount.add(vat),
+            input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
+            input.description() == null ? null : input.description().trim(),
+            WastageCalculator.LINE_TYPE_PLAIN, quantity, blankToNull(input.unit()),
+            null, null, null);
+    }
+
+    /**
+     * S3 — an ADJUSTMENT row (ส่วนลดพิเศษ). The rep types a percent and a date; the system derives
+     * the amount AND the description. A flat baht amount is accepted as the alternative.
+     *
+     * <p>The printed shape is the owner's own QN6900704-2: จำนวน −1, no unit, a POSITIVE ราคา and
+     * คงเหลือ, and a NEGATIVE เป็นเงิน. Note that this falls out of the ordinary arithmetic rather
+     * than being special-cased at print time — {@code amount = quantity × netPrice} with a
+     * quantity of −1 IS the negative figure, which is presumably why she writes it that way.
+     */
+    private NewItem buildAdjustmentItem(ItemInput input, Integer rowNumber, BigDecimal adjustmentBase) {
+        BigDecimal amount;
+        String description;
+        if (input.adjustmentPct() != null) {
+            amount = WastageCalculator.adjustmentAmount(adjustmentBase, input.adjustmentPct());
+            description = DealQuotationLines.adjustmentDescription(
+                input.adjustmentPct(), input.adjustmentDeadline());
+        } else {
+            amount = money2(input.adjustmentAmount());
+            // A flat adjustment has no percent to compose from, so the rep's own wording wins;
+            // failing that, the same phrasing minus the percentage.
+            description = isBlank(input.description())
+                ? DealQuotationLines.adjustmentDescription(null, input.adjustmentDeadline())
+                : input.description().trim();
+        }
+        if (amount.signum() <= 0 && rowNumber != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + rowNumber + ": ส่วนลดพิเศษต้องมากกว่าศูนย์");
+        }
+        BigDecimal lineAmount = amount.negate();
+        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        return new NewItem(
+            input.locationLabel(), null, null,
+            null, null, null, null, null,
+            null, null,
+            null, null, null,
+            null, null, null,
+            0, 0, 0, null,
+            // ราคา and คงเหลือ both print the POSITIVE magnitude; only เป็นเงิน is negative.
+            amount, null, amount, lineAmount,
+            vat, lineAmount.add(vat),
+            null, null, null, input.itemNotes(),
+            description,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, BigDecimal.valueOf(-1), null,
+            null, input.adjustmentPct(), input.adjustmentDeadline());
     }
 
     private NewItem toNewItemFromDto(DealQuotationItemDto item) {
@@ -643,7 +836,13 @@ public class DealQuotationService {
             item.unitPrice(), item.discountPct(), item.netUnitPrice(), item.lineAmount(),
             vat, lineTotal,
             item.originCountry(), item.leadTimeMinDays(), item.leadTimeMaxDays(), item.itemNotes(),
-            item.descriptionLine());
+            item.descriptionLine(),
+            // v3: a revision copies its parent's rows VERBATIM, adjustments included — it is a copy,
+            // not a recalculation, so an already-approved ส่วนลดพิเศษ figure is carried across
+            // rather than re-derived (re-deriving would silently move the number if the parent had
+            // been saved under an older rule).
+            item.lineType(), item.quantity(), item.unit(),
+            item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline());
     }
 
     private BigDecimal resolveSqmPerPiece(ItemInput input) {
@@ -651,6 +850,80 @@ public class DealQuotationService {
             return input.sqmPerPiece();
         }
         return WastageCalculator.parseSqmPerPieceFromSize(input.sizeText());
+    }
+
+    /**
+     * <b>Type-aware price validation</b> — quotation v3, and the replacement for the
+     * {@code @NotNull @DecimalMin("0.01")} that {@code ItemInput.unitPrice} used to carry.
+     *
+     * <p>That bean annotation could not survive S3: an ADJUSTMENT row has NO rep-typed price at
+     * all (the system derives it from the rows above), so a blanket annotation would 400 the very
+     * row type this pass exists to add. The rule was made TYPE-AWARE, not relaxed:
+     *
+     * <ul>
+     *   <li><b>TILE</b> — still refuses a null, zero or negative {@code unitPrice}, exactly as
+     *       before. In SPECIAL_SQM mode the ราคาพิเศษ must ALSO be positive, and in DIRECT_NET the
+     *       typed net must; a mode whose own price is missing is a 400, never a silent fallback to
+     *       the list price.</li>
+     *   <li><b>PLAIN</b> — same positive-price rule. A freight or consumables line always carries
+     *       a direct price; there is no such thing as a free one here.</li>
+     *   <li><b>ADJUSTMENT</b> — refuses a rep-supplied {@code unitPrice} outright (it is derived,
+     *       and accepting one would let a client dictate the discount), and requires EXACTLY one
+     *       of {@code adjustmentPct} / {@code adjustmentAmount}.</li>
+     * </ul>
+     *
+     * <p><b>Not gated on {@code rowNumber}</b>, unlike {@link #requireItemComplete}. The bean
+     * annotation it replaces ran on the lenient {@code calculate-line} preview too, so gating this
+     * would be a real loosening — a TILE row with a zero price would start previewing happily
+     * where today it 400s. Completeness (รุ่น/สี/ผิว/ขนาด, a description, a quantity) stays
+     * row-number-gated, because THAT is what has to tolerate a half-typed row.
+     *
+     * <p>{@code quantityMode}/{@code wastageMode} are re-required here for TILE rows only; they
+     * lost their {@code @NotBlank} for the same S2/S3 reason (a PLAIN row has neither).
+     */
+    private void requirePriceValidForType(ItemInput input, String lineType, String priceMode,
+                                          Integer rowNumber) {
+        String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+        if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
+            if (input.unitPrice() != null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    where + "ส่วนลดพิเศษคำนวณจากรายการด้านบน จึงระบุราคาเองไม่ได้");
+            }
+            boolean hasPct = input.adjustmentPct() != null;
+            boolean hasFlat = input.adjustmentAmount() != null;
+            if (hasPct == hasFlat) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    where + "ส่วนลดพิเศษต้องระบุเป็นเปอร์เซ็นต์ หรือเป็นจำนวนเงิน อย่างใดอย่างหนึ่ง");
+            }
+            if (hasPct && input.adjustmentPct().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, where + "ส่วนลดพิเศษต้องมากกว่าศูนย์");
+            }
+            if (hasFlat && input.adjustmentAmount().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, where + "ส่วนลดพิเศษต้องมากกว่าศูนย์");
+            }
+            return;
+        }
+        // TILE and PLAIN both require a positive unit price — the pre-v3 rule, unchanged.
+        if (input.unitPrice() == null || input.unitPrice().signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาต่อหน่วยต้องมากกว่าศูนย์");
+        }
+        if (!WastageCalculator.LINE_TYPE_TILE.equals(lineType)) {
+            return;
+        }
+        if (isBlank(input.quantityMode())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "กรุณาระบุรูปแบบจำนวน");
+        }
+        if (isBlank(input.wastageMode())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "กรุณาระบุรูปแบบเผื่อ");
+        }
+        if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)
+            && (input.specialPriceSqm() == null || input.specialPriceSqm().signum() <= 0)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาพิเศษต้องมากกว่าศูนย์");
+        }
+        if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
+            && (input.directNetPrice() == null || input.directNetPrice().signum() <= 0)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาสุทธิต้องมากกว่าศูนย์");
+        }
     }
 
     /** Item completeness rule — see {@link #buildItem(ItemInput, Integer)}'s own Javadoc. Collects
@@ -677,6 +950,14 @@ public class DealQuotationService {
      * used only by {@link #submit}'s defensive re-check. {@code seq} is the item's own printed
      * row number, so the message names the same row the rep sees on screen. */
     private void requireStoredItemComplete(DealQuotationItemDto item) {
+        // v3: the tile completeness rule applies to TILE rows only — a PLAIN row has no
+        // รุ่น/สี/ผิว/ขนาด/ความหนา/แผ่นต่อกล่อง to be missing, and an ADJUSTMENT row has neither
+        // those nor a rep-typed price. Running the tile checks over them would make every
+        // document containing a freight line or a ส่วนลดพิเศษ un-submittable.
+        if (!WastageCalculator.LINE_TYPE_TILE.equals(item.lineType())) {
+            requireStoredNonTileComplete(item);
+            return;
+        }
         List<String> missing = new ArrayList<>();
         if (isBlank(item.model())) missing.add("รุ่น");
         if (isBlank(item.color())) missing.add("สี");
@@ -687,6 +968,24 @@ public class DealQuotationService {
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (item.unitPrice() == null || item.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
         if (!hasQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
+        if (!missing.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + item.seq() + ": ขาด " + String.join(", ", missing));
+        }
+    }
+
+    /** {@link #requireStoredItemComplete}'s PLAIN/ADJUSTMENT half — submit's last gate over an
+     * already-stored row. Deliberately thin: what a non-tile row must have is a description and,
+     * for PLAIN, a quantity and a price. Written over the STORED row (not the input) because that
+     * is what the approver is about to see. */
+    private void requireStoredNonTileComplete(DealQuotationItemDto item) {
+        List<String> missing = new ArrayList<>();
+        if (isBlank(item.descriptionLine())) missing.add("รายละเอียด");
+        if (WastageCalculator.LINE_TYPE_PLAIN.equals(item.lineType())) {
+            if (item.quantity() == null || item.quantity().signum() <= 0) missing.add("จำนวน");
+            if (item.unitPrice() == null || item.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
+            if (isBlank(item.unit())) missing.add("หน่วย");
+        }
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + item.seq() + ": ขาด " + String.join(", ", missing));
@@ -706,20 +1005,29 @@ public class DealQuotationService {
         return s == null || s.isBlank();
     }
 
-    /** Stateless preview shape (id=0, seq=0) for {@link #calculateLine} — no DB round trip. */
+    /** Stateless preview shape (id=0, seq=0) for {@link #calculateLine} — no DB round trip. Must
+     * stay in lockstep with {@code DealQuotationRepository#mapItem}, which builds the same DTO from
+     * a stored row; the editor's live preview and the saved document have to agree line-for-line. */
     private DealQuotationItemDto toItemDto(long id, int seq, NewItem item) {
+        // v3: via WastageCalculator, not an inline reciprocal — see #piecesPerSqm's Javadoc.
         BigDecimal piecesPerSqm = item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
-            ? BigDecimal.ONE.divide(item.sqmPerPiece(), 2, RoundingMode.HALF_UP) : null;
-        String sizeLine = DealQuotationLines.sizeLine(item.sizeText(), item.thicknessMm());
-        String calculationLine = DealQuotationLines.calculationLine(item.quantityMode(), item.areaSqm(), piecesPerSqm,
-            item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(), item.piecesPerBox());
+            ? WastageCalculator.piecesPerSqm(item.sqmPerPiece()) : null;
+        boolean tile = WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+        String sizeLine = tile ? DealQuotationLines.sizeLine(item.sizeText(), item.thicknessMm()) : null;
+        String calculationLine = tile
+            ? DealQuotationLines.calculationLine(item.quantityMode(), item.areaSqm(), piecesPerSqm,
+                item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
+                item.piecesPerBox())
+            : null;
         return new DealQuotationItemDto(id, seq, item.locationLabel(), item.catalogPriceId(), item.productCode(),
             item.brand(), item.model(), item.color(), item.texture(), item.sizeText(), item.thicknessMm(),
             item.sqmPerPiece(), item.quantityMode(), item.areaSqm(), item.piecesInput(), item.wastageMode(),
             item.wastageValue(), item.piecesPerBox(), item.unitPrice(), item.discountPct(), item.originCountry(),
             item.leadTimeMinDays(), item.leadTimeMaxDays(), item.itemNotes(),
             piecesPerSqm, item.piecesBeforeWastage(), item.piecesAfterWastage(), item.piecesFinal(), item.boxes(),
-            item.netUnitPrice(), item.lineAmount(), item.descriptionLine(), sizeLine, calculationLine);
+            item.netUnitPrice(), item.lineAmount(), item.descriptionLine(), sizeLine, calculationLine,
+            item.lineType(), item.quantity(), item.unit(), item.specialPriceSqm(), item.adjustmentPct(),
+            item.adjustmentDeadline(), DealQuotationLines.specialPriceLine(item.specialPriceSqm()));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

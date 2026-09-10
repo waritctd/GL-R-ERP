@@ -3,6 +3,7 @@ package th.co.glr.hr.dealquotation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 
 /** Pins the exact printed-line strings from docs/sales/quotation-v2-plan.md's "Printed lines" section. */
@@ -94,5 +95,48 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 600x1200 mm");
         assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "60x60", null))
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm.");
+    }
+
+    // ── quotation v3 (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
+
+    @Test
+    void specialPriceLine_matchesTheOwnersPrintedSubLine() {
+        assertThat(DealQuotationLines.specialPriceLine(new BigDecimal("1350")))
+            .isEqualTo("(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
+        assertThat(DealQuotationLines.specialPriceLine(new BigDecimal("790")))
+            .isEqualTo("(ราคาพิเศษ 790 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
+    }
+
+    /** Null (not a blank string) so the caller OMITS the row — same contract as sizeLine. */
+    @Test
+    void specialPriceLine_isNullWhenThereIsNoSpecialPrice() {
+        assertThat(DealQuotationLines.specialPriceLine(null)).isNull();
+        assertThat(DealQuotationLines.specialPriceLine(BigDecimal.ZERO)).isNull();
+    }
+
+    /** Pinned against the owner's QN6900704-2, verbatim — including the ZERO-PADDED Buddhist-era
+     * date ("31/07/2569"), where the v3 spec's own placeholder would have produced "31/7/2569". */
+    @Test
+    void adjustmentDescription_matchesTheOwnersPrintedDiscountLine() {
+        assertThat(DealQuotationLines.adjustmentDescription(
+            new BigDecimal("3"), LocalDate.of(2026, 7, 31)))
+            .isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+    }
+
+    @Test
+    void adjustmentDescription_dropsTheDeadlineClauseWhenThereIsNoDate() {
+        assertThat(DealQuotationLines.adjustmentDescription(new BigDecimal("3"), null))
+            .isEqualTo("ส่วนลดพิเศษ 3%");
+        // A flat-baht adjustment has no percent to print either.
+        assertThat(DealQuotationLines.adjustmentDescription(null, null)).isEqualTo("ส่วนลดพิเศษ");
+        assertThat(DealQuotationLines.adjustmentDescription(null, LocalDate.of(2026, 7, 31)))
+            .isEqualTo("ส่วนลดพิเศษ สำหรับการสั่งซื้อภายใน 31/07/2569");
+    }
+
+    @Test
+    void adjustmentDescription_dropsTrailingZerosOnAFractionalPercent() {
+        assertThat(DealQuotationLines.adjustmentDescription(
+            new BigDecimal("2.50"), LocalDate.of(2026, 7, 31)))
+            .isEqualTo("ส่วนลดพิเศษ 2.5% สำหรับการสั่งซื้อภายใน 31/07/2569");
     }
 }

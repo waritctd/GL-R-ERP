@@ -30,6 +30,23 @@ public final class WastageCalculator {
     public static final String WASTAGE_MODE_PIECES = "PIECES";
     public static final String WASTAGE_MODE_NONE = "NONE";
 
+    // ── Quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────────
+    /** A real tile: catalog link, wastage, ตร.ม./แผ่น, แผ่น/กล่อง, auto-composed description. */
+    public static final String LINE_TYPE_TILE = "TILE";
+    /** Description + quantity + unit + unit price, and none of the tile machinery — freight,
+     * Mapei consumables, the cut service, sanitary-ware ชุด rows. */
+    public static final String LINE_TYPE_PLAIN = "PLAIN";
+    /** The ส่วนลดพิเศษ line: จำนวน −1, no unit, positive ราคา/คงเหลือ, negative เป็นเงิน. */
+    public static final String LINE_TYPE_ADJUSTMENT = "ADJUSTMENT";
+
+    /** Today's behaviour and the default: the rep types a list price and a discount percent. */
+    public static final String PRICE_MODE_NET = "NET";
+    /** The rep types ราคาพิเศษ in บาท per ตร.ม. INCLUDING VAT — see
+     * {@link #netPerPieceFromSpecialSqm}. */
+    public static final String PRICE_MODE_SPECIAL_SQM = "SPECIAL_SQM";
+    /** The rep types the per-piece net price directly; the ราคา column still shows the list price. */
+    public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
+
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final Pattern SIZE_PATTERN = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*[xX×]\\s*(\\d+(?:\\.\\d+)?)");
@@ -127,9 +144,90 @@ public final class WastageCalculator {
         return new Result(piecesPerSqm, piecesBefore, piecesAfter, piecesFinal, boxes, netUnitPrice, lineAmount);
     }
 
-    /** {@code round(1 / sqmPerPiece, 2, HALF_UP)} — the plan's own formula, verbatim. */
-    private static BigDecimal piecesPerSqm(BigDecimal sqmPerPiece) {
+    /**
+     * {@code round(1 / sqmPerPiece, 2, HALF_UP)} — the plan's own formula, verbatim.
+     *
+     * <p>PUBLIC since quotation v3: this 2dp reciprocal is no longer only a printed figure, it is
+     * a DIVISOR in {@link #netPerPieceFromSpecialSqm}'s money math. Every caller that needs
+     * ตร.ม./แผ่น must come through here rather than re-deriving it, or the two roundings drift
+     * apart and only some of the owner's documents reproduce — the exact failure the v3 spec warns
+     * about. {@code DealQuotationService#toItemDto} and {@code DealQuotationRepository#mapItem}
+     * both used to compute their own {@code ONE.divide(sqmPerPiece, 2, HALF_UP)}, which is
+     * single-rounding where this is double (round to 10dp, then to 2dp); the two disagree only on
+     * a knife-edge value, but "only on a knife edge" is precisely the kind of divergence that
+     * makes a printed sub-line contradict the price beside it. Both now call this.
+     */
+    public static BigDecimal piecesPerSqm(BigDecimal sqmPerPiece) {
         return round2(BigDecimal.ONE.divide(sqmPerPiece, 10, RoundingMode.HALF_UP));
+    }
+
+    /**
+     * {@code SPECIAL_SQM} — the per-piece NET price from a ราคาพิเศษ quoted in บาท per ตร.ม.
+     * INCLUDING VAT. Owner feedback pass 3 (2026-09-11).
+     *
+     * <p><b>The rounding ORDER is the whole point.</b> The naive reading — strip VAT, then multiply
+     * by ตร.ม./แผ่น — is WRONG. Her documents round the pieces-per-ตร.ม. reciprocal to 2dp FIRST
+     * (it is the very figure the printed sub-line carries: "ตร.ม.ๆละ 1.39 แผ่น", "2.78 แผ่น") and
+     * DIVIDE by that:
+     *
+     * <pre>
+     *   piecesPerSqm = round2(1 / sqmPerPiece)
+     *   netPerPiece  = round2( (special / (1 + VAT)) / piecesPerSqm )
+     * </pre>
+     *
+     * <p>Verified to the satang against all four samples — pinned by {@code WastageCalculatorTest}:
+     * <table>
+     *   <caption>owner documents, 2026-09-11</caption>
+     *   <tr><th>document</th><th>ราคาพิเศษ</th><th>ตร.ม./แผ่น</th><th>pcs/ตร.ม.</th><th>คงเหลือ</th></tr>
+     *   <tr><td>QN6900704-2 #1</td><td>1,350</td><td>0.36</td><td>2.78</td><td>453.84</td></tr>
+     *   <tr><td>QN6900704-2 #2</td><td>1,400</td><td>0.36</td><td>2.78</td><td>470.65</td></tr>
+     *   <tr><td>QN6900648</td><td>1,800</td><td>0.72</td><td>1.39</td><td>1,210.25</td></tr>
+     *   <tr><td>QN6900981-1</td><td>790</td><td>0.72</td><td>1.39</td><td>531.16</td></tr>
+     * </table>
+     *
+     * <p>The intermediate VAT-stripped figure is carried at 10dp, NOT rounded to 2dp first: a
+     * third rounding there breaks QN6900648 (1800/1.07 = 1682.2429907; rounding that to 1682.24
+     * and dividing by 1.39 gives 1210.2446 → 1210.24, one satang under the printed 1210.25).
+     * Two roundings, in this order, is the rule.
+     *
+     * <p>Reuses this class's own {@link #VAT_RATE} rather than declaring a fourth copy — the rate
+     * is already stated three times across the codebase ({@code DealQuotationService},
+     * {@code QuotationRenderer}, here) and here is where the money math lives.
+     *
+     * <p><b>Correction to the v3 spec, recorded rather than silently reinterpreted:</b> the spec
+     * states that the naive reading "reproduces only two of the four samples". It reproduces
+     * NONE of them — 454.21/471.03/1211.21/531.59 against her printed
+     * 453.84/470.65/1210.25/531.16. The spec's CONCLUSION (naive is wrong, this order is right)
+     * is unaffected and is what is implemented; only its supporting count was off. Pinned by
+     * {@code WastageCalculatorTest#netPerPieceFromSpecialSqm_dividesByThe2dpReciprocal_notTheExactOne}.
+     */
+    public static BigDecimal netPerPieceFromSpecialSqm(BigDecimal specialPerSqmIncVat, BigDecimal sqmPerPiece) {
+        if (specialPerSqmIncVat == null || specialPerSqmIncVat.signum() <= 0) {
+            throw new IllegalArgumentException("ราคาพิเศษ must be positive, got: " + specialPerSqmIncVat);
+        }
+        if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
+            throw new IllegalArgumentException("sqmPerPiece is required for a SPECIAL_SQM price");
+        }
+        requireReasonableSqmPerPiece(sqmPerPiece);
+        BigDecimal exVat = specialPerSqmIncVat.divide(BigDecimal.ONE.add(VAT_RATE), 10, RoundingMode.HALF_UP);
+        return round2(exVat.divide(piecesPerSqm(sqmPerPiece), 10, RoundingMode.HALF_UP));
+    }
+
+    /**
+     * The ส่วนลดพิเศษ figure: {@code round2(base × pct / 100)}. Owner feedback pass 3 — her
+     * QN6900704-2 proves the printed 38,198.21 is 3% of the four preceding line amounts
+     * (149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56).
+     *
+     * <p>Returns the POSITIVE magnitude. The sign lives in the row's quantity (−1), which is what
+     * makes {@code amount = quantity × netPrice} come out negative while ราคา and คงเหลือ print
+     * positive — exactly as the owner's document does it.
+     */
+    public static BigDecimal adjustmentAmount(BigDecimal base, BigDecimal pct) {
+        if (pct == null) {
+            throw new IllegalArgumentException("adjustmentPct is required");
+        }
+        BigDecimal b = base == null ? BigDecimal.ZERO : base;
+        return round2(b.multiply(pct).divide(HUNDRED, 10, RoundingMode.HALF_UP));
     }
 
     // M4: wastageValue bounds are MODE-dependent (a flat piece count can legitimately be in the
