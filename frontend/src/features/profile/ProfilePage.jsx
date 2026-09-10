@@ -10,6 +10,14 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatAddress, formatShortDate, requestStatus } from '../../utils/format.js';
 import { TaxAllowanceSummaryPanel } from '../taxAllowance/TaxAllowanceSummaryPanel.jsx';
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
+import { SignatureCard } from './SignatureCard.jsx';
+
+// Quotation v2's approver signature card (QUOTATION-V2-PLAN.md): "self, ceo, or admin capability"
+// may WRITE it, but this card only ever renders for the user's OWN profile (there is no
+// view-someone-else's-profile page), so the narrower "self" half of that gate is all this needs
+// -- restricted further to the plan's two approver roles so a sales/import/account/hr viewer
+// (who never approves a quotation) doesn't see a card with nothing to do.
+const SIGNATURE_CARD_ROLES = new Set(['ceo', 'sales_manager']);
 
 const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
 
@@ -92,6 +100,8 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
       </Panel>
 
       <TaxAllowanceSummaryPanel summary={taxAllowanceSummary} />
+
+      {SIGNATURE_CARD_ROLES.has(user.role) ? <SignatureCard user={user} /> : null}
 
       {/* The full request table, absorbed from the former /my-requests page —
           same `ownRequests` data, so a separate page only split one story in

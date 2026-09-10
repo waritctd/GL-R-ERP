@@ -1,0 +1,202 @@
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
+import { PageStack } from '../../components/common/Layout.jsx';
+import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { cn } from '../../utils/cn.js';
+import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { canApproveDealQuotation, canCreateDealQuotationStandalone, dealQuotationStatusLabel } from './quotationMeta.js';
+
+// DataTable's `gridClassName` becomes the desktop `<tr>`'s own class (alongside the shared
+// `.table-head`/`.data-row` base rules in styles.css, which set `display:grid` with no
+// `grid-template-columns` of their own -- see that file's `.table-head, .data-row` rule).
+// Every other DataTable caller supplies that missing piece as a bespoke, page-specific class
+// declared in styles.css (e.g. `.pricing-request-queue-table`) -- the legacy pattern this repo
+// is retiring (CLAUDE.md: "Do not add new page-specific CSS files"). A Tailwind arbitrary-value
+// utility expresses the same `grid-template-columns` without one: เลขที่ / ลูกค้า·โครงการ /
+// พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
+const LIST_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)]';
+
+// Approvers (sales_manager/ceo) lead with the "รออนุมัติ" queue -- that is the work waiting on
+// THEM. sales/import/account have no approval queue of their own, so they land on "ทั้งหมด".
+// #L7: canApproveDealQuotation (quotationMeta.js) instead of a page-local role set -- same
+// role-only gate, single source of truth with the editor's own อนุมัติ/ไม่อนุมัติ button gate.
+
+const STATUS_FILTERS = [
+  { key: 'ALL', label: 'ทั้งหมด', status: undefined },
+  { key: 'PENDING_APPROVAL', status: 'PENDING_APPROVAL' },
+  { key: 'DRAFT', status: 'DRAFT' },
+  { key: 'APPROVED', status: 'APPROVED' },
+  { key: 'SUPERSEDED', status: 'SUPERSEDED' },
+  { key: 'CANCELLED', status: 'CANCELLED' },
+];
+
+function statusFilterLabel(filter) {
+  return filter.label ?? dealQuotationStatusLabel(filter.status).label;
+}
+
+const COLUMNS = [
+  {
+    key: 'number',
+    header: 'เลขที่',
+    sortable: true,
+    searchAccessor: (row) => row.number,
+    render: (row) => (
+      <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
+        <code>{row.number}</code>
+      </Link>
+    ),
+  },
+  {
+    key: 'customer',
+    header: 'ลูกค้า / โครงการ',
+    searchAccessor: (row) => `${row.customerName ?? ''} ${row.projectName ?? ''}`,
+    render: (row) => (
+      <div className="flex flex-col">
+        <span className="font-bold">{row.customerName ?? '-'}</span>
+        {row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
+      </div>
+    ),
+  },
+  {
+    key: 'salesRepName',
+    header: 'พนักงานขาย',
+    searchAccessor: (row) => row.salesRepName,
+    render: (row) => row.salesRepName ?? '-',
+  },
+  {
+    key: 'grandTotal',
+    header: 'ยอดรวม',
+    align: 'right',
+    sortable: true,
+    render: (row) => <span className="tabular-nums font-bold">{formatMoney(row.grandTotal)}</span>,
+  },
+  {
+    key: 'status',
+    header: 'สถานะ',
+    sortable: true,
+    searchAccessor: (row) => row.docStatus,
+    render: (row) => {
+      const status = dealQuotationStatusLabel(row.docStatus);
+      return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+    },
+  },
+  {
+    key: 'quotationDate',
+    header: 'วันที่',
+    sortable: true,
+    render: (row) => formatThaiDate(row.quotationDate),
+  },
+];
+
+function QuotationCard({ row }) {
+  const status = dealQuotationStatusLabel(row.docStatus);
+  return (
+    <>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <Link to={`/quotations/${row.id}`} className="min-w-0 truncate text-xs text-info underline" onClick={(event) => event.stopPropagation()}>
+          <code>{row.number}</code>
+        </Link>
+        <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+      </div>
+      <strong className="min-w-0 truncate text-md leading-snug font-extrabold text-text">
+        {row.customerName ?? '-'}
+      </strong>
+      {row.projectName ? <span className="min-w-0 truncate text-xs text-text-muted">{row.projectName}</span> : null}
+      <span className="min-w-0 truncate text-xs text-text-muted">
+        {row.salesRepName ?? '-'} · {formatThaiDate(row.quotationDate)}
+      </span>
+      <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(row.grandTotal)}</span>
+    </>
+  );
+}
+
+/**
+ * ใบเสนอราคา list — Quotation v2 (QUOTATION-V2-PLAN.md). Route-guarded by
+ * ROLE_PERMISSIONS.canViewDealQuotations; see app/permissions.js PATH_GUARDS for '/quotations'.
+ * `sales` receives only its own deals' quotations already scoped server-side (see
+ * dealQuotations.list's own doc comment) -- this page adds no client-side ownership filter on
+ * top of that.
+ */
+export function QuotationListPage({ user }) {
+  const queryClient = useQueryClient();
+  const isApprover = canApproveDealQuotation(user);
+  const [filterKey, setFilterKey] = useState(isApprover ? 'PENDING_APPROVAL' : 'ALL');
+  const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
+
+  const listQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsList({ status: filter.status }),
+    queryFn: () => api.dealQuotations.list({ status: filter.status }).then((r) => r.items ?? []),
+  });
+  const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
+
+  return (
+    <PageStack>
+      <PageHeader
+        title="ใบเสนอราคา"
+        subtitle={isApprover ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด' : 'ใบเสนอราคาของคุณ'}
+        actions={(
+          <>
+            {canCreateDealQuotationStandalone(user) ? (
+              // Owner ask 2026-09-10 ("inline deal creation"): the entry point into
+              // /quotations/new with no ?ticket= -- the same role-only gate the editor page
+              // itself checks before rendering DealCustomerCard for that URL, so this link and
+              // the page it leads to never disagree about who may land there.
+              <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'primary', size: 'sm' }))}>
+                <Icon name="plus" size={14} />
+                สร้างใบเสนอราคา
+              </Link>
+            ) : null}
+            <Button
+              type="button"
+              variant="icon"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['dealQuotations'] })}
+              title="รีเฟรช"
+              aria-label="รีเฟรช"
+            >
+              <Icon name="refresh" />
+            </Button>
+          </>
+        )}
+      />
+
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+        <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
+        {STATUS_FILTERS.map((option) => {
+          const active = filterKey === option.key;
+          const label = statusFilterLabel(option);
+          return (
+            <button
+              key={option.key}
+              type="button"
+              aria-pressed={active}
+              className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+              }`}
+              onClick={() => setFilterKey(option.key)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      <DataTable
+        columns={COLUMNS}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName={LIST_TABLE_GRID}
+        mobileCard={(row) => <QuotationCard row={row} />}
+        searchable
+        loading={listQuery.isLoading}
+        emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
+      />
+    </PageStack>
+  );
+}

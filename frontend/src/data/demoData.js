@@ -224,7 +224,11 @@ export function createDemoDatabase() {
 
   const users = [
     { id: 2, email: 'hr@glr.co.th', password: 'demo1234', name: employees[20].nameTh, role: 'hr', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
-    { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11) },
+    // canCreateQuotation: true exercises the Quotation v2 per-employee grant (owner ruling
+    // 2026-09-09 -- ภิญญดา, employee 144, QC&ISO / role `qc`, which this demo seed has no persona
+    // for) on a non-sales `employee` role, mirroring AuthResponse.canCreateQuotation /
+    // hr.employee.can_create_quotation (V166). See quotationMeta.js's hasDealQuotationGrant.
+    { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11), canCreateQuotation: true },
     // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
     // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
     // purpose: a division manager's OT-review authority is derived from the org

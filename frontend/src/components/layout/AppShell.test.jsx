@@ -488,3 +488,22 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('งานขาย')).toBeTruthy();
   });
 });
+
+// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the
+// "ใบเสนอราคา" nav item's visibility -- same OR the '/quotations' PATH_GUARDS entry applies, so
+// the two never disagree about who sees the route at all.
+describe('AppShell navigation — canCreateQuotation grant (#H4)', () => {
+  it('hides ใบเสนอราคา from a qc user with no grant', async () => {
+    renderShell({ role: 'qc', employeeId: 20, name: 'ภิญญดา ทดสอบ' });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
+  });
+
+  it('shows ใบเสนอราคา to a qc user WITH the grant, though qc is not in canViewDealQuotations', async () => {
+    renderShell({ role: 'qc', employeeId: 20, name: 'ภิญญดา ทดสอบ', canCreateQuotation: true });
+    await screen.findByText('เนื้อหา');
+
+    expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
+  });
+});
