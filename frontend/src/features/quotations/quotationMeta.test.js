@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as meta from './quotationMeta.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -403,5 +404,148 @@ describe('quotationItemMissingSummary', () => {
   it('renders "รายการที่ N: ขาด field1, field2" in row-layout order, 1-indexed', () => {
     const errors = validateQuotationItem(completeItem({ color: '', thicknessMm: null }));
     expect(quotationItemMissingSummary(errors, 1)).toBe('รายการที่ 2: ขาด สี, ความหนา');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Owner feedback pass 1, 2026-09-10 — F1 grouping + origin mapping, F5 tab metadata.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('originCountryFromCode (F1 catalog autofill)', () => {
+  it('maps the four codes this app has ประเทศต้นทาง options for', () => {
+    expect(meta.originCountryFromCode('IT')).toBe('อิตาลี');
+    expect(meta.originCountryFromCode('ES')).toBe('สเปน');
+    expect(meta.originCountryFromCode('CN')).toBe('จีน');
+    expect(meta.originCountryFromCode('TH')).toBe('ไทย-สต็อก');
+  });
+
+  it('is case- and whitespace-insensitive about the ISO code', () => {
+    expect(meta.originCountryFromCode(' it ')).toBe('อิตาลี');
+  });
+
+  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in
+  // while telling the customer nothing.
+  it('returns "" for an unmapped, empty or absent code', () => {
+    expect(meta.originCountryFromCode('PT')).toBe('');
+    expect(meta.originCountryFromCode('')).toBe('');
+    expect(meta.originCountryFromCode(null)).toBe('');
+    expect(meta.originCountryFromCode(undefined)).toBe('');
+  });
+
+  it('every mapped value is a real ORIGIN_COUNTRY_OPTIONS code with a lead-time range', () => {
+    for (const code of ['IT', 'ES', 'CN', 'TH']) {
+      const label = meta.originCountryFromCode(code);
+      const option = meta.ORIGIN_COUNTRY_OPTIONS.find((o) => o.code === label);
+      expect(option, `${code} -> ${label}`).toBeDefined();
+      expect(option.leadTimeMinDays).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── MED-5: the แก้ predicate must match the SQL, not JS truthiness ──────────────────────────────
+describe('isDealQuotationNeedingRework — mirrors NEEDS_REWORK_PREDICATE', () => {
+  const draft = (over = {}) => ({ docStatus: 'DRAFT', approvalNote: null, parentQuotationId: null, ...over });
+
+  it('an EMPTY-STRING approvalNote counts as present, exactly as `IS NOT NULL` does', () => {
+    // The whole finding: `Boolean('')` is false, `'' IS NOT NULL` is TRUE. The mock used the
+    // former, so this row was in the แก้ tab on the real backend and missing from it in the mock —
+    // fewer rows than production, which is the direction nobody notices from the UI.
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: '' }))).toBe(true);
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: 'ราคาสูงเกินไป' }))).toBe(true);
+  });
+
+  it('null / undefined / absent approvalNote with no parent is NOT rework', () => {
+    expect(meta.isDealQuotationNeedingRework(draft())).toBe(false);
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: undefined }))).toBe(false);
+  });
+
+  it('a DRAFT revision in progress counts, via parentQuotationId (the second sense of แก้)', () => {
+    expect(meta.isDealQuotationNeedingRework(draft({ parentQuotationId: 7 }))).toBe(true);
+  });
+
+  it('DRAFT is part of the definition — an APPROVED/SUPERSEDED row with a note is never rework', () => {
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'APPROVED', approvalNote: '', parentQuotationId: null })).toBe(false);
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'SUPERSEDED', approvalNote: 'x', parentQuotationId: 3 })).toBe(false);
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'PENDING_APPROVAL', approvalNote: 'x', parentQuotationId: null })).toBe(false);
+  });
+});
+
+describe('locationGroupsFromItems (F1)', () => {
+  const item = (locationLabel, model) => ({ locationLabel, model });
+
+  it('starts a new group at every change of label, and tags each item with its group', () => {
+    const { groups, items } = meta.locationGroupsFromItems([
+      item('ชั้น 1', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C'),
+    ]);
+
+    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2']);
+    expect(items.map((it) => it.groupId)).toEqual([groups[0].groupId, groups[0].groupId, groups[1].groupId]);
+  });
+
+  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder
+  // items the rep arranged deliberately, and the document does not do that either.
+  it('does not merge non-adjacent runs of the same label', () => {
+    const { groups } = meta.locationGroupsFromItems([item('ชั้น 1', 'A'), item('ชั้น 2', 'B'), item('ชั้น 1', 'C')]);
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2', 'ชั้น 1']);
+  });
+
+  it('treats null / undefined / "" as one and the same blank label', () => {
+    const { groups } = meta.locationGroupsFromItems([item(null, 'A'), item(undefined, 'B'), item('', 'C')]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe('');
+  });
+
+  it('always yields at least one group, so a brand-new quotation has somewhere to add an item', () => {
+    expect(meta.locationGroupsFromItems([]).groups).toHaveLength(1);
+    expect(meta.locationGroupsFromItems(undefined).groups).toHaveLength(1);
+  });
+
+  it('mints distinct group ids across calls', () => {
+    const a = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
+    const b = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
+    expect(a).not.toBe(b);
+    expect(meta.newLocationGroupId()).not.toBe(meta.newLocationGroupId());
+  });
+
+  it('preserves item order exactly, so the saved document order is the loaded one', () => {
+    const input = [item('ชั้น 2', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C')];
+    const { items } = meta.locationGroupsFromItems(input);
+    expect(items.map((it) => it.model)).toEqual(['A', 'B', 'C']);
+  });
+});
+
+describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
+  it('is exactly the five tabs the owner asked for, in order', () => {
+    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.label))
+      .toEqual(['ทั้งหมด', 'รออนุมัติ', 'แก้', 'ยกเลิก', 'อนุมัติแล้ว']);
+  });
+
+  it('drives แก้ off needsRework, not a docStatus', () => {
+    const rework = meta.dealQuotationStatusTab('NEEDS_REWORK');
+    expect(rework.params).toEqual({ needsRework: true });
+    expect(rework.params.status).toBeUndefined();
+  });
+
+  it('sends no params at all for ทั้งหมด', () => {
+    expect(meta.dealQuotationStatusTab('all').params).toEqual({});
+  });
+
+  it('returns null for an unknown key so the caller can fall back to the role default', () => {
+    expect(meta.dealQuotationStatusTab('SUPERSEDED')).toBeNull();
+    expect(meta.dealQuotationStatusTab(null)).toBeNull();
+  });
+
+  it('sends approvers to รออนุมัติ and everyone else to ทั้งหมด', () => {
+    expect(meta.defaultDealQuotationStatusTab({ role: 'sales_manager' })).toBe('PENDING_APPROVAL');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'ceo' })).toBe('PENDING_APPROVAL');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'sales' })).toBe('all');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'import' })).toBe('all');
+    expect(meta.defaultDealQuotationStatusTab(null)).toBe('all');
+  });
+
+  it('every tab names a countKey the counts DTO carries', () => {
+    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.countKey))
+      .toEqual(['all', 'pendingApproval', 'needsRework', 'cancelled', 'approved']);
   });
 });

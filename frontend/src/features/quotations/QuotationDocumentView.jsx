@@ -50,13 +50,31 @@ export function QuotationDocumentView({ quotation }) {
           <span className="text-right">สุทธิ</span>
           <span className="text-right">เป็นเงิน</span>
         </div>
-        {quotation.items.map((item) => (
+        {quotation.items.map((item, index) => (
           <div key={item.id ?? item.seq} className={`${ITEM_GRID} data-row`}>
             <span data-label="รายละเอียด" className="min-w-0">
-              {item.locationLabel ? <div className="text-2xs font-bold uppercase text-text-muted">{item.locationLabel}</div> : null}
-              <div className="font-bold">{item.descriptionLine}</div>
-              {item.sizeLine ? <div className="text-2xs text-text-muted">{item.sizeLine}</div> : null}
-              {item.calculationLine ? <div className="text-2xs text-text-muted">{item.calculationLine}</div> : null}
+              {/* ONE ตำแหน่งติดตั้ง heading per RUN of equal labels (owner feedback F1,
+                  2026-09-10) — the same grouping the renderer applies to the printed document,
+                  and the same one locationGroupsFromItems rebuilds in the editor. Repeating the
+                  label on every row of a six-tile floor was the thing the owner was reacting to.
+                  Compared against the PREVIOUS item's label, never against a collected set, so
+                  the run structure survives an item order the rep chose deliberately. */}
+              {/* These sub-lines are <span>, NOT <div>, and that is load-bearing rather than a
+                  style preference. `styles.css` clips on the WRAPPER — `.data-row > span` is
+                  `white-space: nowrap; text-overflow: ellipsis` — and its escape hatch (the
+                  "SECONDARY sub-line wraps instead of truncating" rule) only reaches
+                  `> strong | > small | > span`. A <div> child therefore inherits the nowrap and
+                  the Thai description gets cut mid-word instead of wrapping (measured: 111 px lost
+                  at 390, 74 at 1024). This is the recorded `.data-row` wrapper-span trap recurring
+                  in new code — the clip is on the parent, so styling the child alone does nothing;
+                  the child has to MATCH the escape hatch's selector. (A <div> inside a <span> was
+                  invalid nesting too, but the wrapping bug is the reason.) */}
+              {item.locationLabel && item.locationLabel !== quotation.items[index - 1]?.locationLabel ? (
+                <span className="text-2xs font-bold uppercase text-text-muted">{item.locationLabel}</span>
+              ) : null}
+              <span className="font-bold">{item.descriptionLine}</span>
+              {item.sizeLine ? <span className="text-2xs text-text-muted">{item.sizeLine}</span> : null}
+              {item.calculationLine ? <span className="text-2xs text-text-muted">{item.calculationLine}</span> : null}
             </span>
             <span data-label="จำนวน" className="tabular-nums text-right">{item.piecesFinal ?? '-'} แผ่น</span>
             <span data-label="ราคา/หน่วย" className="tabular-nums text-right">{formatMoney(item.unitPrice)}</span>
@@ -87,8 +105,13 @@ export function QuotationDocumentView({ quotation }) {
         ) : null}
       </Panel>
 
+      {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth
+          (owner feedback F2, 2026-09-10: "use that name to auto fill in the name for signature in
+          the quotation pdf"). The name shown here is the FROZEN `contactName` snapshot the DTO
+          carries, which is exactly what the renderer prints, so screen and paper cannot disagree
+          even if the customer's contact record is edited later. */}
       <Panel title="ผู้เกี่ยวข้อง">
-        <div className="grid grid-cols-3 gap-4 mobile:grid-cols-1 text-center text-sm">
+        <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">ผู้พิมพ์</span>
             <strong className="block mt-6 border-t border-border pt-2">{quotation.createdByName ?? '-'}</strong>
@@ -102,6 +125,10 @@ export function QuotationDocumentView({ quotation }) {
             <strong className="block mt-6 border-t border-border pt-2">
               {quotation.docStatus === 'APPROVED' ? (quotation.approvedByName ?? '-') : ''}
             </strong>
+          </div>
+          <div>
+            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้สั่งซื้อ</span>
+            <strong className="block mt-6 border-t border-border pt-2">{quotation.contactName ?? '-'}</strong>
           </div>
         </div>
       </Panel>

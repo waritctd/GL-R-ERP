@@ -18,11 +18,17 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
-  quotationItemMissingSummary, REMAINDER_MODE_OPTIONS, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
+  duplicateLocationLabelGroupIds, emptyLocationGroupIds,
+  locationGroupsFromItems, newLocationGroupId, quotationItemMissingSummary,
+  REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
 } from './quotationMeta.js';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
+import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
-import { emptyQuotationItem, itemInputFromRow, QuotationItemRow } from './QuotationItemRow.jsx';
+import { emptyQuotationItem, itemInputFromRow, newItemClientId, QuotationItemRow } from './QuotationItemRow.jsx';
+import {
+  pushRecentCatalogPick, readQuotationDefaults, readRecentCatalogPicks, writeQuotationDefaults,
+} from './quotationPrefs.js';
 
 // #M3: Bangkok LOCAL calendar date, not `new Date().toISOString().slice(0, 10)` -- that reads
 // the UTC calendar day off a UTC instant, which is one day BEHIND the Bangkok date for any
@@ -45,6 +51,10 @@ const CALCULATED_ITEM_FIELDS = [
 // this component doesn't rely on it for memoisation today; cheap to keep stable regardless).
 const EMPTY_ITEM_ERRORS = {};
 
+// Autosave debounce (owner ask 2026-09-10). Two seconds is long enough that it never fires
+// mid-word and short enough that a rep who closes the tab loses at most one field.
+export const AUTOSAVE_DELAY_MS = 2000;
+
 function pickCalculatedFields(source) {
   const result = {};
   for (const key of CALCULATED_ITEM_FIELDS) {
@@ -53,19 +63,30 @@ function pickCalculatedFields(source) {
   return result;
 }
 
-function emptyTerms() {
+// `defaults` is readQuotationDefaults()'s own return value (quotationPrefs.js) -- the rep's last
+// saved terms, or null. Only ever seeds a BRAND-NEW quotation; an existing one always loads its
+// own stored values (see the init effect below), so a remembered default can never overwrite what
+// is on the server. วันที่ is deliberately never remembered: it is always today.
+function emptyTerms(defaults = null) {
+  const depositPercent = defaults?.depositPercent ?? '';
   return {
     deptCode: '', unitCode: '', offerDate: todayIso(),
-    depositPercent: '', depositPercentCustom: false,
-    remainderMode: '', creditDays: '', validityDays: '', customerNotes: '',
+    depositPercent,
+    depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
+    remainderMode: defaults?.remainderMode ?? '',
+    creditDays: defaults?.creditDays ?? '',
+    validityDays: defaults?.validityDays ?? '',
+    customerNotes: '',
   };
 }
 
 // Owner ask 2026-09-10 ("inline deal creation", inline-deal-spec.md): the "ลูกค้าและโครงการ" card
 // state for a brand-new /quotations/new visit with no `?ticket=` -- nothing here exists on the
 // server yet, unlike `terms`/`items` which round-trip a real ticket/quotation.
+// ผู้สั่งซื้อ is NOT here: it is `contact` state on the page itself, because owner feedback F2
+// (2026-09-10) made it mandatory on all three entry paths and only ONE of them renders this card.
 function emptyDealForm() {
-  return { customer: null, project: null, contact: null, entryChannel: 'UNSPECIFIED' };
+  return { customer: null, project: null, entryChannel: 'UNSPECIFIED' };
 }
 
 /**
@@ -117,10 +138,17 @@ export function QuotationEditorPage({ user, showToast }) {
   // (keeps the whole `r.ticket` around because it also needs `.items`/`.events`, then reads
   // `.summary` separately at the call site) -- this page only ever needs summary fields, so it
   // flattens directly instead of keeping an intermediate `ticket.summary.x` everywhere below.
+  //
+  // Owner feedback F2 (2026-09-10) widened `enabled`: ผู้สั่งซื้อ is now mandatory AND changeable
+  // on an existing DRAFT, and DealQuotationDto carries the frozen `contactId`/`contactName`
+  // snapshot but NOT `customerId` -- which QuotationContactPicker needs to list the customer's
+  // other contacts. The ticket is the only place that id lives, so an editable existing draft
+  // fetches it too. Deliberately NOT fetched for a read-only/non-DRAFT quotation: there is no
+  // picker to feed there, and the document view prints the snapshot the DTO already carries.
   const ticketQuery = useQuery({
     queryKey: queryKeys.ticketDetail(effectiveTicketId),
     queryFn: () => api.tickets.get(effectiveTicketId).then((r) => r.ticket?.summary),
-    enabled: !id && !!effectiveTicketId,
+    enabled: !!effectiveTicketId && (!id || quotation?.docStatus === 'DRAFT'),
   });
   const ticket = ticketQuery.data ?? null;
 
@@ -130,8 +158,13 @@ export function QuotationEditorPage({ user, showToast }) {
   // (not stateful): it only ever describes the URL the page was loaded with.
   const isInlineCreate = !id && !ticketIdParam;
   const [dealForm, setDealForm] = useState(emptyDealForm);
+  // DealCustomerCard still reports ผู้สั่งซื้อ through the same one-patch-upward contract as
+  // ลูกค้า/โครงการ (including `contact: null` when picking a different customer clears it), so
+  // that key is split back out to the page-level `contact` state rather than kept twice.
   function updateDealForm(patch) {
-    setDealForm((prev) => ({ ...prev, ...patch }));
+    const { contact: nextContact, ...rest } = patch;
+    if ('contact' in patch) setContact(nextContact);
+    if (Object.keys(rest).length) setDealForm((prev) => ({ ...prev, ...rest }));
     setDirty(true);
   }
   // Set once the inline flow's own `tickets.create` succeeds. Kept across a subsequent
@@ -140,8 +173,22 @@ export function QuotationEditorPage({ user, showToast }) {
   const [createdTicketId, setCreatedTicketId] = useState(null);
   const [creatingDeal, setCreatingDeal] = useState(false);
 
+  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
+  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
+  // module's own try/catch during the initial state computation and never on a later render.
+  const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
+  const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
+
   const [items, setItems] = useState([]);
-  const [terms, setTerms] = useState(emptyTerms());
+  // ตำแหน่งติดตั้ง groups (owner feedback F1), ordered. `items` stays the single flat, ordered
+  // list it always was -- see locationGroupsFromItems' comment for the contiguity invariant every
+  // mutation below maintains, which is what lets buildUpsertPayload save with no re-sorting.
+  const [groups, setGroups] = useState(() => [{ groupId: newLocationGroupId(), label: '' }]);
+  const [terms, setTerms] = useState(() => emptyTerms(storedDefaults));
+  // ผู้สั่งซื้อ (owner feedback F2) -- a contact OBJECT, or null. Owned here rather than inside
+  // DealCustomerCard because it is required on all three entry paths, only one of which renders
+  // that card.
+  const [contact, setContact] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
@@ -168,8 +215,21 @@ export function QuotationEditorPage({ user, showToast }) {
     if (initializedFor === key) return;
     if (id) {
       if (!quotation) return;
-      setItems(quotation.items.map((it) => ({ ...it, clientId: it.id, calcPending: false })));
+      // F1: "loading rebuilds groups from consecutive equal labels" -- the flat items array the
+      // server sends IS the document order, so the runs of equal `locationLabel` in it are exactly
+      // the headings the renderer prints. Never re-sorted here.
+      const rebuilt = locationGroupsFromItems(
+        quotation.items.map((it) => ({ ...it, clientId: it.id, calcPending: false })),
+      );
+      setGroups(rebuilt.groups);
+      setItems(rebuilt.items);
       setTouchedRowIds(new Set(quotation.items.map((it) => it.id)));
+      // F2: seeded from the frozen snapshot on the DTO, so the picker shows the right ผู้สั่งซื้อ
+      // before (and even if) the customer's contact list ever loads -- see
+      // QuotationContactPicker's own note on injecting a selected-but-unlisted option.
+      setContact(quotation.contactId
+        ? { id: quotation.contactId, firstName: quotation.contactName ?? '', lastName: '' }
+        : null);
       setTerms({
         deptCode: quotation.deptCode ?? '', unitCode: quotation.unitCode ?? '',
         offerDate: quotation.offerDate ?? todayIso(),
@@ -182,12 +242,30 @@ export function QuotationEditorPage({ user, showToast }) {
       setInitializedFor(key);
     } else if (effectiveTicketId) {
       setItems([]);
-      setTerms(emptyTerms());
+      setGroups([{ groupId: newLocationGroupId(), label: '' }]);
+      setTerms(emptyTerms(storedDefaults));
       setTouchedRowIds(new Set());
       setDirty(false);
       setInitializedFor(key);
     }
-  }, [id, quotation, effectiveTicketId, initializedFor]);
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults]);
+
+  // ผู้สั่งซื้อ prefill on the `?ticket=` path (F2: "With `?ticket=`, prefill from the deal's
+  // contact, changeable"). Deliberately its OWN effect, not a branch of the seeding effect above.
+  //
+  // The editor renders while the ticket query is still in flight, so the rep can already be adding
+  // items when it resolves. Folding this into the seeding effect meant either waiting for the
+  // ticket before marking the key initialised -- which lets a late `setItems([])` DELETE rows the
+  // rep had already typed -- or never prefilling at all. Keyed by a ref on the ticket id so it
+  // fires exactly once per deal and can never overwrite a contact the rep chose themselves.
+  const contactSeededForTicket = useRef(null);
+  useEffect(() => {
+    if (id || !ticket?.id || contactSeededForTicket.current === ticket.id) return;
+    contactSeededForTicket.current = ticket.id;
+    if (ticket.contactId) {
+      setContact({ id: ticket.contactId, firstName: ticket.contactName ?? '', lastName: '' });
+    }
+  }, [id, ticket]);
 
   function updateItem(clientId, patch) {
     setDirty(true);
@@ -231,9 +309,98 @@ export function QuotationEditorPage({ user, showToast }) {
     }, 300);
   }
 
-  function addItem() {
+  // ── ตำแหน่งติดตั้ง group operations (owner feedback F1, 2026-09-10) ──────────────────────────
+  //
+  // Every one of these keeps the contiguity invariant: items of the same group are adjacent in
+  // `items`, in group order. `insertIntoGroup` is the single place that decides WHERE a row lands,
+  // so add / move / duplicate can never drift apart on that question.
+
+  /** Splices `row` in immediately after the LAST item already in `targetGroupId` (or, for a group
+   * with no items yet, after the last item of the nearest preceding non-empty group) so the array
+   * stays grouped in `groups` order without ever sorting it. */
+  function insertIntoGroup(list, row, targetGroupId, afterClientId = null) {
+    const next = [...list];
+    if (afterClientId) {
+      const at = next.findIndex((it) => it.clientId === afterClientId);
+      if (at >= 0) { next.splice(at + 1, 0, row); return next; }
+    }
+    let lastIndex = -1;
+    for (let i = 0; i < next.length; i += 1) if (next[i].groupId === targetGroupId) lastIndex = i;
+    if (lastIndex >= 0) { next.splice(lastIndex + 1, 0, row); return next; }
+    // Empty target group: land after everything belonging to groups ordered BEFORE it.
+    const order = groups.map((g) => g.groupId);
+    const targetOrder = order.indexOf(targetGroupId);
+    let boundary = 0;
+    for (let i = 0; i < next.length; i += 1) {
+      if (order.indexOf(next[i].groupId) < targetOrder) boundary = i + 1;
+    }
+    next.splice(boundary, 0, row);
+    return next;
+  }
+
+  function addItem(targetGroupId) {
     setDirty(true);
-    setItems((prev) => [...prev, emptyQuotationItem()]);
+    const groupId = targetGroupId ?? groups[groups.length - 1]?.groupId ?? null;
+    setItems((prev) => insertIntoGroup(prev, emptyQuotationItem(groupId, storedDefaults), groupId));
+  }
+
+  /** MED-4: a new group is born BLANK, so adding one while an existing group is also blank would
+   * create two groups the document cannot tell apart (the renderer groups by runs of equal label,
+   * and both runs are ''), which then merge on the next reload. Refused with the reason instead —
+   * naming the existing one first is the whole fix, and it takes one word. */
+  function addGroup() {
+    const unnamed = groups.find((g) => !(g.label ?? '').trim());
+    if (unnamed) {
+      showToast('error', 'กรุณาตั้งชื่อตำแหน่งติดตั้งที่ยังว่างก่อน มิฉะนั้นสองตำแหน่งจะรวมเป็นตำแหน่งเดียวกันในเอกสาร');
+      return;
+    }
+    setDirty(true);
+    setGroups((prev) => [...prev, { groupId: newLocationGroupId(), label: '' }]);
+  }
+
+  function updateGroupLabel(groupId, label) {
+    setDirty(true);
+    setGroups((prev) => prev.map((g) => (g.groupId === groupId ? { ...g, label } : g)));
+  }
+
+  /** Only ever offered for an EMPTY group (see the render below): removing a group that still
+   * holds items would silently delete them, and "ลบตำแหน่ง" does not read like "ลบรายการ". */
+  function removeGroup(groupId) {
+    setDirty(true);
+    setGroups((prev) => (prev.length <= 1 ? prev : prev.filter((g) => g.groupId !== groupId)));
+  }
+
+  function moveItemToGroup(clientId, targetGroupId) {
+    setDirty(true);
+    setItems((prev) => {
+      const row = prev.find((it) => it.clientId === clientId);
+      if (!row) return prev;
+      return insertIntoGroup(prev.filter((it) => it.clientId !== clientId), { ...row, groupId: targetGroupId }, targetGroupId);
+    });
+  }
+
+  /** "ทำซ้ำรายการ" — within this group (lands directly under the original) or into another one
+   * (lands at that group's end). The copy is a genuinely new row: fresh clientId, no server `id`,
+   * and already TOUCHED, because a duplicate of an incomplete row should show what it is still
+   * missing immediately rather than pretending to be a pristine blank. */
+  function duplicateItem(clientId, targetGroupId) {
+    setDirty(true);
+    const copyId = newItemClientId();
+    setItems((prev) => {
+      const row = prev.find((it) => it.clientId === clientId);
+      if (!row) return prev;
+      const groupId = targetGroupId ?? row.groupId;
+      const copy = { ...row, id: undefined, clientId: copyId, groupId };
+      return insertIntoGroup(prev, copy, groupId, groupId === row.groupId ? clientId : null);
+    });
+    setTouchedRowIds((prev) => new Set(prev).add(copyId));
+  }
+
+  /** One click on a "ใช้ล่าสุด" chip or a typeahead result records the row for next time. Purely
+   * best-effort: quotationPrefs swallows a storage throw and simply returns a list this component
+   * still renders, so the chips degrade rather than the editor breaking. */
+  function handleCatalogPicked(cat) {
+    setRecentPicks(pushRecentCatalogPick(user?.id, cat));
   }
 
   function removeItem(clientId) {
@@ -259,10 +426,17 @@ export function QuotationEditorPage({ user, showToast }) {
     Object.values(calcTimers.current).forEach((timer) => clearTimeout(timer));
   }, []);
 
-  const existingLabels = useMemo(
-    () => [...new Set(items.map((it) => it.locationLabel).filter(Boolean))],
-    [items],
+  const labelByGroupId = useMemo(
+    () => new Map(groups.map((g) => [g.groupId, g.label])),
+    [groups],
   );
+
+  // MED-4: the two states the flat `locationLabel` wire format cannot round-trip — see
+  // quotationMeta.js for why neither is fixable without a schema AND a renderer change. A
+  // duplicate label BLOCKS the save (below); an empty group only warns, because it is a normal
+  // transient state between "เพิ่มตำแหน่ง" and the first item in it.
+  const duplicateGroupIds = useMemo(() => duplicateLocationLabelGroupIds(groups), [groups]);
+  const emptyGroupIds = useMemo(() => emptyLocationGroupIds(groups, items), [groups, items]);
 
   // #M6: live sums off `items` -- what the SERVER would compute once saved (WastageCalculator
   // itself lives only in the backend, so this is an estimate, labelled as one below) -- shown
@@ -296,6 +470,17 @@ export function QuotationEditorPage({ user, showToast }) {
       if (!dealForm.customer) errors.push('ต้องเลือกลูกค้าก่อนบันทึกร่าง');
       if (!dealForm.project) errors.push('ต้องเลือกโครงการก่อนบันทึกร่าง');
     }
+    // ผู้สั่งซื้อ (owner feedback F2, 2026-09-10) — REQUIRED before บันทึกร่าง on every entry
+    // path. The exact Thai wording matches the backend's own 400 for the same condition
+    // (DealQuotationService, "กรุณาระบุผู้สั่งซื้อ"), so a rep who somehow reaches the server
+    // without one is told the same thing twice rather than two different things.
+    if (!contact?.id) errors.push('กรุณาระบุผู้สั่งซื้อ');
+    // MED-4: two groups with the same (or both blank) label are ONE group on the printed document
+    // and would silently merge on the next reload, so the rep is asked to distinguish them before
+    // the save that would lose one.
+    if (duplicateGroupIds.size > 0) {
+      errors.push('ชื่อตำแหน่งติดตั้งซ้ำกัน กรุณาตั้งชื่อให้ต่างกัน (ตำแหน่งที่ชื่อซ้ำจะถูกรวมเป็นตำแหน่งเดียวในเอกสาร)');
+    }
     if (items.length === 0) {
       errors.push('ต้องมีรายการสินค้าอย่างน้อย 1 รายการ');
       return errors;
@@ -308,11 +493,30 @@ export function QuotationEditorPage({ user, showToast }) {
       if (summary) errors.push(summary);
     });
     return errors;
-  }, [items, itemErrorsByRow, isInlineCreate, dealForm.customer, dealForm.project]);
+  }, [items, itemErrorsByRow, isInlineCreate, dealForm.customer, dealForm.project, contact, duplicateGroupIds]);
   const hasValidationErrors = validationErrors.length > 0;
+  /**
+   * Whether to SHOW that checklist — separate from whether it exists, which still gates the save
+   * buttons exactly as before.
+   *
+   * A pristine /quotations/new greeted the rep with four red-flagged failures ("ต้องเลือกลูกค้า",
+   * "ต้องเลือกโครงการ", "กรุณาระบุผู้สั่งซื้อ", "ต้องมีรายการสินค้าอย่างน้อย 1 รายการ") before a
+   * single keystroke — telling someone off for not yet having done what they just arrived to do.
+   * The item rows already got this right via `touchedRowIds`; this is the page-level equivalent.
+   *
+   * `dirty || Boolean(quotation)` deliberately, not `dirty` alone: an EXISTING draft — the
+   * sent-back-for-correction case, where the checklist is the whole point — must still show its
+   * gaps the moment it loads, before the rep touches anything. Only the brand-new, untouched
+   * editor is silenced.
+   */
+  const showValidationSummary = hasValidationErrors && (dirty || Boolean(quotation));
 
   function buildUpsertPayload() {
     return {
+      // F2: `contactId` is optional on the wire (UpsertDealQuotationRequest) and defaults to the
+      // deal's own contact server-side — but this editor always knows which one is selected, so it
+      // always sends it explicitly rather than relying on that default.
+      contactId: contact?.id ?? null,
       deptCode: terms.deptCode || null,
       unitCode: terms.unitCode || null,
       offerDate: terms.offerDate || null,
@@ -321,14 +525,38 @@ export function QuotationEditorPage({ user, showToast }) {
       creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
       validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
       customerNotes: terms.customerNotes || null,
-      items: items.map(itemInputFromRow),
+      // F1: still the FLAT items array the API has always taken, in group order — `items` is
+      // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
+      // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
+      // now; a blank group label sends null, which prints no heading row on the document.
+      items: items.map((item) => ({
+        ...itemInputFromRow(item),
+        locationLabel: (labelByGroupId.get(item.groupId) || '').trim() || null,
+      })),
     };
+  }
+
+  // "บันทึกอัตโนมัติแล้ว HH:mm" — set by an autosave, cleared by any later manual save so the two
+  // indicators never contradict each other.
+  const [autoSavedAt, setAutoSavedAt] = useState(null);
+
+  /** The rep's own terms become the starting point for their NEXT new quotation (owner ask
+   * 2026-09-10). Best-effort by construction — see quotationPrefs.js. */
+  function rememberDefaults() {
+    writeQuotationDefaults(user?.id, {
+      depositPercent: terms.depositPercent,
+      remainderMode: terms.remainderMode,
+      creditDays: terms.creditDays,
+      validityDays: terms.validityDays,
+      originCountry: items[items.length - 1]?.originCountry ?? '',
+    });
   }
 
   const createMutation = useMutation({
     mutationFn: () => api.dealQuotations.create(effectiveTicketId, buildUpsertPayload()),
     onSuccess: (res) => {
       setDirty(false);
+      rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'บันทึกร่างแล้ว');
       navigate(`/quotations/${res.quotation.id}`, { replace: true });
@@ -336,16 +564,51 @@ export function QuotationEditorPage({ user, showToast }) {
     onError: (error) => showToast('error', error.message || 'บันทึกไม่สำเร็จ'),
   });
 
+  // `variables.auto` marks an AUTOSAVE (see the debounce effect below): same request, same
+  // invalidation, but no toast — a toast every two seconds while typing would be noise, and the
+  // "บันทึกอัตโนมัติแล้ว HH:mm" line in the header is the quieter signal that replaces it.
   const updateMutation = useMutation({
     mutationFn: () => api.dealQuotations.update(id, buildUpsertPayload()),
-    onSuccess: (res) => {
+    onSuccess: (res, variables) => {
       setDirty(false);
+      rememberDefaults();
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      showToast('success', 'บันทึกร่างแล้ว');
+      if (variables?.auto) {
+        setAutoSavedAt(new Date());
+      } else {
+        setAutoSavedAt(null);
+        showToast('success', 'บันทึกร่างแล้ว');
+      }
     },
+    // An autosave failure is reported exactly like a manual one. Staying silent would be worse:
+    // the rep would keep typing believing their work is safe. It does NOT clear `dirty`, so the
+    // next edit simply schedules another attempt.
     onError: (error) => showToast('error', error.message || 'บันทึกไม่สำเร็จ'),
   });
+
+  // ── Autosave (owner ask 2026-09-10) ─────────────────────────────────────────────────────────
+  //
+  // Fires AUTOSAVE_DELAY_MS after the last edit, and only once the quotation already has an id --
+  // there is nothing to PUT to before that, and silently minting a deal + a quotation off a
+  // half-typed form is not something a debounce should ever decide to do (the first บันทึกร่าง
+  // stays an explicit, deliberate click).
+  //
+  // It also refuses while the form is INCOMPLETE. That is not caution for its own sake: the same
+  // completeness rule disables บันทึกร่าง, and the server rejects an incomplete upsert, so an
+  // autosave there would do nothing but toast an error every two seconds while the rep types.
+  //
+  // The eligibility flag is computed OUTSIDE the effect (rather than early-returning inside it) so
+  // that it, and not a re-render, is what the dependency array keys on -- `items`/`terms`/
+  // `contact` are the edits themselves, which is what restarts the debounce.
+  const autoSaveEligible = Boolean(id) && dirty && !hasValidationErrors && !!quotation
+    && isDealQuotationEditable(quotation) && canEditDealQuotation(user, quotation);
+  const { mutate: runUpdate, isPending: updatePending } = updateMutation;
+  useEffect(() => {
+    if (!autoSaveEligible || updatePending) return undefined;
+    const timer = setTimeout(() => runUpdate({ auto: true }), AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [autoSaveEligible, updatePending, runUpdate, items, terms, contact]);
 
   // Owner ask 2026-09-10 ("inline deal creation"): the FIRST บันทึกร่าง on an inline-create visit
   // has to mint the ticket itself before there is anything to hang a quotation off of --
@@ -370,7 +633,7 @@ export function QuotationEditorPage({ user, showToast }) {
           customerName: dealForm.customer.name,
           customerId: dealForm.customer.id,
           projectId: dealForm.project.id,
-          contactId: dealForm.contact?.id ?? null,
+          contactId: contact?.id ?? null,
           entryChannel: dealForm.entryChannel,
           priority: 'NORMAL',
           items: [],
@@ -384,6 +647,7 @@ export function QuotationEditorPage({ user, showToast }) {
       }
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
       setDirty(false);
+      rememberDefaults();
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'บันทึกร่างแล้ว');
       navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
@@ -522,19 +786,42 @@ export function QuotationEditorPage({ user, showToast }) {
       : canCreateDealQuotation(user, ticket);
   const readOnlyViewer = isDealQuotationReadOnlyViewer(user);
   const status = quotation ? dealQuotationStatusLabel(quotation.docStatus) : null;
-  const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? '-';
+  // V7 (owner review 2026-09-10): a pristine /quotations/new has no customer yet, and the `'-'`
+  // fallback rendered the page subtitle as a bare "-" — a dash where a sentence belongs reads as a
+  // failed load, not as "nothing chosen yet". Kept as `null` here so the subtitle below can say
+  // what to do instead; the `'-'` fallback still applies wherever a dash is genuinely a value
+  // (salesRepName in the document context strip).
+  const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
   const projectName = quotation?.projectName ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
   const salesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
   const salesRepPhone = quotation?.salesRepPhone ?? null;
   const wasRejected = quotation?.docStatus === 'DRAFT' && Boolean(quotation?.approvalNote);
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
+  // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
+  // existing-DRAFT paths, the one being picked right now on the inline-create path.
+  const contactCustomerId = ticket?.customerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null;
+  const contactError = showValidationSummary && !contact?.id ? 'กรุณาระบุผู้สั่งซื้อ' : undefined;
 
   return (
     <PageStack>
       <PageHeader
         title={quotation ? `ใบเสนอราคา ${quotation.number}` : 'สร้างใบเสนอราคา'}
-        subtitle={`${customerName}${projectName ? ` · ${projectName}` : ''}`}
-        context={status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+        subtitle={customerName
+          ? `${customerName}${projectName ? ` · ${projectName}` : ''}`
+          : 'เริ่มจากเลือกลูกค้าและโครงการด้านล่าง'}
+        context={(
+          <>
+            {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            {/* Autosave receipt (owner ask 2026-09-10). `role="status"` so it is announced once
+                rather than read as a live-updating alert; Bangkok local time, HH:mm, because that
+                is the clock the rep is looking at. */}
+            {autoSavedAt ? (
+              <span role="status" className="text-2xs font-bold text-text-muted">
+                บันทึกอัตโนมัติแล้ว {autoSavedAt.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })}
+              </span>
+            ) : null}
+          </>
+        )}
         actions={(
           <>
             {quotation ? (
@@ -607,18 +894,23 @@ export function QuotationEditorPage({ user, showToast }) {
             // picked (or created) right here instead of the read-only summary below, which has
             // nothing to summarize until the first บันทึกร่าง mints the ticket.
             <DealCustomerCard
-              value={dealForm}
+              value={{ ...dealForm, contact }}
               onChange={updateDealForm}
+              // Gated on showValidationSummary for the same reason as the checklist itself: a
+              // pristine inline-create page must not open with ลูกค้า and โครงการ already flagged
+              // red. Once anything is touched (or an existing draft is loaded) they behave as
+              // before.
               errors={{
-                customer: !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
-                project: dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
+                project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                contact: contactError,
               }}
               showToast={showToast}
             />
           ) : (
             <Panel title="ข้อมูลลูกค้าและผู้ขาย">
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName}</strong></div>
+                <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName ?? '-'}</strong></div>
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span><strong>{projectName ?? '-'}</strong></div>
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span><strong>{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</strong></div>
                 {effectiveTicketId ? (
@@ -627,6 +919,18 @@ export function QuotationEditorPage({ user, showToast }) {
                     <Link to={`/tickets/${effectiveTicketId}`} className="text-sm text-info underline">ดูรายละเอียดดีลนี้</Link>
                   </div>
                 ) : null}
+                {/* ผู้สั่งซื้อ (owner feedback F2) — the SAME picker DealCustomerCard renders on
+                    the inline-create path, so the required-ness and the inline-add fields cannot
+                    diverge between the two. Prefilled from the deal's own contact (see the init
+                    effect) and changeable from here. */}
+                <QuotationContactPicker
+                  customerId={contactCustomerId}
+                  value={contact}
+                  onChange={(next) => { setContact(next); setDirty(true); }}
+                  error={contactError}
+                  showToast={showToast}
+                  idPrefix="quotation-contact"
+                />
                 <FormField label="ฝ่าย" htmlFor="deptCode">
                   <input id="deptCode" value={terms.deptCode} onChange={(e) => { setTerms((t) => ({ ...t, deptCode: e.target.value })); setDirty(true); }} />
                 </FormField>
@@ -637,37 +941,104 @@ export function QuotationEditorPage({ user, showToast }) {
             </Panel>
           )}
 
+          {/* ── รายการสินค้า, grouped by ตำแหน่งติดตั้ง (owner feedback F1, 2026-09-10) ──────
+              "if there were to be a ตำแหน่งติดตั้ง there might be multiple รายการ in one
+              ตำแหน่งติดตั้ง." Each group is a bordered block with its label typed ONCE in its own
+              header — which is the typing saving: a floor with six tiles is one label, not six.
+              The blocks read top-to-bottom in exactly the order the printed document groups them
+              (see locationGroupsFromItems), so the editor is a preview of the page structure. */}
           <Panel
             title="รายการสินค้า"
             actions={(
-              <Button variant="secondary" size="sm" onClick={addItem}>
+              <Button variant="secondary" size="sm" onClick={addGroup}>
                 <Icon name="plus" size={14} />
-                เพิ่มรายการ
+                เพิ่มตำแหน่ง
               </Button>
             )}
           >
-            <datalist id="quotation-location-labels">
-              {existingLabels.map((label) => <option key={label} value={label} />)}
-            </datalist>
-            {items.length === 0 ? (
-              <p className="text-sm text-text-muted">ยังไม่มีรายการสินค้า — กด &quot;เพิ่มรายการ&quot; เพื่อเริ่มต้น</p>
-            ) : (
-              <ul className="grid gap-3">
-                {items.map((item, index) => (
-                  <QuotationItemRow
-                    key={item.clientId}
-                    item={item}
-                    index={index}
-                    errors={touchedRowIds.has(item.clientId) ? itemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
-                    onChange={(patch) => updateItem(item.clientId, patch)}
-                    onRemove={() => removeItem(item.clientId)}
-                  />
-                ))}
-              </ul>
-            )}
+            <div className="grid gap-4">
+              {groups.map((group, groupIndex) => {
+                const groupItems = items.filter((it) => it.groupId === group.groupId);
+                return (
+                  <section key={group.groupId} className="grid gap-3 rounded-md border border-border-muted bg-surface-subtle/40 p-3">
+                    <div className="flex min-w-0 flex-wrap items-end justify-between gap-2">
+                      <div className="min-w-0 flex-1 basis-[18rem]">
+                        <FormField
+                          label={`ตำแหน่งติดตั้งที่ ${groupIndex + 1} (ไม่บังคับ)`}
+                          htmlFor={`group-label-${groupIndex}`}
+                          hint="เช่น ชั้น 1 - โซน A · เว้นว่างได้ (จะไม่พิมพ์หัวข้อในเอกสาร)"
+                          error={duplicateGroupIds.has(group.groupId)
+                            ? 'ชื่อตำแหน่งซ้ำกับตำแหน่งก่อนหน้า — เอกสารจะรวมสองตำแหน่งนี้เป็นตำแหน่งเดียว'
+                            : undefined}
+                        >
+                          <input
+                            id={`group-label-${groupIndex}`}
+                            value={group.label}
+                            placeholder={UNLABELLED_LOCATION_TEXT}
+                            onChange={(e) => updateGroupLabel(group.groupId, e.target.value)}
+                          />
+                        </FormField>
+                      </div>
+                      {/* `min-w-0` so this action cluster is squeezable: "เพิ่มรายการในตำแหน่งนี้"
+                          is a 179 px unbreakable-ish Thai run, and a flex item's automatic minimum
+                          size is its min-content unless this is set — the same mechanism that let
+                          the item rows' selects force the page wide (see QuotationItemRow). */}
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="text-2xs font-bold text-text-muted">{groupItems.length} รายการ</span>
+                        <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
+                          <Icon name="plus" size={13} />
+                          เพิ่มรายการในตำแหน่งนี้
+                        </Button>
+                        {/* Only for an EMPTY group, and never for the last one standing — see
+                            removeGroup. Removing a group that still holds items would delete
+                            them, which this label does not say. */}
+                        {groups.length > 1 && groupItems.length === 0 ? (
+                          <Button variant="icon" size="sm" className="mobile:min-h-[44px] mobile:w-11" onClick={() => removeGroup(group.groupId)} title="ลบตำแหน่งนี้" aria-label={`ลบตำแหน่งติดตั้งที่ ${groupIndex + 1}`}>
+                            <Icon name="close" size={16} />
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {emptyGroupIds.has(group.groupId) ? (
+                      // MED-4: an empty group has no item rows to carry its label, so it does not
+                      // survive a save and prints nothing. Said out loud rather than letting the
+                      // group quietly disappear on the next reload.
+                      <p className="m-0 text-xs text-warning">
+                        ยังไม่มีรายการในตำแหน่งนี้ — ตำแหน่งที่ไม่มีรายการจะไม่ถูกบันทึกและไม่ปรากฏในเอกสาร
+                      </p>
+                    ) : (
+                      <ul className="grid gap-3">
+                        {groupItems.map((item) => {
+                          // The FLAT index — what "รายการที่ N" in the validation summary counts,
+                          // and the order the document prints — never the index within the group.
+                          const index = items.indexOf(item);
+                          return (
+                            <QuotationItemRow
+                              key={item.clientId}
+                              item={item}
+                              index={index}
+                              groupId={group.groupId}
+                              locationGroups={groups}
+                              recentPicks={recentPicks}
+                              errors={touchedRowIds.has(item.clientId) ? itemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
+                              onChange={(patch) => updateItem(item.clientId, patch)}
+                              onRemove={() => removeItem(item.clientId)}
+                              onMove={(targetGroupId) => moveItemToGroup(item.clientId, targetGroupId)}
+                              onDuplicate={(targetGroupId) => duplicateItem(item.clientId, targetGroupId)}
+                              onCatalogPicked={handleCatalogPicked}
+                            />
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
           </Panel>
 
-          {hasValidationErrors ? (
+          {showValidationSummary ? (
             <div className="rounded-md border border-warning-border bg-warning/10 p-3.5 text-xs text-warning" role="alert">
               <strong className="block">กรอกข้อมูลให้ครบก่อนบันทึกหรือส่งขออนุมัติ</strong>
               <ul className="m-0 mt-1 list-disc pl-4">
@@ -678,7 +1049,19 @@ export function QuotationEditorPage({ user, showToast }) {
 
           <Panel title="เงื่อนไข">
             <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-              <FormField label="วันที่รับจำนวน" htmlFor="offerDate">
+              {/* V8 (owner review 2026-09-10): this was labelled "วันที่รับจำนวน", which reads as
+                  "the date a quantity was received" with no subject and was taken for the
+                  quotation's own date. It is neither — it is the date the CUSTOMER supplied the
+                  quantities being quoted, and the document says so verbatim in remark 1
+                  (DealQuotationRenderAdapter: "1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่ …").
+                  Label and hint now match that sentence, so the field and the line it feeds
+                  cannot be read as two different things. The quotation's own date is `createdAt`
+                  (F8) and is not editable here. */}
+              <FormField
+                label="วันที่ที่ได้รับจำนวนจากลูกค้า"
+                htmlFor="offerDate"
+                hint="พิมพ์ในหมายเหตุข้อ 1: จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่ …"
+              >
                 <input id="offerDate" type="date" value={terms.offerDate} onChange={(e) => { setTerms((t) => ({ ...t, offerDate: e.target.value })); setDirty(true); }} />
               </FormField>
               <FormField label="มัดจำ %" htmlFor="depositPercent">
@@ -688,7 +1071,7 @@ export function QuotationEditorPage({ user, showToast }) {
                       key={pct}
                       type="button"
                       aria-pressed={!terms.depositPercentCustom && Number(terms.depositPercent) === pct}
-                      className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
                       onClick={() => { setTerms((t) => ({ ...t, depositPercent: pct, depositPercentCustom: false })); setDirty(true); }}
                     >
                       {pct}%
@@ -697,7 +1080,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   <button
                     type="button"
                     aria-pressed={terms.depositPercentCustom}
-                    className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                    className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
                     onClick={() => { setTerms((t) => ({ ...t, depositPercentCustom: true })); setDirty(true); }}
                   >
                     อื่นๆ
@@ -713,14 +1096,20 @@ export function QuotationEditorPage({ user, showToast }) {
                   ) : null}
                 </div>
               </FormField>
-              <FormField label="ส่วนที่เหลือ" htmlFor="remainderMode">
-                <div className="flex flex-wrap items-center gap-2">
+              {/* No `htmlFor`: ส่วนที่เหลือ is a SET of toggle buttons, not one control. The label
+                  used to point at `remainderMode`, an id that belongs to the เครดิต day-count
+                  input below — which is a different field with a different meaning, and which only
+                  exists at all while CREDIT is selected, so for the other modes the label pointed
+                  at nothing. `role="group"` + aria-label is how a group of controls carries one
+                  name; the day input now carries its own. */}
+              <FormField label="ส่วนที่เหลือ">
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ส่วนที่เหลือ">
                   {REMAINDER_MODE_OPTIONS.map((opt) => (
                     <button
                       key={opt.code}
                       type="button"
                       aria-pressed={terms.remainderMode === opt.code}
-                      className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${terms.remainderMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.remainderMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
                       onClick={() => { setTerms((t) => ({ ...t, remainderMode: opt.code })); setDirty(true); }}
                     >
                       {opt.label}
@@ -730,7 +1119,14 @@ export function QuotationEditorPage({ user, showToast }) {
                     <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
                       เครดิต
                       <input
-                        id="remainderMode"
+                        id="creditDays"
+                        /* NOT "จำนวนวันเครดิต": an accessible name STARTING with "จำนวน"
+                           collides with the item row's own จำนวน field under the prefix
+                           queries the tests use, and this input renders only in CREDIT mode,
+                           so the collision appears or vanishes with a remembered preference —
+                           i.e. it made a test's outcome depend on which test ran before it.
+                           Leading with เครดิต keeps the name specific and unambiguous. */
+                        aria-label="เครดิต (จำนวนวัน)"
                         type="number"
                         className="w-16"
                         value={terms.creditDays}

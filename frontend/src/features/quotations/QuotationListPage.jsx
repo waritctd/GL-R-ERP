@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
@@ -11,7 +11,11 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
-import { canApproveDealQuotation, canCreateDealQuotationStandalone, dealQuotationStatusLabel } from './quotationMeta.js';
+import {
+  canApproveDealQuotation, canCreateDealQuotationStandalone, DEAL_QUOTATION_STATUS_TABS,
+  dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
+  isDealQuotationReadOnlyViewer,
+} from './quotationMeta.js';
 
 // DataTable's `gridClassName` becomes the desktop `<tr>`'s own class (alongside the shared
 // `.table-head`/`.data-row` base rules in styles.css, which set `display:grid` with no
@@ -23,23 +27,17 @@ import { canApproveDealQuotation, canCreateDealQuotationStandalone, dealQuotatio
 // พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
 const LIST_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)]';
 
+// The tab set itself is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js) — owner feedback F5,
+// 2026-09-10 replaced the old six status chips (ทั้งหมด/รออนุมัติ/ร่าง/อนุมัติแล้ว/ถูกแทนที่/
+// ยกเลิก) with the five the owner asked for. ร่าง and ถูกแทนที่ are deliberately GONE as tabs: a
+// plain untouched draft is the rep's own working copy and never needed a queue of its own, and a
+// superseded document is history. Both statuses still render their own badge on a row reached any
+// other way, so nothing became unreachable — dealQuotationStatusLabel still knows all five.
+//
 // Approvers (sales_manager/ceo) lead with the "รออนุมัติ" queue -- that is the work waiting on
 // THEM. sales/import/account have no approval queue of their own, so they land on "ทั้งหมด".
 // #L7: canApproveDealQuotation (quotationMeta.js) instead of a page-local role set -- same
 // role-only gate, single source of truth with the editor's own อนุมัติ/ไม่อนุมัติ button gate.
-
-const STATUS_FILTERS = [
-  { key: 'ALL', label: 'ทั้งหมด', status: undefined },
-  { key: 'PENDING_APPROVAL', status: 'PENDING_APPROVAL' },
-  { key: 'DRAFT', status: 'DRAFT' },
-  { key: 'APPROVED', status: 'APPROVED' },
-  { key: 'SUPERSEDED', status: 'SUPERSEDED' },
-  { key: 'CANCELLED', status: 'CANCELLED' },
-];
-
-function statusFilterLabel(filter) {
-  return filter.label ?? dealQuotationStatusLabel(filter.status).label;
-}
 
 const COLUMNS = [
   {
@@ -127,20 +125,60 @@ function QuotationCard({ row }) {
 export function QuotationListPage({ user }) {
   const queryClient = useQueryClient();
   const isApprover = canApproveDealQuotation(user);
-  const [filterKey, setFilterKey] = useState(isApprover ? 'PENDING_APPROVAL' : 'ALL');
-  const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
+
+  // The active tab lives in the URL (owner feedback F5: "driven by the URL (`?status=`)"), not in
+  // component state -- so a tab is linkable, survives a refresh and a back button, and an approver
+  // can paste "the รออนุมัติ queue" to a colleague and have them see the same thing. An ABSENT
+  // param means "this role's default tab"; an unrecognised one falls back to the same, rather than
+  // rendering an empty list for a typo'd or retired key.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedKey = searchParams.get('status');
+  const activeTab = dealQuotationStatusTab(requestedKey)
+    ?? dealQuotationStatusTab(defaultDealQuotationStatusTab(user))
+    ?? DEAL_QUOTATION_STATUS_TABS[0];
+
+  function selectTab(key) {
+    // ALWAYS writes the key, ทั้งหมด included. Clearing the param instead would mean "the role
+    // default" — so an approver clicking ทั้งหมด would silently bounce straight back to รออนุมัติ,
+    // making that tab unreachable for exactly the role that has a default other than it.
+    // `replace` so clicking through five tabs does not bury the page the rep arrived from under
+    // five history entries.
+    setSearchParams({ status: key }, { replace: true });
+  }
 
   const listQuery = useQuery({
-    queryKey: queryKeys.dealQuotationsList({ status: filter.status }),
-    queryFn: () => api.dealQuotations.list({ status: filter.status }).then((r) => r.items ?? []),
+    queryKey: queryKeys.dealQuotationsList(activeTab.params),
+    queryFn: () => api.dealQuotations.list(activeTab.params).then((r) => r.items ?? []),
   });
   const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
+
+  // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
+  // are advisory chrome: a failed or in-flight counts call renders the tabs with NO number rather
+  // than blocking the list or showing a zero that would read as "nothing here".
+  const countsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationCounts(),
+    // The BARE DealQuotationCountsDto — DealQuotationController#counts returns the record with no
+    // envelope. This used to read `r?.counts ?? r`, which meant a real disagreement between the
+    // controller, hrApi's comment and the mock could never surface as a failure (review finding
+    // MED-3); the tolerance is gone so the contract test and the mock shape test are the ones that
+    // have to be right.
+    queryFn: () => api.dealQuotations.counts().then((r) => r ?? null),
+  });
+  const counts = countsQuery.data ?? null;
 
   return (
     <PageStack>
       <PageHeader
         title="ใบเสนอราคา"
-        subtitle={isApprover ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด' : 'ใบเสนอราคาของคุณ'}
+        // "ของคุณ" is only true for the rep whose own rows these are. import/account are
+        // read-only viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the
+        // possessive was simply wrong for them — a third branch rather than a reworded second one,
+        // because the approver line is right as it stands.
+        subtitle={isApprover
+          ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด'
+          : isDealQuotationReadOnlyViewer(user)
+            ? 'ใบเสนอราคาทั้งหมด (ดูอย่างเดียว)'
+            : 'ใบเสนอราคาของคุณ'}
         actions={(
           <>
             {canCreateDealQuotationStandalone(user) ? (
@@ -166,37 +204,49 @@ export function QuotationListPage({ user }) {
         )}
       />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+      {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list,
+          and arrow-key semantics plus aria-selected is what a screen reader needs to say so. The
+          panel they control is the table below. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3" role="tablist" aria-label="สถานะใบเสนอราคา">
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
-        {STATUS_FILTERS.map((option) => {
-          const active = filterKey === option.key;
-          const label = statusFilterLabel(option);
+        {DEAL_QUOTATION_STATUS_TABS.map((tab) => {
+          const active = activeTab.key === tab.key;
+          const count = counts?.[tab.countKey];
           return (
             <button
-              key={option.key}
+              key={tab.key}
               type="button"
-              aria-pressed={active}
-              className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+              role="tab"
+              aria-selected={active}
+              aria-controls="quotation-list-panel"
+              className={`inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
                 active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
               }`}
-              onClick={() => setFilterKey(option.key)}
+              onClick={() => selectTab(tab.key)}
             >
-              {label}
+              {tab.label}
+              {Number.isFinite(count) ? (
+                <span className={`tabular-nums rounded-full px-1.5 text-2xs ${active ? 'bg-primary/15' : 'bg-surface-subtle text-text-muted'}`}>
+                  {count}
+                </span>
+              ) : null}
             </button>
           );
         })}
       </div>
+      <div id="quotation-list-panel" role="tabpanel">
 
-      <DataTable
-        columns={COLUMNS}
-        rows={rows}
-        getRowKey={(row) => row.id}
-        gridClassName={LIST_TABLE_GRID}
-        mobileCard={(row) => <QuotationCard row={row} />}
-        searchable
-        loading={listQuery.isLoading}
-        emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
-      />
+        <DataTable
+          columns={COLUMNS}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName={LIST_TABLE_GRID}
+          mobileCard={(row) => <QuotationCard row={row} />}
+          searchable
+          loading={listQuery.isLoading}
+          emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
+        />
+      </div>
     </PageStack>
   );
 }
