@@ -124,51 +124,69 @@ function docQuotation(overrides = {}) {
   };
 }
 
-describe('QuotationDocumentView tablet-band column floors (owner review V5, 2026-09-10)', () => {
-  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe the bug
-  // this pins: at 721px the six-column document was forced to `.reflow-cards`'s shared 900px floor
-  // inside a 655px container and scrolled 245px sideways, hiding เป็นเงิน entirely. That was
-  // measured in a real browser and can only be RE-measured in one. This is a TEXT guard on the
-  // two class-string decisions that fix it, so a later edit cannot quietly drop them:
+describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10)', () => {
+  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
+  // pinned here — both were measured in a real browser and can only be RE-measured in one. This is
+  // a TEXT guard on the class-string decisions, so a later edit cannot quietly drop them.
   //
-  //   1. the five NUMERIC columns carry a `min-content` floor, so the grid can never shrink a
-  //      baht figure below its own text (รายละเอียด keeps `minmax(0,…)` — it wraps, so it is the
-  //      column that should absorb the squeeze);
-  //   2. `tablet:min-w-0` releases the shared 900px floor for 721–1040px, which is only safe
-  //      BECAUSE of (1).
-  //
-  // Drop either and the browser regresses while this file stays green unless it checks the string.
-  function itemGridClasses(container) {
-    const head = container.querySelector('.table-head');
-    expect(head, 'no .table-head to read the grid classes from').toBeTruthy();
-    return head.className;
+  //   1. Every NUMERIC column carries a FIXED floor, so the grid can never shrink a baht figure
+  //      below its own text. Measured: เป็นเงิน was cut at every table width under 850px AND on
+  //      desktop at 1041–1150px where the sidebar returns.
+  //   2. The floors are FIXED lengths, never `min-content`. The head row and each data row are
+  //      SEPARATE grid containers, so `min-content` sizes each row from ITS OWN numbers and
+  //      right-aligned currency then staggers row to row (measured at up to 23px of drift before
+  //      this was corrected). Fixed floors give every row the identical track list.
+  //   3. รายละเอียด keeps `minmax(0, …)` and stays the FIRST track — it wraps, so it is the one
+  //      column that should absorb the squeeze.
+  //   4. `tablet:min-w-0` releases `.reflow-cards`'s shared 900px floor for 721–1040px, which is
+  //      safe only because of (1).
+  function gridClasses(el, what) {
+    expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
+    return el.className;
   }
 
-  it('floors every money column at min-content and lets only รายละเอียด be squeezed', () => {
+  it('floors every money column at a fixed width and lets only รายละเอียด be squeezed', () => {
     const { container } = render(<QuotationDocumentView quotation={quotation} />);
-    const classes = itemGridClasses(container);
 
-    // One `minmax(0,…)` — รายละเอียด, the wrapping column — and five `minmax(min-content,…)`.
-    const shrinkable = classes.match(/minmax\(0,/g) ?? [];
-    const floored = classes.match(/minmax\(min-content,/g) ?? [];
-    expect(shrinkable, 'only รายละเอียด may shrink below its content').toHaveLength(1);
-    expect(floored, 'the five numeric columns must each carry a min-content floor').toHaveLength(5);
+    // Asserted on the head row AND a data row. They share one constant today, so this cannot
+    // diverge — but splitting ITEM_GRID and flooring only one is exactly how the columns would
+    // stop lining up, and a guard that only reads the head row would stay green through it.
+    for (const [el, what] of [
+      [container.querySelector('.table-head'), '.table-head'],
+      [container.querySelector('.data-row'), '.data-row'],
+    ]) {
+      const classes = gridClasses(el, what);
 
-    // Order matters: รายละเอียด is the FIRST track. A floored first column would stop the
-    // description wrapping and put the squeeze back on the money.
-    expect(classes).toContain('grid-cols-[minmax(0,3fr)_minmax(min-content,');
+      const shrinkable = classes.match(/minmax\(0,/g) ?? [];
+      expect(shrinkable, `${what}: only รายละเอียด may shrink below its content`).toHaveLength(1);
+
+      // `min-content` is the specific WRONG floor: it re-sizes per row and staggers the currency.
+      expect(classes, `${what}: min-content floors stagger the columns row to row`)
+        .not.toContain('min-content');
+
+      // Five fixed rem floors, one per numeric column.
+      const fixed = classes.match(/minmax\(\d+(?:\.\d+)?rem,/g) ?? [];
+      expect(fixed, `${what}: each numeric column needs its own fixed floor`).toHaveLength(5);
+
+      // Order matters: รายละเอียด is the FIRST track. A floored first column would stop the
+      // description wrapping and put the squeeze straight back on the money.
+      expect(classes).toContain('grid-cols-[minmax(0,3fr)_minmax(');
+    }
   });
 
   it('releases the shared 900px .reflow-cards floor in the 721-1040px band', () => {
     const { container } = render(<QuotationDocumentView quotation={quotation} />);
-    const classes = itemGridClasses(container);
 
-    expect(classes).toContain('tablet:min-w-0');
-    // Still opted into the card reflow: below 721px the rows must become labelled cards, which
-    // the mobile-card-reflow suite above is what actually proves.
-    expect(classes).toContain('reflow-cards');
-    // The head row and the data rows must share the grid, or they stop lining up.
-    expect(container.querySelector('.data-row').className).toContain('tablet:min-w-0');
+    for (const [el, what] of [
+      [container.querySelector('.table-head'), '.table-head'],
+      [container.querySelector('.data-row'), '.data-row'],
+    ]) {
+      const classes = gridClasses(el, what);
+      expect(classes, `${what}: the shared 900px floor must be released`).toContain('tablet:min-w-0');
+      // Still opted into the card reflow: below 721px these rows must become labelled cards,
+      // which the mobile-card-reflow suite above is what actually proves.
+      expect(classes).toContain('reflow-cards');
+    }
   });
 });
 
