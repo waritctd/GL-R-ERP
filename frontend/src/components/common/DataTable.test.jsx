@@ -105,6 +105,186 @@ describe('DataTable', () => {
     expect(ageCell.className).toContain('numeric-cell');
   });
 
+  // ── Sorting a column that has NO sortAccessor ────────────────────────────────────────────────
+  // The fallback used to be `sortAccessor || render`, so a column whose render returned a React
+  // ELEMENT handed the comparator two objects. Both stringified to "[object Object]", every
+  // comparison returned 0, and the sort was a silent no-op — the header still took
+  // aria-sort="ascending" and its active styling while the rows sat still. Measured on /quotations
+  // before the fix: เลขที่, ยอดรวม and สถานะ all reported ascending and did not move. Eight columns
+  // across five pages were affected.
+  //
+  // Both tests below FAIL against the old `sortAccessor || render` line — that is the point of
+  // them, and it is mutation-checked.
+  describe('columns without a sortAccessor', () => {
+    it('sorts by the text a rich cell renders, not by the element object', () => {
+      const rows = [
+        { id: 1, label: 'Charlie' },
+        { id: 2, label: 'Alice' },
+        { id: 3, label: 'Bob' },
+      ];
+      render(
+        <DataTable
+          columns={[{
+            key: 'label',
+            header: 'Label',
+            sortable: true,
+            // No sortAccessor, and the render returns an ELEMENT — the broken shape.
+            render: (row) => <strong className="x"><span>{row.label}</span></strong>,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Label/ }));
+      expect(screen.getAllByRole('cell').map((el) => el.textContent))
+        .toEqual(['Alice', 'Bob', 'Charlie']);
+
+      fireEvent.click(screen.getByRole('button', { name: /Label/ }));
+      expect(screen.getAllByRole('cell').map((el) => el.textContent))
+        .toEqual(['Charlie', 'Bob', 'Alice']);
+    });
+
+    it('compares a formatted money cell numerically, not as text', () => {
+      // Text alone is not enough, and this is the case that proves it: as text `฿1,790,714.29`
+      // sorts BEFORE `฿600,616.00`, which is a wrong answer rather than a missing one.
+      // Zero and a negative are in here deliberately. With only positive non-zero values, two
+      // parser branches go untested and stay green when broken: `numeric == null` weakened to
+      // `!numeric` sends ฿0.00 down the text path, and dropping `[+-]?` sends a negative down it.
+      // A draft quotation with no items renders ฿0.00, so neither is hypothetical.
+      const rows = [
+        { id: 1, total: 1790714.29 },
+        { id: 2, total: 600616 },
+        { id: 3, total: 29583.36 },
+        { id: 4, total: 2032870.7 },
+        { id: 5, total: 0 },
+        // TWO negatives, not one. With a single negative the test stays green even when the sign is
+        // dropped from the number pattern: it falls back to text, and Thai collation happens to
+        // place `฿-…` first anyway, so the expectation is unchanged. These two discriminate —
+        // numerically -9,999 precedes -1,234, but as text `฿-1,234.00` precedes `฿-9,999.00`.
+        { id: 6, total: -1234 },
+        { id: 7, total: -9999 },
+      ];
+      const baht = (n) => `฿${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      render(
+        <DataTable
+          columns={[{
+            key: 'total',
+            header: 'Total',
+            sortable: true,
+            render: (row) => <span className="tabular-nums">{baht(row.total)}</span>,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Total/ }));
+      expect(screen.getAllByRole('cell').map((el) => el.textContent)).toEqual([
+        '฿-9,999.00', '฿-1,234.00', '฿0.00', '฿29,583.36', '฿600,616.00', '฿1,790,714.29',
+        '฿2,032,870.70',
+      ]);
+    });
+
+    it('leaves text that merely contains digits as text', () => {
+      // A document number must NOT be coerced to a number.
+      //
+      // These three are chosen so that stripping non-digits gives a DIFFERENT order, which an
+      // earlier version of this test failed to do: `QT-2026-0005-2` / `-0003` / `-0005` happen to
+      // sort identically either way, so the test passed against a deliberately broken stripper and
+      // proved nothing. Here, digits-only yields 20260009 / 202600091 / 20260010, which orders
+      // `-0010` BEFORE `-0009-1`; as text, `-0009-1` comes first. Only the correct behaviour gives
+      // the expectation below.
+      const rows = [
+        { id: 1, number: 'QT-2026-0010' },
+        { id: 2, number: 'QT-2026-0009-1' },
+        { id: 3, number: 'QT-2026-0009' },
+      ];
+      render(
+        <DataTable
+          columns={[{
+            key: 'number',
+            header: 'Number',
+            sortable: true,
+            render: (row) => <a href="/x"><code>{row.number}</code></a>,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Number/ }));
+      expect(screen.getAllByRole('cell').map((el) => el.textContent))
+        .toEqual(['QT-2026-0009', 'QT-2026-0009-1', 'QT-2026-0010']);
+    });
+
+    it('warns instead of silently doing nothing when a cell has no text children', () => {
+      // The original bug in a new disguise: a component carrying its content in a PROP rather than
+      // in children flattens to '' for every row, so every comparison ties. This shape is real —
+      // PayrollPage's `MoneyCode({ value })` and TicketListPage's `<DaysBadge stageUpdatedAt=…/>`
+      // are both DataTable cells of exactly this kind (both safe today, because both columns supply
+      // their own sortAccessor). Nothing can recover the
+      // text from an arbitrary prop, so the failure is made LOUD instead of silent.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      function MoneyCode({ value }) { return <code>{value.toFixed(2)}</code>; }
+      const rows = [{ id: 1, total: 2 }, { id: 2, total: 1 }];
+      render(
+        <DataTable
+          columns={[{
+            key: 'total',
+            header: 'Total',
+            sortable: true,
+            render: (row) => <MoneyCode value={row.total} />,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Total/ }));
+      expect(warn).toHaveBeenCalled();
+      expect(warn.mock.calls[0][0]).toContain('sortAccessor');
+      warn.mockRestore();
+    });
+
+    it('does not change how a column WITH a sortAccessor compares', () => {
+      // The fix is confined to the fallback path, so nothing that already sorted correctly moves.
+      const rows = [
+        { id: 1, code: '12' },
+        { id: 2, code: '9' },
+        { id: 3, code: '100' },
+      ];
+      render(
+        <DataTable
+          columns={[{
+            key: 'code',
+            header: 'Code',
+            sortable: true,
+            // Returns a STRING deliberately: string ordering is what this caller asked for.
+            sortAccessor: (row) => row.code,
+            render: (row) => <span>{row.code}</span>,
+          }]}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="t"
+          pageSize={10}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /Code/ }));
+      expect(screen.getAllByRole('cell').map((el) => el.textContent))
+        .toEqual(['100', '12', '9']);
+    });
+  });
+
   it('renders an optional semantic footer with the filtered/sorted rows before pagination', () => {
     const rows = makeRows(25);
     const { container } = render(
