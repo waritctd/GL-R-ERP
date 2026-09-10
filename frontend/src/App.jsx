@@ -61,6 +61,10 @@ const CatalogSearchPage = lazy(() => import('./features/catalog/CatalogSearchPag
 const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/PricingRequestQueuePage.jsx').then(toDefault('PricingRequestQueuePage')));
 const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
+// Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09). Sibling
+// feature to the PricingRequest chain above, not a replacement.
+const QuotationListPage = lazy(() => import('./features/quotations/QuotationListPage.jsx').then(toDefault('QuotationListPage')));
+const QuotationEditorPage = lazy(() => import('./features/quotations/QuotationEditorPage.jsx').then(toDefault('QuotationEditorPage')));
 // Attendance calendar admin (PR #480 shipped the hr.holiday / hr.work_schedule_assignment write
 // API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
 // SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
@@ -79,9 +83,13 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 // UserPrincipal is session state with 306 test construction sites). Flatten it here so the rest of
 // the app keeps reading one user object. This only decides whether the nav item renders — every
 // admin endpoint re-checks the flag against the database.
+//
+// `canCreateQuotation` is the same shape, carried by the same record (AuthResponse.java's own
+// javadoc) -- Quotation v2's per-employee "can create quotations" capability (owner ruling, Ploy
+// 2026-09-09). Also a hint only: DealQuotationService re-reads the grant live on every request.
 function userFromAuthResponse(response) {
   if (!response?.user) return null;
-  return { ...response.user, admin: Boolean(response.admin) };
+  return { ...response.user, admin: Boolean(response.admin), canCreateQuotation: Boolean(response.canCreateQuotation) };
 }
 
 function TicketDetailRoute({ user, showToast }) {
@@ -485,6 +493,22 @@ export function App() {
                 <Route
                   path="/pricing-requests/:id"
                   element={<PricingRequestDetailPage user={user} showToast={showToast} />}
+                />
+                {/* Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Guarded by
+                    canViewDealQuotations in PATH_GUARDS. /quotations/new reads ?ticket= (the
+                    editor page reads it via useSearchParams itself); /quotations/:id renders
+                    the editor when DRAFT + the viewer may edit, otherwise a read-only summary. */}
+                <Route
+                  path="/quotations"
+                  element={<QuotationListPage user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/quotations/new"
+                  element={<QuotationEditorPage user={user} showToast={showToast} />}
+                />
+                <Route
+                  path="/quotations/:id"
+                  element={<QuotationEditorPage user={user} showToast={showToast} />}
                 />
                 {/* Import's cross-deal fulfilment workspace (งานนำเข้า) — the four
                     stage-12 transitions performed in place. Guarded by

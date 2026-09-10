@@ -83,6 +83,13 @@ const PATH_GUARDS = [
   { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
   { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewTickets') },
   { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Exact + prefix (the editor's
+  // /quotations/new and /quotations/:id both need to fall under this). Mirrors the plan's
+  // "view/list/download" role set (ROLE_PERMISSIONS.canViewDealQuotations) OR'd with the
+  // per-employee canCreateQuotation capability grant (owner ruling 2026-09-09) — a
+  // grant-holder's role need not be in that role list at all (e.g. `qc`). Per-row "own deals
+  // only" scoping for `sales` is enforced server-side, not by this route guard.
+  { test: (p) => p === '/quotations' || p.startsWith('/quotations/'), can: (u) => hasPermission(u.role, 'canViewDealQuotations') || Boolean(u.canCreateQuotation) },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
   // .canConfirmPayments exactly (account/ceo), same audience as the ticket

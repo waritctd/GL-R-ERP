@@ -41,6 +41,8 @@ class TicketServiceTest {
     private final CustomerRepository customerRepo = mock(CustomerRepository.class);
     private final QuotationRenderer quotationRenderer = new QuotationRenderer();
     private final PricingRequestService pricingRequestService = mock(PricingRequestService.class);
+    private final th.co.glr.hr.auth.EmployeeAuthRepository employeeAuthRepo =
+        mock(th.co.glr.hr.auth.EmployeeAuthRepository.class);
     {
         // Default stub so every markLost/cancel call in this file (most of which
         // don't care about the cascade's own outcome) doesn't NPE on
@@ -74,7 +76,7 @@ class TicketServiceTest {
     }
     private final TicketService service = new TicketService(
         ticketRepo, notifRepo, new ObjectMapper(), customerRepo, quotationRenderer,
-        pricingRequestService);
+        pricingRequestService, employeeAuthRepo);
 
     private final UserPrincipal salesActor   = actor(1L, "sales");
     private final UserPrincipal otherSales   = actor(2L, "sales");

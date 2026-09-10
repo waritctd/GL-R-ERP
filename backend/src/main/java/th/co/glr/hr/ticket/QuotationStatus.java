@@ -18,4 +18,11 @@ public final class QuotationStatus {
     // Declared now (Step 5 completes the customer-response lifecycle) so the V74 CHECK
     // constraint widening does not need a second migration later.
     public static final String REVISION_REQUESTED = "REVISION_REQUESTED";
+    // Quotation v2 (direct deal quotation, V165): a submitted draft awaiting sales_manager/ceo
+    // approval. See th.co.glr.hr.dealquotation.DealQuotationService for the full status machine
+    // (DRAFT -> PENDING_APPROVAL -> APPROVED | back to DRAFT on reject).
+    public static final String PENDING_APPROVAL = "PENDING_APPROVAL";
+    // Quotation v2: terminal-until-revised. Editing an APPROVED quotation creates a new DRAFT
+    // revision instead of mutating this row (see DealQuotationService#createRevision).
+    public static final String APPROVED = "APPROVED";
 }

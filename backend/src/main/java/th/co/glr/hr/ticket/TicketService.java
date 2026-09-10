@@ -16,6 +16,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.DealEntryAccess;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
@@ -91,17 +93,21 @@ public class TicketService {
     // injects TicketRepository, not TicketService, so this dependency direction
     // (TicketService -> PricingRequestService -> TicketRepository) is acyclic.
     private final PricingRequestService pricingRequests;
+    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- create() below is the ONE call
+    // site that uses this; every other SALES_ROLES check in this class is untouched.
+    private final EmployeeAuthRepository employeeAuth;
 
     public TicketService(TicketRepository tickets, NotificationRepository notifications,
                          ObjectMapper objectMapper,
                          CustomerRepository customers, QuotationRenderer quotationRenderer,
-                         PricingRequestService pricingRequests) {
+                         PricingRequestService pricingRequests, EmployeeAuthRepository employeeAuth) {
         this.tickets           = tickets;
         this.notifications     = notifications;
         this.objectMapper      = objectMapper;
         this.customers         = customers;
         this.quotationRenderer = quotationRenderer;
         this.pricingRequests   = pricingRequests;
+        this.employeeAuth      = employeeAuth;
     }
 
     public List<TicketSummaryDto> list(String status, UserPrincipal actor) {
@@ -187,7 +193,11 @@ public class TicketService {
 
     @Transactional
     public TicketDto create(CreateTicketRequest request, UserPrincipal actor) {
-        requireRole(actor, SALES_ROLES);
+        // layout-spec / inline-deal-spec (owner ruling 2026-09-10): widened from sales-only to
+        // sales/sales_manager/canCreateQuotation-grant -- see DealEntryAccess's own Javadoc. This
+        // is the ONE gate on this class that widens; every other SALES_ROLES check below is
+        // deliberately untouched.
+        DealEntryAccess.requireCanEnterDeal(actor, employeeAuth);
         // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project
         // can hold many deals over time). Pre-existing project-less tickets stay valid.
         if (request.projectId() == null) {

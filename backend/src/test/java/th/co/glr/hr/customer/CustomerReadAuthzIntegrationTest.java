@@ -12,6 +12,7 @@ import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
@@ -69,7 +70,8 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         CustomerRepository customers = new CustomerRepository(jdbc);
         ContactRepository contacts = new ContactRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
-        CustomerService customerService = new CustomerService(customers, contacts, projects);
+        EmployeeAuthRepository employeeAuth = new EmployeeAuthRepository(jdbc);
+        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
 
         // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
         // (JacksonAutoConfiguration), so the MockMvc layer is wired with the same converter type.
@@ -81,7 +83,8 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             .build();
 
         mvc = MockMvcBuilders
-            .standaloneSetup(new CustomerController(customers, contacts, projects, customerService, sessions))
+            .standaloneSetup(new CustomerController(customers, contacts, projects, customerService,
+                sessions, employeeAuth))
             .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();

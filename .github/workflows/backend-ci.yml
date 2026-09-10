@@ -140,7 +140,26 @@ jobs:
       # real .xls templates to PDF by shelling out to `soffice --headless`. Without it those tests
       # self-skip (Assumptions.assumeTrue on LibreOfficePdfConverter.isAvailable), so install it here
       # to actually exercise the document-generation path. Mirrors backend/Dockerfile's Render setup.
-      - name: Install LibreOffice (for PDF renderer tests)
+      #
+      # Headless Chromium is required by the quotation v2 HTML renderer tests
+      # (ChromiumPdfPrinterTest, ChromiumPdfPrinterConcurrencyTest, and the HTML-vs-XLS fidelity
+      # gate HtmlXlsFidelityTest, which needs BOTH engines). Two things this step deliberately does
+      # NOT do:
+      #   - `apt-get install chromium`: on Ubuntu 24.04 the `chromium-browser` package is a
+      #     transitional stub that shells out to snap, and there is no `chromium` .deb in the
+      #     Ubuntu archive (that is Debian's package, the one backend/Dockerfile installs). The
+      #     ubuntu-24.04 runner image already ships a real Chromium (/usr/bin/chromium ->
+      #     /usr/local/share/chromium/chrome-linux/chrome, alongside Google Chrome) — use that.
+      #   - let Playwright download its own browser: `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` plus the
+      #     explicit CHROMIUM_PATH mean the driver never fetches its ~170 MB bundled Chromium.
+      # fonts-thai-tlwg gives both engines the same Thai-capable fallback fonts (the licensed
+      # Angsana/Browallia/Cordia are gitignored and never present in CI); the fidelity gate
+      # compares the two renders against EACH OTHER, so what matters is that they see the same
+      # fontconfig, not which font it resolves to.
+      #
+      # REQUIRE_CHROMIUM=1 turns the tests' availability guard from "skip" into "fail": a missing
+      # or unlaunchable browser here must go RED, never green by absence (ChromiumTestGate).
+      - name: Install LibreOffice + Thai fonts, resolve Chromium (for PDF renderer tests)
         if: steps.changes.outputs.backend == 'true'
         # The runner image ships a Google Chrome apt source this job does not need. When that
         # repo serves a Packages.gz whose hash disagrees with its own Release file, `apt-get
@@ -149,9 +168,30 @@ jobs:
         # in the repo. Dropping the source list first makes this step depend only on the Ubuntu
         # archives it actually reads.
         run: |
+          set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libreoffice-calc
+          sudo apt-get install -y --no-install-recommends libreoffice-calc fonts-thai-tlwg
+
+          CHROMIUM_BIN=""
+          for candidate in chromium chromium-browser google-chrome google-chrome-stable; do
+            if resolved="$(command -v "$candidate" 2>/dev/null)"; then
+              CHROMIUM_BIN="$resolved"
+              break
+            fi
+          done
+          if [ -z "$CHROMIUM_BIN" ]; then
+            echo "::error title=No Chromium on the runner::None of chromium / chromium-browser / \
+          google-chrome / google-chrome-stable is on PATH. The runner image used to ship one; \
+          install a real (non-snap) Chromium here rather than letting the Chromium PDF tests skip."
+            exit 1
+          fi
+          echo "Using Chromium at $CHROMIUM_BIN: $("$CHROMIUM_BIN" --version 2>/dev/null || echo '(version unavailable)')"
+          {
+            echo "CHROMIUM_PATH=$CHROMIUM_BIN"
+            echo "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+            echo "REQUIRE_CHROMIUM=1"
+          } >> "$GITHUB_ENV"
 
       # Testcontainers spins its own throwaway Postgres via the runner's Docker daemon, so the
       # integration + security + Flyway tests run without a manually provisioned DB service. The

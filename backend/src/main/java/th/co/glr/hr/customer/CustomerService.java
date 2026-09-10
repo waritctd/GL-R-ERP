@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import th.co.glr.hr.auth.DealEntryAccess;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.ticket.TicketAccessPolicy;
@@ -38,6 +40,12 @@ import th.co.glr.hr.ticket.TicketAccessPolicy;
  * DepositNoticeService}/{@code CustomerQuotationService}/{@code TicketService} all reach customer
  * data by injecting {@code CustomerRepository}/{@code ContactRepository} directly, never through
  * this controller, and each already enforces its own (equal-or-narrower) role gate.
+ *
+ * <p>Owner ruling 2026-09-10 ({@link DealEntryAccess}): these three reads ALSO admit any employee
+ * holding the live {@code canCreateQuotation} grant — the inline-deal-creation typeahead
+ * ({@code /quotations/new}'s customer/project picker) would otherwise 403 for exactly the people
+ * the grant was created to unblock. {@code sales_manager} is already inside
+ * {@link TicketAccessPolicy#VIEWER_ROLES}, so it needs no separate widening here.
  */
 @Service
 public class CustomerService {
@@ -47,31 +55,37 @@ public class CustomerService {
     private final CustomerRepository customers;
     private final ContactRepository  contacts;
     private final ProjectRepository  projects;
+    // Deal-ENTRY grant read only (see DealEntryAccess's own Javadoc) -- ORed alongside
+    // VIEWER_ROLES below, never replacing it (import/ceo/account must stay reachable too).
+    private final EmployeeAuthRepository employeeAuth;
 
-    public CustomerService(CustomerRepository customers, ContactRepository contacts, ProjectRepository projects) {
-        this.customers = customers;
-        this.contacts  = contacts;
-        this.projects  = projects;
+    public CustomerService(CustomerRepository customers, ContactRepository contacts, ProjectRepository projects,
+                           EmployeeAuthRepository employeeAuth) {
+        this.customers    = customers;
+        this.contacts     = contacts;
+        this.projects     = projects;
+        this.employeeAuth = employeeAuth;
     }
 
     public List<CustomerDto> search(String q, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        requireReadAccess(actor);
         return customers.search(q);
     }
 
     public List<ContactDto> listContacts(long customerId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        requireReadAccess(actor);
         return contacts.findByCustomer(customerId);
     }
 
     public List<ProjectDto> listProjects(long customerId, UserPrincipal actor) {
-        requireRole(actor, VIEWER_ROLES);
+        requireReadAccess(actor);
         return projects.findByCustomer(customerId);
     }
 
-    private void requireRole(UserPrincipal actor, Set<String> allowed) {
-        if (!allowed.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+    private void requireReadAccess(UserPrincipal actor) {
+        if (VIEWER_ROLES.contains(actor.role()) || DealEntryAccess.canEnterDeal(actor, employeeAuth)) {
+            return;
         }
+        throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 }

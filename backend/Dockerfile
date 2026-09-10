@@ -26,9 +26,48 @@ WORKDIR /app
 # classic MS Thai font names. Installing it means even a totally fontless build (see below) still
 # renders real Thai glyphs instead of hollow .notdef boxes. It does NOT replace the licensed fonts:
 # only they have the exact metrics the templates were laid out against — see backend/fonts/README.md.
+#
+# Quotation v2 (owner ruling 2026-09-10, "the excel template approach is giving too much
+# problem"): the direct-deal quotation's PDF is now an HTML document printed by headless Chromium
+# (th.co.glr.hr.common.ChromiumPdfPrinter), not LibreOffice — chromium is the Debian package
+# providing /usr/bin/chromium. It reads the SAME fontconfig setup as LibreOffice above (the
+# licensed Thai fonts, or the fonts-thai-tlwg substitutes), so no separate font install is
+# needed for it. The legacy/PCR quotation PDF and every other XLS→PDF document still go through
+# LibreOffice, untouched — libreoffice-calc stays required.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libreoffice-calc fontconfig fonts-thai-tlwg && \
+    apt-get install -y --no-install-recommends libreoffice-calc fontconfig fonts-thai-tlwg chromium && \
     rm -rf /var/lib/apt/lists/*
+
+# CHROMIUM_PATH points ChromiumPdfPrinter at the Debian package's binary instead of trying to
+# download Playwright's own bundled Chromium at runtime (the container has no reason to carry
+# two copies of Chromium, and a runtime download would be both slow and a new outbound-network
+# dependency for a request path). PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD stops Playwright's own
+# postinstall/first-launch download attempt entirely — belt and suspenders with the explicit
+# executable path above, and avoids surprise network calls during `docker build` or first boot.
+#
+# With CHROMIUM_PATH set, ChromiumPdfPrinter launches the browser with the container flags
+# --no-sandbox --disable-dev-shm-usage --disable-gpu --font-render-hinting=none, and each one is
+# load-bearing here: the process runs as the unprivileged USER 10001 (below) in a container with
+# no user-namespace sandbox, so without --no-sandbox Chromium refuses to start at all; Docker's
+# default /dev/shm is 64 MB, which the renderer's shared memory exhausts on a multi-page document
+# unless --disable-dev-shm-usage moves it to /tmp; there is no GPU; and hinting is switched off so
+# glyph shaping does not depend on the host. XDG_* below give the non-root user (whose HOME does
+# not exist — `useradd -r` creates none) somewhere writable for Chromium's config/cache; the
+# browser profile itself is a Playwright temp dir under java.io.tmpdir and needs nothing else.
+#
+# Image size: the Playwright dependency adds ~200 MB to app.jar (driver-bundle carries a Node
+# runtime for five platforms and Maven Central has no per-platform artifact — see backend/pom.xml),
+# and the Debian chromium package ~250 MB on top of libreoffice-calc's ~150 MB.
+#
+# ⚠️ FIRST DEPLOY OF THIS IMAGE NEEDS A SMOKE RENDER. This Dockerfile has not been built on the
+# authoring Mac (its Docker registry pulls are blocked by broken host IPv6). Before switching
+# APP_QUOTATION_PDF_RENDERER=chromium on, download one direct-deal quotation PDF on the deployed
+# image and read the logs: a launch failure surfaces as 503 "ระบบสร้าง PDF ไม่พร้อมใช้งาน" and a
+# "Headless Chromium is not available" warning; the default `xls` engine is unaffected either way.
+ENV CHROMIUM_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV XDG_CONFIG_HOME=/tmp/.config
+ENV XDG_CACHE_HOME=/tmp/.cache
 
 # fonts-thai-tlwg's own fontconfig rules already cover three of the templates' four Thai family
 # names — verified empirically in an isolated container (fontconfig + fonts-thai-tlwg only, no

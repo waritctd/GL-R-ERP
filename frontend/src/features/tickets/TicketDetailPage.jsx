@@ -35,6 +35,11 @@ import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
+// Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Sibling to DealQuotationPanel
+// above (the PCR-chain's own panel, untouched) -- renders `origin = 'DEAL_DIRECT'` rows, which
+// never overlap that panel's rows.
+import { DealDirectQuotationPanel } from '../quotations/DealDirectQuotationPanel.jsx';
+import { canViewDealQuotation } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
@@ -1904,6 +1909,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               call dealQuotationPanelRef directly — but the id/scroll-mt
               wrapper stays for any other in-page anchor that might still
               want it. */}
+          {/* Quotation v2 (QUOTATION-V2-PLAN.md) -- mounted ABOVE the PCR-chain panel below per
+              the implementation brief. Gated on canViewDealQuotation alone (not `sections`,
+              which salesViewScope.js does not know about this feature): the plan's own authz
+              already scopes `sales` to its own deals server-side, and every role that reaches
+              this page's documents tab at all is one canViewDealQuotation covers too. */}
+          {canViewDealQuotation(user) ? (
+            // #L6: normalised to Number -- `ticketId` here is the raw useParams() STRING, and
+            // DealDirectQuotationPanel's own query key (queryKeys.dealQuotationsByTicket) embeds
+            // it verbatim. The editor page reaches the same cache entry via
+            // `Number(ticketIdParam)` (its `effectiveTicketId`), so a string here would key this
+            // panel's list query differently from anything invalidating/refetching by the numeric
+            // id and leave it never refreshing off that path.
+            <DealDirectQuotationPanel ticketId={Number(ticketId)} deal={summary} user={user} showToast={showToast} />
+          ) : null}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
               <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} user={user} showToast={showToast} />

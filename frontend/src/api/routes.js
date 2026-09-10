@@ -18,6 +18,11 @@ export const API_ROUTES = {
     detail: (id) => `/api/employees/${id}`,
     // HR-only temporary-password issue. Mirrors EmployeeController#resetPassword.
     resetPassword: (id) => `/api/employees/${id}/reset-password`,
+    // Quotation v2's approver signature image (hr.employee_signature, V166) — self/ceo/admin
+    // write, everyone who may view the employee reads. Mirrors EmployeeSignatureController. `id`
+    // is the EMPLOYEE id (the signature is keyed to hr.employee, not the login account) — see
+    // QUOTATION-V2-PLAN.md's Data section.
+    signature: (id) => `/api/employees/${id}/signature`,
   },
   profileRequests: {
     list: '/api/profile-requests',
@@ -450,6 +455,31 @@ export const API_ROUTES = {
     attachment: (id) => `/api/pricing-request-attachments/${id}`,
     attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
   },
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09). Bypasses
+  // the PricingRequest -> factory-quote -> CEO-costing chain entirely: sales adds items straight
+  // onto a quotation, types unit price + discount, sales_manager/ceo approves. Mirrors
+  // th.co.glr.hr.dealquotation.DealQuotationController — a SIBLING package to pricingrequest/ and
+  // customerquotation/, not a replacement for either. `sales.quotation.origin = 'DEAL_DIRECT'`
+  // rows never overlap the PCR-chain's `pricing_request_id IS NOT NULL` rows (V166's own header).
+  dealQuotations: {
+    listForTicket: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
+    create: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
+    // Approver queue / role-scoped list. `status` is the only server-side filter the plan
+    // documents (`GET /deal-quotations?status=...`); sales is scoped to its own deals server-side.
+    list: (params = {}) => {
+      const p = new URLSearchParams();
+      if (params.status) p.set('status', params.status);
+      return `/api/deal-quotations${p.toString() ? `?${p}` : ''}`;
+    },
+    detail: (id) => `/api/deal-quotations/${id}`,
+    calculateLine: '/api/deal-quotations/calculate-line',
+    submit: (id) => `/api/deal-quotations/${id}/submit`,
+    approve: (id) => `/api/deal-quotations/${id}/approve`,
+    reject: (id) => `/api/deal-quotations/${id}/reject`,
+    revisions: (id) => `/api/deal-quotations/${id}/revisions`,
+    cancel: (id) => `/api/deal-quotations/${id}/cancel`,
+    file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -590,6 +620,13 @@ export const ROLE_PERMISSIONS = {
   // pricing request (sales still sees its own deal's requests via
   // PricingRequestPanel, gated by ticket ownership, not this key).
   canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
+  // Quotation v2 direct-deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09) — the
+  // pricing-chain-BYPASS quotation. Route guard only, for `/quotations`: mirrors the plan's Authz
+  // section's "view/list/download" role set exactly (sales scoped to its own deals server-side,
+  // sales_manager/ceo oversight, import/account read-only). create/edit/submit/cancel/revise and
+  // approve/reject are NARROWER than this — see quotationMeta.js's own predicates, which mirror
+  // the plan's authz table one gate at a time rather than living in this flat list.
+  canViewDealQuotations: ['sales', 'sales_manager', 'ceo', 'import', 'account'],
   // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
   // with no UI at all). Mirrors HolidayController / WorkScheduleController /
   // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING

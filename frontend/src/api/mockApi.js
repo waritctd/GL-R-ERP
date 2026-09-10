@@ -43,6 +43,11 @@ import {
   RECIPIENT_OPTIONS as PRICING_REQUEST_RECIPIENT_OPTIONS,
   UNIT_BASIS_OPTIONS as PRICING_REQUEST_UNIT_BASIS_OPTIONS,
 } from '../features/pricingRequests/pricingRequestMeta.js';
+// Quotation v2 (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09): direct deal quotation, bypassing
+// the PricingRequest chain entirely. Status transition table shared with the UI so the mock's
+// gate can't drift from the frontend's own copy of QuotationStatus (the authoritative table lives
+// in the backend dealquotation/ package once it lands).
+import { canTransitionDealQuotation } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
 // and for the small local `round2`/`mockInvoiceCalculation` helpers that replace this import
@@ -860,6 +865,10 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
 const mockAttachments = [];
 let mockAttachSeq = 1;
 
+// hr.employee_signature (V166, Quotation v2's approver signature image). Keyed by employee id,
+// one row max per employee (PK), object-URL-backed — see employees.uploadSignature above.
+const mockEmployeeSignatures = new Map();
+
 // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): the
 // deal_activity log. Its own store, not on the ticket, mirrors sales.deal_activity
 // being its own table (same convention as mockAttachments above).
@@ -955,8 +964,15 @@ const mockPriceImportFactories = [
 let mockProductPriceSeq = 100;
 let mockPriceVersionSeq = 100;
 const mockProductPrices = [
-  { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
-  { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72 },
+  // Quotation v2 direct-deal-quotation (V166, docs/sales/quotation-v2-plan.md): thicknessMm/
+  // pcsPerBox are additive ProductPriceDto fields the item editor's catalog typeahead autofills
+  // (QuotationItemRow.pickCatalog). Carried on just these two fixture rows so the autofill has
+  // something real to demonstrate in the browser -- every other row leaving them undefined is
+  // the honest "catalog gap" case (roughly a third of the prod catalog lacks thickness per
+  // prod-catalog-41pct-unpriceable-no-thickness.md), which sales must still be able to complete
+  // by hand.
+  { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72, thicknessMm: 10, pcsPerBox: 3 },
+  { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72, thicknessMm: 10, pcsPerBox: 3 },
   { priceId: 3, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-F800-ASH', grade: null,  collection: 'Frame',        productName: 'Ash',              color: 'Ash',     surface: 'Naturale',  sizeRaw: '80x80',  price: 38.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.64 },
   { priceId: 4, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'L-Trim',           color: null,      surface: null,        sizeRaw: '10x60',  price: 38.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: null },
   { priceId: 5, factoryId: 2, factoryName: 'REFIN',        productCode: null,           grade: null,  collection: 'Terraço',      productName: 'Corner',           color: null,      surface: null,        sizeRaw: '10x10',  price: 55.00, currency: 'EUR', priceUnit: 'per_piece', sqmPerPiece: null },
@@ -1102,6 +1118,18 @@ let mockDiscountApprovalSeq = 1;
 // per call site is how the Java side drifted before. `requireTicketViewer` below wraps the same
 // list but cannot be reused -- it takes a ticket id and applies a sales-ownership check.
 const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
+
+// Read gate for the three customer/contact/project reads below: CUSTOMER_VIEWER_ROLES, OR'd with
+// DealEntryAccess.canEnterDeal's canCreateQuotation grant (sales/sales_manager are already
+// members of CUSTOMER_VIEWER_ROLES, so the grant is the only thing this OR adds — e.g. a
+// non-sales employee who can enter a deal but has no standing viewer role).
+function requireCustomerViewer() {
+  const user = requireSession();
+  if (!CUSTOMER_VIEWER_ROLES.includes(user.role) && !user.canCreateQuotation) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
+  return user;
+}
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
@@ -1842,6 +1870,16 @@ function publicUser(user) {
   };
 }
 
+// Mirrors AuthResponse.java's shape: `{ user, admin, canCreateQuotation }` -- `admin` and
+// `canCreateQuotation` are siblings of `user`, not fields ON it (App.jsx's userFromAuthResponse
+// flattens them back onto one object). auth.login/me/changePassword all resolve this so
+// `canCreateQuotation` actually reaches the frontend under mock mode (#H4) -- previously these
+// three returned `{ user: publicUser(user) }` alone, so `response.canCreateQuotation` was always
+// undefined regardless of the seed's own `canCreateQuotation` field on `db.users`.
+function authResponse(user) {
+  return { user: publicUser(user), admin: Boolean(user?.admin), canCreateQuotation: Boolean(user?.canCreateQuotation) };
+}
+
 function requireSession() {
   if (!sessionUser) fail('กรุณาเข้าสู่ระบบก่อนใช้งาน', 401);
   return sessionUser;
@@ -1871,6 +1909,22 @@ function requireFulfilmentOrOwningRep(ticket) {
 function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+// Mirrors DealEntryAccess.canEnterDeal — who may enter a deal from scratch: create a ticket, or
+// create/read a customer/contact/project on the deal-entry flow (TicketCreateModal /
+// /quotations/new with no ?ticket=). Owner ruling 2026-09-10 widened this from the historical
+// sales-only gate (TicketService.SALES_ROLES / CustomerController's old
+// requireAnyRole(..., "sales")) to also admit sales_manager and any user holding the live
+// canCreateQuotation grant (hr.employee.can_create_quotation). Deliberately narrow, same as the
+// Java side: this is a NEW gate for deal-ENTRY only and must never replace hasRole('sales')
+// elsewhere in this file (ticket submit/edit/cancel/stock declaration, etc. stay sales-only).
+function requireDealEntry() {
+  const user = requireSession();
+  if (user.role !== 'sales' && user.role !== 'sales_manager' && !user.canCreateQuotation) {
+    fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  }
   return user;
 }
 
@@ -4590,6 +4644,346 @@ const LEAVE_PREVIEW_BLOCKING_FIXTURE = {
   },
 };
 
+// ── Deal Direct Quotations (Quotation v2, QUOTATION-V2-PLAN.md) ──────────────────────────────
+// Mirrors th.co.glr.hr.dealquotation package. See quotationMeta.js for the shared status/authz
+// table this mock imports rather than re-deriving.
+
+const DEAL_QUOTATION_VIEWER_ROLES = ['sales', 'sales_manager', 'ceo', 'import', 'account'];
+
+// #H4: `user.canCreateQuotation` (mirrors AuthResponse.canCreateQuotation / DealQuotationService
+// #hasQuotationGrant) grants "any deal" the same way sales_manager does, for view AND write --
+// but never for approve/reject, which stay role-only (see approve/reject below, which call
+// hasRole('sales_manager', 'ceo') directly and never consult this).
+function hasDealQuotationMockGrant(user) {
+  return Boolean(user?.canCreateQuotation);
+}
+
+function requireDealQuotationViewAccess(ticket, user) {
+  if (hasDealQuotationMockGrant(user)) return;
+  if (!DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+// Mirrors DealQuotationService's create/update/submit/cancel/createRevision gate: sales (deal
+// owner), sales_manager (any deal), or a canCreateQuotation grant (any deal). Same shape as
+// requireDealQuotationTicketWriteAccess's pricing-request sibling, requireFulfilmentOrOwningRep,
+// above.
+function requireDealQuotationWriteAccess(ticket, user) {
+  if (hasDealQuotationMockGrant(user)) return;
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!(owns || user.role === 'sales_manager')) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+function requireDealQuotationEditable(row) {
+  if (row.docStatus !== 'DRAFT') fail(`แก้ไขได้เฉพาะสถานะร่างเท่านั้น (สถานะปัจจุบัน: '${row.docStatus}')`, 409);
+}
+
+function requireDealQuotationRowViewable(id) {
+  const user = requireSession();
+  const row = mockDealQuotations.find((q) => q.id === Number(id));
+  if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+  const ticket = db.tickets.find((t) => t.id === row.ticketId);
+  requireDealQuotationViewAccess(ticket, user);
+  return row;
+}
+
+function mockSalesRepPhone(loginUserId) {
+  const account = db.users.find((u) => u.id === loginUserId);
+  const employee = account?.employeeId ? db.employees.find((e) => e.id === account.employeeId) : null;
+  return employee?.phone ?? null;
+}
+
+function addDaysIso(dateStr, days) {
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+let mockDealQuotationNumberSeq = 1;
+// #M10: `QT-{Gregorian year}-{4-digit seq}` -- matches DealQuotationRepository.nextQuotationCode()
+// exactly (`"QT-" + Year.now() + "-" + String.format("%04d", seq)`), NOT a demo-only "QD{2-digit
+// Buddhist-era year}" shape. The two flows share one number space (the `number` column is
+// UNIQUE across both), so this mock's fixture had drifted into a format the real backend never
+// produces.
+function nextMockDealQuotationNumber() {
+  return `QT-${new Date().getFullYear()}-${String(mockDealQuotationNumberSeq++).padStart(4, '0')}`;
+}
+
+// A revision child's number is `{base}-{revisionNo}` -- mirrors DealQuotationRepository
+// .baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a source number's own
+// `-{sourceRevisionNo}` suffix (a no-op when sourceRevisionNo <= 1) to recover the ORIGINAL
+// first-revision number regardless of how many times the chain has already been revised,
+// without walking parentQuotationId to the root.
+function dealQuotationBaseNumber(sourceNumber, sourceRevisionNo) {
+  if (sourceRevisionNo <= 1) return sourceNumber;
+  const suffix = `-${sourceRevisionNo}`;
+  return sourceNumber.endsWith(suffix) ? sourceNumber.slice(0, -suffix.length) : sourceNumber;
+}
+
+function dealQuotationRevisionNumber(baseNumber, revisionNo) {
+  return revisionNo <= 1 ? baseNumber : `${baseNumber}-${revisionNo}`;
+}
+
+// round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
+// rather than redeclared.
+
+/**
+ * ⚠ STUB ARITHMETIC — NOT WastageCalculator. This is a demo placeholder for
+ * `POST /deal-quotations/calculate-line` and the per-item math `create`/`update` apply when
+ * persisting, so the editor's live calculation line and totals have SOMETHING to render under
+ * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
+ *
+ *   - The real WastageCalculator (backend, pure class, unit-tested against the meeting's
+ *     ROUND-UP rule) uses `ceil` at every rounding step. This stub uses `Math.round` instead, so
+ *     its numbers are close but NOT pinned to the reference figures QUOTATION-V2-PLAN.md records
+ *     (e.g. item1: 569 sqm, 1.39 pieces/sqm, 10% wastage, 2/box -> the real engine's answer is
+ *     872, not 870 -- a mock-driven test asserting either number here is asserting nothing about
+ *     that engine).
+ *   - Mirroring the exact algorithm would make a green mock-driven test look like evidence about
+ *     the real rounding rule, which CLAUDE.md's "Mock API contract" section calls out by name
+ *     (computeDraftEtag) as never being independent evidence once a mock mirrors a backend
+ *     computation. Diverging on purpose keeps that failure mode impossible here.
+ *
+ * Every field the real ItemDto adds on top of ItemInput is still populated, so the UI has
+ * something to bind to; only the NUMBERS are a placeholder.
+ */
+function computeDealQuotationLine(input = {}) {
+  const sqmPerPiece = Number(input.sqmPerPiece) || 0;
+  const piecesPerSqm = sqmPerPiece > 0 ? round2(1 / sqmPerPiece) : null;
+  const quantityMode = input.quantityMode === 'PIECES' ? 'PIECES' : 'AREA';
+  const areaSqm = Number(input.areaSqm) || 0;
+  const piecesInput = Number(input.piecesInput) || 0;
+  const piecesBeforeWastage = quantityMode === 'PIECES'
+    ? Math.round(piecesInput)
+    : Math.round(areaSqm * (piecesPerSqm ?? 0));
+  const wastageMode = input.wastageMode ?? 'NONE';
+  const wastageValue = Number(input.wastageValue) || 0;
+  const wastageExtra = wastageMode === 'PERCENT'
+    ? Math.round(piecesBeforeWastage * (wastageValue / 100))
+    : wastageMode === 'PIECES'
+      ? Math.round(wastageValue)
+      : 0;
+  const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
+  const piecesPerBox = Number(input.piecesPerBox) || 0;
+  const piecesFinal = piecesPerBox > 0
+    ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox
+    : piecesAfterWastage;
+  const boxes = piecesPerBox > 0 ? piecesFinal / piecesPerBox : null;
+  const unitPrice = Number(input.unitPrice) || 0;
+  const discountPct = Number(input.discountPct) || 0;
+  const netUnitPrice = round2(unitPrice * (1 - discountPct / 100));
+  const lineAmount = round2(piecesFinal * netUnitPrice);
+
+  const descriptionLine = [
+    'กระเบื้อง',
+    input.model ? `รุ่น ${input.model}` : null,
+    input.color ? `สี ${input.color}` : null,
+    input.texture ? `ผิว ${input.texture}` : null,
+    input.productCode ? `No.${input.productCode}` : null,
+  ].filter(Boolean).join(' ');
+  const sizeLine = input.sizeText
+    ? `ขนาด ${input.sizeText}${input.thicknessMm != null ? `x${input.thicknessMm}` : ''} cm. (ขนาดโดยประมาณ)`
+    : '';
+  const wastageText = wastageMode === 'NONE'
+    ? ''
+    : wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`;
+  const qtyText = quantityMode === 'PIECES'
+    ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`
+    : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`;
+  const boxText = piecesPerBox > 0 ? ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)` : '';
+  const calculationLine = `${qtyText}${boxText}`;
+
+  return {
+    ...input,
+    quantityMode,
+    wastageMode,
+    piecesPerSqm,
+    piecesBeforeWastage,
+    piecesAfterWastage,
+    piecesFinal,
+    boxes,
+    netUnitPrice,
+    lineAmount,
+    descriptionLine,
+    sizeLine,
+    calculationLine,
+  };
+}
+
+function buildDealQuotationItemRow(input, seq) {
+  return { id: mockDealQuotationItemSeq++, seq, ...computeDealQuotationLine(input) };
+}
+
+function dealQuotationTotals(items) {
+  const subtotalAmount = round2(items.reduce((sum, it) => sum + (Number(it.lineAmount) || 0), 0));
+  const vatAmount = round2(subtotalAmount * 0.07);
+  const grandTotal = round2(subtotalAmount + vatAmount);
+  return { subtotalAmount, vatAmount, grandTotal };
+}
+
+function buildDealQuotationDto(row) {
+  return {
+    id: row.id,
+    number: row.number,
+    ticketId: row.ticketId,
+    docStatus: row.docStatus,
+    revisionNo: row.revisionNo,
+    parentQuotationId: row.parentQuotationId,
+    createdById: row.createdById,
+    createdByName: row.createdByName,
+    salesRepId: row.salesRepId,
+    salesRepName: row.salesRepName,
+    salesRepPhone: row.salesRepPhone,
+    submittedAt: row.submittedAt,
+    approvedById: row.approvedById,
+    approvedByName: row.approvedByName,
+    approvedAt: row.approvedAt,
+    approvalNote: row.approvalNote,
+    quotationDate: row.quotationDate,
+    customerName: row.customerName,
+    customerAddress: row.customerAddress,
+    customerTaxId: row.customerTaxId,
+    customerPhone: row.customerPhone,
+    contactName: row.contactName,
+    projectName: row.projectName,
+    deptCode: row.deptCode,
+    unitCode: row.unitCode,
+    offerDate: row.offerDate,
+    depositPercent: row.depositPercent,
+    remainderMode: row.remainderMode,
+    creditDays: row.creditDays,
+    validityDays: row.validityDays,
+    validityDate: row.validityDate,
+    customerNotes: row.customerNotes,
+    ...dealQuotationTotals(row.items),
+    currency: row.currency ?? 'THB',
+    approverHasSignature: row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById)),
+    items: row.items.map((item) => ({ ...item })),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mockDealQuotationDocLines(row) {
+  const dto = buildDealQuotationDto(row);
+  return [
+    `ใบเสนอราคา  เลขที่ ${dto.number}`,
+    `วันที่: ${mockThaiDate(dto.quotationDate)}`,
+    `ลูกค้า: ${dto.customerName ?? ''}`,
+    ...(dto.projectName ? [`Project: ${dto.projectName}`] : []),
+    '',
+    ...dto.items.map((it, i) => `${i + 1}. ${it.descriptionLine} — ${it.piecesFinal ?? 0} แผ่น x ${it.netUnitPrice ?? 0}`),
+    '',
+    `รวมเป็นเงิน: ${dto.subtotalAmount}`,
+    `ภาษีมูลค่าเพิ่ม 7%: ${dto.vatAmount}`,
+    `ยอดรวมทั้งสิ้น: ${dto.grandTotal}`,
+  ];
+}
+
+// Seed: 2 quotations on ticket 18 (SALES1's "ศูนย์การค้า Fashion Island" deal, an existing mock
+// ticket with 4 catalog-flavoured items already seeded in demoSales.js) -- one DRAFT, one
+// PENDING_APPROVAL, per the implementation brief.
+let mockDealQuotationItemSeq = 1;
+let mockDealQuotationSeq = 3;
+const mockDealQuotations = [
+  {
+    id: 1,
+    number: 'QT-2026-0001',
+    ticketId: 18,
+    docStatus: 'DRAFT',
+    revisionNo: 1,
+    parentQuotationId: null,
+    createdById: null,
+    createdByName: 'คุณสมหมาย ขายดี',
+    salesRepId: 6,
+    salesRepName: 'คุณสมหมาย ขายดี',
+    salesRepPhone: '081-234-5678',
+    submittedAt: null, submittedBy: null,
+    approvedById: null, approvedByName: null, approvedAt: null,
+    approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+    quotationDate: '2026-09-01',
+    customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
+    customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+    projectName: null,
+    deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-01',
+    depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30, validityDays: 30, validityDate: null,
+    customerNotes: null,
+    currency: 'THB',
+    items: [
+      buildDealQuotationItemRow({
+        locationLabel: 'ชั้น 1 - โซน A', catalogPriceId: null, productCode: null,
+        brand: 'SCG', model: 'Elegance Series', color: 'ขาวนวล', texture: 'ด้าน',
+        sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'AREA', areaSqm: 120, piecesInput: null,
+        wastageMode: 'PERCENT', wastageValue: 10, piecesPerBox: 4,
+        unitPrice: 350, discountPct: 5,
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 30, leadTimeMaxDays: 45,
+        itemNotes: null,
+      }, 0),
+      buildDealQuotationItemRow({
+        locationLabel: 'ชั้น 1 - โซน B', catalogPriceId: null, productCode: null,
+        brand: 'Cotto', model: 'Metro Square', color: 'ครีม', texture: 'ด้าน',
+        sizeText: '30x30', thicknessMm: 8, sqmPerPiece: 0.09,
+        quantityMode: 'PIECES', areaSqm: null, piecesInput: 900,
+        wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 20,
+        unitPrice: 180, discountPct: 0,
+        originCountry: 'จีน', leadTimeMinDays: 60, leadTimeMaxDays: 75,
+        itemNotes: null,
+      }, 1),
+    ],
+    createdAt: '2026-09-01T09:00:00Z', updatedAt: '2026-09-01T09:00:00Z',
+  },
+  {
+    id: 2,
+    number: 'QT-2026-0002',
+    ticketId: 18,
+    docStatus: 'PENDING_APPROVAL',
+    revisionNo: 1,
+    parentQuotationId: null,
+    createdById: null,
+    createdByName: 'คุณสมหมาย ขายดี',
+    salesRepId: 6,
+    salesRepName: 'คุณสมหมาย ขายดี',
+    salesRepPhone: '081-234-5678',
+    submittedAt: '2026-09-05T10:00:00Z', submittedBy: 6,
+    approvedById: null, approvedByName: null, approvedAt: null,
+    approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+    quotationDate: '2026-09-05',
+    customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
+    customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+    projectName: null,
+    deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-05',
+    depositPercent: 50, remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 45, validityDate: null,
+    customerNotes: 'ลูกค้าขอราคาพิเศษสำหรับงานใหญ่',
+    currency: 'THB',
+    items: [
+      buildDealQuotationItemRow({
+        locationLabel: 'ชั้น 2 - โซน A', catalogPriceId: null, productCode: null,
+        brand: 'Duragres', model: 'Granite Plus', color: 'เทากลาง', texture: 'หยาบกึ่งมัน',
+        sizeText: '60x60', thicknessMm: 9, sqmPerPiece: 0.36,
+        quantityMode: 'AREA', areaSqm: 108, piecesInput: null,
+        wastageMode: 'PERCENT', wastageValue: 5, piecesPerBox: 4,
+        unitPrice: 420, discountPct: 0,
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 30, leadTimeMaxDays: 45,
+        itemNotes: null,
+      }, 0),
+      buildDealQuotationItemRow({
+        locationLabel: 'ชั้น 2 - ล็อบบี้', catalogPriceId: null, productCode: null,
+        brand: 'Panaria', model: 'Trilogy', color: 'Ivory', texture: 'Lappato',
+        sizeText: '60x120', thicknessMm: 10, sqmPerPiece: 0.72,
+        quantityMode: 'AREA', areaSqm: 86.4, piecesInput: null,
+        wastageMode: 'PERCENT', wastageValue: 10, piecesPerBox: 2,
+        unitPrice: 1650, discountPct: 8,
+        originCountry: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90,
+        itemNotes: 'ผิวมันเงา ตรวจสอบล็อตก่อนสั่งจริง',
+      }, 1),
+    ],
+    createdAt: '2026-09-05T10:00:00Z', updatedAt: '2026-09-05T10:00:00Z',
+  },
+];
+mockDealQuotationNumberSeq = 3;
+
+
 // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): `ruleWarnings`/`unpaidByRuleDays` on both
 // LeavePreviewDto and LeaveRequestDto -- see LeaveRuleWarningDto.java/LeaveRuleCode.java's
 // enforcement() split and LeaveRuleEnforcement.java's class Javadoc. Same "not a rule engine"
@@ -4662,14 +5056,14 @@ export const api = {
         }).catch(() => {});
       }
 
-      return delay({ user: publicUser(user) });
+      return delay(authResponse(user));
     },
     async logout() {
       sessionUser = null;
       return delay({ ok: true });
     },
     async me() {
-      return delay({ user: publicUser(requireSession()) });
+      return delay(authResponse(requireSession()));
     },
     async changePassword(payload) {
       const user = requireSession();
@@ -4684,7 +5078,7 @@ export const api = {
       }
       user.password = payload.newPassword;
       user.mustChangePassword = false;
-      return delay({ user: publicUser(user) });
+      return delay(authResponse(user));
     },
   },
   // Mirrors EmployeeController + EmployeeService (employee/).
@@ -4778,6 +5172,60 @@ export const api = {
         account.mustChangePassword = true;
       }
       return delay({ temporaryPassword });
+    },
+    // Quotation v2's approver signature (hr.employee_signature, V166, QUOTATION-V2-PLAN.md).
+    // Mirrors EmployeeSignatureController: write is self/ceo/admin; everyone else 403 on write.
+    // There is no separate read-gate check here — signature imagery is not sensitive the way
+    // employee master data is, and the plan states no read restriction — but every caller still
+    // needs a session (requireSession, inside findEmployee's 404 path via a live employee row).
+    async uploadSignature(id, file) {
+      const user = requireSession();
+      const employee = findEmployee(id);
+      if (!(user.employeeId === employee.id || user.role === 'ceo' || user.admin)) {
+        fail('ไม่มีสิทธิ์อัปโหลดลายเซ็นนี้', 403);
+      }
+      const previous = mockEmployeeSignatures.get(employee.id);
+      if (previous?.url) URL.revokeObjectURL(previous.url);
+      const record = {
+        employeeId: employee.id,
+        mimeType: file?.type || 'image/png',
+        // In-memory only — no persisted byte store in mock mode (same caveat as
+        // attachments.upload above). Survives this tab's session, gone on reload.
+        url: file ? URL.createObjectURL(file) : null,
+        uploadedBy: user.id,
+        uploadedAt: new Date().toISOString(),
+      };
+      mockEmployeeSignatures.set(employee.id, record);
+      // Mirrors the real PUT's 204-no-body response (#H1) -- the mock must NOT resolve a JSON
+      // body the real endpoint never sends, or a mock-only assertion on the resolved value would
+      // pass while the real hrApi.uploadSignature threw "Unexpected end of JSON input".
+      return delay(null);
+    },
+    // Returns the URL to render, not a fetch — same idiom as hrApi.js's getSignature. Placeholder
+    // anchor when nothing has been uploaded this session, matching attachments.fileUrl's
+    // convention of always returning SOMETHING rather than null. Existence is a SEPARATE call
+    // (hasSignature, below) — this one never tells a caller whether the URL is live.
+    getSignature(id) {
+      const record = mockEmployeeSignatures.get(Number(id));
+      return record?.url ?? `#mock-signature-${id}`;
+    },
+    // Mirrors the real GET's 404-vs-200 (EmployeeSignatureService#get) so SignatureCard.jsx can
+    // decide whether to render <img> at all (#M1) instead of getSignature's always-truthy
+    // placeholder anchor hiding the "nothing uploaded yet" case under mock mode.
+    async hasSignature(id) {
+      requireSession();
+      return delay(mockEmployeeSignatures.has(Number(id)));
+    },
+    async deleteSignature(id) {
+      const user = requireSession();
+      const employee = findEmployee(id);
+      if (!(user.employeeId === employee.id || user.role === 'ceo' || user.admin)) {
+        fail('ไม่มีสิทธิ์ลบลายเซ็นนี้', 403);
+      }
+      const previous = mockEmployeeSignatures.get(employee.id);
+      if (previous?.url) URL.revokeObjectURL(previous.url);
+      mockEmployeeSignatures.delete(employee.id);
+      return delay({ ok: true });
     },
   },
   // Mirrors ProfileRequestController + ProfileRequestService (profile/).
@@ -5110,7 +5558,10 @@ export const api = {
     },
 
     async create(payload) {
-      const user = hasRole('sales');
+      // Deal-entry gate — mirrors DealEntryAccess.canEnterDeal (widened 2026-09-10 from the old
+      // TicketService.SALES_ROLES-only requireRole(actor, SALES_ROLES) to also admit
+      // sales_manager and any canCreateQuotation grant holder).
+      const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
       if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
@@ -5142,6 +5593,11 @@ export const api = {
         // deliberate DESIGNER_LED was indistinguishable from silence. UNSPECIFIED is legal as
         // STORED but never as a setEntryChannel INPUT — see th.co.glr.hr.ticket.EntryChannel.
         entryChannel: payload.entryChannel || 'UNSPECIFIED',
+        // Mirrors TicketRepository.create: `next_follow_up_at` is written from the request
+        // (CreateTicketRequest.nextFollowUpAt). This line was missing, so the mock DROPPED an
+        // argument the real API honours — the "mock drops an argument" shape CLAUDE.md names —
+        // and both TicketCreateModal and the inline deal step on /quotations/new send it.
+        nextFollowUpAt: payload.nextFollowUpAt ?? null,
         createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null,
         items: (payload.items || []).map((item, i) => ({
           id: nextId * 100 + i, ticketId: nextId,
@@ -8854,9 +9310,16 @@ export const api = {
   // search (the full canViewTickets audience). Leaving this open while the real backend now
   // 403s employee/warehouse/qc/hr would make VITE_USE_MOCKS=true lie about the permission —
   // exactly the "mock more permissive than production" direction CLAUDE.md warns about.
+  //
+  // The three create() endpoints below are deal-ENTRY writes, gated by requireDealEntry() —
+  // mirrors DealEntryAccess.canEnterDeal, widened 2026-09-10 from CustomerController's old
+  // hand-written requireAnyRole(..., "sales") to also admit sales_manager and any
+  // canCreateQuotation grant holder. The three reads OR that same grant into
+  // CUSTOMER_VIEWER_ROLES (sales/sales_manager are already members of that set, so the grant is
+  // the only thing it adds) via requireCustomerViewer().
   customers: {
     async create(payload) {
-      hasRole('sales'); // deal-entry flow; mirrors CustomerController's requireAnyRole('sales')
+      requireDealEntry();
       const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null };
       mockCustomers.push(customer);
       return delay({ customer });
@@ -8866,7 +9329,7 @@ export const api = {
     // match in insertion order — unbounded and unsorted — so a caller counting results, or
     // reading "the first customer", saw something production would never return (issue #434).
     async search(q) {
-      hasRole(...CUSTOMER_VIEWER_ROLES);
+      requireCustomerViewer();
       const lower = (q ?? '').toLowerCase();
       const results = lower
         ? mockCustomers.filter((c) => c.name.toLowerCase().includes(lower) || (c.taxId ?? '').includes(lower))
@@ -8875,21 +9338,21 @@ export const api = {
       return delay({ customers: ordered.slice(0, CUSTOMER_SEARCH_LIMIT) });
     },
     async contacts(customerId) {
-      hasRole(...CUSTOMER_VIEWER_ROLES);
+      requireCustomerViewer();
       return delay({ contacts: mockContacts.filter((c) => c.customerId === Number(customerId)) });
     },
     async createContact(customerId, payload) {
-      hasRole('sales'); // mirrors CustomerController's requireAnyRole('sales')
+      requireDealEntry();
       const contact = { id: mockContactSeq++, customerId: Number(customerId), ...payload };
       mockContacts.push(contact);
       return delay({ contact });
     },
     async projects(customerId) {
-      hasRole(...CUSTOMER_VIEWER_ROLES);
+      requireCustomerViewer();
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });
     },
     async createProject(customerId, payload) {
-      hasRole('sales'); // mirrors CustomerController's requireAnyRole('sales')
+      requireDealEntry();
       const project = { id: mockProjectSeq++, customerId: Number(customerId), name: payload.name };
       mockProjects.push(project);
       return delay({ project });
@@ -11113,4 +11576,271 @@ export const api = {
     },
   },
 
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09).
+  // Mirrors th.co.glr.hr.dealquotation.DealQuotationController + DealQuotationService — a
+  // SIBLING package to pricingrequest/ and customerquotation/, not a replacement for either.
+  // `sales.quotation.origin = 'DEAL_DIRECT'` rows never overlap the PCR-chain's rows (V166's own
+  // header). Status transitions mirror quotationMeta.js's DEAL_QUOTATION_TRANSITIONS so the mock's
+  // gate can't drift from the frontend's own copy of QuotationStatus.
+  dealQuotations: {
+    async listForTicket(ticketId) {
+      const user = requireSession();
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      requireDealQuotationViewAccess(ticket, user);
+      const items = mockDealQuotations
+        .filter((q) => q.ticketId === ticket.id)
+        .sort((a, b) => b.id - a.id)
+        .map(buildDealQuotationDto);
+      return delay({ items });
+    },
+
+    // Approver queue / role-scoped list -- `status` is the only server-side filter the plan
+    // documents (`GET /deal-quotations?status=...`). sales is scoped to its own deals, same
+    // ownership rule as every other sales-scoped list in this file. A canCreateQuotation grant
+    // sees everything, same as sales_manager -- the grant is "any deal", not "own deal only"
+    // (mirrors DealQuotationService.list's own comment, #H4).
+    async list(params = {}) {
+      const user = requireSession();
+      const grant = hasDealQuotationMockGrant(user);
+      if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      let list = mockDealQuotations;
+      if (!grant && user.role === 'sales') {
+        list = list.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
+      }
+      if (params.status) list = list.filter((q) => q.docStatus === params.status);
+      const sorted = [...list].sort((a, b) => b.id - a.id);
+      return delay({ items: sorted.map(buildDealQuotationDto) });
+    },
+
+    async get(id) {
+      const row = requireDealQuotationRowViewable(id);
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    async create(ticketId, payload = {}) {
+      const user = requireSession();
+      const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      requireDealQuotationWriteAccess(ticket, user);
+      const now = new Date().toISOString();
+      const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
+      const row = {
+        id: mockDealQuotationSeq++,
+        number: nextMockDealQuotationNumber(),
+        ticketId: ticket.id,
+        docStatus: 'DRAFT',
+        revisionNo: 1,
+        parentQuotationId: null,
+        // createdById/approvedById are hr.employee ids (V166's FK), NOT the login-account id --
+        // see this file's own comment on employees.uploadSignature for why approverHasSignature
+        // below has to key off the same space.
+        createdById: user.employeeId ?? null,
+        createdByName: user.name,
+        // salesRepId literally IS ticket.created_by, per the plan's own migration section -- kept
+        // in the login-account id space (not employeeId) so quotationMeta.js's ownership
+        // predicates can compare it against `user.id` the same way every other sales-scoped
+        // ownership check in this codebase does (TicketDetailPage.jsx, DealDepositPanel.jsx, ...).
+        salesRepId: ticket.createdById,
+        salesRepName: ticket.createdByName,
+        salesRepPhone: mockSalesRepPhone(ticket.createdById),
+        submittedAt: null, submittedBy: null,
+        approvedById: null, approvedByName: null, approvedAt: null,
+        approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+        quotationDate: now.slice(0, 10),
+        customerName: ticket.customerName ?? null,
+        customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+        projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+        deptCode: payload.deptCode ?? null,
+        unitCode: payload.unitCode ?? null,
+        offerDate: payload.offerDate ?? now.slice(0, 10),
+        depositPercent: payload.depositPercent ?? null,
+        remainderMode: payload.remainderMode ?? null,
+        creditDays: payload.creditDays ?? null,
+        validityDays: payload.validityDays ?? null,
+        validityDate: null,
+        customerNotes: payload.customerNotes ?? null,
+        currency: 'THB',
+        items,
+        createdAt: now, updatedAt: now,
+      };
+      mockDealQuotations.push(row);
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of
+    // items)"), DRAFT-only.
+    async update(id, payload = {}) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationEditable(row);
+      const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
+      // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
+      // .updateHeader, which writes every one of these columns straight from the request with no
+      // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
+      // explicit null (the UI's own way of CLEARING a field -- see buildUpsertPayload's
+      // `terms.deptCode || null`) fell through the `??` and silently kept the stale value instead
+      // of clearing it -- a mock strictly MORE forgiving than the real PUT.
+      Object.assign(row, {
+        deptCode: payload.deptCode ?? null,
+        unitCode: payload.unitCode ?? null,
+        offerDate: payload.offerDate ?? null,
+        depositPercent: payload.depositPercent ?? null,
+        remainderMode: payload.remainderMode ?? null,
+        creditDays: payload.creditDays ?? null,
+        validityDays: payload.validityDays ?? null,
+        customerNotes: payload.customerNotes ?? null,
+        items,
+        updatedAt: new Date().toISOString(),
+      });
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // Stateless preview -- same STUB calc `create`/`update` apply per line, run against one item
+    // input with nothing persisted. See computeDealQuotationLine's own warning: this is a demo
+    // placeholder, not WastageCalculator.
+    async calculateLine(payload = {}) {
+      requireSession();
+      return delay({ item: computeDealQuotationLine(payload ?? {}) });
+    },
+
+    async submit(id, payload = {}) {
+      void payload;
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      requireDealQuotationWriteAccess(ticket, user);
+      if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
+        fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      const now = new Date().toISOString();
+      row.docStatus = 'PENDING_APPROVAL';
+      row.submittedAt = now;
+      row.submittedBy = user.id;
+      // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment.
+      row.approvalNote = null;
+      row.updatedAt = now;
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    async approve(id, payload = {}) {
+      const user = hasRole('sales_manager', 'ceo');
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      if (!canTransitionDealQuotation(row.docStatus, 'APPROVED')) {
+        fail(`อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      const now = new Date().toISOString();
+      row.docStatus = 'APPROVED';
+      row.approvedById = user.employeeId ?? null;
+      row.approvedByName = user.name;
+      row.approvedAt = now;
+      row.approvalDecidedAt = now;
+      row.approvalDecidedBy = user.employeeId ?? null;
+      row.approvalNote = payload?.note?.trim() || null;
+      // "validity_date = quotation date + N, written at approval" -- QUOTATION-V2-PLAN.md.
+      // #M3: this file's OWN bangkokTodayIso() (above, near round2) -- Bangkok LOCAL date, not
+      // `now.slice(0, 10)`, which reads the UTC calendar day off a UTC instant and is one day
+      // behind Bangkok on any approval made between 00:00-06:59 Bangkok time (UTC+7). Same class
+      // of bug as todayIso() in QuotationEditorPage.jsx (fixed there via utils/format.js's
+      // bangkokTodayIso -- this file already had its own copy of the same fix, unrelated import).
+      row.quotationDate = bangkokTodayIso();
+      row.validityDate = row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null;
+      row.updatedAt = now;
+      // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
+      // last approved document stays valid until replaced.
+      if (row.parentQuotationId) {
+        const parent = mockDealQuotations.find((q) => q.id === row.parentQuotationId);
+        if (parent && canTransitionDealQuotation(parent.docStatus, 'SUPERSEDED')) {
+          parent.docStatus = 'SUPERSEDED';
+          parent.updatedAt = now;
+        }
+      }
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    async reject(id, payload) {
+      const user = hasRole('sales_manager', 'ceo');
+      const reason = payload?.reason?.trim();
+      if (!reason) fail('ต้องระบุเหตุผลที่ไม่อนุมัติ', 400);
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      if (!canTransitionDealQuotation(row.docStatus, 'DRAFT')) {
+        fail(`ไม่อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      const now = new Date().toISOString();
+      row.docStatus = 'DRAFT';
+      row.approvalDecidedAt = now;
+      row.approvalDecidedBy = user.employeeId ?? null;
+      row.approvalNote = reason;
+      row.updatedAt = now;
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // "APPROVED -> (revise) -> new DRAFT child (revision_no+1, number `{base}-{n}`, everything
+    // copied)". The parent is untouched here -- it only becomes SUPERSEDED once THIS child is
+    // itself approved (see approve() above).
+    async createRevision(id, payload = {}) {
+      void payload;
+      const user = requireSession();
+      const parent = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!parent) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = db.tickets.find((t) => t.id === parent.ticketId);
+      requireDealQuotationWriteAccess(ticket, user);
+      if (parent.docStatus !== 'APPROVED') {
+        fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
+      }
+      const now = new Date().toISOString();
+      const revisionNo = parent.revisionNo + 1;
+      const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
+      const child = {
+        ...structuredClone(parent),
+        id: mockDealQuotationSeq++,
+        number: dealQuotationRevisionNumber(base, revisionNo),
+        docStatus: 'DRAFT',
+        revisionNo,
+        parentQuotationId: parent.id,
+        createdById: user.employeeId ?? null,
+        createdByName: user.name,
+        submittedAt: null, submittedBy: null,
+        approvedById: null, approvedByName: null, approvedAt: null,
+        approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+        validityDate: null,
+        quotationDate: now.slice(0, 10),
+        createdAt: now, updatedAt: now,
+        items: parent.items.map((item, index) => buildDealQuotationItemRow(item, index)),
+      };
+      mockDealQuotations.push(child);
+      return delay({ quotation: buildDealQuotationDto(child) });
+    },
+
+    async cancel(id, payload = {}) {
+      void payload;
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      requireDealQuotationWriteAccess(ticket, user);
+      if (!canTransitionDealQuotation(row.docStatus, 'CANCELLED')) {
+        fail(`ยกเลิกไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      row.docStatus = 'CANCELLED';
+      row.updatedAt = new Date().toISOString();
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    async downloadPdf(id) {
+      const row = requireDealQuotationRowViewable(id);
+      return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));
+    },
+
+    async downloadXlsx(id) {
+      const row = requireDealQuotationRowViewable(id);
+      return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));
+    },
+  },
 };

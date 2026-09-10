@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
@@ -45,9 +46,14 @@ class CustomerControllerTest {
     private final CustomerRepository customers = mock(CustomerRepository.class);
     private final ContactRepository contacts = mock(ContactRepository.class);
     private final ProjectRepository projects = mock(ProjectRepository.class);
-    private final CustomerService customerService = new CustomerService(customers, contacts, projects);
+    // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches an endpoint
+    // here only via its OWN role (sales/sales_manager) or an explicit per-test stub — never a
+    // phantom grant. grantedQcCanCreateCustomer below stubs it true for the one test that needs it.
+    private final EmployeeAuthRepository employeeAuth = mock(EmployeeAuthRepository.class);
+    private final CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
     private final MockMvc mvc = MockMvcBuilders
-        .standaloneSetup(new CustomerController(customers, contacts, projects, customerService, new SessionContext()))
+        .standaloneSetup(new CustomerController(customers, contacts, projects, customerService,
+            new SessionContext(), employeeAuth))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 
@@ -119,11 +125,42 @@ class CustomerControllerTest {
     }
 
     @Test
-    void salesManagerCannotCreateCustomer() throws Exception {
-        // sales_manager is read+comment oversight only — never a write role.
+    void salesManagerCanCreateCustomer() throws Exception {
+        // DealEntryAccess (owner ruling 2026-09-10): deal-entry create was widened from
+        // sales-only to sales/sales_manager/canCreateQuotation-grant. sales_manager stays
+        // read+comment oversight everywhere ELSE on the ticket surface (TicketService.SALES_ROLES
+        // is untouched) — this is deliberately the one exception, on the deal-entry flow only.
+        when(customers.create(any(), any(), any(), any(), any()))
+            .thenReturn(new CustomerDto(1L, "ACME", null, null, "สำนักงานใหญ่", null));
         mvc.perform(post("/api/customers").session(session("sales_manager"))
                 .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
+            .andExpect(status().is2xxSuccessful());
+    }
+
+    @Test
+    void qcWithoutGrantCannotCreateCustomer() throws Exception {
+        mvc.perform(post("/api/customers").session(session("qc"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
             .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void qcWithGrantCanCreateCustomer() throws Exception {
+        when(employeeAuth.canCreateQuotation(1L)).thenReturn(true);
+        when(customers.create(any(), any(), any(), any(), any()))
+            .thenReturn(new CustomerDto(1L, "ACME", null, null, "สำนักงานใหญ่", null));
+        mvc.perform(post("/api/customers").session(session("qc"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
+            .andExpect(status().is2xxSuccessful());
+    }
+
+    @Test
+    void importAccountAndEmployeeRolesCannotCreateCustomer() throws Exception {
+        for (String role : List.of("import", "account", "employee")) {
+            mvc.perform(post("/api/customers").session(session(role))
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
+                .andExpect(status().isForbidden());
+        }
     }
 
     @Test
