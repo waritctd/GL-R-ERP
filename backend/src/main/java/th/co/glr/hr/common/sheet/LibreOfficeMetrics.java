@@ -1,9 +1,10 @@
 package th.co.glr.hr.common.sheet;
 
-import java.awt.font.FontRenderContext;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The arithmetic LibreOffice Calc applies when it prints an XLS sheet to PDF — measured out of
@@ -13,7 +14,8 @@ import org.apache.poi.ss.usermodel.Workbook;
  *
  * <ul>
  *   <li><b>Column width</b>: an XLS column width is stored in 1/256ths of the workbook default
- *       font's "0" advance. LibreOffice measures that advance in twips ({@link #charWidthTwips}),
+ *       font's widest digit. LibreOffice measures that advance in twips ({@link #charWidthTwips}) on
+ *       the font the HOST resolves the family to (see {@link FontResolver}),
  *       then {@code trunc(units * charWidth / 256 - 0.5)} twips per column
  *       ({@code XclTools::GetScColumnWidth}). Verified to ±1/100 mm on nine columns at three zooms.
  *       Apache POI's own {@code getColumnWidthInPixels} uses a different constant (36.56 units/px)
@@ -38,6 +40,8 @@ import org.apache.poi.ss.usermodel.Workbook;
 public final class LibreOfficeMetrics {
     private LibreOfficeMetrics() {}
 
+    private static final Logger log = LoggerFactory.getLogger(LibreOfficeMetrics.class);
+
     public static final int TWIPS_PER_INCH = 1440;
     public static final double HMM_PER_TWIP = 2540.0 / 1440.0;
     public static final double PT_PER_HMM = 72.0 / 2540.0;
@@ -51,24 +55,54 @@ public final class LibreOfficeMetrics {
     /** Fallback when the default font cannot be measured — LibreOffice's own default. */
     private static final int DEFAULT_CHAR_WIDTH_TWIPS = 110;
 
-    /** Width in twips of "0" in the workbook's default font (font index 0), the unit an XLS column
-     * width is expressed in. Measured through AWT with fractional metrics, then rounded to whole
-     * twips exactly like LibreOffice's output device does. */
+    /**
+     * Width in twips of the workbook's default font's widest digit (font index 0), the unit an
+     * XLS column width is expressed in — measured on the font THIS HOST resolves that family to,
+     * not the family the workbook names. LibreOffice ({@code XclRoot::SetCharWidth}) sets its
+     * printer font to the default font by name, lets fontconfig substitute whatever the host
+     * has, and takes the widest of '0'..'9' in twips; on a host without the licensed Cordia New
+     * that is Garuda/Umpush's digit, ~50% wider, and every column, the fit zoom and every row
+     * height follow it. {@link FontResolver} answers the same fontconfig question and the digit
+     * is measured through AWT with fractional metrics, then rounded to whole twips exactly like
+     * LibreOffice's output device does. Cached per (family, size, weight) for the JVM's life.
+     */
     public static int charWidthTwips(Workbook wb) {
         try {
             Font f = wb.getFontAt(0);
-            java.awt.Font awt = new java.awt.Font(f.getFontName(), java.awt.Font.PLAIN, f.getFontHeightInPoints());
-            if (!awt.getFamily().equalsIgnoreCase(f.getFontName()) && !awt.getFontName().replace(" ", "")
-                    .equalsIgnoreCase(f.getFontName().replace(" ", ""))) {
-                return DEFAULT_CHAR_WIDTH_TWIPS;
-            }
-            FontRenderContext frc = new FontRenderContext(null, true, true);
-            double advancePt = awt.getStringBounds("0", frc).getWidth();
-            int twips = (int) Math.round(advancePt * 20.0);
-            return twips > 0 ? twips : DEFAULT_CHAR_WIDTH_TWIPS;
+            String family = f.getFontName();
+            double sizePt = f.getFontHeightInPoints();
+            boolean bold = f.getBold();
+            String key = family + "|" + sizePt + "|" + bold;
+            Integer cached = CHAR_WIDTH_TWIPS.get(key);
+            if (cached != null) return cached;
+            int twips = measureCharWidthTwips(family, sizePt, bold);
+            CHAR_WIDTH_TWIPS.put(key, twips);
+            return twips;
         } catch (RuntimeException e) {
+            log.warn("Column unit: could not read the workbook default font ({}); using LibreOffice's fallback {} twips",
+                e.toString(), DEFAULT_CHAR_WIDTH_TWIPS);
             return DEFAULT_CHAR_WIDTH_TWIPS;
         }
+    }
+
+    private static final java.util.Map<String, Integer> CHAR_WIDTH_TWIPS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static int measureCharWidthTwips(String family, double sizePt, boolean bold) {
+        FontResolver.Resolved resolved = FontResolver.resolve(family);
+        java.util.OptionalDouble advance = FontResolver.maxDigitAdvancePt(resolved, sizePt, bold);
+        if (advance.isEmpty()) {
+            log.warn("Column unit: '{}' {}pt resolves to '{}' but no measurable font could be loaded; "
+                + "using LibreOffice's fallback {} twips (the HTML render may not match LibreOffice's geometry)",
+                family, sizePt, resolved.family(), DEFAULT_CHAR_WIDTH_TWIPS);
+            return DEFAULT_CHAR_WIDTH_TWIPS;
+        }
+        int twips = (int) Math.round(advance.getAsDouble() * 20.0);
+        if (twips <= 0) return DEFAULT_CHAR_WIDTH_TWIPS;
+        log.info("Column unit: workbook default font '{}' {}pt{} -> {} '{}'{}: widest digit {} pt = {} twips",
+            family, sizePt, bold ? " bold" : "", resolved.viaFontconfig() ? "fontconfig" : "java.awt",
+            resolved.family(), resolved.file() != null ? " (" + resolved.file() + ")" : "",
+            String.format(java.util.Locale.US, "%.3f", advance.getAsDouble()), twips);
+        return twips;
     }
 
     /** {@code XclTools::GetScColumnWidth}: XLS 1/256-char units → twips. */

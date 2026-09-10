@@ -323,8 +323,12 @@ class QuotationRendererTest {
         String text = strip(pdf);
         String flat = text.replaceAll("\\s+", "");
 
-        // Heading printed exactly once even though two items share it.
-        assertThat(countOccurrences(text, "หน้าบ้าน")).isEqualTo(1);
+        // Heading printed exactly once even though two items share it — counted in the SHEET the
+        // PDF is printed from, not in the PDF's extracted text: LibreOffice's PDF export of a
+        // substituted Thai font (CI has only fonts-thai-tlwg) emits tone-mark variant glyphs
+        // with no ToUnicode mapping, so "หน้าบ้าน" came back from the PDF 0 times there while
+        // the page printed it once. The XLS cell is what decides how often it prints.
+        assertThat(countCellsWithText(renderer.toXls(model), "หน้าบ้าน")).isEqualTo(1);
         // All three description lines of BOTH items survive.
         assertThat(flat).contains("รุ่นElegance");
         assertThat(flat).contains("รุ่นStone");
@@ -827,12 +831,19 @@ class QuotationRendererTest {
         return c == null || c.getCellType() == org.apache.poi.ss.usermodel.CellType.BLANK;
     }
 
-    private int countOccurrences(String haystack, String needle) {
+    /** How many cells of the quotation sheet hold exactly {@code text}. */
+    private int countCellsWithText(byte[] xls, String text) throws Exception {
         int count = 0;
-        int idx = 0;
-        while ((idx = haystack.indexOf(needle, idx)) != -1) {
-            count++;
-            idx += needle.length();
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            for (var row : sheet) {
+                for (var cell : row) {
+                    if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING
+                        && text.equals(cell.getStringCellValue().strip())) {
+                        count++;
+                    }
+                }
+            }
         }
         return count;
     }

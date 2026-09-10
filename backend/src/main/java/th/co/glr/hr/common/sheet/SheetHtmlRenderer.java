@@ -64,7 +64,7 @@ public final class SheetHtmlRenderer {
             .append(".c.clip{overflow:hidden}")
             .append(".c>span{display:block;flex:none}")
             .append(".c.wrap>span{flex:0 1 auto;max-width:100%}")
-            .append(".rules{position:absolute;left:0;top:0;fill:#000}")
+            .append(".rules{position:absolute;left:0;top:0;stroke:#000;fill:none;stroke-linecap:butt}")
             .append(".sheet{position:absolute;overflow:hidden}")
             .append(".fill{position:absolute}")
             .append(".p{position:absolute}")
@@ -126,27 +126,55 @@ public final class SheetHtmlRenderer {
             if (!rowTop.containsKey(pic.row1())) continue;
             renderPicture(html, plan, pic, rowTop, originX, originY, classifier);
         }
-        // Rules go into ONE SVG per page, as filled rects in pt: Chromium pixel-snaps CSS box
+        // Rules go into ONE SVG per page, as STROKED lines in pt: Chromium pixel-snaps CSS box
         // backgrounds to its 96-dpi layout grid (a 0.54 pt rule became 0.75 pt on a 0.75 pt
         // grid — measured), but SVG geometry keeps its floating-point coordinates in the PDF.
+        // Strokes rather than filled rects because that is what LibreOffice's PDF carries
+        // (`w … m … l S`), and the two only measure alike in a raster when they are the same
+        // kind of path: a rasteriser normalises a ~1 px STROKE onto one pixel row however often
+        // it is drawn, while two overlapping anti-aliased FILLS compound (0.65 pt of LibreOffice
+        // ink read 0.96 pt from doubled rects at 87% zoom — measured) — which matters for the
+        // rules LibreOffice draws twice, below.
         html.append(String.format(Locale.US, "<svg class=\"rules\" "
                 + "width=\"%spt\" height=\"%spt\" viewBox=\"0 0 %s %s\" shape-rendering=\"geometricPrecision\">",
             fmt(pt(plan.pageWidthHmm)), fmt(pt(plan.pageHeightHmm)), fmt(pt(plan.pageWidthHmm)), fmt(pt(plan.pageHeightHmm))));
+        // LibreOffice strokes the OUTLINE of every printed range twice — read out of its own PDF
+        // content streams (two identical `m … l S` paths, both environments): the print range's
+        // right-hand edge on every page, the bottom edge of the repeated title block on pages 2+,
+        // and the page-bottom closer on every page but the last (the last page's body ends on
+        // the signature rows, which have no bottom border, so nothing is drawn there to double).
+        // Top and left edges are never doubled. Mirrored by emitting those strokes twice: at a
+        // 0.42 pt rule (56% zoom, CI's substitute fonts) LibreOffice's pair reads 0.94 px of ink
+        // where a single line reads 0.62 — a 0.20 pt gap in measured stroke — and at ≥ 1 px the
+        // doubling is invisible in both engines alike.
+        int rightEdgeHmm = plan.columnLeftHmm(plan.lastCol) + plan.column(plan.lastCol).scaledHmm();
+        java.util.Set<Integer> doubledBottoms = new java.util.HashSet<>();
+        List<Integer> pageRows = page.rowIndices();
+        if (page.repeatedRowCount() > 0) {
+            int lastRepeated = pageRows.get(page.repeatedRowCount() - 1);
+            doubledBottoms.add(rowTop.get(lastRepeated) + plan.rows.get(lastRepeated).scaledHmm());
+        }
+        if (page.number() < plan.pages.size()) {
+            int lastRow = pageRows.get(pageRows.size() - 1);
+            doubledBottoms.add(rowTop.get(lastRow) + plan.rows.get(lastRow).scaledHmm());
+        }
         for (Rule rule : rules(plan, page, rowTop)) {
             double lw = rule.widthPt;
+            // Each run extended by half the stroke at both ends, as LibreOffice draws it, so
+            // perpendicular rules meet in a full corner.
+            String line;
             if (rule.horizontal) {
-                html.append(String.format(Locale.US, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\"/>",
-                    fmt(originX + pt(rule.from) - lw / 2), fmt(originY + pt(rule.pos) - lw / 2),
-                    fmt(pt(rule.to - rule.from) + lw), fmt(lw)));
+                line = String.format(Locale.US, "<line x1=\"%s\" y1=\"%s\" x2=\"%s\" y2=\"%s\" stroke-width=\"%s\"/>",
+                    fmt(originX + pt(rule.from) - lw / 2), fmt(originY + pt(rule.pos)),
+                    fmt(originX + pt(rule.to) + lw / 2), fmt(originY + pt(rule.pos)), fmt(lw));
             } else {
-                // (LibreOffice strokes the print range's right-hand edge twice — opaque black over
-                // black, invisible; NOT mirrored: it measured 0.63/0.63 pt at 72% but 0.89 vs
-                // 0.65 pt at 84%, because a rasteriser snaps a sub-pixel stroke to one pixel however
-                // often it is drawn while two anti-aliased fills compound.)
-                html.append(String.format(Locale.US, "<rect x=\"%s\" y=\"%s\" width=\"%s\" height=\"%s\"/>",
-                    fmt(originX + pt(rule.pos) - lw / 2), fmt(originY + pt(rule.from) - lw / 2),
-                    fmt(lw), fmt(pt(rule.to - rule.from) + lw)));
+                line = String.format(Locale.US, "<line x1=\"%s\" y1=\"%s\" x2=\"%s\" y2=\"%s\" stroke-width=\"%s\"/>",
+                    fmt(originX + pt(rule.pos)), fmt(originY + pt(rule.from) - lw / 2),
+                    fmt(originX + pt(rule.pos)), fmt(originY + pt(rule.to) + lw / 2), fmt(lw));
             }
+            boolean doubled = rule.horizontal ? doubledBottoms.contains(rule.pos) : rule.pos == rightEdgeHmm;
+            html.append(line);
+            if (doubled) html.append(line);
         }
         html.append("</svg>");
         renderHeaderFooter(html, plan, page);
@@ -394,7 +422,17 @@ public final class SheetHtmlRenderer {
             + "s.style.fontSize=(fs*avail/w)+'px';}}})();</script>";
     }
 
-    /** Single-quoted family names: the stack lives inside a double-quoted {@code style="…"}. */
+    /**
+     * Single-quoted family names: the stack lives inside a double-quoted {@code style="…"}. The
+     * requested family comes first; when the host's fontconfig substitutes it (no licensed Cordia
+     * New — CI, a fontless image), the family fontconfig actually resolved is placed SECOND, so
+     * Chromium draws the same substitute LibreOffice drew ({@link FontResolver}). Both engines
+     * consult the same fontconfig, but whether a browser follows a fontconfig alias for a family
+     * it cannot find depends on that alias's binding — naming the resolved family here removes
+     * the question, instead of leaving Chromium to walk the static chain below and possibly pick
+     * a different Thai face than LibreOffice's. The static Thai-capable chain stays as the last
+     * resort.
+     */
     private static String fontStack(String name) {
         String n = name == null ? "" : name.replace("\"", "").replace("'", "");
         String fallback = switch (n) {
@@ -404,7 +442,14 @@ public final class SheetHtmlRenderer {
             case "Tahoma" -> "Tahoma,'DejaVu Sans',sans-serif";
             default -> "sans-serif";
         };
-        return "'" + n + "'," + fallback;
+        StringBuilder stack = new StringBuilder("'").append(n).append('\'');
+        if (!n.isEmpty()) {
+            FontResolver.Resolved resolved = FontResolver.resolve(n);
+            if (resolved.substituted()) {
+                stack.append(",'").append(resolved.family().replace("\"", "").replace("'", "")).append('\'');
+            }
+        }
+        return stack.append(',').append(fallback).toString();
     }
 
     private static double pt(double hmm) {

@@ -98,7 +98,13 @@ class ChromiumPdfPrinterTest {
         Signatories sig = new Signatories("Printed Name", "Checked Name", "Approved Name", null, null);
         return new QuotationRenderModel(
             LocalDate.of(2026, 9, 10), number, "P003", "D002", "Sales/Test T.000",
-            "คุณทดสอบ", "โทร. 000", "Test Project",
+            // The number is repeated in the project name on purpose: I4 (เลขที่อ้างอิง) is a narrow
+            // cell whose left neighbour carries the label, so both engines CLIP it at the cell
+            // edge — and how much survives depends on the digit width of whatever font the host
+            // substitutes (CI's tlwg fonts clipped "QT-PAR-0001" to "QT-PAR-0"). The Project row
+            // is wide and its neighbours are empty, so a marker there is never clipped, and the
+            // concurrency tests read their per-render marker from here.
+            "คุณทดสอบ", "โทร. 000", "Test Project " + number,
             items, EIGHT_REMARKS, sig, true);
     }
 }

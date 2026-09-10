@@ -185,8 +185,12 @@ Chromium (local dev) gets Playwright's defaults. Pinned by `ChromiumPdfPrinterCo
 once; a failed launch is not retried inside the cooldown and IS retried after it).
 
 `SheetHtmlRenderer` reproduces LibreOffice's page geometry, measured out of LibreOffice's own PDF
-vectors (`LibreOfficeMetrics`): column widths from the default font's "0" advance in twips,
-integer fit zoom over the print range trimmed to its used rows, 1/100 mm truncation, unscaled
+vectors (`LibreOfficeMetrics`): column widths from the default font's widest-digit advance in
+twips — measured on the font the HOST resolves that family to through fontconfig (`FontResolver`:
+Cordia New = 102 twips with the licensed font, Umpush = 156 on a tlwg-only host such as CI), and
+the same resolved family is placed second in every cell's CSS font stack so Chromium substitutes
+exactly what LibreOffice did; rules are SVG strokes, with LibreOffice's doubled outline strokes
+(print-range right edge, repeated-title-block bottom, page-bottom closer) mirrored — integer fit zoom over the print range trimmed to its used rows, 1/100 mm truncation, unscaled
 margins, horizontal centring, THIN = 0.75 pt × zoom centred on the grid line, fonts at
 `floor(pt × zoom)`, repeat rows + manual row breaks for pagination, the in-page "หน้า X/Y"
 footer. One LibreOffice quirk worth knowing: it decides fit-vs-scale from the WSBOOL bit POI
