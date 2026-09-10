@@ -233,6 +233,49 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.queryByText(/ขั้นตอนที่ 3\/3/)).toBeNull();
   });
 
+  // Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- unlike every other type
+  // above, SICK must NOT trip the past-start-date block at all, with no lower bound (an arbitrarily
+  // old date, not merely "a few days back"). This does not exercise sickCertificateRuleOutcome's
+  // separate SICK_CERTIFICATE_WINDOW gate (LeaveService.java) -- that rule lives in the backend
+  // preview response, not this client-side check, and is untouched by this test.
+  it('step 2: SICK start date in the past is NOT rejected and does not block advancing', async () => {
+    renderComposer();
+    fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ท้องเสีย + ปวดหัวไมเกรน' } });
+    expect(screen.queryByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).toBeNull();
+
+    // Both guards, not just the visible one: `disabled` on the button AND advanceFromStep2's own
+    // `if (!valid || startDateInPast) return`. Asserting only the attribute would stay green if a
+    // second, independent past-date check were ever added inside the handler.
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    expect(await screen.findByText(/ขั้นตอนที่ 3\/3/)).not.toBeNull();
+  });
+
+  // The two call sites of isStartDateBlockedAsPast can disagree: `shouldValidate` on the type
+  // button re-runs the schema but writes back only leaveTypeCode's own error, so a past-date error
+  // raised under ลาพักร้อน used to survive the switch to ลาป่วย -- error text still rendered while
+  // the Next button was already enabled. Exactly the "this should have been ลาป่วย" correction the
+  // owner ruling exists to allow, so it is pinned rather than left to self-heal on the next click.
+  it('step 2: switching ลาพักร้อน -> ลาป่วย clears the past-date error the old type raised', async () => {
+    await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
+    await screen.findByText(/ขั้นตอนที่ 2\/3/);
+
+    await waitFor(() => expect(screen.queryByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).toBeNull());
+    expect(screen.getByLabelText(/วันที่เริ่ม/).getAttribute('aria-invalid')).not.toBe('true');
+    expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
+  });
+
   it('step 2: honestly surfaces coverageEvaluated=false under the debounced QUICK preview', async () => {
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
@@ -409,14 +452,18 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(attachmentFile.name).toBe('sick-note.pdf');
   });
 
-  it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
+  it('unticking ลาทั้งวัน (single day) sends the chosen times without touching endDate', async () => {
     await goToStep2ForVacation();
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
-    fireEvent.click(screen.getByLabelText(/ลาบางส่วนของวัน/));
+    // "ลาทั้งวัน" is TICKED by default (V166) -- unticking it reveals the time fields.
+    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
 
+    // Partial-day span (V166): endDate is NO LONGER forced to startDate when timed -- it was
+    // already handleStartDateChange's own sync (endDate === startDate here only because the user
+    // never touched endDate after setting startDate, same as before this feature).
     expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(futureDate);
     fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
     fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
@@ -433,6 +480,39 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(payload.endDate).toBe(futureDate);
     expect(payload.startTime).toBe('08:30');
     expect(payload.endTime).toBe('12:30');
+  });
+
+  // The owner's own motivating case (CLAUDE.md task brief): a timed span that crosses a calendar
+  // day, now possible since V166 relaxed chk_leave_time_single_day. This is the behaviour the old
+  // "sub-day" feature could never represent (endDate used to be force-locked to startDate).
+  it('a timed span can now cross calendar days -- endDate stays independently editable', async () => {
+    await goToStep2ForVacation();
+
+    const startDate = '2099-12-31';
+    const endDate = '2100-01-01';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: startDate } });
+    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: endDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ลาบ่ายต่อเนื่องถึงวันถัดไป' } });
+    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
+
+    // Still both dates as chosen -- unticking "ลาทั้งวัน" must never collapse a multi-day span.
+    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe(startDate);
+    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(endDate);
+    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '13:00' } });
+    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '17:30' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const payload = api.leave.create.mock.calls[0][0];
+    expect(payload.startDate).toBe(startDate);
+    expect(payload.endDate).toBe(endDate);
+    expect(payload.startTime).toBe('13:00');
+    expect(payload.endTime).toBe('17:30');
   });
 
   it('deep link (?type=&start=&end=) lands directly on step 2 with the type/dates prefilled', async () => {

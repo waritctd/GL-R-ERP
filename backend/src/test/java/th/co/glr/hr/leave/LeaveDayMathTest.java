@@ -343,6 +343,83 @@ class LeaveDayMathTest {
     // repository, which Mockito/plain-object fakes here cannot verify.
     // ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * Direct coverage for the {@link LeaveDayMath#spanDayFractions} ledger itself. Every other test
+     * of the span path reaches it through {@code LeaveService#submit}, which proves the TOTAL but
+     * not the per-DATE shape -- and the per-date shape is what payroll-month attribution and the
+     * attendance summary both consume, so a ledger that summed correctly while bucketing wrongly
+     * would pass every existing test.
+     */
+    @Test
+    void spanDayFractionsPutsThePartialFractionOnTheBoundaryDatesAndAFullDayOnEveryDateBetween() {
+        Predicate<LocalDate> everyDayIsWorking = date -> true;
+        Map<LocalDate, BigDecimal> ledger = LeaveDayMath.spanDayFractions(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-14"),
+            LocalTime.of(13, 30), LocalTime.of(12, 30),
+            LeaveDayCountBasis.WORKING_DAYS, everyDayIsWorking,
+            FIVE_DAY_SCHEDULE, FIVE_DAY_SCHEDULE);
+
+        // First day 13:30-17:30 = 240 min, no break overlap -> 0.50.
+        // Last day 08:30-12:30 = 240 min, no break overlap -> 0.50.
+        // The two dates strictly between are full days.
+        assertThat(ledger).containsExactly(
+            Map.entry(LocalDate.parse("2026-09-11"), new BigDecimal("0.50")),
+            Map.entry(LocalDate.parse("2026-09-12"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2026-09-13"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2026-09-14"), new BigDecimal("0.50")));
+        assertThat(LeaveDayMath.sumFractions(ledger)).isEqualByComparingTo("3.00");
+    }
+
+    /** A non-working date contributes NOTHING to the ledger -- not a zero entry, no entry at all. */
+    @Test
+    void spanDayFractionsOmitsNonWorkingDatesEntirelyRatherThanRecordingThemAsZero() {
+        Predicate<LocalDate> weekdaysOnly = date -> FIVE_DAY_SCHEDULE.isWorkday(date);
+        Map<LocalDate, BigDecimal> ledger = LeaveDayMath.spanDayFractions(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-15"),
+            LocalTime.of(13, 30), LocalTime.of(12, 30),
+            LeaveDayCountBasis.WORKING_DAYS, weekdaysOnly,
+            FIVE_DAY_SCHEDULE, FIVE_DAY_SCHEDULE);
+
+        // 11 Sep 2026 is a Friday; 12-13 Sep are the weekend and must be ABSENT, not 0.00.
+        assertThat(ledger.keySet()).containsExactly(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-14"), LocalDate.parse("2026-09-15"));
+        assertThat(LeaveDayMath.sumFractions(ledger)).isEqualByComparingTo("2.00");
+    }
+
+    /**
+     * {@link LeaveDayMath#unpaidByMonthFromFractionsAcrossYears} is the seam payroll reads when a
+     * timed span crosses BOTH a month and a calendar-year boundary: each year carries its own
+     * paidDays (quota is per year), so the unpaid remainder must be worked out per year and only
+     * then merged by month. Summing the whole span against one paidDays figure would silently
+     * mis-attribute the deduction.
+     */
+    @Test
+    void unpaidByMonthAcrossYearsResolvesEachYearAgainstItsOwnPaidDaysBeforeMergingByMonth() {
+        Map<LocalDate, BigDecimal> ledger = new java.util.LinkedHashMap<>();
+        ledger.put(LocalDate.parse("2026-12-30"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2026-12-31"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2027-01-04"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2027-01-05"), new BigDecimal("0.50"));
+
+        // 2026 has 1.00 of its 2.00 paid; 2027 has none of its 1.50 paid.
+        List<LeaveQuotaYearSplit> perYear = List.of(
+            new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), new BigDecimal("1.00"),
+                new BigDecimal("1.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO),
+            new LeaveQuotaYearSplit(2027, new BigDecimal("1.50"), BigDecimal.ZERO,
+                new BigDecimal("1.50"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO));
+
+        Map<LocalDate, BigDecimal> byMonth =
+            LeaveDayMath.unpaidByMonthFromFractionsAcrossYears(ledger, perYear);
+
+        // Dec 2026: 2.00 in the ledger, 1.00 paid (earliest first) -> 1.00 unpaid.
+        // Jan 2027: nothing paid -> the whole 1.50 is unpaid.
+        assertThat(byMonth).containsExactly(
+            Map.entry(LocalDate.parse("2026-12-01"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2027-01-01"), new BigDecimal("1.50")));
+    }
+
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final WorkSchedule FIVE_DAY_SCHEDULE = new WorkSchedule(
         BUSINESS_ZONE, LocalTime.of(8, 30), LocalTime.of(17, 30), 5,

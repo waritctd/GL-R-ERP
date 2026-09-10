@@ -184,6 +184,58 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // §5.6 ORDINATION minimum service (V164 gap-closing coverage, 2026-09-10). MIN_SERVICE_MONTHS is
+    // WARN_UNPAID_ALL (V164): an under-12-month employee now still submits, unpaid in full, rather
+    // than being auto-rejected outright. ORDINATION is NOT prorated_first_year (unlike
+    // VACATION/PERSONAL, V120) and carries advance_notice_days=0 (V116), so this gate is isolated --
+    // neither HIRE_DATE_MISSING_PRORATED nor ADVANCE_NOTICE can fire alongside it for these requests.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void ordinationWarnsUnpaidInFullForAnEmployeeUnderTwelveMonthsOfService() {
+        // Hired 2026-01-13 -- exactly 6 completed months of service by the 2026-07-13 request start,
+        // well under ORDINATION's 12-month min_service_months (V116).
+        long employeeId = insertEmployee("ORD-MINSVC-001", LocalDate.parse("2026-01-13"));
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "ORDINATION", "2026-07-13", "2026-07-14"), // 2 working days
+            employee(employeeId));
+
+        // Wrong-way-round: SUBMITTED, not AUTO_REJECTED -- V164's entire point for this code.
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.systemNote()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("MIN_SERVICE_MONTHS");
+        assertThat(result.ruleWarnings().get(0).messageTh()).contains("12 เดือน");
+        // WARN_UNPAID_ALL: the WHOLE request is unpaid by rule, nothing paid.
+        assertThat(result.totalDays()).isEqualByComparingTo("2.00");
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("2.00");
+        assertThat(result.paidDays()).isEqualByComparingTo("0.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
+        // Owner ruling #1: unpaid-by-rule days consume NO quota -- before/after must be identical.
+        assertThat(result.quotaRemainingBefore()).isEqualByComparingTo(result.quotaRemainingAfter());
+    }
+
+    @Test
+    void ordinationIsGrantedAtExactlyTwelveMonthsOfServiceWithNoWarning() {
+        // Wrong-way-round complement, pinned at the boundary itself: hired EXACTLY 12 completed
+        // months before the request start must be ELIGIBLE ("at least 12 months", not "more than
+        // 12") and must carry NO MIN_SERVICE_MONTHS warning at all -- genuinely did not warn, not
+        // merely "warned but was still approved anyway".
+        long employeeId = insertEmployee("ORD-MINSVC-002", LocalDate.parse("2025-07-13"));
+
+        LeaveRequestDto result = leaveService.submit(
+            submitRequest(employeeId, "ORDINATION", "2026-07-13", "2026-07-14"),
+            employee(employeeId));
+
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.ruleWarnings()).isEmpty();
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(result.paidDays()).isEqualByComparingTo("2.00");
+        assertThat(result.unpaidDays()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
     @Test
     void vacationQuotaIsProratedUnderOneYearOfServiceAndFullAfterOneYear() {
         // Defect 1 fix (V120): §5.3's parenthetical grants a PRO-RATED quota to an employee under a

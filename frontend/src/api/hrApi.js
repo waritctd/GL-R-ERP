@@ -141,6 +141,8 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.leave.employees),
     types: () => apiRequest(API_ROUTES.leave.types),
     balances: (params) => apiRequest(withQuery(API_ROUTES.leave.balances, params)),
+    // Manager team-quota summary (2026-09) -- see routes.js's own comment on the scope.
+    teamBalances: (params) => apiRequest(withQuery(API_ROUTES.leave.teamBalances, params)),
     // Sub-day leave + paper-form contact block (2026-07-25): autofill for the
     // contact-during-leave block, reusing the /balances access predicate.
     contactDefaults: (params) => apiRequest(withQuery(API_ROUTES.leave.contactDefaults, params)),

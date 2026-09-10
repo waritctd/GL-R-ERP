@@ -41,6 +41,7 @@ import th.co.glr.hr.leave.LeaveResponses.LeaveEmployeeOptionsResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveListResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeavePreviewResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveReviewSummaryResponse;
+import th.co.glr.hr.leave.LeaveResponses.LeaveTeamBalancesResponse;
 import th.co.glr.hr.leave.LeaveResponses.LeaveTypesResponse;
 
 @RestController
@@ -267,6 +268,15 @@ public class LeaveController {
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveBalancesResponse(leaveService.balances(user, employeeId, year));
+    }
+
+    /** Manager team-quota summary (2026-09) -- see {@link LeaveService#teamBalances}. */
+    @GetMapping("/balances/team")
+    LeaveTeamBalancesResponse teamBalances(
+            @RequestParam(value = "year", required = false) Integer year,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new LeaveTeamBalancesResponse(leaveService.teamBalances(user, year));
     }
 
     @PostMapping("/{id}/approve")

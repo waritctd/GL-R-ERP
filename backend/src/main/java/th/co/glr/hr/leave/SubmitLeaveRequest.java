@@ -12,8 +12,11 @@ public record SubmitLeaveRequest(
     @NotNull LocalDate startDate,
     @NotNull LocalDate endDate,
     @NotBlank @Size(max = 2000) String reason,
-    // Sub-day leave (2026-07-25): both null means legacy/whole-day leave. See
-    // LeaveService#computeTotalDays / #validateSubDayTimes and V90's chk_leave_time_* checks.
+    // Partial-day span leave (2026-07-25, widened to multi-day V166 2026-09-10): both null means
+    // whole-day leave (any number of days). Non-null no longer implies startDate == endDate -- a
+    // timed request may now span multiple calendar days (e.g. an afternoon-only first day through a
+    // full second day). See LeaveService#computeTotalDays / #validateSubDayTimes and V166's
+    // chk_leave_time_* checks.
     LocalTime startTime,
     LocalTime endTime,
     // Paper-form (ใบลาหยุด F-HR-020) "contact during leave" block. Autofilled from the employee's
