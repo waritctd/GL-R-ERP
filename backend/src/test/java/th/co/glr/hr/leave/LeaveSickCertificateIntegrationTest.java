@@ -86,7 +86,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void firstThreeCertificatelessSickRequestsInACalendarMonthAreApprovedButTheFourthIsAutoRejected() {
+    void firstThreeCertificatelessSickRequestsInACalendarMonthAreApprovedButTheFourthWarnsUnpaid() {
         long employeeId = insertEmployee("SICK-TOL-001");
 
         // Mon 2026-07-06, Wed 2026-07-08, Fri 2026-07-10, Mon 2026-07-13 -- four distinct working
@@ -100,9 +100,14 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(first.status()).isEqualTo("SUBMITTED");
         assertThat(second.status()).isEqualTo("SUBMITTED");
         assertThat(third.status()).isEqualTo("SUBMITTED");
-        assertThat(fourth.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourth.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-        assertThat(fourth.systemNote()).isNotBlank();
+        // V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED is now
+        // WARN_UNPAID_ALL, not BLOCK -- the 4th request still submits, wholly unpaid by rule.
+        assertThat(fourth.status()).isEqualTo("SUBMITTED");
+        assertThat(fourth.systemNoteCode()).isNull();
+        assertThat(fourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
+        assertThat(fourth.ruleWarnings().get(0).messageTh()).isNotBlank();
+        assertThat(fourth.unpaidByRuleDays()).isEqualByComparingTo("1.00");
         // Money-effect pin: the first three each granted a paid day (paid_days_cap is NULL for SICK,
         // well within the 30-day quota) -- today's pre-V124 code would have auto-rejected ALL FOUR.
         assertThat(first.paidDays()).isEqualByComparingTo("1.00");
@@ -124,11 +129,13 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(juneSecond.status()).isEqualTo("SUBMITTED");
         assertThat(juneThird.status()).isEqualTo("SUBMITTED");
 
-        // A fourth certificate-less occasion, still in June, would be rejected (same boundary as the
-        // test above) -- proving June's own count is genuinely exhausted, not that this employee has
-        // some unlimited allowance.
+        // A fourth certificate-less occasion, still in June, would warn unpaid (V164, owner-approved
+        // change, 2026-09-09 -- same boundary as the test above) -- proving June's own count is
+        // genuinely exhausted, not that this employee has some unlimited allowance.
         LeaveRequestDto juneFourth = leaveService.submit(sickRequest(employeeId, "2026-06-25"), employee(employeeId));
-        assertThat(juneFourth.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(juneFourth.status()).isEqualTo("SUBMITTED");
+        assertThat(juneFourth.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
 
         // ...but a request starting in JULY is a NEW calendar month: the counter must have reset, not
         // carried the exhausted June count forward. Wed 2026-07-01 is FIXED_NOW itself, a working day,
@@ -192,18 +199,22 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     @Test
-    void aSickRequestWithACertificateFiledOutsideTheWorkingDayWindowIsAutoRejected() {
+    void aSickRequestWithACertificateFiledOutsideTheWorkingDayWindowWarnsUnpaid() {
         // Start Mon 2026-06-01 (a full month before FIXED_NOW): addWorkingDays(Mon, 3) =
         // Thu 2026-06-04 -- "today" (2026-07-01) is long past that deadline -> LATE, even though a
-        // real certificate is attached.
+        // real certificate is attached. V164 (owner-approved change, 2026-09-09):
+        // SICK_CERTIFICATE_WINDOW is now WARN_UNPAID_ALL, not BLOCK -- still submits, wholly unpaid.
         long employeeId = insertEmployee("SICK-WIN-LATE-001");
         stubFileStorage();
 
         LeaveRequestDto result = leaveService.submit(
             sickRequest(employeeId, "2026-06-01"), certificate(), employee(employeeId));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(result.systemNoteCode()).isEqualTo("SICK_CERTIFICATE_WINDOW");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(result.systemNoteCode()).isNull();
+        assertThat(result.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("SICK_CERTIFICATE_WINDOW");
+        assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("1.00");
         assertThat(result.paidDays()).isEqualByComparingTo("0.00");
         // The late certificate is still recorded (LeaveService#submit's attach block is unconditional
         // on hasAttachment, not on the outcome) -- it just did not buy approval.

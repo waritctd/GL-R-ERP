@@ -263,16 +263,20 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         }
 
         // The 4th certificate-less occasion this SAME month: the monthly tolerance (not quota) is
-        // what now binds -- AUTO_REJECTED, exactly the old outright-rejection shape (0/0), but for
-        // the tolerance reason, not merely "quota is 0".
+        // what now binds. V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED
+        // is WARN_UNPAID_ALL, not BLOCK -- SUBMITTED, unpaid by rule (not merely "quota is 0", though
+        // the day count looks the same either way here: quota was already exhausted by the fill-up).
         LeaveRequestDto fourthOccasion = leaveService.submit(
             submitRequest(employeeId, "SICK", "2026-08-27", "2026-08-27"), employee(employeeId)); // Thu
 
-        assertThat(fourthOccasion.status()).isEqualTo("AUTO_REJECTED");
-        assertThat(fourthOccasion.systemNoteCode()).isEqualTo("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
-        assertThat(fourthOccasion.systemNote()).isNotBlank();
+        assertThat(fourthOccasion.status()).isEqualTo("SUBMITTED");
+        assertThat(fourthOccasion.systemNoteCode()).isNull();
+        assertThat(fourthOccasion.ruleWarnings()).extracting(LeaveRuleWarningDto::code)
+            .containsExactly("SICK_NO_CERT_TOLERANCE_EXHAUSTED");
+        assertThat(fourthOccasion.ruleWarnings().get(0).messageTh()).isNotBlank();
+        assertThat(fourthOccasion.unpaidByRuleDays()).isEqualByComparingTo("1.00");
         assertThat(fourthOccasion.paidDays()).isEqualByComparingTo("0.00");
-        assertThat(fourthOccasion.unpaidDays()).isEqualByComparingTo("0.00");
+        assertThat(fourthOccasion.unpaidDays()).isEqualByComparingTo("1.00");
     }
 
     @Test

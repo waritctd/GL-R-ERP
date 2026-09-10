@@ -705,6 +705,211 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   });
 });
 
+// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): 10 of 17 LeaveRuleCode gates no longer
+// BLOCK -- they submit normally and carry `ruleWarnings`/`unpaidByRuleDays` instead (see
+// LeaveRuleEnforcement.java's class Javadoc). `messageTh` below is copied VERBATIM from
+// LeaveRuleMessages' real ADVANCE_NOTICE/PROBATION_NOT_PASSED templates (WARN_UNPAID_TAIL
+// included), same reason CLAUDE.md gives for never hand-translating backend copy.
+const advanceNoticeWarning = {
+  code: 'ADVANCE_NOTICE',
+  params: {
+    leaveTypeNameTh: 'ลาพักร้อน', noticeDays: '3', section: '5', days: '1',
+  },
+  messageTh: 'การลาพักร้อนต้องยื่นล่วงหน้าอย่างน้อย 3 วัน (ระเบียบข้อ 5) คำขอนี้ยื่นไม่ทันกำหนด '
+    + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
+};
+const probationNotPassedWarning = {
+  code: 'PROBATION_NOT_PASSED',
+  params: {
+    leaveTypeNameTh: 'ลากิจ', probationEndsOn: '1 มกราคม 2570', section: '5.2', days: '1',
+  },
+  messageTh: 'การลากิจต้องผ่านทดลองงานก่อน (คาดว่าจะผ่านวันที่ 1 มกราคม 2570 ระเบียบข้อ 5.2) '
+    + 'แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา 1 วันจะไม่ได้รับค่าจ้าง',
+};
+
+function warningPreview({ ruleWarnings, unpaidByRuleDays, depth } = {}) {
+  return {
+    preview: {
+      blocking: null,
+      datesEvaluated: true,
+      coverageEvaluated: depth === 'FULL',
+      totalDays: 1,
+      paidDays: 1 - unpaidByRuleDays,
+      unpaidDays: unpaidByRuleDays,
+      quotaYearSplits: [{
+        quotaYear: 2099,
+        totalDays: 1,
+        paidDays: 1 - unpaidByRuleDays,
+        unpaidDays: unpaidByRuleDays,
+        quotaRemainingBefore: 6,
+        quotaRemainingAfter: 5,
+      }],
+      ruleWarnings,
+      unpaidByRuleDays,
+      counters: NO_COUNTERS,
+    },
+  };
+}
+
+async function advanceToStep3WithFutureDate() {
+  await goToStep2ForVacation();
+  const futureDate = '2099-12-31';
+  fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+  fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
+  fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+  await screen.findByText(/ขั้นตอนที่ 3\/3/);
+}
+
+describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)', () => {
+  beforeEach(() => {
+    installDefaultLeaveMocks();
+  });
+
+  it('step 3: a warning renders (amber, non-danger) and submit stays enabled with the unpaid-copy label', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      return Promise.resolve(warningPreview({
+        ruleWarnings: [advanceNoticeWarning], unpaidByRuleDays: 1, depth: payload.depth,
+      }));
+    });
+
+    await advanceToStep3WithFutureDate();
+
+    expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
+    // Not rendered inside role="alert" (that's step3Blocking/step3Error's own terminal wrapper) --
+    // a warning does not stop submission, so it must not be announced the same way.
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    expect(submitButton.textContent).toMatch(/ส่งคำขอ \(ไม่รับค่าจ้าง\)/);
+
+    fireEvent.click(submitButton);
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+  });
+
+  it('step 2: the green "ผ่านเงื่อนไขแล้ว" line is SUPPRESSED when a warning fired', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      return Promise.resolve(warningPreview({
+        ruleWarnings: [advanceNoticeWarning], unpaidByRuleDays: 1, depth: payload.depth,
+      }));
+    });
+
+    await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
+
+    // The warning itself IS shown at step 2...
+    expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
+    // ...and the green "passed" line must NOT sit above it. A request carrying a warning does pass
+    // (nothing blocks submission), but telling someone their leave cleared the checks immediately
+    // before telling them it will be unpaid is the wrong thing for them to take away.
+    expect(screen.queryByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).toBeNull();
+  });
+
+  it('step 2: the green "ผ่านเงื่อนไขแล้ว" line still shows when there is nothing to flag', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      return Promise.resolve(warningPreview({
+        ruleWarnings: [], unpaidByRuleDays: 0, depth: payload.depth,
+      }));
+    });
+
+    await goToStep2ForVacation();
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
+
+    expect(await screen.findByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).not.toBeNull();
+  });
+
+  it('step 3: multiple warnings all render, not just the first (owner ruling: show all)', async () => {
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      return Promise.resolve(warningPreview({
+        ruleWarnings: [advanceNoticeWarning, probationNotPassedWarning], unpaidByRuleDays: 1, depth: payload.depth,
+      }));
+    });
+
+    await advanceToStep3WithFutureDate();
+
+    expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
+    expect(await screen.findByText(/ต้องผ่านทดลองงานก่อน/)).not.toBeNull();
+  });
+
+  it('step 3: a BLOCK still disables submit and shows only the danger panel, even alongside warnings', async () => {
+    // Defensive: LeavePreviewDto's own contract says a non-null `blocking` always pairs with an
+    // EMPTY ruleWarnings (a BLOCK wins outright) -- this proves the FRONTEND enforces that
+    // dominance itself rather than trusting a well-behaved backend, in case a future response ever
+    // sends both.
+    const blockingOutcome = {
+      code: 'DEPARTMENT_COVERAGE',
+      params: { uncoveredDate: '2099-12-31' },
+      messageTh: 'ไม่มีพนักงานคนอื่นในแผนกทำงานในวันที่เลือก',
+    };
+    api.leave.preview.mockImplementation((payload) => {
+      if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
+      if (payload.depth === 'FULL') {
+        return Promise.resolve({
+          preview: {
+            blocking: blockingOutcome,
+            datesEvaluated: true,
+            coverageEvaluated: true,
+            totalDays: 1,
+            paidDays: null,
+            unpaidDays: null,
+            quotaYearSplits: [],
+            ruleWarnings: [advanceNoticeWarning],
+            unpaidByRuleDays: 0,
+            counters: NO_COUNTERS,
+          },
+        });
+      }
+      return Promise.resolve(approvedPreview(payload));
+    });
+
+    await advanceToStep3WithFutureDate();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/ไม่มีพนักงานคนอื่นในแผนกทำงานในวันที่เลือก/);
+    expect(screen.queryByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).toBeNull();
+    const submitButton = screen.getByRole('button', { name: /ส่งคำขอ/ });
+    expect(submitButton.disabled).toBe(true);
+    expect(submitButton.textContent).not.toMatch(/ไม่รับค่าจ้าง/);
+  });
+
+  it('a dateless preview renders no warning, even if (incorrectly) the response carried one', async () => {
+    // The real LeavePreviewDto contract is that ruleWarnings is ALWAYS empty for a dateless call
+    // (LeavePreviewDto's own Javadoc: a dateless preview cannot know totalDays, so there is no
+    // honest day count a WARN_UNPAID_TAIL sentence could quote) -- step 1's TypeChoice never reads
+    // ruleWarnings at all, so this holds even if a misbehaving response broke that contract.
+    api.leave.preview.mockImplementation((payload) => {
+      if (payload?.leaveTypeCode === 'VACATION' && !payload?.startDate) {
+        return Promise.resolve({
+          preview: {
+            blocking: null,
+            datesEvaluated: false,
+            coverageEvaluated: false,
+            totalDays: null,
+            paidDays: null,
+            unpaidDays: null,
+            quotaYearSplits: [],
+            ruleWarnings: [advanceNoticeWarning],
+            unpaidByRuleDays: null,
+            counters: NO_COUNTERS,
+          },
+        });
+      }
+      return Promise.resolve(dateless_ok_preview);
+    });
+
+    renderComposer();
+    await screen.findByRole('button', { name: /ลาพักร้อน/ });
+
+    expect(screen.queryByText(/จะไม่ได้รับค่าจ้าง/)).toBeNull();
+  });
+});
+
 // HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
 // but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
 // button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via

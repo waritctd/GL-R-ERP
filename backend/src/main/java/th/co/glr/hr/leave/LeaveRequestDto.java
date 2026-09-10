@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 public record LeaveRequestDto(
@@ -97,6 +98,19 @@ public record LeaveRequestDto(
     // active hr-role employee exists -- see LeaveRepository#resolvePendingApprover's Javadoc for
     // why a single name cannot be picked in that case.
     String pendingApproverRole,
-    String pendingApproverName
+    String pendingApproverName,
+    // §5 WARN_UNPAID_* gates (V164, owner-approved change, 2026-09-09): every warning that fired for
+    // this request but did not block it -- see LeaveRuleWarningDto/LeaveRuleCode#enforcement()/
+    // LeaveService#autoRejectNote. Owner ruling #2: the approver must see this before approving --
+    // this is that surface. NEVER null (LeaveRepository#mapRequest maps a NULL rule_warnings column
+    // to List.of()), so a caller can always iterate it without a null check; empty for the common case
+    // (no warning fired) and for every row created before this migration (NO BACKFILL).
+    List<LeaveRuleWarningDto> ruleWarnings,
+    // §5 WARN_UNPAID_* gates (V164): how many of totalDays are unpaid because a WARN_UNPAID_ALL/
+    // WARN_UNPAID_EXCESS gate fired, as opposed to ordinary quota exceedance -- see
+    // LeaveService#computeQuotaSplit's Javadoc and hr.leave_request.unpaid_by_rule_days' V164 column
+    // comment. A SUBSET of unpaidDays above, never a third bucket that would break paidDays +
+    // unpaidDays == totalDays. 0 when no WARN gate fired, or for a pre-V164 row (NO BACKFILL).
+    BigDecimal unpaidByRuleDays
 ) {
 }
