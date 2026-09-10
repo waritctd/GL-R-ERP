@@ -22,6 +22,16 @@ public class EmployeeSignatureRepository {
 
     public record SignatureImage(String mimeType, byte[] image) {}
 
+    /** Whether {@code hr.employee} has this row at all (active or not) — the 404 gate the service
+     * applies before touching a signature, so a write against an id that does not exist is
+     * refused rather than "succeeding" against nothing. */
+    public boolean employeeExists(long employeeId) {
+        Boolean found = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM hr.employee WHERE employee_id = :id)",
+            Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(found);
+    }
+
     public boolean exists(long employeeId) {
         Boolean found = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM hr.employee_signature WHERE employee_id = :id)",

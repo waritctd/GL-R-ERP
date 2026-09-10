@@ -154,6 +154,28 @@
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>3.0.3</version>
         </dependency>
+        <!-- Quotation v2 (V165, owner ruling 2026-09-10): headless-Chromium PDF rendering for the
+             DIRECT deal quotation only ("the excel template approach is giving too much problem").
+             th.co.glr.hr.common.ChromiumPdfPrinter drives this to print a self-contained HTML
+             document (th.co.glr.hr.dealquotation.QuotationHtmlDocument) to PDF. The legacy/PCR
+             quotation path and every other XLS→PDF conversion keep going through
+             LibreOfficePdfConverter, untouched. Not in the Spring Boot BOM, so pinned explicitly.
+
+             SIZE: this pulls in com.microsoft.playwright:driver-bundle (202 MB jar, 586 MB unpacked —
+             a Node.js runtime plus the driver for EACH of linux, linux-arm64, mac, mac-arm64 and
+             win32_x64), so the fat jar and the Render image grow by ~200 MB. Checked 2026-09-10:
+             Maven Central publishes only playwright / driver / driver-bundle / parent-pom for this
+             group — there is NO per-platform driver artifact to swap in, so an <exclusion> of
+             driver-bundle would leave nothing to launch with. (Pointing the driver at a system
+             Node via PLAYWRIGHT_NODEJS_PATH, or a custom driver impl, is out of scope for now.)
+             The browser itself is NOT in the jar: the runtime image uses the Debian `chromium`
+             package via CHROMIUM_PATH, and PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 stops the driver
+             fetching its own. -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>1.62.0</version>
+        </dependency>
     </dependencies>
 
     <build>

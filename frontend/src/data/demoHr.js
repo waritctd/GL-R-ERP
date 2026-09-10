@@ -216,16 +216,17 @@ export function buildDemoLeaveRequests(employees) {
       // Sub-day leave (V90): times present, single date, fractional totalDays — exercises the
       // expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
       id: 15, employeeId: employees[4].id, leaveTypeCode: 'PERSONAL',
-      startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.5, quotaYear: 2026,
-      startTime: '13:00', endTime: '17:00',
+      startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.44, quotaYear: 2026,
+      startTime: '13:00', endTime: '17:00',  // 13:00-17:00 = 240 clock min, minus 30 min of the 12:30-13:30 break = 210 worked / 480 = 0.44 (V166)
       reason: 'ติดต่อราชการที่สำนักงานเขต ช่วงบ่าย', status: 'SUBMITTED',
       purposeCode: 'DRIVING_LICENSE_OR_GOVERNMENT',
-      quotaRemainingBefore: 7, quotaRemainingAfter: 6.5,
+      quotaRemainingBefore: 7, quotaRemainingAfter: 6.56,
       requestedById: employees[4].id, requestedByName: employees[4].nameTh, requestedAt: at(-2),
     }),
     // The two sub-day rows below (2026-08-31) exist because id 15 above was, until now, the ONLY
-    // fractional day count in the whole seed — and its 0.5 is the one fraction that reads cleanly
-    // in every format ("4 ชั่วโมง", and "6.5" before that). A leave surface driven only by it looks
+    // fractional day count in the whole seed — and it used to read cleanly in every format, back
+    // when it was a flat 0.5 ("4 ชั่วโมง", "6.5"). V166's break window ended that: 13:00-17:00
+    // straddles 12:30-13:30 by 30 minutes, so it is now 0.44 — awkward on purpose. A leave surface driven only by it looks
     // fine while the awkward cases are the ones users actually reported: quota remainders carry the
     // fraction into the DAY column too, which is where "0.38 วัน · เหลือ 6.37 วัน" came from.
     //

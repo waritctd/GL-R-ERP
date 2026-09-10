@@ -92,6 +92,11 @@ export const API_ROUTES = {
     employees: '/api/leave/employees',
     types: '/api/leave/types',
     balances: '/api/leave/balances',
+    // Manager team-quota summary (2026-09): per-direct-report remaining balances, TeamLeaveTab.jsx.
+    // See LeaveService#teamBalances's Javadoc for why this reuses findEmployeeOptions's scope
+    // (self OR reports_to_employee_id = actor, or every active employee for hr/ceo) rather than a
+    // new predicate.
+    teamBalances: '/api/leave/balances/team',
     contactDefaults: '/api/leave/contact-defaults',
     approve: (id) => `/api/leave/${id}/approve`,
     reject: (id) => `/api/leave/${id}/reject`,

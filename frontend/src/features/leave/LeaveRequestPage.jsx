@@ -46,6 +46,42 @@ import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js
 const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
 const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม';
 
+// Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- SICK, and only SICK, is
+// exempt from the "start date must not be before today" block below. Deliberately unlimited: there
+// is no retroactive window on it, unlike OT (OT_RETROACTIVE_WINDOW_DAYS in
+// features/overtime/OvertimePanel.jsx). It is also not HR-only -- an employee filing for themselves
+// gets the same exemption, which is the case that prompted the ruling (paper F-HR-020 sick forms
+// were reaching HR days late and could not be entered through this form at all). Every OTHER type
+// keeps the block: a widening to all types was considered on the same day and explicitly dropped.
+//
+// The backend applies its own §5.1 gates, which this exemption does not touch and which surface in
+// the preview response at BOTH step 2 and step 3 (step2FieldTarget below already routes the SICK
+// certificate codes to the attachment field): LeaveService#sickCertificateRuleOutcome returns
+// SICK_CERTIFICATE_WINDOW when an attachment IS present and today falls more than
+// certificate_filing_window_days (3, as seeded) WORKING days after startDate.
+//
+// UPDATED 2026-09-10 (V164): that gate is now a WARNING, not a rejection. An earlier draft of this
+// comment said a paper form arriving after the window "still auto-rejects", and flagged it as the
+// one part of "ได้ตลอด" this change could not deliver. That is no longer true --
+// SICK_CERTIFICATE_WINDOW's LeaveRuleEnforcement is WARN_UNPAID_ALL, so a late-filed sick leave now
+// SUBMITS, carries the warning, and is unpaid if approved rather than being refused outright. So
+// unblocking the form here genuinely does deliver the owner's "ได้ตลอด" end to end: the employee can
+// file it, and a manager decides. Do not restore the old wording.
+//
+// SICK-only here is the OWNER'S POLICY CHOICE, not a limit the backend imposes. Do not restate it
+// as one: the advance-notice gate is `if (noticeDays > 0)`, and advance_notice_days is 0 for SICK,
+// LEAVE_WITHOUT_PAY, MATERNITY, MILITARY and ORDINATION alike (PERSONAL 1 / VACATION 3 are the only
+// non-zero ones), so the backend would accept a backdated request for any of those five.
+const BACKDATE_ALLOWED_LEAVE_TYPE_CODES = new Set(['SICK']);
+
+// Single source of truth for the past-start-date rule -- both the zod schema and the render-time
+// `startDateInPast` derivation below call THIS, so the exemption cannot drift between the two.
+function isStartDateBlockedAsPast(leaveTypeCode, startDate, minStartDate) {
+  if (!startDate || !minStartDate) return false;
+  if (BACKDATE_ALLOWED_LEAVE_TYPE_CODES.has(leaveTypeCode)) return false;
+  return startDate < minStartDate;
+}
+
 // Step 1's secondary disclosure leads each rare type with its own gating condition (the brief's
 // own framing: "each leading with its *gating condition*") -- this only echoes each type's OWN
 // metadata columns (minServiceMonths/oncePerEmployment/requiresAttachment, already present on the
@@ -99,7 +135,11 @@ function defaultForm({
     startDate: start,
     endDate: endDate || start,
     reason: '',
-    subDay: false,
+    // Partial-day span (V166, 2026-09-10): ticked by default (Teams-shaped: "all day" is the
+    // common case) -- unticking reveals startTime/endTime, which may now span more than one
+    // calendar day (replaces the old subDay field, which forced a single date). See
+    // handleAllDayToggle/createLeaveFormSchema below.
+    allDay: true,
     startTime: '',
     endTime: '',
     contactHouseNo: '',
@@ -125,7 +165,7 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     startDate: z.string().min(1, 'กรุณาเลือกวันที่เริ่ม'),
     endDate: z.string().min(1, 'กรุณาเลือกวันที่สิ้นสุด'),
     reason: z.string().min(1, 'กรุณาระบุเหตุผลการลา'),
-    subDay: z.boolean().optional(),
+    allDay: z.boolean().optional(),
     startTime: z.string().optional(),
     endTime: z.string().optional(),
     contactHouseNo: z.string().optional(),
@@ -145,17 +185,23 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['employeeId'], message: 'กรุณาเลือกพนักงาน' });
     }
-    if (data.startDate && data.startDate < minStartDate) {
+    if (isStartDateBlockedAsPast(data.leaveTypeCode, data.startDate, minStartDate)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: LEAVE_START_PAST_MESSAGE });
     }
-    if (data.subDay) {
+    // Partial-day span (V166, 2026-09-10): `allDay === false` (not merely falsy -- the default is
+    // `true`) is when times are required. A timed span may now cross calendar days, so the
+    // end-after-start ordering check below only applies when start/end fall on the SAME date --
+    // mirrors LeaveService#validateSubDayTimes/V166's chk_leave_time_order exactly (a multi-day
+    // span has no same-clock-time ordering constraint at all; the backend's own row-wise
+    // (end_date, end_time) > (start_date, start_time) check is what actually guards it).
+    if (data.allDay === false) {
       if (!data.startTime) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['startTime'], message: 'กรุณาระบุเวลาเริ่ม' });
       }
       if (!data.endTime) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['endTime'], message: 'กรุณาระบุเวลาสิ้นสุด' });
       }
-      if (data.startTime && data.endTime && data.endTime <= data.startTime) {
+      if (data.startDate === data.endDate && data.startTime && data.endTime && data.endTime <= data.startTime) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['endTime'], message: LEAVE_TIME_ORDER_MESSAGE });
       }
     }
@@ -357,16 +403,20 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     reValidateMode: 'onChange',
   });
   const [
-    employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
+    employeeId, leaveTypeCode, startDate, endDate, allDay, startTime, endTime, purposeCode, requestedAsEmergency,
     quotaPoolPreference,
   ] = useWatch({
     control,
     name: [
-      'employeeId', 'leaveTypeCode', 'startDate', 'endDate', 'subDay', 'purposeCode', 'requestedAsEmergency',
-      'quotaPoolPreference',
+      'employeeId', 'leaveTypeCode', 'startDate', 'endDate', 'allDay', 'startTime', 'endTime', 'purposeCode',
+      'requestedAsEmergency', 'quotaPoolPreference',
     ],
   });
-  const startDateInPast = Boolean(startDate && startDate < todayIso());
+  // Not memoised on purpose: `leaveTypeCode` is watched, so this recomputes on a type switch.
+  // That alone only clears the DERIVED half (this flag, and with it the button's disabled state);
+  // a message already written into `errors.startDate` by the previous type is cleared by
+  // selectType's explicit trigger('startDate') below. Both halves are needed -- see that comment.
+  const startDateInPast = isStartDateBlockedAsPast(leaveTypeCode, startDate, todayIso());
   const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
 
   // Seed the acting employee once options load, same convention as the pre-A2 form.
@@ -403,6 +453,13 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   function selectType(code) {
     setValue('leaveTypeCode', code, { shouldValidate: true });
+    // `shouldValidate` re-runs the whole schema but writes back ONLY the named field's error, so a
+    // past-date error raised under the previous type would otherwise still be rendered after
+    // switching to a backdate-exempt one (ลาพักร้อน -> ลาป่วย). Re-validate startDate explicitly --
+    // but only once it holds a value, or an empty field would answer a type click with its own
+    // "กรุณาเลือกวันที่เริ่ม" required error before the user has reached step 2.
+    if (getValues('startDate')) trigger('startDate');
+
     // A different type invalidates whatever purpose/emergency choice belonged to the old one.
     setValue('purposeCode', '', { shouldValidate: true });
     setValue('requestedAsEmergency', false, { shouldValidate: true });
@@ -457,7 +514,14 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       employeeId: Number(employeeId),
       leaveTypeCode,
       startDate,
-      endDate: subDay ? startDate : endDate,
+      // Partial-day span (V166): endDate is sent AS-IS -- no longer forced back to startDate when
+      // timed, since a timed span may now cover more than one calendar day.
+      endDate,
+      // Partial-day span (V166): widened from "no sub-day times in this shape at all" -- see
+      // LeavePreviewRequest's own Javadoc on the backend. undefined (not sent) when allDay, exactly
+      // like every other "only relevant sometimes" field this params object already builds.
+      startTime: !allDay && startTime ? startTime : undefined,
+      endTime: !allDay && endTime ? endTime : undefined,
       purposeCode: leaveTypeCode === 'PERSONAL' && purposeCode ? purposeCode : undefined,
       requestedAsEmergency: leaveTypeCode === 'PERSONAL' ? Boolean(requestedAsEmergency) : undefined,
       hasAttachment: Boolean(attachmentFile),
@@ -469,8 +533,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       quotaPoolPreference,
     };
   }, [
-    employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
-    attachmentFile, quotaPoolPreference,
+    employeeId, leaveTypeCode, startDate, endDate, allDay, startTime, endTime, purposeCode,
+    requestedAsEmergency, attachmentFile, quotaPoolPreference,
   ]);
   const debouncedStep2Params = useDebouncedValue(step2Params, 400);
   const step2PreviewQuery = useQuery({
@@ -547,7 +611,10 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       employeeId: Number(employeeId),
       leaveTypeCode,
       startDate,
-      endDate: subDay ? startDate : endDate,
+      // Partial-day span (V166): same "sent as-is" reasoning as step2Params above.
+      endDate,
+      startTime: !allDay && startTime ? startTime : undefined,
+      endTime: !allDay && endTime ? endTime : undefined,
       purposeCode: leaveTypeCode === 'PERSONAL' && purposeCode ? purposeCode : undefined,
       requestedAsEmergency: leaveTypeCode === 'PERSONAL' ? Boolean(requestedAsEmergency) : undefined,
       hasAttachment: Boolean(attachmentFile),
@@ -556,8 +623,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       quotaPoolPreference,
     };
   }, [
-    step, employeeId, leaveTypeCode, startDate, endDate, subDay, purposeCode, requestedAsEmergency,
-    attachmentFile, quotaPoolPreference,
+    step, employeeId, leaveTypeCode, startDate, endDate, allDay, startTime, endTime, purposeCode,
+    requestedAsEmergency, attachmentFile, quotaPoolPreference,
   ]);
   const step3PreviewQuery = useQuery({
     queryKey: queryKeys.leavePreview(step3Params ?? {}),
@@ -631,10 +698,12 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       leaveTypeCode: values.leaveTypeCode,
       startDate: values.startDate,
-      endDate: values.subDay ? values.startDate : values.endDate,
+      // Partial-day span (V166): endDate goes out AS CHOSEN -- no longer collapsed to startDate
+      // when timed, since a timed request may now span more than one calendar day.
+      endDate: values.endDate,
       reason: values.reason.trim(),
-      startTime: values.subDay && values.startTime ? values.startTime : null,
-      endTime: values.subDay && values.endTime ? values.endTime : null,
+      startTime: !values.allDay && values.startTime ? values.startTime : null,
+      endTime: !values.allDay && values.endTime ? values.endTime : null,
       contactHouseNo: values.contactHouseNo?.trim() || null,
       contactSubdistrict: values.contactSubdistrict?.trim() || null,
       contactDistrict: values.contactDistrict?.trim() || null,
@@ -651,23 +720,33 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     });
   }
 
+  // Partial-day span (V166): endDate is no longer force-locked to startDate while timed -- only
+  // bumped forward when it would otherwise fall BEFORE the new startDate (the one invariant that
+  // must always hold, mirrors chk_leave_date_order/validateDateRange on the backend), regardless
+  // of allDay.
   function handleStartDateChange(event) {
     const value = event.target.value;
-    if (getValues('subDay') || getValues('endDate') < value) {
+    if (getValues('endDate') < value) {
       setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
     }
   }
 
-  function handleSubDayToggle(event) {
+  // Partial-day span (V166): unticking "ลาทั้งวัน" reveals the time fields, prefilled to the
+  // seeded standard workday (08:30-17:30) so the control starts looking like a full day -- the
+  // requester then narrows either end to make it partial. Re-ticking clears both times (back to
+  // the whole-day null/null convention) but leaves startDate/endDate exactly as chosen -- a
+  // multi-day whole-day request is unaffected either way.
+  function handleAllDayToggle(event) {
     if (event.target.checked) {
-      setValue('endDate', getValues('startDate'), { shouldDirty: true, shouldValidate: true });
-    } else {
       setValue('startTime', '', { shouldDirty: true, shouldValidate: true });
       setValue('endTime', '', { shouldDirty: true, shouldValidate: true });
+    } else {
+      if (!getValues('startTime')) setValue('startTime', '08:30', { shouldDirty: true, shouldValidate: true });
+      if (!getValues('endTime')) setValue('endTime', '17:30', { shouldDirty: true, shouldValidate: true });
     }
   }
 
-  const formSubDay = subDay;
+  const showTimedFields = !allDay;
 
   // Upcoming-holidays panel (composer follow-up to #ot-holiday-visibility, PR 2): a fixed ~90-day
   // forward window from today, independent of whatever startDate/endDate is (or is not yet)
@@ -683,13 +762,14 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   // 3 steps and was, before this gate, safe today only because three facts happened to stack up,
   // none of them load-bearing by design. Step 1's choices are all `<button type="button">` (zero
   // fields that block implicit submission). Step 2 always renders at least two blocking fields
-  // (startDate + endDate, or four once sub-day adds startTime/endTime) — notably `endDate` stays
-  // MOUNTED (merely `disabled`) rather than removed from the DOM when sub-day is checked, which is
-  // what keeps that count at 2 instead of dropping to 1. Step 3 always renders the one real
-  // `<Button type="submit">` in this form. Change any one of those three — e.g. unmounting
-  // `endDate` instead of disabling it — and Enter in whatever single text field remained would
-  // silently file a real leave request, the same as the tax-allowance bug this gate shape was
-  // copied from (TaxAllowanceForm.jsx, #tax-allowance-ia-hub-review), and jsdom would not catch it
+  // (startDate + endDate, always both mounted and enabled -- partial-day span V166 dropped the old
+  // `disabled` toggle on `endDate`, but the count this gate relies on was always "at least 2",
+  // never dependent on that attribute) plus two more (startTime/endTime) once ลาทั้งวัน is
+  // unticked. Step 3 always renders the one real `<Button type="submit">` in this form. Change
+  // startDate/endDate to ever unmount (rather than just staying enabled) and Enter in whatever
+  // single text field remained would silently file a real leave request, the same as the
+  // tax-allowance bug this gate shape was copied from (TaxAllowanceForm.jsx,
+  // #tax-allowance-ia-hub-review), and jsdom would not catch it
   // — it does not implement implicit submission at all (see LeaveRequestPage.test.jsx's
   // `fireEvent.submit(form)` cases, which exercise the same 'submit' event a real Enter keypress
   // produces). `canSubmit={step === 3}` removes the dependency on those three accidents continuing
@@ -831,7 +911,6 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                     type="date"
                     {...register('endDate')}
                     min={startDate}
-                    disabled={formSubDay}
                     aria-invalid={Boolean(errors.endDate)}
                     aria-describedby={errors.endDate ? fieldErrorId('leave-end-date') : undefined}
                     required
@@ -888,36 +967,60 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              <div className={formGridSpan2}>
-                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                  <input type="checkbox" className="h-4 w-4 shrink-0" {...register('subDay', { onChange: handleSubDayToggle })} />
-                  ลาบางส่วนของวัน (ระบุเวลา)
+              {/* Partial-day span (V166, 2026-09-10): Teams-shaped time control -- ticked by
+                  default (the common whole-day case, matching defaultForm's allDay: true), and
+                  unticking reveals a start TIME + end TIME pair that apply to the start/end DATE
+                  fields directly above, which may now differ (a timed request is no longer forced
+                  to a single date -- see handleAllDayToggle). Grouped in its own bordered panel,
+                  same visual pattern QuotaPoolPreferenceField below uses for "a related cluster of
+                  fields", so the toggle and the fields it reveals read as one unit rather than two
+                  independent controls. */}
+              <div className={`${formGridSpan2} grid gap-3 rounded-md border border-border-input bg-surface p-3`}>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-text">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0"
+                    {...register('allDay', { onChange: handleAllDayToggle })}
+                  />
+                  ลาทั้งวัน
                 </label>
+                {showTimedFields ? (
+                  <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
+                    <FormField
+                      label="เวลาเริ่ม"
+                      htmlFor="leave-start-time"
+                      hint={startDate && endDate && startDate !== endDate ? formatDate(startDate) : undefined}
+                      error={errors.startTime?.message}
+                      required
+                    >
+                      <input
+                        id="leave-start-time"
+                        type="time"
+                        {...register('startTime')}
+                        aria-invalid={Boolean(errors.startTime)}
+                        aria-describedby={errors.startTime ? fieldErrorId('leave-start-time') : undefined}
+                        required
+                      />
+                    </FormField>
+                    <FormField
+                      label="เวลาสิ้นสุด"
+                      htmlFor="leave-end-time"
+                      hint={startDate && endDate && startDate !== endDate ? formatDate(endDate) : undefined}
+                      error={errors.endTime?.message}
+                      required
+                    >
+                      <input
+                        id="leave-end-time"
+                        type="time"
+                        {...register('endTime')}
+                        aria-invalid={Boolean(errors.endTime)}
+                        aria-describedby={errors.endTime ? fieldErrorId('leave-end-time') : undefined}
+                        required
+                      />
+                    </FormField>
+                  </div>
+                ) : null}
               </div>
-              {formSubDay ? (
-                <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
-                  <FormField label="เวลาเริ่ม" htmlFor="leave-start-time" error={errors.startTime?.message} required>
-                    <input
-                      id="leave-start-time"
-                      type="time"
-                      {...register('startTime')}
-                      aria-invalid={Boolean(errors.startTime)}
-                      aria-describedby={errors.startTime ? fieldErrorId('leave-start-time') : undefined}
-                      required
-                    />
-                  </FormField>
-                  <FormField label="เวลาสิ้นสุด" htmlFor="leave-end-time" error={errors.endTime?.message} required>
-                    <input
-                      id="leave-end-time"
-                      type="time"
-                      {...register('endTime')}
-                      aria-invalid={Boolean(errors.endTime)}
-                      aria-describedby={errors.endTime ? fieldErrorId('leave-end-time') : undefined}
-                      required
-                    />
-                  </FormField>
-                </div>
-              ) : null}
 
               {/* §5.3.5 pool choice (V161): sits with the other "mechanics of this request" fields
                   (dates, sub-day), above เหตุผลการลา -- same field-order reasoning as the note
