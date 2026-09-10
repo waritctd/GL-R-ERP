@@ -216,8 +216,8 @@ export function buildDemoLeaveRequests(employees) {
       // Sub-day leave (V90): times present, single date, fractional totalDays — exercises the
       // expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
       id: 15, employeeId: employees[4].id, leaveTypeCode: 'PERSONAL',
-      startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.5, quotaYear: 2026,
-      startTime: '13:00', endTime: '17:00',
+      startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.44, quotaYear: 2026,
+      startTime: '13:00', endTime: '17:00',  // 13:00-17:00 = 240 clock min, minus 30 min of the 12:30-13:30 break = 210 worked / 480 = 0.44 (V166)
       reason: 'ติดต่อราชการที่สำนักงานเขต ช่วงบ่าย', status: 'SUBMITTED',
       purposeCode: 'DRIVING_LICENSE_OR_GOVERNMENT',
       quotaRemainingBefore: 7, quotaRemainingAfter: 6.5,
