@@ -156,7 +156,10 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submissionAutoRejectsWhenAdvanceNoticeIsTooShort() {
+    void submissionWarnsUnpaidWhenAdvanceNoticeIsTooShort() {
+        // V164 (owner-approved change, 2026-09-09): ADVANCE_NOTICE is now WARN_UNPAID_ALL, not BLOCK
+        // -- renamed/updated in place from "...AutoRejects...", same reasoning as the SICK-window
+        // test above.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "VACATION",
@@ -168,19 +171,26 @@ class LeaveServiceTest {
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
+        // NOTE: paidDays/unpaidDays are matched with BigDecimal.ZERO/BigDecimal.ONE below (scale 0),
+        // NOT "0.00"/"1.00" -- a single-day request's totalDays (LeaveDayMath's ONE_DAY constant) is
+        // itself scale-0, and every arithmetic step downstream (min/subtract) preserves that scale
+        // when both operands share it. Mockito's eq() uses BigDecimal#equals, which is
+        // SCALE-SENSITIVE ("0.00" != "0") -- verified empirically (not guessed) before writing this
+        // stub, since guessing scale here is exactly the kind of thing that silently breaks a mock.
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(57L);
         when(leaveRepository.findById(57L)).thenReturn(Optional.of(
-            requestDto(57L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(57L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), org.mockito.ArgumentMatchers.contains("อย่างน้อย 7 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(57L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.ADVANCE_NOTICE
+                && warnings.get(0).messageTh().contains("อย่างน้อย 7 วัน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(new BigDecimal("1.00")) == 0));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -222,12 +232,15 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submissionAllowsTheThirdCertificatelessSickOccasionButRejectsTheFourthInTheSameMonth() {
+    void submissionAllowsTheThirdCertificatelessSickOccasionButWarnsUnpaidForTheFourthInTheSameMonth() {
         // THE boundary, asserted from both sides on ONE fixture (same request shape, same month):
         // 2 occasions already used -> this one is the 3rd -> still within the tolerance of 3 ->
-        // SUBMITTED (rule chain passed). 3 occasions already used -> this one would be the 4th ->
-        // exceeds the tolerance -> AUTO_REJECTED. If the boundary comparison used > instead of >=,
-        // this test would fail on the "3 used" side instead of passing.
+        // SUBMITTED, fully paid (rule chain passed cleanly). 3 occasions already used -> this one
+        // would be the 4th -> exceeds the tolerance -> still SUBMITTED (V164, owner-approved change,
+        // 2026-09-09: SICK_NO_CERT_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK -- renamed/
+        // updated in place from "...RejectsTheFourth..."), but wholly unpaid by rule if approved. If
+        // the boundary comparison used > instead of >=, this test would fail on the "3 used" side
+        // instead of passing.
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
@@ -254,18 +267,19 @@ class LeaveServiceTest {
             eq(request.startDate().withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
             .thenReturn(3);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(59L);
         when(leaveRepository.findById(59L)).thenReturn(Optional.of(
-            requestDto(59L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(59L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
-        LeaveRequestDto rejected = leaveService.submit(request, user("employee", 10L));
-        assertThat(rejected.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ไม่เกิน 3 ครั้งต่อเดือน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        LeaveRequestDto warned = leaveService.submit(request, user("employee", 10L));
+        assertThat(warned.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(59L),
+            argThat(warnings -> warnings.size() == 1
+                && warnings.get(0).code() == LeaveRuleCode.SICK_NO_CERT_TOLERANCE_EXHAUSTED
+                && warnings.get(0).messageTh().contains("ไม่เกิน 3 ครั้งต่อเดือน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -300,27 +314,28 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submissionRejectsSickLeaveWithACertificateFiledOutsideTheWorkingDayWindow() {
+    void submissionWarnsUnpaidForSickLeaveWithACertificateFiledOutsideTheWorkingDayWindow() {
+        // V164 (owner-approved change, 2026-09-09): SICK_CERTIFICATE_WINDOW is now WARN_UNPAID_ALL,
+        // not BLOCK -- this test used to be named "...Rejects..." and assert AUTO_REJECTED; renamed
+        // and updated in place, since it still proves the SAME underlying gate fires (a late-filed
+        // certificate does not satisfy the filing window), only the resulting status/split changed.
         // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-01 (a full month earlier):
         // addWorkingDays(Mon, 3) = Thu 2026-06-04 -- "today" (2026-07-01) is long past that deadline
-        // -> LATE -> AUTO_REJECTED, even though a real certificate was attached.
+        // -> LATE -> the whole 1.00-day request is unpaid by rule if approved, but still SUBMITTED.
         LocalDate start = LocalDate.parse("2026-06-01");
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Fever, saw a doctor (filed late)");
         MultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert".getBytes());
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        ArgumentCaptor<BigDecimal> paidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<BigDecimal> unpaidDays = ArgumentCaptor.forClass(BigDecimal.class);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
+            unpaidDays.capture(), eq(2026),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(61L);
         when(leaveRepository.findById(61L)).thenReturn(Optional.of(
-            requestDto(61L, 10L, "AUTO_REJECTED", start, start, "0.00", "0.00")));
-        // #submit stores an attachment whenever one is present, UNCONDITIONALLY of whether the
-        // request itself was approved or auto-rejected (see LeaveService#submit: the hasAttachment
-        // block runs after #create regardless of `status`) -- the late-filed certificate is still
-        // recorded for HR to see when reviewing the rejection, it just does not buy the request
-        // approval.
+            requestDto(61L, 10L, "SUBMITTED", start, start, "0.00", "1.00")));
         when(fileStorage.storeInDatabase(eq("leave"), eq(61L), eq(certificate), any(Set.class)))
             .thenReturn(new FileStorageService.StoredContent(
                 "cert.pdf", "leave/61/x.pdf", "application/pdf", 4L, "cert".getBytes()));
@@ -330,11 +345,15 @@ class LeaveServiceTest {
 
         LeaveRequestDto result = leaveService.submit(request, certificate, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("วันทำการนับจากวันที่เริ่มลาป่วย"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
+        assertThat(unpaidDays.getValue()).isEqualByComparingTo("1.00");
+        // Owner ruling #1: unpaid-by-rule days consume NO quota, so #recordRuleWarnings' own
+        // unpaidByRuleDays argument equals the WHOLE request (1.00), not merely "some unpaid amount".
+        verify(leaveRepository).recordRuleWarnings(eq(61L),
+            argThat(warnings -> warnings.size() == 1
+                && warnings.get(0).code() == LeaveRuleCode.SICK_CERTIFICATE_WINDOW),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(new BigDecimal("1.00")) == 0));
     }
 
     @Test
@@ -698,30 +717,34 @@ class LeaveServiceTest {
         // writing a quota-year row for one of its years would leave that year's attribution
         // permanently missing -- a data-integrity gap, not just a cosmetic one.
         //
-        // Uses SICK (not VACATION) so autoRejectNote fires for a simple, unrelated reason (missing
-        // medical certificate, monthly no-certificate tolerance already exhausted -- V124) rather
-        // than needing the cross-year date itself to trigger a gate.
+        // V164 (owner-approved change, 2026-09-09): this test used SICK's no-certificate tolerance
+        // gate to reach AUTO_REJECTED -- that gate (SICK_NO_CERT_TOLERANCE_EXHAUSTED) is now
+        // WARN_UNPAID_ALL, not BLOCK, so it can no longer produce the AUTO_REJECTED premise this test
+        // needs. Switched to VACATION + §5.3.4 post-resignation (RESIGNATION_GATE), which STAYS BLOCK
+        // (owner ruling, V164 -- protects handover, docking pay does not achieve that) and fires
+        // early enough (categorical eligibility, before any date-shape gate) that the cross-year DATES
+        // themselves are what actually need this test's real subject: does #computeQuotaSplit's
+        // not-approved branch still walk every year `LeaveDayMath#totalDaysByYear` finds and persist
+        // a zeroed row for each, rather than short-circuiting on the first BLOCK and skipping this
+        // entirely -- unrelated to WHICH gate produced the rejection.
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
-        when(leaveRepository.findLeaveType("SICK")).thenReturn(Optional.of(sickType()));
-        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.sumUsedDays(eq(10L), eq("SICK"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
-        // V124: this month's no-certificate tolerance (3) is already exhausted, so the certificate-less
-        // gate still fires -- keeps this test isolated to the cross-year quota-split mechanism, not
-        // the (separately tested) tolerance boundary itself.
-        when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
-            .thenReturn(3);
-        SubmitLeaveRequest sickRequest = new SubmitLeaveRequest(
-            null, "SICK", LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-04"), "Year-end illness");
-        when(leaveRepository.create(eq(10L), eq(10L), eq(sickRequest), any(BigDecimal.class), eq(BigDecimal.ZERO),
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(true);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2027), any(Collection.class))).thenReturn(BigDecimal.ZERO);
+        SubmitLeaveRequest vacationRequest = new SubmitLeaveRequest(
+            null, "VACATION", LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-04"), "Year-end trip");
+        when(leaveRepository.create(eq(10L), eq(10L), eq(vacationRequest), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(2026),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(111L);
         when(leaveRepository.findById(111L)).thenReturn(Optional.of(
-            requestDto(111L, 10L, "AUTO_REJECTED", sickRequest.startDate(), sickRequest.endDate(), "0.00", "0.00")));
+            requestDto(111L, 10L, "AUTO_REJECTED", vacationRequest.startDate(), vacationRequest.endDate(), "0.00", "0.00")));
 
-        LeaveRequestDto result = leaveService.submit(sickRequest, user("employee", 10L));
+        LeaveRequestDto result = leaveService.submit(vacationRequest, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        verify(leaveRepository, org.mockito.Mockito.never()).recordRuleWarnings(anyLong(), any(List.class), any(BigDecimal.class));
         ArgumentCaptor<List<LeaveQuotaYearSplit>> splitsCaptor = ArgumentCaptor.forClass(List.class);
         verify(leaveRepository).insertQuotaYearSplits(eq(111L), splitsCaptor.capture());
         List<LeaveQuotaYearSplit> splits = splitsCaptor.getValue();
@@ -747,7 +770,7 @@ class LeaveServiceTest {
         // single year here, carrying the same paid/total figures the parent DTO above does.
         when(leaveRepository.findQuotaYearSplits(80L)).thenReturn(List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), new BigDecimal("1.00"), new BigDecimal("1.00"),
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2.00"))));
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("2.00"), BigDecimal.ZERO)));
         when(leaveRepository.findProcessedPayrollMonths(any(Collection.class)))
             .thenReturn(java.util.Set.of(LocalDate.parse("2026-07-01")));
         UserPrincipal hr = user("hr", 20L);
@@ -965,7 +988,9 @@ class LeaveServiceTest {
             null, false, null, Map.of(), false,
             // feat/pending-approver-info: no test using this fixture asserts on these (computed by
             // LeaveRepository#mapRequest, a real SQL row mapper this Mockito-level class never hits).
-            null, null
+            null, null,
+            // V164 WARN_UNPAID_*: no test using this fixture asserts on these.
+            List.of(), BigDecimal.ZERO
         );
     }
 
@@ -992,7 +1017,36 @@ class LeaveServiceTest {
             null, false, null, Map.of(), false,
             // feat/pending-approver-info: no test using this fixture asserts on these (computed by
             // LeaveRepository#mapRequest, a real SQL row mapper this Mockito-level class never hits).
-            null, null
+            null, null,
+            // V164 WARN_UNPAID_*: no test using this fixture asserts on these.
+            List.of(), BigDecimal.ZERO
+        );
+    }
+
+    /**
+     * Like {@link #requestDtoWithManager}, but with {@code ruleWarnings}/{@code unpaidByRuleDays}
+     * controllable -- needed by the {@code notifyPendingApproval} rule-warnings tests below (V164),
+     * which need a SUBMITTED request that actually carries warnings, unlike every other fixture in
+     * this class.
+     */
+    private LeaveRequestDto requestDtoWithWarnings(long id, long employeeId, LocalDate startDate, LocalDate endDate,
+            Long managerEmployeeId, List<LeaveRuleWarningDto> ruleWarnings, BigDecimal unpaidByRuleDays) {
+        OffsetDateTime timestamp = OffsetDateTime.parse("2026-06-14T10:00:00+07:00");
+        return new LeaveRequestDto(
+            id, employeeId, "EMP001", "Test Employee",
+            "VACATION", "Vacation", "Vacation leave",
+            startDate, endDate, null, null,
+            new BigDecimal("2.00"), new BigDecimal("2.00"), new BigDecimal("0.00"),
+            startDate.getYear(), "Family trip", null, null, "SUBMITTED",
+            new BigDecimal("5.00"), new BigDecimal("3.00"), null,
+            employeeId, "Test Employee", timestamp,
+            null, null, null, null, null,
+            managerEmployeeId, managerEmployeeId == null ? null : "Test Manager",
+            timestamp, timestamp,
+            null, null, null, null, null,
+            null, false, null, Map.of(), false,
+            null, null,
+            ruleWarnings, unpaidByRuleDays
         );
     }
 
@@ -1091,6 +1145,74 @@ class LeaveServiceTest {
     }
 
     /**
+     * V164 (owner ruling, 2026-09-09): the approver must see a request's §5 WARN_UNPAID_* violation
+     * IN the {@code LEAVE_PENDING_APPROVAL} body itself, not only after opening the portal --
+     * {@link LeaveService#ruleWarningsBlock}. Two warnings on the fixture so the "N ข้อ" count and
+     * the per-warning loop both get real coverage, not just the {@code size() == 1} case.
+     */
+    @Test
+    void notifyPendingApprovalAppendsRuleWarningsToTheApproverBodyWhenTheRequestCarriesAny() {
+        SubmitLeaveRequest request = validSubmit(10010L);
+        when(leaveRepository.employeeExists(10010L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10010L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10010L), eq(10010L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(72L);
+        List<LeaveRuleWarningDto> warnings = List.of(
+            new LeaveRuleWarningDto("ADVANCE_NOTICE", Map.of(), "ยื่นล่วงหน้าไม่ทันกำหนด แจ้งเตือนที่หนึ่ง"),
+            new LeaveRuleWarningDto("FIRST_YEAR_MAX_DAYS", Map.of(), "เกินสิทธิ์ปีแรก แจ้งเตือนที่สอง"));
+        when(leaveRepository.findById(72L)).thenReturn(Optional.of(
+            requestDtoWithWarnings(72L, 10010L, request.startDate(), request.endDate(), 99L,
+                warnings, new BigDecimal("2.00"))));
+
+        leaveService.submit(request, user("employee", 10010L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        assertThat(body.getValue())
+            .contains("คำขอนี้ผิดระเบียบ 2 ข้อ")
+            .contains("ยื่นล่วงหน้าไม่ทันกำหนด แจ้งเตือนที่หนึ่ง")
+            .contains("เกินสิทธิ์ปีแรก แจ้งเตือนที่สอง")
+            .contains("หากอนุมัติ พนักงานจะไม่ได้รับค่าจ้าง 2 วัน");
+        // The plain-text body is shared with the email surface -- see NotificationEmailService#send,
+        // which converts \n to <br>. No HTML/styled callout belongs in this string.
+        assertThat(body.getValue()).doesNotContain("<");
+    }
+
+    /**
+     * Companion to the test above, wrong-way-round: a request with NO warnings gets the exact SAME
+     * body it always did -- V164 must not add so much as a stray blank line when there is nothing to
+     * report. Asserted with a full {@code isEqualTo}, not {@code doesNotContain}, so a spurious
+     * trailing newline or an always-appended (but empty) block would still fail this test.
+     */
+    @Test
+    void notifyPendingApprovalBodyIsByteIdenticalToBeforeWhenThereAreNoRuleWarnings() {
+        SubmitLeaveRequest request = validSubmit(null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            .thenReturn(73L);
+        when(leaveRepository.findById(73L)).thenReturn(Optional.of(
+            requestDto(73L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "2.00", "0.00")));
+
+        leaveService.submit(request, user("employee", 10L));
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(notificationService).notify(eq(99L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), body.capture(), eq("/leave"), eq(true));
+        String period = th.co.glr.hr.common.ThaiText.dateRange(request.startDate(), request.endDate());
+        assertThat(body.getValue()).isEqualTo(
+            "Test Employee ขอVacation " + period + " (2 วัน)"
+                + "\nกรุณาพิจารณาอนุมัติหรือปฏิเสธในระบบ");
+    }
+
+    /**
      * F4 (Opus review): {@code approvers.remove(actorEmployeeId)} (self-exclusion) was a no-op in the
      * only pre-existing covered case ({@code requestDto()}'s fixed manager 99L never equals the
      * fixed actor 10L in any submit test), so deleting that line left all 609 tests green. This
@@ -1141,9 +1263,11 @@ class LeaveServiceTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void submitRejectsWhenMinimumServiceIsNotMet() {
-        // ORDINATION requires 12 completed months of service. Hired 2026-01-01, requesting leave
-        // starting 2026-07-13: ~6 completed months -- short of 12.
+    void submitWarnsUnpaidWhenMinimumServiceIsNotMet() {
+        // V164 (owner-approved change, 2026-09-09): MIN_SERVICE_MONTHS is now WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated in place from "...Rejects...". ORDINATION requires 12 completed
+        // months of service. Hired 2026-01-01, requesting leave starting 2026-07-13: ~6 completed
+        // months -- short of 12, so the whole 1-day request is unpaid by rule if approved.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), "Ordination ceremony");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1152,20 +1276,25 @@ class LeaveServiceTest {
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-01")));
         when(leaveRepository.sumUsedDays(eq(10L), eq("ORDINATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        // ordinationType() carries a non-null paidDaysCap (15.00) -- now reached (the request is
+        // approved, not blocked), so #boundByPaidCap needs this stub, unlike the pre-V164 version of
+        // this test which never got past the MIN_SERVICE_MONTHS block.
+        when(leaveRepository.sumPaidDays(eq(10L), eq("ORDINATION"), eq(request.startDate().getYear()), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(90L);
         when(leaveRepository.findById(90L)).thenReturn(Optional.of(
-            requestDto(90L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(90L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("อย่างน้อย 12 เดือน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(90L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.MIN_SERVICE_MONTHS
+                && warnings.get(0).messageTh().contains("อย่างน้อย 12 เดือน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -1224,10 +1353,15 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submitRejectsARequestExceedingTheMaxConsecutiveDaysCap() {
+    void submitWarnsUnpaidForTheExcessOverTheMaxConsecutiveDaysCap() {
+        // V164 (owner-approved change, 2026-09-09): MAX_CONSECUTIVE_DAYS is now WARN_UNPAID_EXCESS,
+        // not BLOCK -- renamed/updated in place from "...Rejects...". Same reasoning as the other
+        // renamed tests above, but this is the ONE EXCESS (not ALL) code exercised in this class:
         // PERSONAL (fixture): max 3 consecutive days. Mon 2026-07-13 .. Thu 2026-07-16 is a 4-calendar
         // -day span (DECISION: consecutive = calendar days, not LeaveDayMath working days -- see
-        // LeaveService#autoRejectNote).
+        // LeaveService#autoRejectNote) -- 1 day over the cap, so only that 1 (of 4 total working-day)
+        // gets marked unpaid by rule; the other 3 still go through the ordinary quota/paid-cap
+        // machinery below (7.00 quota, unused -> paidDays=3.00).
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-16"), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1241,20 +1375,20 @@ class LeaveServiceTest {
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
+            any(BigDecimal.class), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(93L);
         when(leaveRepository.findById(93L)).thenReturn(Optional.of(
-            requestDto(93L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(93L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "3.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ติดต่อกันได้ไม่เกิน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(93L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.MAX_CONSECUTIVE_DAYS
+                && warnings.get(0).messageTh().contains("ติดต่อกันได้ไม่เกิน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -1294,9 +1428,11 @@ class LeaveServiceTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void submitRejectsPersonalLeaveWhenTheEmployeeIsStillInProbation() {
-        // Hired 2026-06-20, probation_days=90 -> probation ends 2026-09-18. Requesting PERSONAL
-        // leave for 2026-07-13 (weekdayAfterNotice()) is well before that.
+    void submitWarnsUnpaidWhenTheEmployeeIsStillInProbation() {
+        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is now WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated in place from "...Rejects...". Hired 2026-06-20, probation_days=90
+        // -> probation ends 2026-09-18. Requesting PERSONAL leave for 2026-07-13
+        // (weekdayAfterNotice()) is well before that, so the whole 1-day request is unpaid by rule.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1306,19 +1442,19 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(100L);
         when(leaveRepository.findById(100L)).thenReturn(Optional.of(
-            requestDto(100L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(100L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(100L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.PROBATION_NOT_PASSED
+                && warnings.get(0).messageTh().contains("ผ่านทดลองงานก่อน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -1423,10 +1559,12 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submitRejectsPersonalLeaveOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
-        // Wrong-way-round complement, pinning the exact DEFAULT_PROBATION_DAYS=119 boundary from the
-        // other side: hired ONE DAY LATER than the passing case above (118 completed days, not 119)
-        // -> still one day short -> must be rejected, proving the fallback is exactly 119, not some
+    void submitWarnsUnpaidOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
+        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is now WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated in place from "...Rejects...". Wrong-way-round complement, pinning
+        // the exact DEFAULT_PROBATION_DAYS=119 boundary from the other side: hired ONE DAY LATER than
+        // the passing case above (118 completed days, not 119) -> still one day short -> must warn
+        // (whole request unpaid by rule if approved), proving the fallback is exactly 119, not some
         // other nearby number, and that the boundary is enforced correctly in both directions.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
@@ -1436,19 +1574,19 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(105L);
         when(leaveRepository.findById(105L)).thenReturn(Optional.of(
-            requestDto(105L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(105L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(105L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.PROBATION_NOT_PASSED
+                && warnings.get(0).messageTh().contains("ผ่านทดลองงานก่อน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -1461,9 +1599,11 @@ class LeaveServiceTest {
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
-    void submitRejectsPersonalLeaveOnConfirmDateItself() {
-        // hire_date/probation_days would say "eligible" (hired long ago, low probation_days), but
-        // confirm_date is authoritative and the request date IS confirm_date -- not yet eligible.
+    void submitWarnsUnpaidPersonalLeaveOnConfirmDateItself() {
+        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is now WARN_UNPAID_ALL, not
+        // BLOCK -- renamed/updated in place from "...Rejects...". hire_date/probation_days would say
+        // "eligible" (hired long ago, low probation_days), but confirm_date is authoritative and the
+        // request date IS confirm_date -- not yet eligible, so the whole 1-day request warns unpaid.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1473,19 +1613,19 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(106L);
         when(leaveRepository.findById(106L)).thenReturn(Optional.of(
-            requestDto(106L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(106L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ผ่านทดลองงานก่อน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(result.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(106L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.PROBATION_NOT_PASSED
+                && warnings.get(0).messageTh().contains("ผ่านทดลองงานก่อน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
         // confirm_date is authoritative -- probation_days must never even be read once it is present.
         verify(leaveRepository, org.mockito.Mockito.never()).findProbationDays(anyLong());
     }
@@ -1901,23 +2041,25 @@ class LeaveServiceTest {
         assertThat(paidDays.getValue()).isEqualByComparingTo("3.00");
 
         // One more than the cap: 4 working days (a DIFFERENT date range so this isn't also blocked
-        // by any other gate), must be refused outright -- NOT approved-with-a-partially-unpaid-split,
-        // unlike ordinary quota exceedance elsewhere in this class (see
-        // submissionApprovesWithPaidUnpaidSplitWhenQuotaIsInsufficient).
+        // by any other gate). V164 (owner-approved change, 2026-09-09): FIRST_YEAR_MAX_DAYS is now
+        // WARN_UNPAID_EXCESS, not an outright rejection -- only the 1 day beyond the 3.00 cap is
+        // unpaid by rule; the other 3 still go through the ordinary quota machinery (3.50 prorated
+        // quota, unused -> paid).
         SubmitLeaveRequest overCap = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Family matter");
-        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(new BigDecimal("3.00")),
+            eq(new BigDecimal("1.00")), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(211L);
         when(leaveRepository.findById(211L)).thenReturn(Optional.of(
-            requestDto(211L, 10L, "AUTO_REJECTED", overCap.startDate(), overCap.endDate(), "0.00", "0.00")));
+            requestDto(211L, 10L, "SUBMITTED", overCap.startDate(), overCap.endDate(), "3.00", "1.00")));
 
         LeaveRequestDto overCapResult = leaveService.submit(overCap, user("employee", 10L));
-        assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("12 เดือนแรกของการทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(overCapResult.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(211L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.FIRST_YEAR_MAX_DAYS
+                && warnings.get(0).messageTh().contains("12 เดือนแรกของการทำงาน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -2106,21 +2248,25 @@ class LeaveServiceTest {
         LeaveRequestDto atCapResult = leaveService.submit(atCap, user("employee", 10L));
         assertThat(atCapResult.status()).isEqualTo("SUBMITTED");
 
+        // V164 (owner-approved change, 2026-09-09): WEDDING_MAX_DAYS is now WARN_UNPAID_EXCESS, not
+        // an outright rejection -- only the 1 day beyond the 3-day cap is unpaid by rule; the other 3
+        // still go through the ordinary quota machinery (7.00 quota, unused -> paid).
         SubmitLeaveRequest overCap = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Own wedding",
             null, null, null, null, null, null, null, "WEDDING", null);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+        when(leaveRepository.create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(new BigDecimal("3.00")),
+            eq(new BigDecimal("1.00")), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(301L);
         when(leaveRepository.findById(301L)).thenReturn(Optional.of(
-            requestDto(301L, 10L, "AUTO_REJECTED", overCap.startDate(), overCap.endDate(), "0.00", "0.00")));
+            requestDto(301L, 10L, "SUBMITTED", overCap.startDate(), overCap.endDate(), "3.00", "1.00")));
 
         LeaveRequestDto overCapResult = leaveService.submit(overCap, user("employee", 10L));
-        assertThat(overCapResult.status()).isEqualTo("AUTO_REJECTED");
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(overCap), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("เข้าพิธีสมรส"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        assertThat(overCapResult.status()).isEqualTo("SUBMITTED");
+        verify(leaveRepository).recordRuleWarnings(eq(301L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.WEDDING_MAX_DAYS
+                && warnings.get(0).messageTh().contains("เข้าพิธีสมรส")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
@@ -2218,11 +2364,12 @@ class LeaveServiceTest {
     }
 
     @Test
-    void submitRejectsEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed() {
+    void submitWarnsUnpaidForEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed() {
         // Wrong-way-round complement, same fixture: the would-be 4th occasion (usedThisMonth=3, the
-        // allowance already fully consumed) is refused outright with the tolerance-exhausted
-        // message, and markEmergencyFiling is never reached -- pinning the boundary at "< allowance",
-        // not "<= allowance".
+        // allowance already fully consumed) now WARNS UNPAID (V164, owner-approved change,
+        // 2026-09-09 -- EMERGENCY_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK; renamed/updated
+        // in place from "...Rejects..."), and markEmergencyFiling is never reached -- pinning the
+        // boundary at "< allowance", not "<= allowance".
         LeaveTypeDto type = personalTypeWithEmergencyTolerance();
         LocalDate date = LocalDate.parse("2026-06-22");
         SubmitLeaveRequest request = new SubmitLeaveRequest(
@@ -2231,33 +2378,34 @@ class LeaveServiceTest {
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
-        // remainingDays() (and so sumUsedDays()) still runs even for an AUTO_REJECTED outcome -- the
-        // per-year quota-split rows are recorded (with nothing consumed) regardless of status; see
-        // aCrossYearRequestThatIsAutoRejectedStillRecordsAQuotaYearSplitPerYearWithNothingConsumed.
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.countEmergencyFilings(eq(10L), eq("PERSONAL"), eq(date), any(Collection.class)))
             .thenReturn(3);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(313L);
         when(leaveRepository.findById(313L)).thenReturn(Optional.of(
-            requestDto(313L, 10L, "AUTO_REJECTED", date, date, "0.00", "0.00")));
+            requestDto(313L, 10L, "SUBMITTED", date, date, "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository, org.mockito.Mockito.never()).markEmergencyFiling(anyLong());
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("ลากิจฉุกเฉินโดยไม่แจ้งล่วงหน้า"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        verify(leaveRepository).recordRuleWarnings(eq(313L),
+            argThat(warnings -> warnings.size() == 1
+                && warnings.get(0).code() == LeaveRuleCode.EMERGENCY_TOLERANCE_EXHAUSTED
+                && warnings.get(0).messageTh().contains("ลากิจฉุกเฉินโดยไม่แจ้งล่วงหน้า")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
-    void submitRejectsLatePersonalLeaveWithTheGenericNoticeMessageWhenNotRequestedAsEmergency() {
+    void submitWarnsUnpaidForLatePersonalLeaveWithTheGenericNoticeMessageWhenNotRequestedAsEmergency() {
         // Pin: a late request that never DECLARES itself an emergency gets the ORIGINAL, unchanged
-        // notice-rejection message -- proving the exception is opt-in, and that
-        // countEmergencyFilings is never even consulted when it isn't needed.
+        // notice-warning message -- proving the exception is opt-in, and that countEmergencyFilings
+        // is never even consulted when it isn't needed. V164 (owner-approved change, 2026-09-09):
+        // ADVANCE_NOTICE is now WARN_UNPAID_ALL, not BLOCK -- renamed/updated in place from
+        // "...Rejects...".
         LeaveTypeDto type = personalTypeWithEmergencyTolerance();
         LocalDate date = LocalDate.parse("2026-06-01");
         SubmitLeaveRequest request = new SubmitLeaveRequest(
@@ -2265,32 +2413,34 @@ class LeaveServiceTest {
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
-        // remainingDays() (and so sumUsedDays()) still runs even for an AUTO_REJECTED outcome -- see
-        // the identical stub note in submitRejectsEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed.
+        // remainingDays() (and so sumUsedDays()) always runs, WARN or BLOCK alike -- see the identical
+        // stub note in submitWarnsUnpaidForEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed.
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
+            eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(314L);
         when(leaveRepository.findById(314L)).thenReturn(Optional.of(
-            requestDto(314L, 10L, "AUTO_REJECTED", date, date, "0.00", "0.00")));
+            requestDto(314L, 10L, "SUBMITTED", date, date, "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository, org.mockito.Mockito.never())
             .countEmergencyFilings(anyLong(), any(String.class), any(LocalDate.class), any(Collection.class));
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(2026), eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("อย่างน้อย 1 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        verify(leaveRepository).recordRuleWarnings(eq(314L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.ADVANCE_NOTICE
+                && warnings.get(0).messageTh().contains("อย่างน้อย 1 วัน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     @Test
-    void submitDoesNotApplyTheEmergencyExceptionToALeaveTypeWithNoEmergencyAllowance() {
+    void submitWarnsUnpaidWithoutApplyingTheEmergencyExceptionToALeaveTypeWithNoEmergencyAllowance() {
         // Pin: no other leave type's behaviour changes. VACATION carries no
         // emergencyMonthlyAllowance (vacationType() fixture) -- a late VACATION request declared
-        // "emergency" must still be refused by the ordinary notice gate, unchanged, exactly as it
-        // was before V125.
+        // "emergency" must still WARN via the ordinary notice gate, unchanged, exactly as it was
+        // before V125. V164 (owner-approved change, 2026-09-09): ADVANCE_NOTICE is now
+        // WARN_UNPAID_ALL, not BLOCK -- renamed/updated in place from "...DoesNotApply...".
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", weekdayWithinNotice(), weekdayWithinNotice(), "Urgent errand",
             null, null, null, null, null, null, null, null, true);
@@ -2299,22 +2449,22 @@ class LeaveServiceTest {
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(315L);
         when(leaveRepository.findById(315L)).thenReturn(Optional.of(
-            requestDto(315L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(315L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
-        assertThat(result.status()).isEqualTo("AUTO_REJECTED");
+        assertThat(result.status()).isEqualTo("SUBMITTED");
         verify(leaveRepository, org.mockito.Mockito.never())
             .countEmergencyFilings(anyLong(), any(String.class), any(LocalDate.class), any(Collection.class));
         verify(leaveRepository, org.mockito.Mockito.never()).markEmergencyFiling(anyLong());
-        verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
-            org.mockito.ArgumentMatchers.contains("อย่างน้อย 7 วัน"), eq(null), eq(null), eq(null), eq(null), eq(null));
+        verify(leaveRepository).recordRuleWarnings(eq(315L),
+            argThat(warnings -> warnings.size() == 1 && warnings.get(0).code() == LeaveRuleCode.ADVANCE_NOTICE
+                && warnings.get(0).messageTh().contains("อย่างน้อย 7 วัน")),
+            org.mockito.ArgumentMatchers.argThat(days -> days.compareTo(BigDecimal.ONE) == 0));
     }
 
     // §5.3 relational rules (2026-08): §5.3.2 department coverage, §5.3.3 contiguous PERSONAL/
@@ -2375,10 +2525,12 @@ class LeaveServiceTest {
     void submitDoesNotCheckResignationForALeaveTypeOutsideTheGate() {
         // SICK is not VACATION/PERSONAL -- hasSubmittedResignation must never even be called, proving
         // the type gate short-circuits rather than merely happening to allow it in this fixture.
-        // V124: sickType() carries a real noCertificateMonthlyTolerance (3), so this must still force
-        // AUTO_REJECTED via #sickCertificateRuleOutcome -- stub the occasion count at the tolerance itself so
-        // the certificate-less request is refused for an unrelated (SICK-specific) reason, isolating
-        // this test to the resignation-gate short-circuit it actually proves.
+        // V124: sickType() carries a real noCertificateMonthlyTolerance (3) -- stub the occasion count
+        // at the tolerance itself so the certificate-less request still fires SICK_NO_CERT_TOLERANCE_
+        // EXHAUSTED for an unrelated (SICK-specific) reason, isolating this test to the resignation-
+        // gate short-circuit it actually proves. V164 (owner-approved change, 2026-09-09): that code
+        // is now WARN_UNPAID_ALL, not BLOCK, so the request lands SUBMITTED (not AUTO_REJECTED) -- an
+        // incidental change to this test's fixture, not to what it actually asserts.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "SICK", weekdayAfterNotice(), weekdayAfterNotice(), "Fever");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -2389,11 +2541,11 @@ class LeaveServiceTest {
                 eq(10L), eq("SICK"), any(LocalDate.class), any(LocalDate.class), any(Collection.class)))
             .thenReturn(3);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
-            eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
-            eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class), any(String.class), eq(null), eq(null), eq(null), eq(null), eq(null)))
+            eq(BigDecimal.ONE), eq(request.startDate().getYear()),
+            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
             .thenReturn(303L);
         when(leaveRepository.findById(303L)).thenReturn(Optional.of(
-            requestDto(303L, 10L, "AUTO_REJECTED", request.startDate(), request.endDate(), "0.00", "0.00")));
+            requestDto(303L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "0.00", "1.00")));
 
         leaveService.submit(request, user("employee", 10L));
 
@@ -2654,6 +2806,112 @@ class LeaveServiceTest {
             org.mockito.ArgumentMatchers.contains("ไม่มีพนักงานคนอื่นในแผนกมาทำงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // POST /api/leave/preview: ruleWarnings/unpaidByRuleDays mapping (V164 follow-up, 2026-09-09).
+    // LeavePreviewIntegrationTest carries the real-Postgres proof (real repository, real quota/
+    // warning arithmetic); these Mockito-level tests isolate #preview's DTO-mapping decision itself
+    // -- which of AutoRejectResult's warnings/unpaidByRuleDays end up on LeavePreviewDto, and the
+    // dateless-path decision that deliberately reports NEITHER (see LeavePreviewDto's/#preview's
+    // Javadoc for why: a dateless call has no real totalDays to render a WARN message's day-count
+    // clause with, and a fabricated "0 วัน" would be a false answer, not an honest "not yet known").
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void previewSurfacesRuleWarningsForADatedWarnTriggeringRequest() {
+        // Same fixture as submitWarnsUnpaidWhenMinimumServiceIsNotMet, but through #preview -- proves
+        // the pre-submit live check can show the SAME warning #submit would persist, before the
+        // employee commits (the gap this branch closes).
+        LeavePreviewRequest request = new LeavePreviewRequest(
+            "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
+            LeavePreviewDepth.FULL, null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("ORDINATION")).thenReturn(Optional.of(ordinationType()));
+        when(leaveRepository.hasOutstandingOrGrantedRequest(10L, "ORDINATION")).thenReturn(false);
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-01")));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("ORDINATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+        when(leaveRepository.sumPaidDays(eq(10L), eq("ORDINATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+
+        LeavePreviewDto preview = leaveService.preview(request, user("employee", 10L));
+
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.datesEvaluated()).isTrue();
+        assertThat(preview.coverageEvaluated()).isTrue();
+        assertThat(preview.ruleWarnings()).extracting(LeaveRuleWarningDto::code).containsExactly("MIN_SERVICE_MONTHS");
+        assertThat(preview.ruleWarnings().get(0).messageTh()).contains("อย่างน้อย 12 เดือน");
+        assertThat(preview.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void previewReturnsNoWarningsForACleanRequest() {
+        // The complement of the WARN-triggering test above: a request no §5 gate touches at all must
+        // report an empty ruleWarnings (never a null-vs-empty ambiguity) and a ZERO -- not null --
+        // unpaidByRuleDays, since dates ARE known here (matching AutoRejectResult#reject's/the
+        // dominance rule's own ZERO-for-clean-request convention, and LeaveRequestDto#unpaidByRuleDays'
+        // identical "0 when no WARN gate fired" precedent).
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+            .thenReturn(new BigDecimal("1.00"));
+
+        LeavePreviewDto preview = leaveService.preview(
+            new LeavePreviewRequest("VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
+                null, null, false, false, LeavePreviewDepth.FULL, null),
+            user("employee", 10L));
+
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.datesEvaluated()).isTrue();
+        assertThat(preview.ruleWarnings()).isEmpty();
+        assertThat(preview.unpaidByRuleDays()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void previewDoesNotLeakAWarningWhenABlockingGateFires() {
+        // Wrong-way-round proof: a BLOCK code (§5.3.4 post-resignation) must report `blocking`
+        // non-null AND an EMPTY ruleWarnings. LeaveService.AutoRejectResult's own dominance rule
+        // discards any WARN accumulated before a BLOCK fires (a BLOCK wins outright -- see that
+        // record's Javadoc); this proves #preview's mapping does not reintroduce a leak on top of it.
+        LeavePreviewRequest request = new LeavePreviewRequest(
+            "VACATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
+            LeavePreviewDepth.FULL, null);
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
+        when(leaveRepository.hasSubmittedResignation(10L)).thenReturn(true);
+        when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
+            .thenReturn(BigDecimal.ZERO);
+
+        LeavePreviewDto preview = leaveService.preview(request, user("employee", 10L));
+
+        assertThat(preview.blocking()).isNotNull();
+        assertThat(preview.blocking().code()).isEqualTo(LeaveRuleCode.RESIGNATION_GATE);
+        assertThat(preview.ruleWarnings()).isEmpty();
+    }
+
+    @Test
+    void previewReturnsNoWarningsWhenNoDatesAreChosenYet() {
+        // Same fixture as submitWarnsUnpaidWhenTheEmployeeIsStillInProbation (probation not passed as
+        // of FIXED_NOW), but called via #preview with NO dates chosen -- decision (a) for the "0 วัน"
+        // bug this branch closes (see LeavePreviewDto's/#preview's Javadoc): a dateless preview cannot
+        // honestly quantify how many days would be unpaid, so it must report NO warning at all rather
+        // than one whose rendered sentence would falsely claim "0 วัน".
+        when(leaveRepository.employeeExists(10L)).thenReturn(true);
+        when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
+        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-06-20")));
+        when(leaveRepository.findProbationDays(10L)).thenReturn(Optional.of(90));
+
+        LeavePreviewDto preview = leaveService.preview(
+            new LeavePreviewRequest("PERSONAL", null, null, null, null, false, false, LeavePreviewDepth.FULL, null),
+            user("employee", 10L));
+
+        assertThat(preview.datesEvaluated()).isFalse();
+        assertThat(preview.coverageEvaluated()).isFalse();
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.ruleWarnings()).isEmpty();
+        assertThat(preview.unpaidByRuleDays()).isNull();
+        assertThat(preview.totalDays()).isNull();
+    }
+
     private SubmitLeaveRequest validSubmit(Long employeeId) {
         // Monday–Tuesday, 12 days after FIXED_NOW: 2 working days, well past the 7-day notice.
         return new SubmitLeaveRequest(
@@ -2840,7 +3098,11 @@ class LeaveServiceTest {
             // LeaveRepository#mapRequest (a real SQL row mapper this Mockito-level class never
             // exercises), so no test in this class asserts on them via the helper.
             null,
-            null
+            null,
+            // V164 WARN_UNPAID_*: same reasoning -- no test in this class asserts on these via the
+            // helper.
+            List.of(),
+            BigDecimal.ZERO
         );
     }
 

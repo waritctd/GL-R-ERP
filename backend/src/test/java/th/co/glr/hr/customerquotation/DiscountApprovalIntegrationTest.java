@@ -135,7 +135,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests,
             costingRepository, tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications, objectMapper,
-            customers, new QuotationRenderer(), pricingRequestService);
+            customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
         CustomerQuotationRepository quotationRepository = new CustomerQuotationRepository(jdbc);
         discountApprovals = new DiscountApprovalRepository(jdbc);
         quotationService = new CustomerQuotationService(quotationRepository, pricingRequests, decisionRepository,

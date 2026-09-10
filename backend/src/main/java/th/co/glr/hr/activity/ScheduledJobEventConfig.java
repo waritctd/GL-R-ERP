@@ -46,7 +46,7 @@ public class ScheduledJobEventConfig {
         try {
             int durationMs = (int) Math.min(Integer.MAX_VALUE,
                 (System.nanoTime() - startedNanos) / 1_000_000L);
-            AppEventBuffer.offer(new AppEvent(
+            AppEventBuffer.shared().offer(new AppEvent(
                 OffsetDateTime.now(),
                 AppEvent.KIND_JOB,
                 failure == null ? "INFO" : "ERROR",

@@ -87,7 +87,7 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
-            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests);
+            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,

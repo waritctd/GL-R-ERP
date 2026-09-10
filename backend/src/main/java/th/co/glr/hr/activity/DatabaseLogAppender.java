@@ -20,6 +20,12 @@ import java.time.ZoneOffset;
  * <p><strong>Never logs.</strong> Failures go to logback's own status manager via
  * {@link #addError}, which does not re-enter the logging pipeline. A {@code log.warn} here would be
  * appended by this appender, and a database outage would turn that into a spin.
+ *
+ * <p>Feeds {@link AppEventBuffer#shared()} by default — the no-arg constructor is what production
+ * uses via {@link AppEventWriter}, and that default is what keeps production behaviour identical to
+ * before this class took a buffer at all. The package-private constructor exists so a test can
+ * inject its own isolated {@link AppEventBuffer} instead of fighting every other test in the fork
+ * for the shared one.
  */
 public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
 
@@ -29,13 +35,24 @@ public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
     private static final int MAX_MESSAGE = 4_000;
     private static final int MAX_EXCEPTION_MESSAGE = 1_000;
 
+    private final AppEventBuffer buffer;
+
+    public DatabaseLogAppender() {
+        this(AppEventBuffer.shared());
+    }
+
+    /** Test seam: an isolated buffer nothing else in the JVM can touch. */
+    DatabaseLogAppender(AppEventBuffer buffer) {
+        this.buffer = buffer;
+    }
+
     @Override
     protected void append(ILoggingEvent event) {
         try {
             if (event == null || !isCapturedLevel(event.getLevel())) {
                 return;
             }
-            AppEventBuffer.offer(toAppEvent(event));
+            buffer.offer(toAppEvent(event));
         } catch (RuntimeException e) {
             // addError, never a log call — see the class javadoc.
             addError("Could not capture a log event for hr.app_event", e);

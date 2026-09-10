@@ -4,7 +4,9 @@ import {
   fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach, beforeEach, describe, expect, it, vi,
+} from 'vitest';
 import { TeamLeaveTab } from './TeamLeaveTab.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
@@ -108,10 +110,40 @@ function renderTeamLeaveTab(user = manager, showToast = vi.fn()) {
   return queryClient;
 }
 
+// DataTable only renders `mobileCard` when useIsMobile() is true, and that hook reads
+// window.matchMedia -- which jsdom does not implement, so it returns false and the DESKTOP table
+// renders instead. A "mobile card" assertion written without this stub therefore passes against
+// leaveRequestTable.jsx's shared desktop status column (which has carried the unpaid badge since
+// before this branch) and proves NOTHING about the card. Verified by mutation: with the gate in
+// mobileCard forced permanently true, an unstubbed test stayed green.
+// Restored in afterEach: assigning window.matchMedia is a GLOBAL mutation that otherwise leaks
+// into every later test in this file, silently flipping them to the mobile card and breaking
+// assertions that look for desktop-table controls. Observed exactly that before this cleanup existed.
+const originalMatchMedia = window.matchMedia;
+
+function stubMobileViewport() {
+  const listeners = new Set();
+  window.matchMedia = (query) => ({
+    matches: true,
+    media: query,
+    addEventListener: (_e, cb) => listeners.add(cb),
+    removeEventListener: (_e, cb) => listeners.delete(cb),
+    addListener: (cb) => listeners.add(cb),
+    removeListener: (cb) => listeners.delete(cb),
+    dispatchEvent: () => false,
+    onchange: null,
+  });
+}
+
 describe('TeamLeaveTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.leave.employees.mockResolvedValue({ employees: teamEmployeeOptions });
+  });
+
+  afterEach(() => {
+    if (originalMatchMedia) window.matchMedia = originalMatchMedia;
+    else delete window.matchMedia;
   });
 
   it('shows both the actor\'s own request AND their direct reports\' requests -- this is the "ลูกทีม" table, unlike "ของฉัน"', async () => {
@@ -123,6 +155,31 @@ describe('TeamLeaveTab', () => {
     expect(await screen.findByText('ลาของหัวหน้างานเอง')).not.toBeNull();
     expect(await screen.findByText('ลาป่วยของลูกทีม')).not.toBeNull();
     expect(await screen.findByText('ธุระของลูกทีมอีกคน')).not.toBeNull();
+  });
+
+  // V164 follow-up: this tab's DESKTOP table already showed the unpaid badge (it uses
+  // leaveRequestTable.jsx's shared status column), while its own mobileCard did not -- so a manager
+  // scanning their team on a phone saw no unpaid signal at all for rows their desktop flagged.
+  // Both badges render in the DOM here regardless of viewport; jsdom cannot evaluate the
+  // `flex-col` that stacks them, so this asserts PRESENCE only, never visual placement.
+  it("the MOBILE CARD shows the ไม่รับค่าจ้าง badge beside its status badge", async () => {
+    stubMobileViewport();
+    api.leave.list.mockResolvedValue({
+      requests: [{ ...directReportRequest, unpaidDays: 2, paidDays: 0 }],
+    });
+    renderTeamLeaveTab();
+
+    expect(await screen.findByText('ลาป่วยของลูกทีม')).not.toBeNull();
+    expect(await screen.findByText(/ไม่รับค่าจ้าง/)).not.toBeNull();
+  });
+
+  it("the MOBILE CARD's badge is GATED on unpaidDays -- a paid row shows none", async () => {
+    stubMobileViewport();
+    api.leave.list.mockResolvedValue({ requests: [directReportRequest] });
+    renderTeamLeaveTab();
+
+    expect(await screen.findByText('ลาป่วยของลูกทีม')).not.toBeNull();
+    expect(screen.queryByText(/ไม่รับค่าจ้าง/)).toBeNull();
   });
 
   it('the "ทุกคน" employee filter renders when the actor has more than one employee option, and narrows the query', async () => {

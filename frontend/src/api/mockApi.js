@@ -4019,6 +4019,15 @@ function buildLeaveRecord(record, user) {
     leaveTypeNameTh: leaveType.nameTh,
     leaveTypeNameEn: leaveType.nameEn,
     canReview: canReviewLeave(user, record.employeeId),
+    // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): LeaveRequestDto's own contract is NEVER
+    // null here (LeaveRepository#mapRequest maps a NULL rule_warnings column to List.of(), even for
+    // a pre-migration row -- see that field's Javadoc, "NO BACKFILL" means the VALUE stays empty,
+    // not that the FIELD goes missing). db.leaveRequests seed rows predate this branch and carry
+    // neither field at all, so `record.ruleWarnings` would otherwise reach a caller as `undefined`
+    // -- defaulted here rather than at every read site, same convention as employeeCode/managerName
+    // above defaulting a seed row's possibly-missing FK lookups.
+    ruleWarnings: record.ruleWarnings ?? [],
+    unpaidByRuleDays: record.unpaidByRuleDays ?? 0,
     ...pendingApproverForLeave(record, managerEmployeeId),
   };
 }
@@ -4919,6 +4928,50 @@ const mockDealQuotations = [
   },
 ];
 mockDealQuotationNumberSeq = 3;
+
+
+// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): `ruleWarnings`/`unpaidByRuleDays` on both
+// LeavePreviewDto and LeaveRequestDto -- see LeaveRuleWarningDto.java/LeaveRuleCode.java's
+// enforcement() split and LeaveRuleEnforcement.java's class Javadoc. Same "not a rule engine"
+// stance as LEAVE_PREVIEW_BLOCKING_FIXTURE above: a SMALL, FIXED, keyed-by-leaveTypeCode-only
+// fixture (never the caller's real hire date/probation/attendance history) -- PERSONAL renders
+// "would be unpaid" under EVERY caller and EVERY date range in mock mode, not because THIS
+// employee's real advance-notice window was missed. Exists so the composer/review-queue UI this
+// branch adds has something genuine to render (CLAUDE.md: "a mock omits a field the feature keys
+// on" is one of the three recorded failure shapes) -- do not read a mock-mode warning as proof the
+// real ADVANCE_NOTICE gate fires for this scenario; verify against the real backend.
+//
+// `days` is substituted from the REAL totalDays this call computed (not a fixed string), so the
+// rendered sentence stays internally consistent with the totalDays/paidDays/unpaidDays this same
+// preview response carries. Every other placeholder (leaveTypeNameTh/noticeDays/section) is
+// hand-copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE template (WARN_UNPAID_TAIL
+// included) -- never re-worded, same reason CLAUDE.md gives for never hand-translating backend copy.
+function leavePreviewWarnings(leaveType, totalDays) {
+  if (leaveType.code !== 'PERSONAL') return { warnings: [], unpaidByRuleDays: 0 };
+  const days = String(totalDays);
+  // noticeDays is read from the SEEDED leave type, never hardcoded: PERSONAL's
+  // advance_notice_days is 1 (V116), and VACATION's is 3. An earlier draft of this fixture
+  // hardcoded '3' here, which rendered "การลากิจต้องยื่นล่วงหน้าอย่างน้อย 3 วัน" -- a sentence
+  // stating company policy that the real backend would never produce for ลากิจ. That is the
+  // mirrored-constant drift CLAUDE.md warns about, and nothing guards it: contract.test.js
+  // compares method surface and arity only, so a wrong VALUE here fails no test at all.
+  const noticeDays = String(Math.max(0, Number(leaveType.advanceNoticeDays || 0)));
+  return {
+    warnings: [{
+      code: 'ADVANCE_NOTICE',
+      params: {
+        leaveTypeNameTh: leaveType.nameTh, noticeDays, section: '5', days,
+      },
+      messageTh: `การ${leaveType.nameTh}ต้องยื่นล่วงหน้าอย่างน้อย ${noticeDays} วัน (ระเบียบข้อ 5) `
+        + 'คำขอนี้ยื่นไม่ทันกำหนด '
+        + `แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา ${days} วันจะไม่ได้รับค่าจ้าง`,
+    }],
+    // WARN_UNPAID_ALL (LeaveRuleEnforcement) -- the whole request is unpaid if approved, same
+    // dominance-rule reading LeaveService#autoRejectNote documents: with only one WARN code firing
+    // here, unpaid_by_rule_days is simply that code's own full-request figure.
+    unpaidByRuleDays: totalDays,
+  };
+}
 
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
@@ -6211,6 +6264,15 @@ export const api = {
         // AUTO_REJECTED above regardless of requestedAsEmergency.
         purposeCode: payload.purposeCode || null,
         emergencyFiling: false,
+        // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): shape parity only, same stance as
+        // systemNote/emergencyFiling above -- this mock's create() does not reimplement the §5 rule
+        // chain (see the db.leaveTypes comment for why), so a request created here never genuinely
+        // carries a WARN gate. Defaults to the real DTO's own "no warning fired" reading
+        // (LeaveRequestDto's Javadoc: NEVER null, empty for the common case; 0 when no WARN gate
+        // fired) rather than leaving the field undefined, which is what a caller reading
+        // request.ruleWarnings.length on a freshly-created row would otherwise crash on.
+        ruleWarnings: [],
+        unpaidByRuleDays: 0,
       };
       request.employeeCode = employee.code;
       request.employeeName = employee.nameTh;
@@ -6314,6 +6376,12 @@ export const api = {
     // `(payload, options)` (real callers pass an AbortSignal there) -- honoured only for a
     // caller that is ALREADY aborted at call time, since this mock's fixed `delay()` has no
     // mechanism to reject mid-flight the way a real aborted fetch would.
+    //
+    // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): `ruleWarnings`/`unpaidByRuleDays` follow
+    // LeavePreviewDto's own dateless-vs-dated split VERBATIM (see that record's class Javadoc) --
+    // the dateless branch below reports `[]`/`null` (unknown, not zero -- a dateless call cannot
+    // know totalDays yet, so there is no honest day count a warning sentence could quote), and the
+    // dated branch calls leavePreviewWarnings() for the real (fixture-driven) values.
     async preview(payload = {}, options = {}) {
       requireSession();
       if (options.signal?.aborted) {
@@ -6332,6 +6400,8 @@ export const api = {
             paidDays: null,
             unpaidDays: null,
             quotaYearSplits: [],
+            ruleWarnings: [],
+            unpaidByRuleDays: null,
             counters,
           },
         });
@@ -6340,6 +6410,14 @@ export const api = {
       const depth = payload.depth === 'QUICK' ? 'QUICK' : 'FULL';
       const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
       const quotaYear = Number(String(payload.startDate).slice(0, 4));
+      // A BLOCKing gate always reports an empty ruleWarnings/0 unpaidByRuleDays -- same dominance
+      // reading LeavePreviewDto's own Javadoc documents ("a BLOCK wins outright"; this DTO never has
+      // both a non-null `blocking` and a non-empty `ruleWarnings` at once).
+      const { warnings: ruleWarnings, unpaidByRuleDays } = blocking
+        ? { warnings: [], unpaidByRuleDays: 0 }
+        : leavePreviewWarnings(leaveType, totalDays);
+      const paidDays = blocking ? null : Math.max(0, totalDays - unpaidByRuleDays);
+      const unpaidDays = blocking ? null : unpaidByRuleDays;
       return delay({
         preview: {
           blocking,
@@ -6349,16 +6427,18 @@ export const api = {
           // of its own -- there is nothing here TO run; see this namespace's header comment.
           coverageEvaluated: depth === 'FULL' && !blocking,
           totalDays: blocking ? null : totalDays,
-          paidDays: blocking ? null : totalDays,
-          unpaidDays: blocking ? null : 0,
+          paidDays,
+          unpaidDays,
           quotaYearSplits: blocking ? [] : [{
             quotaYear,
             totalDays,
-            paidDays: totalDays,
-            unpaidDays: 0,
+            paidDays,
+            unpaidDays,
             quotaRemainingBefore: leaveType.annualQuotaDays,
             quotaRemainingAfter: Math.max(0, leaveType.annualQuotaDays - totalDays),
           }],
+          ruleWarnings,
+          unpaidByRuleDays: blocking ? 0 : unpaidByRuleDays,
           counters,
         },
       });

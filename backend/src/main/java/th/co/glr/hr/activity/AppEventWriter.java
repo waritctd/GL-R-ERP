@@ -34,6 +34,7 @@ public class AppEventWriter {
 
     private final ActivityLogRepository repository;
     private final boolean enabled;
+    private final AppEventBuffer buffer = AppEventBuffer.shared();
     private Thread worker;
     private volatile boolean running = true;
     private DatabaseLogAppender appender;
@@ -80,13 +81,13 @@ public class AppEventWriter {
     private void drainForever() {
         while (running) {
             try {
-                AppEvent first = AppEventBuffer.poll(POLL_TIMEOUT_MS);
+                AppEvent first = buffer.poll(POLL_TIMEOUT_MS);
                 if (first == null) {
                     continue;
                 }
                 List<AppEvent> batch = new ArrayList<>(BATCH_SIZE);
                 batch.add(first);
-                AppEventBuffer.drainTo(batch, BATCH_SIZE - 1);
+                buffer.drainTo(batch, BATCH_SIZE - 1);
                 repository.insertAppEvents(batch);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -122,7 +123,7 @@ public class AppEventWriter {
         }
         try {
             List<AppEvent> remaining = new ArrayList<>();
-            AppEventBuffer.drainTo(remaining, BATCH_SIZE);
+            buffer.drainTo(remaining, BATCH_SIZE);
             repository.insertAppEvents(remaining);
         } catch (RuntimeException e) {
             System.err.println("[app-event] could not flush on shutdown: " + e);
