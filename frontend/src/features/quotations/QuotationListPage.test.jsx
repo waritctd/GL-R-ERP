@@ -177,3 +177,90 @@ describe('QuotationListPage', () => {
     expect(screen.getByText('ร่าง')).not.toBeNull();
   });
 });
+
+describe('QuotationListPage column floors (responsive review, 2026-09-10)', () => {
+  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout and no text measurement, so it
+  // cannot observe the defect this pins: at a 721px viewport the six `minmax(0, …)` tracks were
+  // shrunk below their own text and the cells clip rather than overflow, so `QT-2026-0005-2`
+  // rendered `QT-2026-000…` — losing the `-N` suffix that is the only thing distinguishing a
+  // revision from the document it replaces. That was measured in a real browser and can only be
+  // RE-measured in one. This is a TEXT guard on the decisions that fix it:
+  //
+  //   1. FIXED floors on the four columns that cannot wrap (เลขที่, ยอดรวม, สถานะ, วันที่) plus a
+  //      smaller one on พนักงานขาย. Fixed, never `min-content` — the head row and each data row are
+  //      separate grid containers, so `min-content` sizes each row from its own content and the
+  //      columns stagger row to row.
+  //   2. ลูกค้า / โครงการ keeps `minmax(0, …)` and stays the SECOND track: it is the designated
+  //      absorber, the one column of free text that can give up width without losing anything.
+  //   3. Both free-text cells render a <span> wrapper, because styles.css's wrap escape hatch
+  //      (`.data-row > td > strong | small | span`) reaches nothing else — a <div> child, or a bare
+  //      string with no child element at all, inherits the cell's `nowrap` and is truncated.
+  //
+  // The MAGNITUDES are pinned literally, not merely counted. Shrinking every floor, or permuting
+  // them so ยอดรวม inherits สถานะ's, would keep any count-based assertion green while silently
+  // clipping the money again — that exact escape was found on the sibling page's guard.
+  function gridClasses(el, what) {
+    expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
+    return el.className;
+  }
+
+  it('floors the columns that cannot wrap and leaves ลูกค้า / โครงการ as the absorber', async () => {
+    api.dealQuotations.list.mockResolvedValue({ items: [row()] });
+    const { container } = renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    // Asserted on the head row AND a data row. They share one constant today, so this cannot
+    // diverge — but splitting the grid and flooring only one is exactly how the header would stop
+    // lining up with the body, and a guard that reads only the head row would stay green.
+    for (const [el, what] of [
+      [container.querySelector('.table-head'), '.table-head'],
+      [container.querySelector('.data-row'), '.data-row'],
+    ]) {
+      const classes = gridClasses(el, what);
+
+      // `min-content` is the specific WRONG floor: it re-sizes per row and staggers the columns.
+      expect(classes, `${what}: min-content floors stagger the columns row to row`)
+        .not.toContain('min-content');
+
+      // Exactly one shrinkable track — ลูกค้า / โครงการ, the absorber — and it is track TWO.
+      const shrinkable = classes.match(/minmax\(0,/g) ?? [];
+      expect(shrinkable, `${what}: only ลูกค้า / โครงการ may shrink below its content`)
+        .toHaveLength(1);
+
+      // The whole track list, pinned literally. The values are each column's widest realistic
+      // value measured in the live cell typography and rounded up; ยอดรวม and วันที่ are sized
+      // against the FALLBACK font, not Sarabun, because Sarabun is swap-loaded from Google Fonts
+      // and absent entirely on an on-prem host that cannot reach them. Re-measure before changing
+      // any of these — see the source comment beside LIST_TABLE_GRID.
+      expect(classes).toContain(
+        'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(4rem,1.3fr)'
+        + '_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.125rem,1fr)]',
+      );
+    }
+  });
+
+  it('gives both free-text cells a <span> so they can wrap instead of truncating', async () => {
+    api.dealQuotations.list.mockResolvedValue({
+      items: [row({ customerName: 'บริษัท เดโม เรสซิเดนซ์ จำกัด', projectName: 'Residence Nawamin 76' })],
+    });
+    const { container } = renderListPage(salesUser);
+    await screen.findByText('บริษัท เดโม เรสซิเดนซ์ จำกัด');
+
+    const cells = [...container.querySelector('.data-row').children];
+
+    // ลูกค้า / โครงการ — the wrapper must be a <span>. A <div> here inherits the cell's nowrap,
+    // which is what stopped the absorber absorbing anything.
+    const customerCell = cells[1];
+    const customerWrapper = customerCell.firstElementChild;
+    expect(customerWrapper?.tagName, 'ลูกค้า / โครงการ wrapper must be a <span>, not a <div>')
+      .toBe('SPAN');
+    expect(customerWrapper.textContent).toContain('บริษัท เดโม เรสซิเดนซ์ จำกัด');
+    expect(customerWrapper.textContent).toContain('Residence Nawamin 76');
+
+    // พนักงานขาย — a bare string leaves no child element for the escape hatch to match at all.
+    const repCell = cells[2];
+    expect(repCell.firstElementChild?.tagName, 'พนักงานขาย must render inside a <span>')
+      .toBe('SPAN');
+    expect(repCell.textContent).toBe('คุณสมหมาย ขายดี');
+  });
+});
