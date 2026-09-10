@@ -25,7 +25,63 @@ import {
 // is retiring (CLAUDE.md: "Do not add new page-specific CSS files"). A Tailwind arbitrary-value
 // utility expresses the same `grid-template-columns` without one: เลขที่ / ลูกค้า·โครงการ /
 // พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
-const LIST_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)]';
+//
+// ── Column floors: FIXED, identical in every row ──────────────────────────────────────────────
+// Six `minmax(0, …)` tracks used to be the whole story, and `minmax(0, …)` lets the grid shrink a
+// column BELOW its own text. The cells are `white-space: nowrap` with `overflow: clip`
+// (styles.css's `.data-row > td`), so that loss never appears as overflow — it appears as SILENTLY
+// truncated content. Measured at a 721px viewport (655px row, 559px of content budget after 36px
+// padding and 60px of gaps): เลขที่ lost 28px, ลูกค้า/โครงการ 29px, พนักงานขาย 13px and วันที่ 14px,
+// and `QT-2026-0005-2` rendered `QT-2026-000…` — the `-N` suffix is the ONLY thing distinguishing a
+// revision from the document it replaces, so of everything on this row it is the worst to lose.
+//
+// The floors are FIXED lengths, never `min-content`: the head row and each data row are SEPARATE
+// grid containers, so `min-content` sizes every row from ITS OWN content and the columns then
+// stagger row to row (QuotationDocumentView.jsx shipped that by mistake and a review measured 23px
+// of drift — read that file's ITEM_GRID comment, this is the same fix).
+//
+// Sized from each column's widest realistic value, measured in the live cell typography and
+// rounded up. Money and dates are sized against the FALLBACK font, not Sarabun: Sarabun arrives
+// from Google Fonts with `display=swap`, so during the swap window — and permanently on the on-prem
+// deployment if that host cannot reach fonts.googleapis.com — `system-ui` renders instead and every
+// figure is ~14% wider.
+//
+//   เลขที่   6.875rem/110px  `QT-2026-9999-99` = 108.4px in the monospace stack (a system stack, so
+//                            no swap risk). Cannot wrap: breaking a document number mid-token would
+//                            be worse than the truncation this replaces.
+//   ยอดรวม  8.25rem/132px   `฿99,999,999.99` = 114px in Sarabun but 130.5px in the fallback. The
+//                            same floor QuotationDocumentView.jsx uses for เป็นเงิน, deliberately —
+//                            a grand total is at least as large as any line total on it.
+//   สถานะ   4.75rem/76px    the widest badge label, อนุมัติแล้ว, plus the badge's own padding.
+//   วันที่   6.5rem/104px    ALL TWELVE months measured, not one. `เม.ย.` is the widest — four glyph
+//                            clusters, not three — at 100.13px in the fallback, so the 98px this was
+//                            first set to CLIPPED every April date on a host without Sarabun. `พ.ค.`
+//                            96.74 and `ต.ค.` 96.16 had under 2px to spare. Never size a Thai date
+//                            column from one sample month. The cell renders a bare string, so it
+//                            truncates rather than wraps — see the note on พนักงานขาย below for why
+//                            it is deliberately NOT wrapped in a <span>.
+//   พนักงานขาย —            NO floor, deliberately. It wraps, and the longest real surname
+//                            (`วงศ์ประเสริฐ`, 82.5px) exceeds any floor this budget can afford, so a
+//                            floor could never prevent a mid-word break — its only actual effect
+//                            was taking 64px from the absorber. Both free-text columns now share
+//                            what the four floored columns leave, by their `fr` weights.
+//
+// ลูกค้า / โครงการ and พนักงานขาย keep `minmax(0, …)`: they are the two columns of free text, both
+// wrap, and so they are the two that can give up width without losing anything.
+//
+// ⚠️ This string must stay ONE unbroken literal. Splitting it across a `+` concatenation — a
+// natural-looking edit — leaves Tailwind's scanner unable to see the arbitrary value, so the rule is
+// never emitted, `grid-template-columns` goes unset, and the row collapses to a single implicit
+// track (measured: 63.5px tall becomes 242px, cells stacked). Lint, the unit suite and `npm run
+// build` ALL stay green, and the dev server keeps working from its cache, so nothing catches it
+// except reading `dist/assets/*.css`. The guard test asserts this file's own source text for that
+// reason.
+//
+// ⚠️ At a browser root font-size above about 18.6px the floors (30rem total) exceed the 559px the
+// row has at a 721px viewport. The wrapping <section> is `overflow-x-auto`, so that degrades to a
+// horizontal scrollbar rather than losing anything — but it is a state the old all-`minmax(0,…)`
+// grid could not reach.
+const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]';
 
 // The tab set itself is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js) — owner feedback F5,
 // 2026-09-10 replaced the old six status chips (ทั้งหมด/รออนุมัติ/ร่าง/อนุมัติแล้ว/ถูกแทนที่/
@@ -55,18 +111,29 @@ const COLUMNS = [
     key: 'customer',
     header: 'ลูกค้า / โครงการ',
     searchAccessor: (row) => `${row.customerName ?? ''} ${row.projectName ?? ''}`,
+    // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
+    // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
+    // its wrap escape hatch only reaches `> strong`, `> small` and `> span`. A <div> child
+    // therefore inherits the nowrap and this column cannot absorb any squeeze at all, which is
+    // what made it lose 29px at 721px. `flex flex-col` still stacks the two lines: a Tailwind
+    // utility beats the escape hatch's `display: block` on layer order (styles.css is
+    // `layer(legacy)`), so only the wrapping changes.
     render: (row) => (
-      <div className="flex flex-col">
+      <span className="flex flex-col">
         <span className="font-bold">{row.customerName ?? '-'}</span>
         {row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
-      </div>
+      </span>
     ),
   },
   {
     key: 'salesRepName',
     header: 'พนักงานขาย',
     searchAccessor: (row) => row.salesRepName,
-    render: (row) => row.salesRepName ?? '-',
+    // Wrapped in a <span> for the same reason as ลูกค้า above: a bare string leaves the cell with
+    // no child element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai
+    // name is truncated rather than broken across two lines. `ภิญญาดา วงศ์ประเสริฐ` needs 147.8px
+    // on one line and this column is floored at 64px, so wrapping is what keeps it whole.
+    render: (row) => <span>{row.salesRepName ?? '-'}</span>,
   },
   {
     key: 'grandTotal',
