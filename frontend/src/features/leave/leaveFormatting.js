@@ -56,7 +56,9 @@ export function formatDateRange(start, end) {
 //
 // Every day figure on the leave surface is a NUMERIC(5,2) day count whose fractional part is real,
 // not a rounding artefact. Sub-day leave divides clock-minutes by an eight-hour workday
-// (LeaveService's `STANDARD_WORKDAY_MINUTES = 8 * 60`, HALF_UP to 2dp, capped at 1.00), and a
+// (LeaveDayMath's `WORKED_MINUTES_PER_DAY = 8 * 60`, HALF_UP to 2dp, capped at 1.00 -- renamed and
+// moved there by V166, which also made it subtract the 12:30-13:30 break; the DIVISOR is unchanged
+// at eight worked hours, which is why this module's own constant still matches), and a
 // remaining balance is `quota - approved - pending`, so those eighths accumulate into figures like
 // 6.37. Rows read "0.38 วัน · เหลือ 6.37 วัน" -- arithmetic nobody does in their head to answer
 // "how much have I actually got left". They now read "3 ชั่วโมง · เหลือ 6 วัน 3 ชั่วโมง".

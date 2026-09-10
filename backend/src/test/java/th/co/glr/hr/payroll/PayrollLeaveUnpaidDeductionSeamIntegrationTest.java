@@ -196,11 +196,17 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
 
     @Test
     void subDayLeaveOverQuotaDeductsProportionalDailyRate() {
-        // Sub-day leave (2026-07-25): LEAVE_WITHOUT_PAY has a 0-day statutory quota, so a half-day
-        // (08:30-12:30 = 4 clock-hours / 8 = 0.50) request is entirely unpaid from day 1 -- proves the
-        // fraction survives the same submit -> per-month attribution -> payroll-preview path the
-        // whole-day cases above exercise, and that PayrollCalculator's dailyRate x unpaidLeaveDays
-        // deduction is proportional, not floored to a whole day.
+        // Partial-day span (V166, FINAL owner ruling 2026-09-10, widened from the original
+        // single-day-only sub-day feature, 2026-07-25): LEAVE_WITHOUT_PAY has a 0-day statutory
+        // quota, so a half-day (08:30-12:30 = 240 clock-minutes, ZERO overlap with the 12:30-13:30
+        // lunch break -> 240 worked minutes / 480 = 0.50 HALF_UP) request is entirely unpaid from
+        // day 1 -- proves the fraction survives the same submit -> per-month attribution ->
+        // payroll-preview path the whole-day cases above exercise, and that PayrollCalculator's
+        // dailyRate x unpaidLeaveDays deduction is proportional, not floored to a whole day.
+        //
+        // An intermediate draft of this feature divided by the day's own resolved WorkSchedule span
+        // instead (240/540 = 0.44) -- WRONG, superseded (see LeaveDayMath's "Partial-day span"
+        // section header) -- asserted wrong-way-round below.
         long employeeId = insertEmployee("SEAM-004");
         LocalDate monday = firstMondayOfMonth(2);
         LocalDate month = monday.withDayOfMonth(1);
@@ -210,6 +216,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
                 LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null),
             employee(employeeId));
         assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
+        assertThat(leave.totalDays()).isNotEqualByComparingTo("0.44");
         assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");
         // Leave requires approval (2026-08-05): see the whole-day case above -- payroll only sees
         // APPROVED leave.

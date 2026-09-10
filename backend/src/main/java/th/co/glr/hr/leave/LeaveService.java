@@ -3,7 +3,6 @@ package th.co.glr.hr.leave;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -23,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -77,13 +77,16 @@ public class LeaveService {
     // so passing only `from` still gets the default `to` and vice versa. mockApi.js's leave.list
     // mirrors this same default; keep the two in step.
     private static final int DEFAULT_WINDOW_MONTHS = 12;
-    // Sub-day leave (2026-07-25): day-fraction = clock-hours(start,end) / 8, no lunch subtraction
-    // (decided rule -- see docs/agent-handoffs), rounded HALF_UP to 2dp, capped at 1.00 whole day.
-    // Times must fall within the standard workday, matching the paper form's printed hours.
-    private static final BigDecimal STANDARD_WORKDAY_MINUTES = BigDecimal.valueOf(8 * 60);
-    private static final LocalTime WORKDAY_START = LocalTime.of(8, 30);
-    private static final LocalTime WORKDAY_END = LocalTime.of(17, 30);
-    private static final BigDecimal FULL_DAY = new BigDecimal("1.00");
+    // Sub-day / partial-day-span leave (2026-07-25, widened to multi-day V166 2026-09-10):
+    // day-fraction = (clock-minutes(start,end) MINUS overlap with the 12:30-13:30 company-wide
+    // lunch break) / 480 (8 WORKED hours), rounded HALF_UP to 2dp, each day capped at 1.00 -- the
+    // FINAL owner ruling (2026-09-10, after four supersessions; see LeaveDayMath's "Partial-day
+    // span" section header for the full worked-example table and why an earlier draft that divided
+    // by the day's own resolved WorkSchedule span, with no break subtraction, was wrong). Valid TIME
+    // BOUNDS (not the fraction itself) are still read from LeaveRepository#resolveOwnSchedule per
+    // boundary date -- see #computeTotalDays/#validateSubDayTimes and
+    // LeaveDayMath#spanDayFractions's Javadoc for the full rule and why this is a deliberate
+    // behaviour change even for an existing single-day timed request.
     // §5.2/§5.3 pro-ration (V120, defect 1 fix): a first-year employee's quota is scaled by
     // completed months of service out of a full 12 -- see #employeeAnnualQuota.
     private static final int FULL_SERVICE_MONTHS = 12;
@@ -308,15 +311,37 @@ public class LeaveService {
         // holiday defects this closes.
         Predicate<LocalDate> isWorkingDay =
             leaveRepository.workingDayPredicate(employeeId, request.startDate(), request.endDate());
-        validateSubDayTimes(request, leaveType.dayCountBasis(), isWorkingDay);
+        // Partial-day span (V166): resolved ONCE here (at most two extra queries -- one per distinct
+        // boundary date, none at all for a whole-day request) and reused by BOTH validateSubDayTimes
+        // (time-bound validation) and the spanFractions ledger below, rather than each resolving the
+        // same date's WorkSchedule separately. null for a whole-day request (startTime == null) --
+        // every timed-request-only code path below is gated on that same null check.
+        WorkSchedule startSchedule = request.startTime() != null
+            ? leaveRepository.resolveOwnSchedule(employeeId, request.startDate()) : null;
+        WorkSchedule endSchedule = request.startTime() == null ? null
+            : request.startDate().equals(request.endDate()) ? startSchedule
+            : leaveRepository.resolveOwnSchedule(employeeId, request.endDate());
+        validateSubDayTimes(request, leaveType.dayCountBasis(), isWorkingDay, startSchedule, endSchedule);
         // §5.2 leave purpose (V125): validated up front, same as leaveTypeCode -- see
         // normalizePurposeCode's Javadoc for why this can never refuse a request for lacking a
         // matching NAMED category (OTHER is always available).
         String purposeCode = normalizePurposeCode(request.purposeCode());
         boolean requestedAsEmergency = Boolean.TRUE.equals(request.requestedAsEmergency());
 
+        // Partial-day span (V166): the per-date fraction ledger for a TIMED request (single- or
+        // multi-day) -- null for a whole-day request, in which case every call site below falls back
+        // to its pre-V166 behaviour UNCHANGED (see LeaveDayMath's own "Partial-day span" section
+        // header for why that old path is never touched, not merely reused). Built once, shared by
+        // #computeTotalDays and #computeQuotaSplit so a submitted request's totalDays and its
+        // per-year attribution can never drift apart (the same "identical arguments" guarantee this
+        // class already gives #submit vs #preview elsewhere).
+        Map<LocalDate, BigDecimal> spanFractions = request.startTime() == null ? null
+            : LeaveDayMath.spanDayFractions(
+                request.startDate(), request.endDate(), request.startTime(), request.endTime(),
+                leaveType.dayCountBasis(), isWorkingDay, startSchedule, endSchedule);
         BigDecimal totalDays = computeTotalDays(
-            request.startDate(), request.endDate(), request.startTime(), request.endTime(), leaveType, isWorkingDay);
+            spanFractions, request.startDate(), request.endDate(), request.startTime(), request.endTime(),
+            leaveType, isWorkingDay);
         int quotaYear = request.startDate().getYear();
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
         // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
@@ -370,7 +395,7 @@ public class LeaveService {
         // per owner ruling #1: unpaid-by-rule days consume NO quota. See #computeQuotaSplit's Javadoc.
         QuotaSplitResult quotaSplit = computeQuotaSplit(
             employeeId, leaveType, request.startDate(), request.endDate(), totalDays, isWorkingDay,
-            quotaYear, outcome == null, quotaPoolPreference, autoReject.unpaidByRuleDays());
+            quotaYear, outcome == null, quotaPoolPreference, autoReject.unpaidByRuleDays(), spanFractions);
         List<LeaveQuotaYearSplit> quotaYearSplits = quotaSplit.quotaYearSplits();
         BigDecimal paidDays = quotaSplit.paidDays();
         BigDecimal unpaidDays = quotaSplit.unpaidDays();
@@ -567,9 +592,24 @@ public class LeaveService {
         validateDateRange(startDate, endDate);
 
         Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);
-        // No sub-day times in LeavePreviewRequest's shape -- always the whole-day path, the same path
-        // a legacy no-times submission always took. See #computeTotalDays's Javadoc.
-        BigDecimal totalDays = computeTotalDays(startDate, endDate, null, null, leaveType, isWorkingDay);
+        // Partial-day span (V166): LeavePreviewRequest now carries the SAME optional startTime/
+        // endTime SubmitLeaveRequest does (widened from the original "no sub-day times in this
+        // shape at all" design -- see LeavePreviewRequest's own Javadoc for why), resolved and
+        // ledgered the IDENTICAL way #submit does, so a previewed totalDays can never drift from
+        // what #submit would actually persist for the same request. null request times -> null
+        // schedules/ledger -> the unchanged pre-V166 whole-day path, exactly as before this field
+        // existed.
+        WorkSchedule startSchedule = request.startTime() != null
+            ? leaveRepository.resolveOwnSchedule(employeeId, startDate) : null;
+        WorkSchedule endSchedule = request.startTime() == null ? null
+            : startDate.equals(endDate) ? startSchedule
+            : leaveRepository.resolveOwnSchedule(employeeId, endDate);
+        Map<LocalDate, BigDecimal> spanFractions = request.startTime() == null ? null
+            : LeaveDayMath.spanDayFractions(
+                startDate, endDate, request.startTime(), request.endTime(),
+                leaveType.dayCountBasis(), isWorkingDay, startSchedule, endSchedule);
+        BigDecimal totalDays = computeTotalDays(
+            spanFractions, startDate, endDate, request.startTime(), request.endTime(), leaveType, isWorkingDay);
         boolean evaluateDepartmentCoverage = depth == LeavePreviewDepth.FULL;
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, startDate, endDate,
             hasAttachment, totalDays, purposeCode, requestedAsEmergency, evaluateDepartmentCoverage);
@@ -585,7 +625,7 @@ public class LeaveService {
         // same rule outcome, matching this method's own "identical arguments" guarantee.
         QuotaSplitResult split = computeQuotaSplit(
             employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved,
-            quotaPoolPreference, autoReject.unpaidByRuleDays());
+            quotaPoolPreference, autoReject.unpaidByRuleDays(), spanFractions);
 
         // V164 follow-up: mirrors AutoRejectResult#warnings()/#unpaidByRuleDays() exactly -- the SAME
         // values #submit would persist for the identical request -- see this method's Javadoc and
@@ -851,8 +891,24 @@ public class LeaveService {
         // deducted (mirrors the basis decision in the comment above, one paragraph up).
         Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(
             cancelled.employeeId(), cancelled.startDate(), cancelled.endDate());
-        Map<LocalDate, BigDecimal> unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
-            cancelled.startDate(), cancelled.endDate(), quotaYearSplits, basis, isWorkingDay);
+        // Partial-day span (V166): a multi-day TIMED request (cancelled.startTime() != null AND
+        // startDate != endDate) reverses through the fraction-aware
+        // LeaveDayMath#unpaidByMonthFromFractionsAcrossYears instead -- the plain whole-day-per-rank
+        // composition above cannot represent a fractional boundary day. Every other request shape
+        // (whole-day, or single-day timed) is UNCHANGED, still reversed through
+        // #unpaidWorkingDaysByMonthAcrossYears exactly as before this migration.
+        Map<LocalDate, BigDecimal> unpaidByMonth;
+        if (cancelled.startTime() != null && !cancelled.startDate().equals(cancelled.endDate())) {
+            WorkSchedule startSchedule = leaveRepository.resolveOwnSchedule(cancelled.employeeId(), cancelled.startDate());
+            WorkSchedule endSchedule = leaveRepository.resolveOwnSchedule(cancelled.employeeId(), cancelled.endDate());
+            Map<LocalDate, BigDecimal> fractions = LeaveDayMath.spanDayFractions(
+                cancelled.startDate(), cancelled.endDate(), cancelled.startTime(), cancelled.endTime(),
+                basis, isWorkingDay, startSchedule, endSchedule);
+            unpaidByMonth = LeaveDayMath.unpaidByMonthFromFractionsAcrossYears(fractions, quotaYearSplits);
+        } else {
+            unpaidByMonth = LeaveDayMath.unpaidWorkingDaysByMonthAcrossYears(
+                cancelled.startDate(), cancelled.endDate(), quotaYearSplits, basis, isWorkingDay);
+        }
         if (unpaidByMonth.isEmpty()) {
             return;
         }
@@ -997,9 +1053,17 @@ public class LeaveService {
     private QuotaSplitResult computeQuotaSplit(
             long employeeId, LeaveTypeDto leaveType, LocalDate startDate, LocalDate endDate,
             BigDecimal totalDays, Predicate<LocalDate> isWorkingDay, int quotaYear, boolean approved,
-            LeaveQuotaPoolPreference preference, BigDecimal unpaidByRuleDays) {
-        Map<Integer, BigDecimal> requestedDaysByYear = LeaveDayMath.totalDaysByYear(
-            startDate, endDate, totalDays, leaveType.dayCountBasis(), isWorkingDay);
+            LeaveQuotaPoolPreference preference, BigDecimal unpaidByRuleDays,
+            Map<LocalDate, BigDecimal> spanFractions) {
+        // Partial-day span (V166): `spanFractions` is non-null ONLY for a timed request (see
+        // #submit/#preview's own comment on why) -- summing it per year is the fraction-aware
+        // analogue of #totalDaysByYear's multi-day branch, and (trivially) sums to EXACTLY
+        // `totalDays`, preserving this method's pre-existing invariant. A whole-day request
+        // (spanFractions == null) is completely unaffected: this falls through to the SAME
+        // #totalDaysByYear call every pre-V166 caller already used.
+        Map<Integer, BigDecimal> requestedDaysByYear = spanFractions != null
+            ? LeaveDayMath.sumFractionsByYear(spanFractions)
+            : LeaveDayMath.totalDaysByYear(startDate, endDate, totalDays, leaveType.dayCountBasis(), isWorkingDay);
         // V164: see this method's Javadoc paragraph above for why this is allocated BEFORE the
         // per-year loop and consumed latest-year-first.
         Map<Integer, BigDecimal> unpaidByRuleByYear =
@@ -2635,62 +2699,74 @@ public class LeaveService {
     }
 
     /**
-     * Sub-day leave (2026-07-25): no times -&gt; the existing whole-day day count, per the leave
-     * type's {@link LeaveDayCountBasis} (V119: CALENDAR_DAYS for MATERNITY, WORKING_DAYS for every
-     * other type -- unchanged). Times set -&gt; clock-hours(start,end) / 8 (STANDARD_WORKDAY_MINUTES),
-     * no lunch subtraction (decided rule), rounded HALF_UP to 2dp, capped at 1.00 (a sub-day request
-     * can never exceed one whole day). FULL_DAY (not BigDecimal.ONE) keeps the cap at scale 2,
-     * matching the NUMERIC(5,2) convention every other day figure in this codebase uses. The sub-day
-     * branch is basis-independent by construction: sub-day leave is always single-day (start_date ==
-     * end_date, enforced by {@link #validateSubDayTimes}), so "which days count" never arises -- the
-     * one date in question always counts, under either basis.
+     * Partial-day span (V166, widened from the original single-day-only sub-day feature,
+     * 2026-07-25): no times -&gt; the existing whole-day day count, per the leave type's {@link
+     * LeaveDayCountBasis} (V119: CALENDAR_DAYS for MATERNITY, WORKING_DAYS for every other type --
+     * unchanged). Times set -&gt; the plain sum of {@code spanFractions} (built by the caller via
+     * {@link LeaveDayMath#spanDayFractions}, which measures each boundary day against the FIXED
+     * 480-worked-minute/12:30-13:30-break rule, never against that day's own resolved {@link
+     * WorkSchedule} span -- see that method's Javadoc for the exact rule, the worked-example table,
+     * and why this REPLACES the old {@code hours/8} divisor even for a single-day timed request).
+     * {@code spanFractions} must be non-null whenever {@code startTime} is
+     * non-null -- every call site below builds it that way; this method only sums and range-checks it.
      *
-     * <p>{@code isWorkingDay} (2026-08-03): the schedule/holiday-aware predicate built once in
-     * {@link #submit}, only read by the WORKING_DAYS branch below (via {@link #workingDaysBetween})
-     * -- the CALENDAR_DAYS (MATERNITY) branch never touches it, unchanged from before this predicate
-     * existed.
+     * <p>{@code isWorkingDay} (2026-08-03): the schedule/holiday-aware predicate built once by the
+     * caller, only read by the whole-day WORKING_DAYS branch below (via {@link #workingDaysBetween})
+     * -- the CALENDAR_DAYS (MATERNITY) branch never touches it, and the timed branch reads it only
+     * indirectly, already baked into {@code spanFractions}.
      *
      * <p>Phase A0b: takes {@code startDate}/{@code endDate}/{@code startTime}/{@code endTime}
      * directly rather than a {@code SubmitLeaveRequest} (a pure parameter-extraction refactor, same
-     * body, same behaviour for every #submit call site below) so {@link #preview} -- which has no
-     * sub-day times in its request shape at all -- can call it too, passing {@code null} for both
-     * times to take the same whole-day path a legacy no-times submission always took.
+     * body, same behaviour for every #submit call site below) so {@link #preview} can call it too,
+     * passing {@code null} for both times (and {@code spanFractions}) to take the same whole-day path
+     * a legacy no-times submission always took.
      */
     private BigDecimal computeTotalDays(
-            LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
-            LeaveTypeDto leaveType, Predicate<LocalDate> isWorkingDay) {
+            Map<LocalDate, BigDecimal> spanFractions, LocalDate startDate, LocalDate endDate,
+            LocalTime startTime, LocalTime endTime, LeaveTypeDto leaveType, Predicate<LocalDate> isWorkingDay) {
         if (startTime == null) {
             if (leaveType.dayCountBasis() == LeaveDayCountBasis.CALENDAR_DAYS) {
                 return BigDecimal.valueOf(LeaveDayMath.countCalendarDays(startDate, endDate));
             }
             return workingDaysBetween(startDate, endDate, isWorkingDay);
         }
-        long minutes = Duration.between(startTime, endTime).toMinutes();
-        BigDecimal fraction = BigDecimal.valueOf(minutes)
-            .divide(STANDARD_WORKDAY_MINUTES, 2, RoundingMode.HALF_UP);
-        return fraction.min(FULL_DAY);
+        BigDecimal total = LeaveDayMath.sumFractions(spanFractions);
+        if (total.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
+        }
+        return total;
     }
 
     /**
-     * Sub-day leave (2026-07-25): startTime/endTime are optional, but if either is set both must be,
-     * the request must be single-day on a WORKING day, endTime must be after startTime, and both must
-     * fall within the standard workday (08:30-17:30) -- mirrors V90's chk_leave_time_* checks, giving
-     * a clearer 400 before the DB constraint would ever fire. The weekday check matters: without it a
-     * Saturday/Sunday half-day would be accepted (and could produce a payroll deduction for a
-     * non-working day) while the identical whole-day request is rejected by workingDaysBetween.
+     * Partial-day span (V166, widened from the original single-day-only sub-day feature,
+     * 2026-07-25): startTime/endTime are optional, but if either is set both must be, the RANGE
+     * (which may now span more than one calendar day) must contain at least one WORKING day, endTime
+     * must fall after startTime on a single-day request, and each boundary day's time must fall
+     * within THAT DAY'S OWN resolved {@link WorkSchedule} window -- mirrors V166's relaxed
+     * {@code chk_leave_time_*} checks, giving a clearer 400 before the DB constraint would ever fire.
+     * The weekday check matters: without it a Saturday/Sunday-only span would be accepted (and could
+     * produce a payroll deduction for a non-working day) while the identical whole-day request is
+     * rejected by workingDaysBetween.
+     *
+     * <p>{@code startSchedule}/{@code endSchedule} (V166): resolved ONCE by the caller ({@link
+     * #submit}/{@link #preview}) and passed in here, rather than this method re-resolving them --
+     * both are {@code null} exactly when {@code startTime} is {@code null} (a whole-day request never
+     * needs them); {@code endSchedule} equals {@code startSchedule} for a single-day request (both
+     * boundary checks read the SAME resolved schedule, matching pre-V166 behaviour exactly).
      *
      * <p>Schedule/holiday-aware working-day counting (2026-08-03): the "must be a working day" check
      * now uses the schedule/holiday-aware {@code isWorkingDay} predicate (a warehouse employee's
-     * Saturday sub-day request is now valid), and applies ONLY to {@code WORKING_DAYS}-basis types
-     * -- gated on {@code basis} so a CALENDAR_DAYS (MATERNITY) sub-day request is never rejected for
+     * Saturday timed request is now valid), and applies ONLY to {@code WORKING_DAYS}-basis types --
+     * gated on {@code basis} so a CALENDAR_DAYS (MATERNITY) timed request is never rejected for
      * landing on a non-working day, matching how CALENDAR_DAYS never filters days anywhere else in
      * this class. Skipping this gate for CALENDAR_DAYS is a deliberate decision, not an oversight:
-     * without it, a sub-day MATERNITY request landing on a public holiday would go from "allowed"
+     * without it, a timed MATERNITY request landing on a public holiday would go from "allowed"
      * (today, holiday-blind) to "rejected" (this branch's holiday awareness applied everywhere) --
      * exactly the "double-handling" MATERNITY must not receive, per LeaveDayCountBasis's javadoc.
      */
     private void validateSubDayTimes(
-            SubmitLeaveRequest request, LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay) {
+            SubmitLeaveRequest request, LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay,
+            WorkSchedule startSchedule, WorkSchedule endSchedule) {
         LocalTime startTime = request.startTime();
         LocalTime endTime = request.endTime();
         if (startTime == null && endTime == null) {
@@ -2699,19 +2775,56 @@ public class LeaveService {
         if (startTime == null || endTime == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การลาแบบระบุช่วงเวลาต้องระบุเวลาเริ่มต้นและเวลาสิ้นสุด");
         }
-        if (!request.startDate().equals(request.endDate())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "การลาแบบระบุช่วงเวลาต้องเริ่มต้นและสิ้นสุดในวันเดียวกัน");
-        }
-        if (basis == LeaveDayCountBasis.WORKING_DAYS
-                && LeaveDayMath.countWorkingDays(request.startDate(), request.startDate(), isWorkingDay) == 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
-        }
-        if (!endTime.isAfter(startTime)) {
+        LocalDate startDate = request.startDate();
+        LocalDate endDate = request.endDate();
+        boolean singleDay = startDate.equals(endDate);
+        if (singleDay && !endTime.isAfter(startTime)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น");
         }
-        if (startTime.isBefore(WORKDAY_START) || startTime.isAfter(WORKDAY_END)
-                || endTime.isBefore(WORKDAY_START) || endTime.isAfter(WORKDAY_END)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาลาต้องอยู่ในช่วงเวลาทำงาน (08:30-17:30)");
+        // The TIME-BOUND check applies to EVERY basis, including CALENDAR_DAYS (MATERNITY).
+        //
+        // Regression fix: an earlier draft of this method returned early for CALENDAR_DAYS before
+        // reaching here, and its comment claimed that matched pre-V166 behaviour. It did not. In the
+        // pre-V166 version the `basis == WORKING_DAYS` condition gated ONLY the working-day COUNT;
+        // the 08:30-17:30 bound below it was ungated and applied to every leave type. Returning early
+        // therefore let a single-day MATERNITY request at e.g. 06:00-20:00 through, where it had
+        // always been refused. Only the WORKING-DAY checks are basis-specific -- the clock bound is
+        // not, and must stay above the gate.
+        //
+        // CALENDAR_DAYS has no working-day concept, so its bound is checked unconditionally rather
+        // than behind isWorkingDay -- every date in a MATERNITY range counts, weekends included
+        // (§5.4), which is the whole reason that basis exists.
+        if (basis != LeaveDayCountBasis.WORKING_DAYS) {
+            validateWithinSchedule(startTime, startSchedule, startDate);
+            validateWithinSchedule(endTime, singleDay ? startSchedule : endSchedule,
+                singleDay ? startDate : endDate);
+            return;
+        }
+        if (LeaveDayMath.countWorkingDays(startDate, endDate, isWorkingDay) == 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน");
+        }
+        if (isWorkingDay.test(startDate)) {
+            validateWithinSchedule(startTime, startSchedule, startDate);
+            if (singleDay) {
+                validateWithinSchedule(endTime, startSchedule, startDate);
+            }
+        }
+        if (!singleDay && isWorkingDay.test(endDate)) {
+            validateWithinSchedule(endTime, endSchedule, endDate);
+        }
+    }
+
+    /**
+     * One boundary day's time-bound check (V166): {@code time} must fall within {@code schedule}'s
+     * own {@code [workStart, workEnd]} window for {@code date} -- the schedule/holiday-aware
+     * replacement for the old hardcoded 08:30-17:30 bound, resolved per employee per date exactly as
+     * every other schedule-aware check in this class already is.
+     */
+    private void validateWithinSchedule(LocalTime time, WorkSchedule schedule, LocalDate date) {
+        if (time.isBefore(schedule.workStart()) || time.isAfter(schedule.workEnd())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "เวลาลาวันที่ " + date + " ต้องอยู่ในช่วงเวลาทำงาน ("
+                    + schedule.workStart() + "-" + schedule.workEnd() + ")");
         }
     }
 

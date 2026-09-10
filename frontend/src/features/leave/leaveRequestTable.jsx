@@ -162,7 +162,15 @@ export function renderLeaveRequestExpanded(request) {
         ) : null}
         <DetailField label="ลากิจฉุกเฉิน" value={request.emergencyFiling ? 'ใช่' : 'ไม่ใช่'} />
         {request.startTime || request.endTime ? (
-          <DetailField label="ช่วงเวลา (ลาบางส่วนของวัน)" value={`${request.startTime || '-'} - ${request.endTime || '-'}`} />
+          // Partial-day span (V166, 2026-09-10): startDate/endDate may now differ for a timed
+          // request -- the label/value read as "13:00 (วันเริ่ม) - 17:30 (วันสิ้นสุด)" in that
+          // case, since the formatDateRange(...) shown above already gives the reader the actual
+          // dates each time belongs to; a single-day request keeps the plain "13:00 - 17:30" it
+          // always showed.
+          <DetailField
+            label={request.startDate === request.endDate ? 'ช่วงเวลา (ลาบางส่วนของวัน)' : 'ช่วงเวลา (วันเริ่ม - วันสิ้นสุด)'}
+            value={`${request.startTime || '-'} - ${request.endTime || '-'}`}
+          />
         ) : null}
         <DetailField label="พิจารณาเมื่อ" value={formatDateTime(request.reviewedAt)} />
         {!isAutoRejected && request.reviewerNote ? (
