@@ -18,6 +18,7 @@ import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ChromiumPdfPrinter;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
@@ -102,8 +103,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
         employeeAuth = new EmployeeAuthRepository(jdbc);
         EmployeeSignatureRepository signatureRepository = new EmployeeSignatureRepository(jdbc);
+        // Exercise the Chromium engine end-to-end through the service wherever a Chromium can be
+        // launched; elsewhere the default LibreOffice engine keeps the PDF assertions meaningful.
+        QuotationRenderer quotationRenderer = new QuotationRenderer();
+        if (ChromiumPdfPrinter.isAvailable()) {
+            quotationRenderer.setPdfRenderer(QuotationRenderer.PDF_RENDERER_CHROMIUM);
+        }
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, notifications,
-            approvalMailer, new QuotationRenderer(), employeeAuth, signatureRepository, "https://portal.test");
+            approvalMailer, quotationRenderer, employeeAuth, signatureRepository, "https://portal.test");
 
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 
@@ -571,7 +578,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(xlsx).startsWith((byte) 0xD0, (byte) 0xCF, (byte) 0x11, (byte) 0xE0,
             (byte) 0xA1, (byte) 0xB1, (byte) 0x1A, (byte) 0xE1);
 
-        Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(), "LibreOffice (soffice) not available");
+        Assumptions.assumeTrue(ChromiumPdfPrinter.isAvailable() || LibreOfficePdfConverter.isAvailable(),
+            "neither Chromium nor LibreOffice available locally");
         byte[] pdf = quotationService.renderPdf(created.id(), salesActor);
         assertThat(pdf).isNotEmpty();
         assertThat(pdf[0]).isEqualTo((byte) '%');
@@ -585,7 +593,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * (DealQuotationLines#calculationLine, served on the DTO) is the text that actually printed. */
     @Test
     void renderPdf_approvedQuotation_showsApproverNameAndCalculationLine() throws Exception {
-        Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(), "LibreOffice (soffice) not available");
+        Assumptions.assumeTrue(ChromiumPdfPrinter.isAvailable() || LibreOfficePdfConverter.isAvailable(),
+            "neither Chromium nor LibreOffice available locally");
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
         // sampleItem(PIECES, wastage NONE, no piecesPerBox): calculationLine = "(จำนวน 10 แผ่น = 10 แผ่น)".
         String expectedCalcLine = approved.items().get(0).calculationLine();
@@ -600,8 +609,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approved.approvedByName()).isNotBlank();
         assertThat(flat).contains("(" + approved.approvedByName().replaceAll("\\s+", "") + ")");
         assertThat(flat).contains(expectedCalcLine.replaceAll("\\s+", ""));
-        assertThat(flat).contains("ผู้ตรวจ");
-        assertThat(flat).contains("ผู้อนุมัติ");
+        assertThat(flat).contains("พนักงานขาย");
+        assertThat(flat).contains("ผู้จัดการฝ่ายขาย");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

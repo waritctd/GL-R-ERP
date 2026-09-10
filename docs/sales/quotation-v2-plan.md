@@ -151,3 +151,110 @@ from `calculate-line` (debounced 300 ms). Terms card: วันที่รั�
 Actions by state/role: บันทึกร่าง, ส่งขออนุมัติ, ดาวน์โหลด PDF/Excel, อนุมัติ / ไม่อนุมัติ(เหตุผล),
 สร้างฉบับแก้ไข, ยกเลิกร่าง. hrApi + routes + mockApi mirror (mock STUBS the calc — does not reimplement it)
 + contract tests + unit tests for the pages.
+
+## PDF renderer — two engines, one sheet (2026-09-10)
+The direct-deal quotation's PDF can be printed by either of two engines, selected by
+`app.quotation.pdf-renderer` (`APP_QUOTATION_PDF_RENDERER`, default `xls`) in
+`QuotationRenderer#toPdf(QuotationRenderModel)`:
+
+- **`xls`** — the POI-filled `quotation_template.xls` converted by LibreOffice
+  (`LibreOfficePdfConverter`), the long-standing path. Excel export (`renderXlsx`) is this same
+  workbook and is unchanged.
+- **`chromium`** — the SAME POI workbook `toXls` just wrote is read back as one row plan
+  (`th.co.glr.hr.common.sheet.SheetPlan`: rows, columns, merges, evaluated cell text, fonts,
+  alignment, borders, pictures, print setup) and drawn by `SheetHtmlRenderer` as absolutely
+  positioned cells + SVG border rules on exact A4 pages, then printed by headless Chromium
+  (`ChromiumPdfPrinter`, Playwright). There is no second HTML layout of the quotation: whatever
+  the XLS path emits — its v2 row arithmetic, cloned item rows, compacted remarks, relocated
+  footer block, money-column sizing, no-split row breaks, signature rows, anchored approver
+  image — is what prints, by construction. 503 "ระบบสร้าง PDF ไม่พร้อมใช้งาน" when no Chromium
+  can be launched; never a silent fallback to the other engine.
+
+`ChromiumPdfPrinter` owns ONE Playwright connection + browser on ONE dedicated daemon thread and
+serialises every render through it — Playwright for Java is thread-confined (a 4-thread probe of
+the first cut failed 4/4 with `Cannot find object to call __adopt__`), so `print()` submits to
+that worker and waits (queue + possible relaunch + render, 2 min cap). The browser handle is
+checked with `isConnected()` before every use and relaunched when the process has died; a
+FAILED launch caches "unavailable" for 60 s only, then the next caller retries, so a transient
+failure cannot turn every later quotation into a 503 until the pod restarts. One JVM shutdown
+hook, registered at class-init. With a system Chromium (`CHROMIUM_PATH`, or the Dockerfile's
+`/usr/bin/chromium`) it launches with `--no-sandbox --disable-dev-shm-usage --disable-gpu
+--font-render-hinting=none` (non-root `USER 10001`, 64 MB `/dev/shm`); Playwright's own bundled
+Chromium (local dev) gets Playwright's defaults. Pinned by `ChromiumPdfPrinterConcurrencyTest`
+(six overlapping renders, each carrying its own number; a killed browser relaunches exactly
+once; a failed launch is not retried inside the cooldown and IS retried after it).
+
+`SheetHtmlRenderer` reproduces LibreOffice's page geometry, measured out of LibreOffice's own PDF
+vectors (`LibreOfficeMetrics`): column widths from the default font's "0" advance in twips,
+integer fit zoom over the print range trimmed to its used rows, 1/100 mm truncation, unscaled
+margins, horizontal centring, THIN = 0.75 pt × zoom centred on the grid line, fonts at
+`floor(pt × zoom)`, repeat rows + manual row breaks for pagination, the in-page "หน้า X/Y"
+footer. One LibreOffice quirk worth knowing: it decides fit-vs-scale from the WSBOOL bit POI
+calls `autobreaks`, not from `setFitToPage`.
+
+**Acceptance** is `HtmlXlsFidelityTest` (guarded on LibreOffice + Chromium): both engines render
+the 5-item reference, the owner's real workbook (`src/test/resources/fixtures/
+QN6900-CHN1A-HUB.xls`, fit-to-page copy) and 12-/30-item paginated references; both PDFs are
+rasterised at 110 dpi, EVERY page, and every ruled line is measured — each LibreOffice rule must
+have an HTML counterpart within 1.0 mm (position and both ends), no extra rules, strokes within
+0.2 pt, equal page counts, every planned rule continuous (gap ≤ 0.3 mm), and — text — every
+page's text in geometric order (PDFBox `sortByPosition`, NFC, all whitespace removed, because
+PDFBox's word-gap heuristic splits a Thai glyph run differently in the two PDFs) must be
+IDENTICAL. Side-by-side and diff PNGs, page rasters, the per-page text and the numeric reports
+land in `-Dfidelity.outDir` (default `target/fidelity`). The engine is generic: the deposit
+notice / invoice templates render through the same plan.
+
+Single known text exception, declared and asserted-present rather than silently skipped
+(`HtmlXlsFidelityTest.WORKBOOK_DATE_CELL`): the owner's real workbook's B4 is `=TODAY()` in
+Excel's Thai-locale date format `d ดดดด bbbb` (Thai month name, Buddhist year). Neither engine
+understands it — LibreOffice prints the codes literally ("5 ดดดด bbbb"), POI's `DataFormatter`
+does not see a date and prints the serial ("46178.0"); Excel would print "5 มิถุนายน 2569". The
+fixture pins the cell to its cached serial (the volatile formula is removed on the POI copy, or
+both engines recompute it on load) so the gate does not move with the calendar. The product's
+own XLS path writes the date as text, so this never reaches a real quotation. The fixtures'
+quotation numbers are product-shaped (`QT-2026-0005`): a longer, fixture-only number spilt past
+column I, where the two engines clip a glyph run at different points.
+
+**CI** (`.github/workflows/backend-ci.yml`): the gate RUNS on every backend PR. The runner uses
+the ubuntu-24.04 image's own Chromium (`/usr/bin/chromium`; Ubuntu's `chromium-browser` apt
+package is a snap stub and there is no `chromium` .deb in Ubuntu's archive), installs
+`fonts-thai-tlwg` so both engines share a Thai-capable fontconfig, exports `CHROMIUM_PATH` +
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` (never the 170 MB driver download), and sets
+`REQUIRE_CHROMIUM=1`, under which `ChromiumTestGate` turns the tests' availability guard from
+"skip" into "fail" — a missing browser (or LibreOffice) can never turn the gate green by absence.
+
+**Remark box (owner, 2026-09-10)**: "หมายเหตุ :" + lines 1–8 are ONE closed box B..H inside the
+form — each row a merged B..H cell (not B..I), a top rule B..H directly under the last item line,
+the A|B and H|I separators as its edges, no interior separators, closed by the form's A..I rule
+under line 8; ลำดับ and เป็นเงิน stay open columns beside it (`QuotationRenderer#openRemarkBox`).
+The gate asserts the box from the plan and from the ink of both renders.
+
+**Multi-page (owner, 2026-09-10)**: "หน้า X/Y" on every page of a multi-page document in both
+engines (the XLS footer `&P/&N`; the HTML engine draws it in the bottom-margin band at
+LibreOffice's position — measured as ink, centre/baseline within 1.5 mm, glyph height within
+0.6 mm), nothing on a single page. Breaks fall only between whole item blocks (heading kept with
+its item, an item's lines together), the whole tail (remark box + totals + ตกลงสั่งซื้อ +
+signature + F-SM-002) moves as one block, the box closes A..I at every page bottom and re-opens
+under the repeated rows 1–7. The page budget is LibreOffice's own (`LibreOfficeMetrics.
+fitZoomPercent` + 1/100 mm row truncation, shared with `SheetPlan#paginate`), minus one item row
+of headroom — a raw-point budget broke pages a third early.
+
+**Local dev**: install Playwright's Chromium once —
+`mvn dependency:build-classpath -Dmdep.outputFile=/tmp/cp.txt && java -cp "$(cat /tmp/cp.txt)"
+com.microsoft.playwright.CLI install chromium` (there is no `exec-maven-plugin` binding, so the
+plain `mvn exec:java` form does nothing). macOS caches it under
+`~/Library/Caches/ms-playwright`, Linux/Docker under `~/.cache/ms-playwright`.
+
+**Docker**: `backend/Dockerfile` installs the `chromium` Debian package alongside
+`libreoffice-calc` and sets `CHROMIUM_PATH=/usr/bin/chromium` +
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so the runtime image never downloads its own copy, plus
+`XDG_CONFIG_HOME`/`XDG_CACHE_HOME` under `/tmp` for the home-less non-root user. It reads the
+same fontconfig setup (licensed fonts, or `fonts-thai-tlwg` substitutes) LibreOffice already
+uses. **Size**: the Playwright dependency adds ~200 MB to `app.jar` — `driver-bundle` carries a
+Node runtime for five platforms and Maven Central publishes no per-platform artifact (checked
+2026-09-10: only `playwright` / `driver` / `driver-bundle` / `parent-pom`), so it cannot be
+excluded and replaced; the Debian `chromium` package adds ~250 MB on top. Not build-verified on
+this Mac (Docker registry pulls are blocked by broken host IPv6 — see the memory note) — **the
+first deploy of the image needs a smoke render** (download one direct-deal quotation PDF with
+`APP_QUOTATION_PDF_RENDERER=chromium` and read the logs) before the engine is switched on; the
+default `xls` engine is unaffected either way.

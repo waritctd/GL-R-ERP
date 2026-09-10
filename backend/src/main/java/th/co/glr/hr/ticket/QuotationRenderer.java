@@ -47,6 +47,13 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 // th.co.glr.hr.dealquotation.DealQuotationRenderAdapter) builds the same model with multi-line
 // item descriptions, location headings, all 8 remark lines, real signatory names, and the
 // approver's signature image — see docs/sales/quotation-v2-plan.md's "Printed lines" section.
+//
+// Quotation v2 (2026-09-10): toXls/toXlsx ALWAYS render through this POI/XLS template (both
+// paths, XLS output unchanged). toPdf(QuotationRenderModel) — the direct-deal path — prints that
+// SAME sheet through one of two engines selected by app.quotation.pdf-renderer: LibreOffice
+// (default) or headless Chromium drawing the sheet as HTML (QuotationHtmlDocument /
+// th.co.glr.hr.common.sheet.SheetHtmlRenderer). toPdf(TicketDto, QuotationDto, CustomerDto) — the
+// legacy/PCR path — is untouched: XLS through LibreOffice. See toPdf(QuotationRenderModel).
 @Component
 public class QuotationRenderer {
     private static final Logger log = LoggerFactory.getLogger(QuotationRenderer.class);
@@ -62,6 +69,7 @@ public class QuotationRenderer {
     // Template layout per document-generation-fix.md §A2-A3
     // The template's item zone is 0-based rows 9–20; the first item row (A10) starts the table.
     private static final int ITEM_START_ROW = 9; // 0-based (= row 10 in 1-based)
+    private static final int TITLE_ROW = 6;      // 0-based: ลำดับ … เป็นเงิน (บาท), last of the repeated rows A1:I7
 
     // Flow layout: pack rows one per emitted item-row from ITEM_START_ROW and relocate the footer
     // block (notes/totals/signature) to sit right after the last emitted row, so any row count
@@ -139,6 +147,17 @@ public class QuotationRenderer {
         REMARK_HEAD_ROWS[REMARK_HEAD_ROWS.length - 1] + 1; // 37 — the always-blank trailing row
     private static final int REMARK_V2_COMPACT_SHIFT =
         -(REMARK_V2_COMPACT_LAST_UNUSED - REMARK_V2_COMPACT_FIRST_UNUSED + 1); // -7
+    // html-fidelity-spec §8 (owner, 2026-09-10): the remark block is its OWN closed box inside the
+    // form — "หมายเหตุ :" (FOOTER_START) plus lines 1–8 — spanning columns B..H: a top rule B..H
+    // directly under the last item line, the A|B separator as its left edge, the H|I separator as
+    // its right edge, no interior column separators, closed at the bottom by the form's own A..I
+    // rule under line 8 (#compactRemarksSection). ลำดับ (A) and เป็นเงิน (I) keep their own
+    // verticals down to that rule, reading as open columns beside the box. So every remark row —
+    // the label row too — is ONE merged B..H cell, not B..I: a merge ending at I swallowed the H|I
+    // separator (a merged region draws no interior edge), which is exactly what the owner's crop
+    // rejected. See #openRemarkBox.
+    private static final int REMARK_BOX_FIRST_COL = LABEL_VALUE_COL; // B
+    private static final int REMARK_BOX_LAST_COL = 7;                // H
     // Width-aware wrap budget for a remark head+continuation row pair (H3): measured in
     // characters against column B's own width at the template's default font — a generous 62 (not
     // the theoretical max the raw pixel width would allow) because Thai glyph clusters render
@@ -348,19 +367,27 @@ public class QuotationRenderer {
                 fitToOnePageAtScale(sh, scale * 100.0);
             } else {
                 delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift);
-                // LOW fix: this used to run through SUBTOTAL_ROW - 1 + delta — which, once the
-                // footer is relocated by `delta`, reaches well PAST the last actual item row and
-                // gives every remarks/notes row (blank in columns C..I, since remarks only write
-                // column B) the SAME thin-bottom-border treatment as a real item row. On a
-                // multi-page render whose page break happened to fall inside the remarks block,
-                // that painted a wide, empty, bordered "table" fragment at the top of the next
-                // page — the reviewer's reported stub. The item table itself ends at
-                // FOOTER_START + delta - 1 (see #layoutFlowing's own delta derivation); only that
-                // range should ever get an item-table border.
-                closeItemTableBorders(sh, ITEM_START_ROW, FOOTER_START + delta - 1);
+                // The box is closed at the bottom of every PAGE, not under the last item row: a
+                // previous version bordered FOOTER_START + delta - 1 unconditionally, which is
+                // right only when the footer moves to the next page (then that row IS a page
+                // bottom) and is an interior rule between the last item and หมายเหตุ whenever the
+                // footer stays on the same page — layout-spec §1 forbids interior rules.
+                // #insertNoSplitPageBreaks knows exactly where the pages end (it sets every break),
+                // so it closes each page fragment itself; the last page closes under remark line 8
+                // (#compactRemarksSection). (Its older LOW-fix history — bordering through
+                // SUBTOTAL_ROW painted a bordered stub at the top of the next page — still holds:
+                // never stripe the remarks rows.)
                 int idx = sh.getWorkbook().getSheetIndex(sh);
                 sh.getWorkbook().setPrintArea(idx, 0, 8, 0, footerEnd + delta);
                 sh.setRepeatingRows(CellRangeAddress.valueOf("A1:I7"));
+                // The template's title row does not close itself: its ราคา cell (E7, 0-based
+                // (6,4)) has top+left borders only, and on page 1 the rule under ราคา is drawn by
+                // the Project row's (row 8) own TOP border. A repeated title row on page 2+ sits
+                // on an item row instead, so that stretch of the title's bottom rule was simply
+                // missing there (≈12 mm hole, both engines — caught by HtmlXlsFidelityTest's §7
+                // continuity check). Give every title cell its own bottom rule; on page 1 it
+                // coincides with row 8's top rule, so nothing is double-drawn.
+                closeItemTableBorders(sh, TITLE_ROW, TITLE_ROW);
                 sh.getFooter().setCenter("หน้า &P/&N");
                 // layout-spec §6: "never split an item's lines, the remark block, or the signature
                 // block across pages". LOW's own note here used to record a REVERTED attempt at
@@ -370,8 +397,7 @@ public class QuotationRenderer {
                 // (remarks+totals+signature together, never just the signature portion), and by
                 // walking the SAME per-item row accounting #fillItems used, so an item's own
                 // heading+lines never straddle either.
-                insertNoSplitPageBreaks(sh, items, alwaysShowSeq, FOOTER_START + delta,
-                    sumRowHeights(sh, FOOTER_START + delta, footerEnd + delta));
+                insertNoSplitPageBreaks(sh, items, alwaysShowSeq, FOOTER_START + delta, footerEnd + delta);
                 fitToWidthPaginate(sh);
             }
 
@@ -389,8 +415,54 @@ public class QuotationRenderer {
         return toXls(model);
     }
 
+    /**
+     * The direct-deal path's PDF ({@code DealQuotationService} is the only caller). Which engine
+     * prints it is {@code app.quotation.pdf-renderer}:
+     * <ul>
+     *   <li>{@code xls} (default) — the POI template converted by {@link LibreOfficePdfConverter},
+     *       exactly as before;</li>
+     *   <li>{@code chromium} — the SAME POI sheet this method just rendered, drawn as HTML by
+     *       {@link th.co.glr.hr.common.sheet.SheetHtmlRenderer} and printed by headless Chromium
+     *       ({@link th.co.glr.hr.common.ChromiumPdfPrinter}). Fails loudly with 503 when no
+     *       Chromium can be launched — never a silent fallback to the other engine.</li>
+     * </ul>
+     * Both engines consume one row plan: the workbook. See {@code QuotationHtmlDocument} and
+     * {@code HtmlXlsFidelityTest} for the pixel/rule-level proof that the two renders agree.
+     */
     public byte[] toPdf(QuotationRenderModel model) {
-        return LibreOfficePdfConverter.convert(toXls(model));
+        byte[] xls = toXls(model);
+        if (PDF_RENDERER_CHROMIUM.equalsIgnoreCase(pdfRenderer)) {
+            if (!th.co.glr.hr.common.ChromiumPdfPrinter.isAvailable()) {
+                throw new th.co.glr.hr.common.ApiException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "ระบบสร้าง PDF ไม่พร้อมใช้งาน");
+            }
+            String html = th.co.glr.hr.dealquotation.QuotationHtmlDocument.render(xls, model);
+            return th.co.glr.hr.common.ChromiumPdfPrinter.print(html);
+        }
+        return LibreOfficePdfConverter.convert(xls);
+    }
+
+    /** The HTML {@code toPdf} prints in {@code chromium} mode — exposed for the fidelity gate. */
+    public String toHtml(QuotationRenderModel model) {
+        return th.co.glr.hr.dealquotation.QuotationHtmlDocument.render(toXls(model), model);
+    }
+
+    public static final String PDF_RENDERER_XLS = "xls";
+    public static final String PDF_RENDERER_CHROMIUM = "chromium";
+
+    // app.quotation.pdf-renderer — see application.yml. A field initialiser rather than a
+    // constructor argument so `new QuotationRenderer()` (tests, hand-wired services) keeps the
+    // long-standing LibreOffice engine.
+    @org.springframework.beans.factory.annotation.Value("${app.quotation.pdf-renderer:xls}")
+    private String pdfRenderer = PDF_RENDERER_XLS;
+
+    public void setPdfRenderer(String pdfRenderer) {
+        this.pdfRenderer = pdfRenderer == null ? PDF_RENDERER_XLS : pdfRenderer;
+    }
+
+    public String getPdfRenderer() {
+        return pdfRenderer;
     }
 
     // ── layout ──────────────────────────────────────────────────────────────────
@@ -452,12 +524,13 @@ public class QuotationRenderer {
 
     // layout-spec §1: the table body is ONE box with only vertical column rules — no horizontal
     // rule under any item/description/heading/remark row. The ONLY horizontal rules are under the
-    // column-title row (row 6, template-native) and at the bottom of the whole box, just above
-    // รวมเป็นเงิน (the template's own row carries that border and travels with the footer block on
-    // #layoutFlowing's relocation — see #placeBlock). So this method must NOT stripe every row in
-    // [firstRow, lastRow] with a border (that painted the "grid under every row" the reviewer
-    // rejected) — it borders ONLY {@code lastRow}, closing a genuinely paginated page fragment that
-    // ends mid-table without a border of its own, exactly as the caller's own name promises.
+    // column-title row (row 6, template-native), at the bottom of the whole box just above
+    // รวมเป็นเงิน (legacy path: the template's own closing row, which travels with the footer block
+    // on #layoutFlowing's relocation — see #placeBlock; v2 path: remark line 8, see
+    // #compactRemarksSection), and at the bottom of every paginated page fragment (see
+    // #insertNoSplitPageBreaks). So this method must NOT stripe every row in [firstRow, lastRow]
+    // with a border (that painted the "grid under every row" the reviewer rejected) — it borders
+    // ONLY {@code lastRow}, across A..I, exactly as the caller's own name promises.
     private void closeItemTableBorders(Sheet sh, int firstRow, int lastRow) {
         Workbook wb = sh.getWorkbook();
         Map<Short, CellStyle> cache = new HashMap<>();
@@ -695,6 +768,7 @@ public class QuotationRenderer {
                 setStr(sh, row, LABEL_VALUE_COL, remarkLines.get(i));
                 mergeRemarkRow(sh, row);
             }
+            openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + REMARK_HEAD_ROWS.length - 1);
             return;
         }
         // Legacy (3 lines): unchanged — template's own head+continuation rows, single column B,
@@ -725,13 +799,83 @@ public class QuotationRenderer {
     private void compactRemarksSection(Sheet sh) {
         int lastRow = sh.getLastRowNum();
         sh.shiftRows(REMARK_V2_COMPACT_LAST_UNUSED + 1, lastRow, REMARK_V2_COMPACT_SHIFT);
+        // The removed range's LAST row (template row 37 post-H3 / raw 36) was not merely blank: it
+        // was the row that CLOSED the item+remark box — every cell A..I carries the box's bottom
+        // rule (POI dump: `.tt.` A..F, `.t.t` G..I), and รวมเป็นเงิน sits directly under it in the
+        // customer's form. Shifting it away left the box open above the totals in BOTH engines
+        // (the HTML draws this sheet's own borders). layout-spec §3 wants the box to close directly
+        // under line 8 with no blank row, so the last packed remark row carries that bottom rule
+        // instead of re-creating the blank row — across A..I, so a merged B..I remark row draws it
+        // whichever cell an engine reads a merged region's bottom edge from.
+        closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + REMARK_HEAD_ROWS.length - 1);
     }
 
-    // layout-spec §3: each remark line is ONE merged B..I cell — v2 only ({@code full} = all 8
-    // lines supplied); the legacy path's 3 remark lines keep the template's own single-column-B
-    // cells untouched (stays content-equivalent, see the class Javadoc).
+    // layout-spec §3 + html-fidelity-spec §8: each remark line is ONE merged B..H cell (see
+    // REMARK_BOX_LAST_COL) — v2 only ({@code full} = all 8 lines supplied); the legacy path's 3
+    // remark lines keep the template's own single-column-B cells untouched (stays
+    // content-equivalent, see the class Javadoc).
     private void mergeRemarkRow(Sheet sh, int row) {
-        mergeIfAbsent(sh, row, row, LABEL_VALUE_COL, 8);
+        mergeIfAbsent(sh, row, row, REMARK_BOX_FIRST_COL, REMARK_BOX_LAST_COL);
+    }
+
+    /**
+     * html-fidelity-spec §8 — closes the remark box (see {@link #REMARK_BOX_LAST_COL}) over rows
+     * {@code labelRow} ("หมายเหตุ :") .. {@code lastLineRow} (line 8): the label row becomes the
+     * same merged B..H cell as the eight lines under it and carries the box's TOP rule on every
+     * cell B..H (both engines read a merged region's perimeter from the perimeter cells' own
+     * borders — see {@code SheetPlan#borders}); the left (B) and right (H) edges are the
+     * template's own cell borders on every remark row, re-asserted here so a template edit can
+     * never quietly open the box. The covered cells' values (the template's per-row H/I formulas)
+     * are blanked, styles kept: column I stays an open column beside the box, so its cells must
+     * keep their verticals but show nothing. The bottom rule is the form's own A..I closing rule
+     * under line 8 ({@link #compactRemarksSection}), and the box travels with the footer block
+     * ({@link #layoutFlowing} moves merges and styles together), so it lands directly under the
+     * last item line wherever that is.
+     */
+    private void openRemarkBox(Sheet sh, int labelRow, int lastLineRow) {
+        Map<String, CellStyle> cache = new HashMap<>();
+        for (int r = labelRow; r <= lastLineRow; r++) {
+            for (int c = REMARK_BOX_FIRST_COL + 1; c <= 8; c++) clearCell(sh, r, c);
+            addThinBorder(sh, r, REMARK_BOX_FIRST_COL, REMARK_BOX_FIRST_COL, Side.LEFT, cache);
+            addThinBorder(sh, r, REMARK_BOX_LAST_COL, REMARK_BOX_LAST_COL, Side.RIGHT, cache);
+        }
+        mergeIfAbsent(sh, labelRow, labelRow, REMARK_BOX_FIRST_COL, REMARK_BOX_LAST_COL);
+        addThinBorder(sh, labelRow, REMARK_BOX_FIRST_COL, REMARK_BOX_LAST_COL, Side.TOP, cache);
+    }
+
+    private enum Side { TOP, RIGHT, BOTTOM, LEFT }
+
+    /** Gives cells {@code firstCol..lastCol} of {@code row} a THIN border on {@code side}, cloning
+     * the cell's own style (the template's font/alignment/other borders stay). Cells that already
+     * carry it are left alone; {@code cache} (one per render call — never a field, see
+     * {@link #underlinedStyle}) keys the clones by source style + side. */
+    private void addThinBorder(Sheet sh, int row, int firstCol, int lastCol, Side side, Map<String, CellStyle> cache) {
+        Workbook wb = sh.getWorkbook();
+        for (int c = firstCol; c <= lastCol; c++) {
+            Cell cell = getOrKeep(sh, row, c);
+            CellStyle src = cell.getCellStyle();
+            org.apache.poi.ss.usermodel.BorderStyle current = switch (side) {
+                case TOP -> src.getBorderTop();
+                case RIGHT -> src.getBorderRight();
+                case BOTTOM -> src.getBorderBottom();
+                case LEFT -> src.getBorderLeft();
+            };
+            if (current != null && current != org.apache.poi.ss.usermodel.BorderStyle.NONE) continue;
+            String key = side + ":" + src.getIndex();
+            CellStyle bordered = cache.get(key);
+            if (bordered == null) {
+                bordered = wb.createCellStyle();
+                bordered.cloneStyleFrom(src);
+                switch (side) {
+                    case TOP -> bordered.setBorderTop(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+                    case RIGHT -> bordered.setBorderRight(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+                    case BOTTOM -> bordered.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+                    case LEFT -> bordered.setBorderLeft(org.apache.poi.ss.usermodel.BorderStyle.THIN);
+                }
+                cache.put(key, bordered);
+            }
+            cell.setCellStyle(bordered);
+        }
     }
 
     /**
@@ -779,8 +923,16 @@ public class QuotationRenderer {
     // reference-v4/v5.pdf and LOOKING at it). Measuring each row's own real string width via AWT
     // {@link java.awt.Font#getStringBounds} and padding with THAT row's own padding character's own
     // measured width keeps all three rows' slot boundaries at the same physical x position.
-    private static final String[] SIG_LABELS = {"ผู้พิมพ์", "ผู้ตรวจ", "ผู้อนุมัติ", "ผู้สั่งซื้อ"};
-    private static final int SIG_APPROVER_INDEX = 2; // ผู้อนุมัติ — where the signature image anchors
+    // Quotation v2 owner ruling 2026-09-10: keep the TEMPLATE's OWN original four labels
+    // (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย / ผู้สั่งซื้อ — see the raw row-44 string quoted in
+    // the class comment above) rather than the invented ผู้ตรวจ/ผู้อนุมัติ pair a previous
+    // iteration of this rebuild substituted. Only the LABEL TEXT changed here — the name mapping
+    // below (printedBy → slot 0, checkedBy/sales rep → slot 1, approvedBy → slot 2) and the
+    // approver-signature-image anchor (slot 2, ผู้จัดการฝ่ายขาย = ผึ้ง/sales_manager or ราม/ceo)
+    // are unchanged; every reader that used to look for "ผู้ตรวจ"/"ผู้อนุมัติ" must now look for
+    // "พนักงานขาย"/"ผู้จัดการฝ่ายขาย" instead (QuotationRendererTest, QuotationHtmlDocument).
+    private static final String[] SIG_LABELS = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
+    private static final int SIG_APPROVER_INDEX = 2; // ผู้จัดการฝ่ายขาย — where the signature image anchors
     private static final String BLANK_NAME_PLACEHOLDER = "(..........................)";
     // Fraction of the A..I row's total pixel width that S1 (labels+underscores) should fill —
     // matching the template's own original row 44, which ran its four-label string almost but not
@@ -1212,12 +1364,37 @@ public class QuotationRenderer {
      * footer) that would otherwise straddle — moving the WHOLE block to the next page instead.
      * Only ever called from the genuinely-multi-page branch: the single-page branches never risk a
      * mid-block split in the first place (everything fits one page by construction).
+     *
+     * <p>html-fidelity-spec §7 ("page 2+: the box closes at the page bottom and re-opens under the
+     * repeated title row"): LibreOffice draws nothing at a page break — the template's own borders
+     * simply stop where the page ends (the owner's workbook render, chn1a-2.png, shows exactly
+     * that), so the row above every break inserted here gets the box's bottom rule across A..I
+     * ({@link #closeItemTableBorders}). The re-opening needs nothing: the repeated title row
+     * carries its own top and bottom rules.
+     *
+     * <p>html-fidelity-spec §9 ("seamless page breaks"): the page budget is the page LibreOffice
+     * will actually fill, not the unscaled template. {@link #fitToWidthPaginate} prints at the
+     * fit-to-width zoom (≈72% on this template), so a page holds 1/zoom more rows than their raw
+     * point heights suggest — measuring the budget in raw points (as this method once did) broke
+     * pages a third early and left every page 20–30% blank. The accounting here is LibreOffice's
+     * own ({@link th.co.glr.hr.common.sheet.LibreOfficeMetrics}, the same arithmetic
+     * {@code SheetPlan#paginate} uses to lay the HTML pages, so both engines agree on the
+     * break by construction): zoom = {@link #fitWidthZoomPercent}, every row truncated to
+     * 1/100 mm at that zoom, page body = paper minus the top/bottom margins, the repeating rows
+     * A1:I7 charged to every page. One item row of headroom is kept below the budget so
+     * LibreOffice's own rounding at the boundary can never drop an automatic break INSIDE a
+     * block that this method judged to fit.
      */
     private void insertNoSplitPageBreaks(Sheet sh, List<RenderItem> items, boolean alwaysShowSeq,
-                                          int footerStartRow, double footerHeight) {
-        double capacity = printableHeightPt(sh) - sumRowHeights(sh, 0, ITEM_START_ROW - 1);
-        double rowH = itemRowHeight(sh);
-        double usedOnPage = 0;
+                                          int footerStartRow, int footerEndRow) {
+        int zoom = fitWidthZoomPercent(sh);
+        int bodyHmm = th.co.glr.hr.common.sheet.LibreOfficeMetrics.A4_HEIGHT_HMM
+            - th.co.glr.hr.common.sheet.LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.TOP))
+            - th.co.glr.hr.common.sheet.LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.BOTTOM));
+        int repeatedHmm = scaledRowsHmm(sh, 0, ITEM_START_ROW - 1, zoom);
+        int headroomHmm = scaledRowsHmm(sh, ITEM_STYLE_PROTO_ROW, ITEM_STYLE_PROTO_ROW, zoom);
+        int capacity = bodyHmm - repeatedHmm - headroomHmm;
+        int usedOnPage = 0;
         int r = ITEM_START_ROW;
         String prevLabel = null;
         boolean prevSet = false;
@@ -1227,17 +1404,52 @@ public class QuotationRenderer {
             prevSet = true;
             List<String> lines = alwaysShowSeq ? wrapDescriptionLines(item.descriptionLines()) : item.descriptionLines();
             int blockRows = (heading ? 1 : 0) + Math.max(1, lines.size());
-            double blockHeight = blockRows * rowH;
-            if (usedOnPage > 0 && usedOnPage + blockHeight > capacity) {
+            int blockHmm = scaledRowsHmm(sh, r, r + blockRows - 1, zoom);
+            if (usedOnPage > 0 && usedOnPage + blockHmm > capacity) {
                 sh.setRowBreak(r - 1);
+                closeItemTableBorders(sh, ITEM_START_ROW, r - 1);
                 usedOnPage = 0;
             }
-            usedOnPage += blockHeight;
+            usedOnPage += blockHmm;
             r += blockRows;
         }
-        if (usedOnPage > 0 && usedOnPage + footerHeight > capacity) {
+        // The whole tail — remark box, totals, ตกลงสั่งซื้อ, signature rows, F-SM-002 — is one
+        // block: never split, and never parted from the remark box.
+        int footerHmm = scaledRowsHmm(sh, footerStartRow, footerEndRow, zoom);
+        if (usedOnPage > 0 && usedOnPage + footerHmm > capacity) {
             sh.setRowBreak(footerStartRow - 1);
+            closeItemTableBorders(sh, ITEM_START_ROW, footerStartRow - 1);
         }
+    }
+
+    /** The zoom LibreOffice prints {@link #fitToWidthPaginate}'s sheet at (fit 1 wide, height
+     * unconstrained): columns A..I in twips exactly as LibreOffice converts them, against the
+     * page width minus the sheet's own margins. */
+    private int fitWidthZoomPercent(Sheet sh) {
+        int charWidth = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+        long contentWidthTwips = 0;
+        for (int c = 0; c <= 8; c++) {
+            contentWidthTwips += th.co.glr.hr.common.sheet.LibreOfficeMetrics.columnTwips(sh.getColumnWidth(c), charWidth);
+        }
+        double availableWidthTwips = (th.co.glr.hr.common.sheet.LibreOfficeMetrics.A4_WIDTH_HMM
+            - th.co.glr.hr.common.sheet.LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.LEFT))
+            - th.co.glr.hr.common.sheet.LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.RIGHT)))
+            / th.co.glr.hr.common.sheet.LibreOfficeMetrics.HMM_PER_TWIP;
+        return th.co.glr.hr.common.sheet.LibreOfficeMetrics.fitZoomPercent(contentWidthTwips, 0,
+            availableWidthTwips, 0, 1, 0);
+    }
+
+    /** Rows {@code from..to} as LibreOffice prints them at {@code zoom}: each row's twips scaled
+     * and truncated to 1/100 mm on its own (the plan's unit), then summed. */
+    private int scaledRowsHmm(Sheet sh, int from, int to, int zoom) {
+        int sum = 0;
+        for (int r = from; r <= to; r++) {
+            Row row = sh.getRow(r);
+            int twips = row == null ? Math.round(sh.getDefaultRowHeightInPoints() * 20f)
+                : row.getZeroHeight() ? 0 : row.getHeight();
+            sum += th.co.glr.hr.common.sheet.LibreOfficeMetrics.scaledHmm(twips, zoom);
+        }
+        return sum;
     }
 
     // Consistent page margins (inches) on every layout so content has corner padding and every page

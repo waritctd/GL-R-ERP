@@ -339,11 +339,16 @@ class QuotationRendererTest {
         assertThat(flat).contains("เครดิต30วัน");
         assertThat(flat).contains("รายการที่1-2ระยะเวลานำเข้า75-90วัน");
         assertThat(flat).contains("กำหนดยืนยันราคา45วัน");
-        // v2 signature labels + approver name in parens.
-        assertThat(text).contains("ผู้ตรวจ");
-        assertThat(text).contains("ผู้อนุมัติ");
+        // v2 signature labels (owner ruling 2026-09-10: the TEMPLATE's own original four labels,
+        // not the invented ผู้ตรวจ/ผู้อนุมัติ pair) + approver name in parens. Order/rebuild
+        // correctness against the raw template cell is pinned precisely (not via fragile PDF text
+        // extraction) by modelPath_approverSignatureImage_anchorsWithinTheApproverSlot_... below,
+        // which reads the actual XLSX cell string.
+        // (flat, not text — PDFBox's text extraction can insert a stray space inside
+        // "ผู้จัดการฝ่ายขาย"'s glyph cluster, same as it does elsewhere in this file.)
+        assertThat(flat).contains("พนักงานขาย");
+        assertThat(flat).contains("ผู้จัดการฝ่ายขาย");
         assertThat(flat).contains("(รามอิฐรัตน์)");
-        assertThat(text).doesNotContain("พนักงานขาย____"); // the legacy label text is GONE, not just added-to
     }
 
     /**
@@ -407,10 +412,12 @@ class QuotationRendererTest {
             // Row 44 (0-based, post-H3-shift LABELS_ROW) is now ONE merged A:I cell carrying all
             // four labels in a single string, in order — not a per-label merged column range.
             String labelsRowText = sheet.getRow(44).getCell(0).getStringCellValue();
-            assertThat(labelsRowText).contains("ผู้พิมพ์", "ผู้ตรวจ", "ผู้อนุมัติ", "ผู้สั่งซื้อ");
+            // Owner ruling 2026-09-10: the template's own original labels, not the invented
+            // ผู้ตรวจ/ผู้อนุมัติ pair a previous rebuild substituted.
+            assertThat(labelsRowText).contains("ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ");
             int idxPrinted = labelsRowText.indexOf("ผู้พิมพ์");
-            int idxChecked = labelsRowText.indexOf("ผู้ตรวจ");
-            int idxApproved = labelsRowText.indexOf("ผู้อนุมัติ");
+            int idxChecked = labelsRowText.indexOf("พนักงานขาย");
+            int idxApproved = labelsRowText.indexOf("ผู้จัดการฝ่ายขาย");
             int idxCustomer = labelsRowText.indexOf("ผู้สั่งซื้อ");
             assertThat(idxPrinted).isLessThan(idxChecked);
             assertThat(idxChecked).isLessThan(idxApproved);
@@ -592,13 +599,15 @@ class QuotationRendererTest {
     }
 
     /**
-     * layout-spec §3: every one of the 8 v2/full-remarks lines is written into a merged B..I range
-     * (not left as a plain column-B cell) — the full table width, so a composed line never needs
-     * to wrap. Checks all 8 packed rows (REMARK_HEAD_ROWS[0]..+7 — the compaction leaves them
-     * consecutive, see REMARK_V2_COMPACT_SHIFT's Javadoc).
+     * layout-spec §3 + html-fidelity-spec §8: every one of the 8 v2/full-remarks lines is written
+     * into a merged B..H range (not left as a plain column-B cell) — the remark box's width, so a
+     * composed line never needs to wrap; NOT B..I, which would swallow the H|I separator that is
+     * the box's right edge. Checks all 8 packed rows (REMARK_HEAD_ROWS[0]..+7 — the compaction
+     * leaves them consecutive, see REMARK_V2_COMPACT_SHIFT's Javadoc) and the "หมายเหตุ" label
+     * row above them, which is the first line inside the box.
      */
     @Test
-    void modelPath_eachRemarkLine_isOneMergedRangeSpanningTheFullTableWidth() throws Exception {
+    void modelPath_eachRemarkLine_isOneMergedRangeSpanningTheRemarkBox() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
             BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
         QuotationRenderModel model = modelWithItems(List.of(item),
@@ -611,7 +620,44 @@ class QuotationRendererTest {
             for (int i = 0; i < 8; i++) {
                 int row = 23 + i; // REMARK_HEAD_ROWS[0] .. +7
                 assertThat(mergedRange(sheet, row)).as("remark line " + (i + 1) + " (row " + row + ")")
-                    .isEqualTo(new int[]{row, row, 1, 8}); // B..I
+                    .isEqualTo(new int[]{row, row, 1, 7}); // B..H
+            }
+            assertThat(mergedRange(sheet, 22)).as("หมายเหตุ label row (FOOTER_START)").isEqualTo(new int[]{22, 22, 1, 7});
+        }
+    }
+
+    /**
+     * html-fidelity-spec §8: the remark block is a closed box B..H — top rule on every cell B..H
+     * of the "หมายเหตุ" row (and on no cell of A or I: the rule stops at the เป็นเงิน column's
+     * left rule), left edge on B and right edge on H of every row down to line 8, and the
+     * covered cells hold no value (the template's per-row formulas would otherwise print through
+     * a merge in one engine and not the other).
+     */
+    @Test
+    void modelPath_remarkBox_hasTopRuleBtoH_andLeftRightEdgesOnEveryRow() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item),
+            List.of("1.x", "2.x", "3.x", "4.x", "5.x", "6.x", "7.x", "8.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var thin = org.apache.poi.ss.usermodel.BorderStyle.THIN;
+            var none = org.apache.poi.ss.usermodel.BorderStyle.NONE;
+            for (int c = 1; c <= 7; c++) {
+                assertThat(sheet.getRow(22).getCell(c).getCellStyle().getBorderTop()).as("top rule at col " + c).isEqualTo(thin);
+            }
+            assertThat(sheet.getRow(22).getCell(0).getCellStyle().getBorderTop()).as("no top rule on ลำดับ").isEqualTo(none);
+            assertThat(sheet.getRow(22).getCell(8).getCellStyle().getBorderTop()).as("no top rule on เป็นเงิน").isEqualTo(none);
+            for (int row = 22; row <= 30; row++) {
+                assertThat(sheet.getRow(row).getCell(1).getCellStyle().getBorderLeft()).as("left edge row " + row).isEqualTo(thin);
+                assertThat(sheet.getRow(row).getCell(7).getCellStyle().getBorderRight()).as("right edge row " + row).isEqualTo(thin);
+                assertThat(sheet.getRow(row).getCell(8).getCellStyle().getBorderRight()).as("เป็นเงิน outer rule row " + row).isEqualTo(thin);
+                for (int c = 2; c <= 8; c++) {
+                    assertThat(cellIsEmpty(sheet, row, c)).as("row " + row + " col " + c + " blank").isTrue();
+                }
             }
         }
     }
