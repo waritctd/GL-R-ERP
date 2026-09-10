@@ -54,7 +54,16 @@ public final class DealQuotationRequests {
         @Size(max = 4000) String itemNotes
     ) {}
 
+    /**
+     * {@code contactId} (owner feedback F2, 2026-09-10 — ผู้สั่งซื้อ) is OPTIONAL on the wire and
+     * defaults to the deal's own contact ({@code sales.ticket.contact_id}); what is REQUIRED is
+     * that one resolves — create/update/submit answer 400 "กรุณาระบุผู้สั่งซื้อ" otherwise. The
+     * chosen contact must belong to the deal's customer; its name/phone/email are snapshotted onto
+     * the quotation (V167). Enforced in {@code DealQuotationService}, not by bean validation, because
+     * the default is a DB lookup.
+     */
     public record UpsertDealQuotationRequest(
+        Long contactId,
         @Size(max = 20) String deptCode,
         @Size(max = 20) String unitCode,
         LocalDate offerDate,

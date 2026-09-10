@@ -250,6 +250,18 @@ const SERVER_ONLY = {
   // policyDocumentAvailable/downloadPolicyDocument to a screen for the first time since the PDF was
   // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
   // the leave page links; this endpoint is the server-side archive of record, not that reader.
+  'GET /api/deal-quotations/counts':
+    'Quotation v2 owner-feedback pass 1 (F5, 2026-09-10): per-status counts for the ใบเสนอราคา list '
+    + 'tabs, shipped on the BACKEND branch (feat/quotation-feedback-1-backend) a day ahead of the UI '
+    + 'branch stacked on it, which wires api.dealQuotations.counts() and must DELETE this entry (the '
+    + 'stale-entry test below enforces that). Owner-scoped like GET /api/deal-quotations; proven '
+    + 'wrong-way-round by DealQuotationIntegrationTest#counts_matchTheListsUnderTheSameScope….',
+  'PUT /api/customers/{}':
+    'Quotation v2 owner-feedback pass 1 (F7, 2026-09-10): corrects a customer\'s เลขที่ผู้เสียภาษี / '
+    + 'โทร. in place from the deal card, shipped on the BACKEND branch a day ahead of the UI branch '
+    + 'stacked on it, which wires api.customers.update() and must DELETE this entry (the stale-entry '
+    + 'test below enforces that). Same DealEntryAccess gate as POST /api/customers, no wider — real-DB '
+    + 'evidence in DealEntryAccessIntegrationTest, denials written wrong-way-round.',
 
   // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
   // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or

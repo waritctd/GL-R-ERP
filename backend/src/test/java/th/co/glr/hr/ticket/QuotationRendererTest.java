@@ -452,6 +452,243 @@ class QuotationRendererTest {
         }
     }
 
+    // ── owner feedback pass 1 (2026-09-10): F2 slot-4 name, F4 dates, F6 picture on the rule ──
+
+    @Test
+    void signatureDateText_isDayMonthUnpaddedWithBuddhistYear_orTheDottedPlaceholder() {
+        assertThat(QuotationRenderer.signatureDateText(LocalDate.of(2026, 9, 10))).isEqualTo("วันที่ 10/9/2569");
+        assertThat(QuotationRenderer.signatureDateText(LocalDate.of(2026, 1, 1))).isEqualTo("วันที่ 1/1/2569");
+        assertThat(QuotationRenderer.signatureDateText(LocalDate.of(2025, 12, 31))).isEqualTo("วันที่ 31/12/2568");
+        assertThat(QuotationRenderer.signatureDateText(null)).isEqualTo("วันที่........./........./.........");
+    }
+
+    /** F2 + F4: the names row prints the ผู้สั่งซื้อ name in slot 4 (after the approver), and the
+     * dates row prints created/submitted/approved under slots 1-3 with slot 4 dotted. */
+    @Test
+    void modelPath_signatureBlock_printsOrderedByInSlot4_andPerSlotDates() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", "สมหญิง ใจดี", null, null,
+                LocalDate.of(2026, 9, 8), LocalDate.of(2026, 9, 9), LocalDate.of(2026, 9, 10)));
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String names = sheet.getRow(45).getCell(0).getStringCellValue();
+            assertThat(names).contains("(A)", "(B)", "(ราม อิฐรัตน์)", "(สมหญิง ใจดี)");
+            assertThat(names.indexOf("(สมหญิง ใจดี)")).isGreaterThan(names.indexOf("(ราม อิฐรัตน์)"));
+            assertThat(names).doesNotContain("(..........................)");
+
+            String dates = sheet.getRow(46).getCell(0).getStringCellValue();
+            int d1 = dates.indexOf("วันที่ 8/9/2569");
+            int d2 = dates.indexOf("วันที่ 9/9/2569");
+            int d3 = dates.indexOf("วันที่ 10/9/2569");
+            int dotted = dates.indexOf("วันที่........./........./.........");
+            assertThat(d1).isNotNegative();
+            assertThat(d2).isGreaterThan(d1);
+            assertThat(d3).isGreaterThan(d2);
+            assertThat(dotted).as("ผู้สั่งซื้อ's date slot stays dotted, last").isGreaterThan(d3);
+            assertThat(dates.split("วันที่........./........./.........", -1)).hasSize(2);
+        }
+    }
+
+    /** A DRAFT-shaped model (no submitted/approved dates, no approver) keeps those slots dotted;
+     * the five-argument constructor (legacy shape) prints all four dotted. */
+    @Test
+    void modelPath_signatureBlock_missingDatesAndNames_printPlaceholders() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel draft = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", null, "สมหญิง ใจดี", null, null,
+                LocalDate.of(2026, 9, 8), null, null));
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(renderer.toXls(draft)))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String names = sheet.getRow(45).getCell(0).getStringCellValue();
+            assertThat(names.split("\\(\\.{26}\\)", -1)).as("one dotted name: the approver").hasSize(2);
+            assertThat(names.indexOf("(..........................)")).isGreaterThan(names.indexOf("(B)"))
+                .isLessThan(names.indexOf("(สมหญิง ใจดี)"));
+            String dates = sheet.getRow(46).getCell(0).getStringCellValue();
+            assertThat(dates).contains("วันที่ 8/9/2569");
+            assertThat(dates.split("วันที่........./........./.........", -1)).hasSize(4);
+        }
+
+        QuotationRenderModel legacyShape = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "C", null, null));
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(renderer.toXls(legacyShape)))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(45).getCell(0).getStringCellValue()).containsOnlyOnce("(..........................)");
+            assertThat(sheet.getRow(46).getCell(0).getStringCellValue()
+                .split("วันที่........./........./.........", -1)).hasSize(5);
+        }
+    }
+
+    /**
+     * F6, amended twice on 2026-09-10 — the owner's final words: "still make the line visible but
+     * put the signature on top of the line in the middle and not too high up."
+     *
+     * <p>Three regressions are pinned here, all read off the RENDERED anchor and the RENDERED
+     * labels string (never off the renderer's own constants):
+     *
+     * <ol>
+     *   <li><strong>Centred on the underscore RUN, not the slot.</strong> The build the owner saw
+     *       centred the picture on the whole ผู้จัดการฝ่ายขาย quarter, which drew it over the label
+     *       words themselves. The run is the blank stretch AFTER the label text, and the picture's
+     *       left edge must start clear of the label's own x-range.</li>
+     *   <li><strong>Scaled down</strong> to at most {@code SIGNATURE_RUN_WIDTH_FRACTION} (60%) of
+     *       that run, so the rule shows on both sides of the ink — and at most 8 mm tall.</li>
+     *   <li><strong>Resting ON the rule</strong>: the bottom edge lands just ABOVE it (0–1 mm),
+     *       never cutting through it. The owner rejected the straddling build in as many words —
+     *       "it should sit above the line, right now it's across the middle of the line" — after
+     *       an earlier build had it floating a whole row too high, so both directions are pinned:
+     *       the gap is positive, and smaller than a millimetre.</li>
+     * </ol>
+     *
+     * <p>The three sources cover both binding constraints and the wide-source regression the
+     * width cap exists for: a 300x120 (width binds), a 200x400 (height binds — it must stay
+     * centred anyway) and a 2000x400, which at natural size would be over half a metre wide.
+     */
+    @Test
+    void modelPath_approverSignatureImage_restsOnTheRuleCentredOnTheUnderscoreRun() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        for (byte[] png : List.of(realPng(300, 120), realPng(200, 400), realPng(2000, 400))) {
+            QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+                new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", png, "image/png"));
+            byte[] xlsx = renderer.toXls(model);
+            try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+                var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+                var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+                org.apache.poi.hssf.usermodel.HSSFPicture signature = null;
+                for (var shape : hssf.getDrawingPatriarch().getChildren()) {
+                    if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                        && pic.getClientAnchor().getRow1() >= 40) {
+                        signature = pic;
+                    }
+                }
+                assertThat(signature).isNotNull();
+                var anchor = signature.getClientAnchor();
+
+                // ── the run, measured off the string the renderer actually emitted ───────────
+                int labelsRow = 44;
+                double[] run = approverUnderscoreRun(sheet, labelsRow);
+                double runStart = run[0];
+                double runEnd = run[1];
+                double runCentre = (runStart + runEnd) / 2;
+
+                double startPx = anchorXPixels(sheet, anchor.getCol1(), anchor.getDx1());
+                double endPx = anchorXPixels(sheet, anchor.getCol2(), anchor.getDx2());
+                double centrePx = (startPx + endPx) / 2;
+                double widthPx = endPx - startPx;
+
+                assertThat(Math.abs(centrePx - runCentre))
+                    .as("%dx%d: centred on the underscore run (run %.0f..%.0f px, picture %.0f..%.0f)",
+                        signature.getImageDimension().width, signature.getImageDimension().height,
+                        runStart, runEnd, startPx, endPx)
+                    .isLessThanOrEqualTo(mmToPixels(2.0));
+                assertThat(startPx)
+                    .as("never drawn over the ผู้จัดการฝ่ายขาย label text — it starts after the run does")
+                    .isGreaterThanOrEqualTo(runStart);
+                assertThat(endPx).as("stays inside the run, so the rule shows on both sides")
+                    .isLessThanOrEqualTo(runEnd);
+                assertThat(widthPx).as("at most 60%% of the run")
+                    .isLessThanOrEqualTo((runEnd - runStart) * 0.60 + 1);
+
+                // ── resting on the rule ─────────────────────────────────────────────────────
+                double labelsRowPt = sheet.getRow(labelsRow).getHeightInPoints();
+                double rulePt = labelsRowPt - mmToPoints(1.0); // SIGNATURE_BASELINE_LIFT_MM
+                double bottomPt = anchorYPoints(sheet, labelsRow, anchor.getRow2(), anchor.getDy2());
+                double topPt = anchorYPoints(sheet, labelsRow, anchor.getRow1(), anchor.getDy1());
+                assertThat(rulePt - bottomPt)
+                    .as("the ink RESTS ON the rule: bottom just above it, never crossing it")
+                    .isBetween(0.0, mmToPoints(1.0));
+                assertThat(bottomPt - topPt).as("at most 8 mm tall, and a real box")
+                    .isPositive()
+                    .isLessThanOrEqualTo(mmToPoints(8.0) + 1);
+            }
+        }
+    }
+
+    /** The absolute pixel x of one anchor corner, from column A's left edge. */
+    private double anchorXPixels(org.apache.poi.ss.usermodel.Sheet sheet, int col, int dx) {
+        double x = 0;
+        for (int c = 0; c < col; c++) x += sheet.getColumnWidthInPixels(c);
+        return x + dx / 1024.0 * sheet.getColumnWidthInPixels(col);
+    }
+
+    /** One anchor corner's offset in POINTS below {@code baseRow}'s TOP edge (the corner may sit
+     * above the base row, or — as the signature's bottom now deliberately does — below it). */
+    private double anchorYPoints(org.apache.poi.ss.usermodel.Sheet sheet, int baseRow, int row, int dy) {
+        double y = 0;
+        for (int r = Math.min(baseRow, row); r < Math.max(baseRow, row); r++) {
+            var sheetRow = sheet.getRow(r);
+            y += sheetRow != null ? sheetRow.getHeightInPoints() : sheet.getDefaultRowHeightInPoints();
+        }
+        if (row < baseRow) y = -y;
+        var anchorRow = sheet.getRow(row);
+        double h = anchorRow != null ? anchorRow.getHeightInPoints() : sheet.getDefaultRowHeightInPoints();
+        return y + dy / 256.0 * h;
+    }
+
+    /**
+     * The ผู้จัดการฝ่ายขาย slot's underscore run — {@code [startPx, endPx]} in the same absolute
+     * anchor-pixel space {@link #anchorXPixels} returns — derived from the labels string the
+     * renderer actually WROTE into the sheet (split on the four label words), measured with the
+     * row's own font, and converted from font pixels to anchor pixels through LibreOffice's column
+     * model. The conversion is what makes the two comparable at all: text is placed by font
+     * advances, an anchor by column widths, and LibreOffice does not size a column the way POI's
+     * {@code getColumnWidthInPixels} does.
+     */
+    private double[] approverUnderscoreRun(org.apache.poi.ss.usermodel.Sheet sheet, int labelsRow)
+            throws Exception {
+        String line = sheet.getRow(labelsRow).getCell(0).getStringCellValue();
+        String[] labels = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
+        var poiFont = sheet.getWorkbook().getFontAt(
+            sheet.getRow(labelsRow).getCell(0).getCellStyle().getFontIndexAsInt());
+        var awtFont = new java.awt.Font(poiFont.getFontName(), java.awt.Font.PLAIN,
+            (int) poiFont.getFontHeightInPoints());
+        var frc = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+            .createGraphics().getFontRenderContext();
+
+        double cursor = 0;
+        double runStart = 0;
+        double runEnd = 0;
+        int at = 0;
+        for (int i = 0; i < labels.length; i++) {
+            int labelAt = line.indexOf(labels[i], at);
+            int slotEnd = i + 1 < labels.length ? line.indexOf(labels[i + 1], labelAt + labels[i].length())
+                : line.length();
+            String slot = line.substring(labelAt, slotEnd);
+            double slotPx = awtFont.getStringBounds(slot, frc).getWidth() * 96.0 / 72.0;
+            if (i == 2) {
+                runStart = cursor + awtFont.getStringBounds(labels[i], frc).getWidth() * 96.0 / 72.0;
+                runEnd = cursor + slotPx;
+            }
+            cursor += slotPx;
+            at = slotEnd;
+        }
+
+        int charWidthTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sheet.getWorkbook());
+        long loTwips = 0;
+        double poiPx = 0;
+        for (int c = 0; c <= 8; c++) {
+            loTwips += th.co.glr.hr.common.sheet.LibreOfficeMetrics.columnTwips(sheet.getColumnWidth(c), charWidthTwips);
+            poiPx += sheet.getColumnWidthInPixels(c);
+        }
+        double loPx = loTwips / 1440.0 * 96.0;
+        double fontToAnchor = loPx > 0 && poiPx > 0 ? loPx / poiPx : 1.0;
+        double insetPx = 40 / 1440.0 * 96.0; // LibreOfficeMetrics.TEXT_INSET_TWIPS
+        return new double[]{(insetPx + runStart) / fontToAnchor, (insetPx + runEnd) / fontToAnchor};
+    }
+
+    private static double mmToPixels(double mm) {
+        return mm / 25.4 * 96.0;
+    }
+
+    private static double mmToPoints(double mm) {
+        return mm / 25.4 * 72.0;
+    }
+
     /**
      * M6: the signature image was never scaled — an oversized upload (e.g. a raw phone-camera
      * photo) rendered at its own natural pixel size, which can dwarf the whole ผู้อนุมัติ box or

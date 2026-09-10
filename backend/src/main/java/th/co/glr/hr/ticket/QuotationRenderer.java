@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.common.sheet.LibreOfficeMetrics;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
@@ -934,6 +935,7 @@ public class QuotationRenderer {
     private static final String[] SIG_LABELS = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
     private static final int SIG_APPROVER_INDEX = 2; // ผู้จัดการฝ่ายขาย — where the signature image anchors
     private static final String BLANK_NAME_PLACEHOLDER = "(..........................)";
+    private static final String BLANK_DATE_PLACEHOLDER = "วันที่........./........./.........";
     // Fraction of the A..I row's total pixel width that S1 (labels+underscores) should fill —
     // matching the template's own original row 44, which ran its four-label string almost but not
     // quite edge-to-edge.
@@ -1025,7 +1027,18 @@ public class QuotationRenderer {
             sig != null ? sig.printedBy() : null,
             sig != null ? sig.checkedBy() : null,
             sig != null ? sig.approvedBy() : null,
-            null, // ผู้สั่งซื้อ — the customer, never has a name on our side; always the placeholder
+            // ผู้สั่งซื้อ — the deal's contact (owner feedback F2, 2026-09-10: "use that name to
+            // auto fill in the name for signature"); the placeholder when the model has none.
+            sig != null ? sig.orderedBy() : null,
+        };
+        // Owner feedback F4 ("also autofill in the dates"): ผู้พิมพ์ = created, พนักงานขาย =
+        // submitted, ผู้จัดการฝ่ายขาย = approved; ผู้สั่งซื้อ always the placeholder — the customer
+        // dates their own signature on paper.
+        LocalDate[] dates = {
+            sig != null ? sig.printedOn() : null,
+            sig != null ? sig.checkedOn() : null,
+            sig != null ? sig.approvedOn() : null,
+            null,
         };
 
         mergeIfAbsent(sh, labelsRow, labelsRow, 0, 8);
@@ -1035,23 +1048,51 @@ public class QuotationRenderer {
         StringBuilder labelsLine = new StringBuilder();
         StringBuilder namesLine = new StringBuilder();
         StringBuilder datesLine = new StringBuilder();
+        // Owner feedback F6-amended-again (2026-09-10 late): the signature picture is centred on
+        // the approver slot's UNDERSCORE RUN — the blank stretch of rule AFTER the label words —
+        // not on the whole slot, which drew it over "ผู้จัดการฝ่ายขาย" itself. The run is derived
+        // from the very string being built here, measured with the SAME AWT metrics that laid it
+        // out, so it tracks the real glyph widths of whatever font the template carries rather
+        // than any hardcoded millimetre figure.
+        double runStartPx = 0;
+        double runEndPx = 0;
+        double cursorPx = 0;
         for (int i = 0; i < SIG_LABELS.length; i++) {
-            labelsLine.append(padLabelSlotPx(fontMetrics, SIG_LABELS[i], slotWidthPx, underscoreWidthPx));
+            String labelSlot = padLabelSlotPx(fontMetrics, SIG_LABELS[i], slotWidthPx, underscoreWidthPx);
+            labelsLine.append(labelSlot);
+            double labelSlotPx = textWidthPx(fontMetrics, labelSlot);
+            if (i == SIG_APPROVER_INDEX) {
+                runStartPx = cursorPx + textWidthPx(fontMetrics, SIG_LABELS[i]);
+                runEndPx = cursorPx + labelSlotPx;
+            }
+            cursorPx += labelSlotPx;
 
             String name = names[i];
             String nameText = name != null && !name.isBlank() ? "(" + name.trim() + ")" : BLANK_NAME_PLACEHOLDER;
             namesLine.append(centerInSlotPx(fontMetrics, nameText, slotWidthPx, spaceWidthPx));
 
-            datesLine.append(centerInSlotPx(fontMetrics, "วันที่........./........./.........",
-                slotWidthPx, spaceWidthPx));
+            datesLine.append(centerInSlotPx(fontMetrics, signatureDateText(dates[i]), slotWidthPx, spaceWidthPx));
         }
         writeFixedWidthRow(sh, labelsRow, labelsLine.toString());
         writeFixedWidthRow(sh, nameRow, namesLine.toString());
         writeFixedWidthRow(sh, dateRow, datesLine.toString());
 
         if (sig != null && sig.approverSignaturePng() != null) {
-            anchorApproverSignature(sh, labelsRow, sig.approverSignaturePng(), sig.approverSignatureMime());
+            anchorApproverSignature(sh, labelsRow, sig.approverSignaturePng(), sig.approverSignatureMime(),
+                runStartPx, runEndPx);
         }
+    }
+
+    /**
+     * The S3 ("วันที่…") slot text for one signatory: {@code "วันที่ d/M/BBBB"} — day and month
+     * unpadded, Buddhist-era year ({@code วันที่ 10/9/2569}, owner feedback F4's own example) —
+     * or the dotted placeholder when the date is absent. Deliberately NOT {@link #shortThaiDate}'s
+     * zero-padded form: that one is a remark-line date inside a sentence; this one sits on a
+     * signature line the signer would otherwise fill by hand, and the owner's example is unpadded.
+     */
+    static String signatureDateText(LocalDate date) {
+        if (date == null) return BLANK_DATE_PLACEHOLDER;
+        return "วันที่ " + date.getDayOfMonth() + "/" + date.getMonthValue() + "/" + (date.getYear() + 543);
     }
 
     /** Resolves the label row's OWN template font (before this render overwrites its value) as an
@@ -1178,23 +1219,31 @@ public class QuotationRenderer {
     }
 
     /**
-     * Anchors the approver's signature image over the ผู้อนุมัติ slot's underscores using HSSF
-     * drawing, reusing the template's EXISTING drawing patriarch (it already carries the
-     * letterhead/cert images — creating a fresh one is the known POI corruption risk this
-     * deliberately avoids). Spans rows {@code labelsRow-2..labelsRow} — i.e. sitting ON the
-     * underscore line, extending upward above it. Any failure here is swallowed and logged: a
-     * broken image anchor must never break the whole render, so the dotted-placeholder/name text
-     * {@link #writeSignatureBlock} already wrote stands on its own.
+     * Anchors the approver's signature image in the ผู้จัดการฝ่ายขาย slot using HSSF drawing,
+     * reusing the template's EXISTING drawing patriarch (it already carries the letterhead/cert
+     * images — creating a fresh one is the known POI corruption risk this deliberately avoids).
+     * Any failure here is swallowed and logged: a broken image anchor must never break the whole
+     * render, so the dotted-placeholder/name text {@link #writeSignatureBlock} already wrote
+     * stands on its own.
      *
-     * <p>Since S1-S3 no longer have per-label column ranges (layout-spec §5 rebuild — see the
-     * comment above {@link #SIG_LABELS}), the image is positioned purely by PIXEL FRACTION of the
-     * whole A..I row width — {@link #SIGNATURE_APPROVER_SLOT_CENTER_FRACTION} — converted to a
-     * column+dx anchor via {@link #absolutePixelToColumn}, independent of where the underlying
-     * (very unevenly sized) column boundaries happen to fall. The initial box is centred on that
-     * fraction at the target ~30mm width; {@link #scaleSignaturePicture} then fine-tunes the END
-     * (col2/dx2) from the image's real aspect ratio, keeping this start point fixed.
+     * <p>Owner feedback F6 (2026-09-10, seen on the demo), amended twice the same evening: the
+     * picture used to span rows {@code labelsRow-2..labelsRow} with {@code dy2 = 0} — its BOTTOM
+     * edge sat on the TOP edge of the labels row, a whole row (~6.5 mm) above the underscore rule,
+     * and its left edge was fixed at "centre minus half of a 30 mm guess" so a height-capped
+     * (narrower) image drifted left of the slot centre. The first amendment moved the bottom onto
+     * the rule and centred it on the whole slot — which put the ink over the words
+     * "ผู้จัดการฝ่ายขาย" ("still make the line visible but put the signature on top of the line in
+     * the middle and not too high up"). Now {@link #placeSignaturePicture} sets all four anchor
+     * corners from the image's real scaled size and the measured geometry of the label string's
+     * own approver-slot UNDERSCORE RUN ({@code runStartPx}..{@code runEndPx}, absolute pixels from
+     * column A's left edge — see {@link #writeSignatureBlock}): centred on that run, capped at
+     * {@link #SIGNATURE_RUN_WIDTH_FRACTION} of it (and {@link #SIGNATURE_MAX_HEIGHT_MM} tall),
+     * with the bottom edge {@link #SIGNATURE_LIFT_ABOVE_RULE_MM} ABOVE the rule so it rests on the
+     * line the way a real signature does. Nothing is ever painted behind the picture — the PNG's
+     * own alpha is what keeps the rule visible on both sides of the ink.
      */
-    private void anchorApproverSignature(Sheet sh, int labelsRow, byte[] png, String mime) {
+    private void anchorApproverSignature(Sheet sh, int labelsRow, byte[] png, String mime,
+                                         double runStartPx, double runEndPx) {
         try {
             Drawing<?> patriarch = sh.getDrawingPatriarch();
             if (patriarch == null) {
@@ -1205,17 +1254,14 @@ public class QuotationRenderer {
                 ? Workbook.PICTURE_TYPE_JPEG : Workbook.PICTURE_TYPE_PNG;
             int pictureIdx = wb.addPicture(png, pictureType);
 
+            // Provisional box (replaced wholesale by #placeSignaturePicture): the approver slot's
+            // centre column, the labels row and the one above it.
             double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
-            double centerPx = totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION;
-            double approxTargetWidthPx = SIGNATURE_TARGET_WIDTH_MM / MM_PER_INCH * ASSUMED_IMAGE_DPI;
-            double leftPx = Math.max(0, centerPx - approxTargetWidthPx / 2);
-            int[] start = absolutePixelToColumn(sh, leftPx, 0, 8);
-            int[] endGuess = absolutePixelToColumn(sh, leftPx + approxTargetWidthPx, 0, 8);
-
-            ClientAnchor anchor = patriarch.createAnchor(start[1], 0, endGuess[1], 0,
-                start[0], Math.max(0, labelsRow - 2), endGuess[0], labelsRow);
+            int[] center = absolutePixelToColumn(sh, totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION, 0, 8);
+            ClientAnchor anchor = patriarch.createAnchor(center[1], 0, center[1], 0,
+                center[0], Math.max(0, labelsRow - 1), center[0], labelsRow);
             Picture picture = patriarch.createPicture(anchor, pictureIdx);
-            scaleSignaturePicture(sh, picture);
+            placeSignaturePicture(sh, picture, labelsRow, runStartPx, runEndPx);
         } catch (RuntimeException e) {
             log.warn("Approver signature image anchor failed; falling back to text-only name: {}", e.getMessage(), e);
         }
@@ -1223,60 +1269,202 @@ public class QuotationRenderer {
 
     // M6: the signature was never scaled — an employee's uploaded image renders at whatever
     // pixel size they happened to save it at, which can dwarf or barely mark the ผู้อนุมัติ box.
-    // Scale to a fixed real-world box (~30mm wide, capped at ~15mm tall), preserving aspect.
-    private static final double SIGNATURE_TARGET_WIDTH_MM = 30.0;
-    private static final double SIGNATURE_MAX_HEIGHT_MM = 15.0;
+    // Scale to a real-world box, preserving aspect. F6-amended-again (owner, 2026-09-10 late,
+    // "scale it more down"): the width cap is no longer a fixed 30 mm guess but a FRACTION of the
+    // approver slot's own measured underscore run — 60% of a ~28 mm run ≈ 16 mm — so the rule
+    // stays visible on both sides of the ink whatever font/column widths the template carries.
+    private static final double SIGNATURE_RUN_WIDTH_FRACTION = 0.60;
+    private static final double SIGNATURE_MAX_HEIGHT_MM = 8.0;
+    // Only when the run could not be measured at all (AWT font metrics unavailable AND the
+    // character-count fallback produced a degenerate run) — never in a normal render.
+    private static final double SIGNATURE_FALLBACK_WIDTH_MM = 16.0;
     private static final double MM_PER_INCH = 25.4;
     // Assumed image DPI for Picture#getImageDimension()'s pixel dimensions — POI/Excel's own
     // convention for a raster image with no embedded DPI metadata (PNG signature uploads here
     // are screen-captured or scanned at typical screen resolution, not print resolution).
     private static final double ASSUMED_IMAGE_DPI = 96.0;
+    // F6: the underscore RULE itself sits this far above the labels row's BOTTOM edge — roughly
+    // the 14pt font's descent, i.e. the row's text baseline. Everything vertical is measured from
+    // here rather than from the row edge (the owner's "floats above its line" was the picture
+    // ending a whole row higher than this).
+    private static final double SIGNATURE_BASELINE_LIFT_MM = 1.0;
+    // F6-amended-3 (owner, 2026-09-10 late: "it should sit ABOVE the line, right now it's across
+    // the middle of the line"): the ink's BOTTOM edge rests this far ABOVE the rule, so the
+    // signature sits ON the line without cutting through it. Measured before the change: ink
+    // bottom 264.16 mm against a rule at 262.54 mm — 1.62 mm THROUGH it. Keep this positive; a
+    // negative value would put the ink back across the rule.
+    private static final double SIGNATURE_LIFT_ABOVE_RULE_MM = 0.4;
+    // Never walk the anchor more than this many rows away from the labels row — a corrupt row
+    // height must not send the walk off the sheet.
+    private static final int SIGNATURE_MAX_ROW_WALK = 8;
+    private static final double POINTS_PER_INCH = 72.0;
+    // HSSF two-cell anchors express dx in 1/1024 of the column width and dy in 1/256 of the row
+    // height (the HTML engine, SheetHtmlRenderer#anchorY, reads the same units).
+    private static final int HSSF_DY_UNITS = 256;
 
     /**
-     * Sets the anchor's END column/offset directly from a target PIXEL width, instead of calling
-     * {@link Picture#resize(double, double)} — which walks the SAME kind of column-width math
-     * internally, but starting from whatever column the anchor's `col1` happens to be, and threw
-     * {@code IllegalArgumentException: col2 must be between 0 and 255} the moment that internal
-     * walk needed to search past this sheet's own printable range. Computing the end point
-     * ourselves — anchored at the SAME pixel origin the H2 fix already placed `col1`/`dx1` at,
-     * using the identical {@link #absolutePixelToColumn} column-walk — keeps this in one
-     * consistent, already-tested pixel model rather than a second (and here, broken) one inside
-     * POI itself. Height (row2/dy2) is left as the caller's original anchor set it: the vertical
-     * box already spans two template rows, comfortably more than {@link #SIGNATURE_MAX_HEIGHT_MM}
-     * for the row heights this template uses, so the image (anchored at the top-left) never needs
-     * the box grown taller — only ever narrower than the box, never wider than the page.
+     * Sets ALL FOUR corners of the picture's anchor from its natural dimensions and the approver
+     * slot's measured underscore run ({@code runStartPx}..{@code runEndPx}, absolute pixels from
+     * column A's left edge):
+     *
+     * <ul>
+     *   <li><strong>width</strong> — scaled to {@link #SIGNATURE_RUN_WIDTH_FRACTION} of the run
+     *       (or {@link #SIGNATURE_MAX_HEIGHT_MM} tall, whichever binds first), aspect preserved,
+     *       so the rule shows on both sides of the ink;</li>
+     *   <li><strong>horizontal</strong> — centred on the RUN's centre, not the slot's: the run
+     *       starts where the label text ends, so the picture can never be drawn over the words
+     *       "ผู้จัดการฝ่ายขาย" (the owner's complaint on the 2026-09-10 demo);</li>
+     *   <li><strong>vertical</strong> — the bottom edge lands {@link #SIGNATURE_LIFT_ABOVE_RULE_MM}
+     *       ABOVE the rule (itself {@link #SIGNATURE_BASELINE_LIFT_MM} above {@code labelsRow}'s
+     *       bottom edge), so the strokes cross the line; the top is the same point minus the
+     *       scaled height. Both are converted to (row, dy) by {@link #rowOffsetToAnchor}, which
+     *       walks up OR down as needed — the bottom now deliberately falls past the labels row's
+     *       own bottom edge.</li>
+     * </ul>
+     *
+     * <p>Column/row offsets go through {@link #absolutePixelToColumn} rather than
+     * {@link Picture#resize(double, double)}, which walks the same column math internally from
+     * whatever {@code col1} is and threw {@code col2 must be between 0 and 255} when that walk ran
+     * past this sheet's printable range. A picture whose dimensions POI cannot read is left on its
+     * provisional anchor.
      */
-    private void scaleSignaturePicture(Sheet sh, Picture picture) {
+    private void placeSignaturePicture(Sheet sh, Picture picture, int labelsRow,
+                                       double runStartPx, double runEndPx) {
         java.awt.Dimension natural = picture.getImageDimension();
         if (natural.width <= 0 || natural.height <= 0) {
             return;
         }
-        double naturalWidthMm = natural.width / ASSUMED_IMAGE_DPI * MM_PER_INCH;
+        double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
+        // Font pixels are NOT anchor pixels — see #textPixelToAnchorPixel.
+        double fontToAnchor = fontPixelToAnchorPixelScale(sh);
+        double runStartAnchorPx = textPixelToAnchorPixel(runStartPx, fontToAnchor);
+        double runEndAnchorPx = textPixelToAnchorPixel(runEndPx, fontToAnchor);
+        // Degenerate run (font metrics unavailable and the char-count fallback produced nothing
+        // usable): fall back to a fixed box centred on the whole slot rather than render a
+        // zero-width picture.
+        double runWidthAnchorPx = runEndAnchorPx - runStartAnchorPx;
+        double maxWidthAnchorPx;
+        double runCentreAnchorPx;
+        if (runEndPx > runStartPx && runWidthAnchorPx > 0) {
+            maxWidthAnchorPx = runWidthAnchorPx * SIGNATURE_RUN_WIDTH_FRACTION;
+            runCentreAnchorPx = (runStartAnchorPx + runEndAnchorPx) / 2;
+        } else {
+            maxWidthAnchorPx = SIGNATURE_FALLBACK_WIDTH_MM * ASSUMED_IMAGE_DPI / MM_PER_INCH / fontToAnchor;
+            runCentreAnchorPx = totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION;
+        }
+
+        // The aspect ratio must be preserved in PHYSICAL space, so the width cap (an anchor-pixel
+        // figure) converts back to font pixels before the height is derived from it; row heights,
+        // unlike column widths, are exact twips in the file and need no such correction.
         double naturalHeightMm = natural.height / ASSUMED_IMAGE_DPI * MM_PER_INCH;
-        double scale = SIGNATURE_TARGET_WIDTH_MM / naturalWidthMm;
+        double scale = maxWidthAnchorPx * fontToAnchor / natural.width;
         if (naturalHeightMm * scale > SIGNATURE_MAX_HEIGHT_MM) {
             scale = SIGNATURE_MAX_HEIGHT_MM / naturalHeightMm;
         }
+        double widthPx = natural.width * scale / fontToAnchor;
+        double heightPt = natural.height * scale / ASSUMED_IMAGE_DPI * POINTS_PER_INCH;
+
+        // Horizontal: centre the REAL scaled width on the underscore run's centre.
+        double leftPx = Math.max(0, runCentreAnchorPx - widthPx / 2);
+        int[] start = absolutePixelToColumn(sh, leftPx, 0, 8);
+        int[] end = absolutePixelToColumn(sh, leftPx + widthPx, 0, 8);
+
+        // Vertical: the rule sits SIGNATURE_BASELINE_LIFT_MM above the labels row's bottom edge;
+        // the ink's bottom is SIGNATURE_LIFT_ABOVE_RULE_MM above THAT, and the top is the scaled height
+        // above the bottom.
+        double liftPt = SIGNATURE_BASELINE_LIFT_MM / MM_PER_INCH * POINTS_PER_INCH;
+        double sitAbovePt = SIGNATURE_LIFT_ABOVE_RULE_MM / MM_PER_INCH * POINTS_PER_INCH;
+        double bottomFromRowTopPt = rowHeightPoints(sh, labelsRow) - liftPt - sitAbovePt;
+        int[] bottom = rowOffsetToAnchor(sh, labelsRow, bottomFromRowTopPt);
+        int[] top = rowOffsetToAnchor(sh, labelsRow, bottomFromRowTopPt - heightPt);
+
         ClientAnchor anchor = picture.getClientAnchor();
-        double startPx = absoluteColumnPixel(sh, anchor.getCol1(), anchor.getDx1(), 0);
-        double targetWidthPx = natural.width * scale;
-        int[] end = absolutePixelToColumn(sh, startPx + targetWidthPx, 0, 8);
+        anchor.setCol1(start[0]);
+        anchor.setDx1(start[1]);
         anchor.setCol2(end[0]);
         anchor.setDx2(end[1]);
+        anchor.setRow1(top[0]);
+        anchor.setDy1(top[1]);
+        anchor.setRow2(bottom[0]);
+        anchor.setDy2(bottom[1]);
     }
 
-    /** The absolute pixel offset of {@code col}'s left edge (relative to {@code firstCol}) plus
-     * {@code dx1024}/1024 of that column's own width — the inverse of
-     * {@link #absolutePixelToColumn}, so a {@link ClientAnchor}'s existing col1/dx1 can be
-     * converted back to the same pixel space {@link #scaleSignaturePicture} computes a target
-     * width in. */
-    private double absoluteColumnPixel(Sheet sh, int col, int dx1024, int firstCol) {
-        double cumulative = totalColumnWidthPixels(sh, firstCol, col - 1);
-        double colWidth = sh.getColumnWidthInPixels(col);
-        return cumulative + (dx1024 / 1024.0) * colWidth;
+    /**
+     * Converts an offset in POINTS from {@code baseRow}'s TOP edge — negative (above it) or larger
+     * than the row's own height (below it) both allowed — into HSSF's {@code [rowIndex, dyUnits]}
+     * anchor pair, walking whole rows in either direction. The vertical counterpart of
+     * {@link #absolutePixelToColumn}. Walks at most {@link #SIGNATURE_MAX_ROW_WALK} rows so a
+     * degenerate (zero-height) row can never spin this loop.
+     */
+    private int[] rowOffsetToAnchor(Sheet sh, int baseRow, double offsetPt) {
+        int row = baseRow;
+        double offset = offsetPt;
+        int walked = 0;
+        while (offset < 0 && row > 0 && walked++ < SIGNATURE_MAX_ROW_WALK) {
+            row--;
+            offset += rowHeightPoints(sh, row);
+        }
+        while (offset >= rowHeightPoints(sh, row) && walked++ < SIGNATURE_MAX_ROW_WALK) {
+            offset -= rowHeightPoints(sh, row);
+            row++;
+        }
+        double height = rowHeightPoints(sh, row);
+        int dy = height > 0 ? clampDy((int) Math.round(HSSF_DY_UNITS * Math.max(0, offset) / height)) : 0;
+        return new int[]{row, dy};
     }
 
-    /** The lower-level primitive {@link #scaleSignaturePicture} builds on — takes an ABSOLUTE
+    /**
+     * Font pixels are NOT anchor pixels. The signature rows' text is positioned by the FONT's own
+     * advances (what {@link #textWidthPx} measures), while a {@link ClientAnchor} is positioned by
+     * COLUMN widths — and LibreOffice does not compute a column's width the way POI's
+     * {@link Sheet#getColumnWidthInPixels} does. LibreOffice scales the XLS 1/256-character width
+     * unit by the workbook default font's widest digit ({@code XclRoot::SetCharWidth}, replicated
+     * exactly by {@link LibreOfficeMetrics#columnTwips}); on this template that comes out ~3%
+     * NARROWER than POI's figure, which is a systematic ~5 mm leftward error on a signature
+     * anchored two thirds of the way across the page — measured, not guessed: the picture landed
+     * at 132.2 mm on a page where its underscore run centred at 137.6 mm.
+     *
+     * <p>Returns {@code (LibreOffice's A..I width) / (POI's A..I width)}, both in 96 dpi pixels —
+     * the factor that turns an anchor pixel into a font pixel, and (dividing) a font pixel into
+     * the anchor pixel that lands at the same physical place on the page. Falls back to 1.0 (the
+     * uncorrected behaviour) if the column unit cannot be measured at all.
+     */
+    private double fontPixelToAnchorPixelScale(Sheet sh) {
+        try {
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            long loTwips = 0;
+            for (int c = 0; c <= 8; c++) {
+                loTwips += LibreOfficeMetrics.columnTwips(sh.getColumnWidth(c), charWidthTwips);
+            }
+            double loPx = loTwips / (double) LibreOfficeMetrics.TWIPS_PER_INCH * ASSUMED_IMAGE_DPI;
+            double poiPx = totalColumnWidthPixels(sh, 0, 8);
+            return loPx > 0 && poiPx > 0 ? loPx / poiPx : 1.0;
+        } catch (RuntimeException e) {
+            log.debug("LibreOffice column unit unavailable; anchoring the signature in POI pixels: {}",
+                e.getMessage());
+            return 1.0;
+        }
+    }
+
+    /** An offset in FONT pixels from the merged cell's left edge (plus LibreOffice's own text
+     * inset, which the string is drawn after) as an absolute ANCHOR pixel offset from column A's
+     * left edge — see {@link #fontPixelToAnchorPixelScale}. */
+    private double textPixelToAnchorPixel(double textPx, double fontToAnchor) {
+        double insetPx = LibreOfficeMetrics.TEXT_INSET_TWIPS / (double) LibreOfficeMetrics.TWIPS_PER_INCH
+            * ASSUMED_IMAGE_DPI;
+        return (insetPx + textPx) / fontToAnchor;
+    }
+
+    private static int clampDy(int dy) {
+        return Math.max(0, Math.min(HSSF_DY_UNITS - 1, dy));
+    }
+
+    private double rowHeightPoints(Sheet sh, int r) {
+        Row row = sh.getRow(r);
+        return row != null ? row.getHeightInPoints() : sh.getDefaultRowHeightInPoints();
+    }
+
+    /** The lower-level primitive {@link #placeSignaturePicture} builds on — takes an ABSOLUTE
      * pixel offset (relative to {@code firstCol}'s left edge) and returns
      * {@code [columnIndex, dxUnits]} (dx in HSSF's 1/1024-of-that-column's-own-width units), so a
      * {@link ClientAnchor} can start or end mid-column instead of only ever landing on a whole

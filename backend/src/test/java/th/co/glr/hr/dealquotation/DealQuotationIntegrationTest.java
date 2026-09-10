@@ -20,10 +20,13 @@ import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ChromiumPdfPrinter;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.customer.ContactDto;
+import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
@@ -57,6 +60,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private TicketService ticketService;
     private CustomerRepository customers;
+    private ContactRepository contacts;
+    private ProjectRepository projects;
     private NotificationRepository notifications;
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
@@ -82,6 +87,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UserPrincipal employeeActor;
     private long ticketId;
     private long otherTicketId;
+    private CustomerDto customer;
+    private ContactDto contact;
 
     @BeforeEach
     void wireServicesAndCreateDeals() {
@@ -89,7 +96,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ObjectMapper objectMapper = new ObjectMapper();
         notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         customers = new CustomerRepository(jdbc);
-        ProjectRepository projects = new ProjectRepository(jdbc);
+        contacts = new ContactRepository(jdbc);
+        projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         // pricingRequests (last arg) is dead-deal-cascade-only (markLost/cancel) -- unused by
@@ -109,7 +117,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         if (ChromiumPdfPrinter.isAvailable()) {
             quotationRenderer.setPdfRenderer(QuotationRenderer.PDF_RENDERER_CHROMIUM);
         }
-        quotationService = new DealQuotationService(quotationRepository, tickets, customers, notifications,
+        quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts, notifications,
             approvalMailer, quotationRenderer, employeeAuth, signatureRepository, "https://portal.test");
 
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
@@ -132,17 +140,23 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         qcActor = actor(qcUserId, "qc");
         employeeActor = actor(employeeUserId, "employee");
 
-        CustomerDto customer = customers.create(
+        customer = customers.create(
             "บริษัท Deal Quotation จำกัด", "0100000000099", "999 ถนนทดสอบ", "สนญ.", "02-999-9999");
         ProjectDto project = projects.create(customer.id(), "โครงการ Deal Quotation");
+        // ผู้สั่งซื้อ (owner feedback F2): every deal here carries a contact, because create/update/
+        // submit now REFUSE a quotation without one -- the no-contact cases build their own ticket
+        // (see #create_withoutAnyResolvableContact_isBadRequest).
+        contact = contacts.create(customer.id(), "สมหญิง", "ใจดี", "ผู้จัดการจัดซื้อ",
+            "somying@customer.test", "081-111-2222");
+        ticketId = createTicket("ดีล DQ", project.id(), contact.id(), salesActor);
+        otherTicketId = createTicket("ดีล DQ อื่น", project.id(), contact.id(), otherSalesActor);
+    }
+
+    private long createTicket(String title, long projectId, Long contactId, UserPrincipal creator) {
         TicketDto created = ticketService.create(
-            new CreateTicketRequest("ดีล DQ", "NORMAL", customer.name(), customer.id(), project.id(),
-                null, null, null, null), salesActor);
-        ticketId = created.summary().id();
-        TicketDto otherCreated = ticketService.create(
-            new CreateTicketRequest("ดีล DQ อื่น", "NORMAL", customer.name(), customer.id(), project.id(),
-                null, null, null, null), otherSalesActor);
-        otherTicketId = otherCreated.summary().id();
+            new CreateTicketRequest(title, "NORMAL", customer.name(), customer.id(), projectId,
+                contactId, null, null, null), creator);
+        return created.summary().id();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -181,8 +195,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approved.approvedById()).isEqualTo(salesManagerId);
         assertThat(approved.approvalNote()).isEqualTo("อนุมัติแล้ว");
         assertThat(approved.validityDate()).isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
-        assertThat(approved.quotationDate()).isEqualTo(approved.approvedAt()
+        // Owner feedback F8 (2026-09-10): the header/DTO date is the CREATED date, for every
+        // status -- it used to follow approvedAt once approved. Asserted wrong-way-round too: the
+        // approval must NOT move it, so an approval on a later day cannot re-date the document.
+        assertThat(approved.quotationDate()).isEqualTo(approved.createdAt()
             .atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate());
+        assertThat(approved.quotationDate()).isEqualTo(submitted.quotationDate())
+            .isEqualTo(updated.quotationDate());
 
         // In-app notification to the rep (== creator here, so exactly one row, not two).
         assertThat(notifications.findByEmployeeId(salesRepId))
@@ -192,6 +211,45 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // hand-wired call — see DealQuotationService#afterCommit's "no transaction, no deferral").
         assertThat(mailer.attachmentsSent).isNotEmpty();
         assertThat(mailer.attachmentsSent.get(0)[1]).contains(approved.number());
+    }
+
+    /**
+     * Owner feedback F8 (2026-09-10): "for วันที่ at the top of the page it should be the date it
+     * was created by the sale." Written wrong-way-round on the only case that can tell the two
+     * rules apart — a document CREATED on one day and APPROVED on another. A fresh integration run
+     * creates and approves within the same minute, so the create date is backdated in the DB
+     * first; the old rule (approved date, else today) would print TODAY, the new one prints the
+     * backdated day, on both the DTO and the printed B4 header cell.
+     */
+    @Test
+    void quotationDateAndPrintedHeader_followTheCreatedDate_notTheApprovalDate() throws Exception {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        LocalDate createdOn = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(5);
+        jdbc.update("UPDATE sales.quotation SET issued_at = :d WHERE quotation_id = :id",
+            java.util.Map.of("d", java.sql.Timestamp.from(
+                    createdOn.atTime(9, 0).atZone(java.time.ZoneId.of("Asia/Bangkok")).toInstant()),
+                "id", approved.id()));
+
+        DealQuotationDto reread = quotationService.get(approved.id(), salesActor);
+        assertThat(reread.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(reread.approvedAt().atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate())
+            .as("still approved today — so the two rules genuinely disagree here")
+            .isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")));
+        assertThat(reread.quotationDate()).isEqualTo(createdOn);
+
+        byte[] xls = quotationService.renderXlsx(approved.id(), salesActor);
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(
+                new java.io.ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            String header = sheet.getRow(3).getCell(1).getStringCellValue();
+            LocalDate today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
+            assertThat(header)
+                .as("B4 prints the created date (\"d MMMM BBBB\" in Thai)")
+                .startsWith(createdOn.getDayOfMonth() + " ")
+                .endsWith(String.valueOf(createdOn.getYear() + 543));
+            assertThat(header).as("and NOT the approval date, which is today")
+                .doesNotStartWith(today.getDayOfMonth() + " ");
+        }
     }
 
     @Test
@@ -614,6 +672,425 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Owner feedback pass 1 (2026-09-10) — F2 ผู้สั่งซื้อ: mandatory, snapshotted (V167)
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void create_defaultsToTheDealsContact_andSnapshotsNamePhoneEmail() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isEqualTo(contact.id());
+        assertThat(created.contactName()).isEqualTo("สมหญิง ใจดี");
+        assertThat(created.contactPhone()).isEqualTo("081-111-2222");
+        assertThat(created.contactEmail()).isEqualTo("somying@customer.test");
+    }
+
+    /** The snapshot is FROZEN: editing the contact row afterwards must not change what the
+     * quotation carries (or prints) — an approved, emailed document keeps the name it was
+     * approved with. Proven by rewriting the contact row directly and re-reading. */
+    @Test
+    void contactSnapshot_isFrozen_laterContactEditDoesNotChangeTheQuotation() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        jdbc.update("""
+            UPDATE customers.contact SET first_name = 'สมชาย', last_name = 'เปลี่ยนแล้ว', phone = '099-000-0000'
+             WHERE contact_id = :id
+            """, java.util.Map.of("id", contact.id()));
+
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.contactName()).isEqualTo("สมหญิง ใจดี");
+        assertThat(reread.contactPhone()).isEqualTo("081-111-2222");
+        // And the list/search hydration path reads the same frozen columns.
+        assertThat(quotationService.search(null, false, salesActor))
+            .filteredOn(q -> q.id() == created.id())
+            .extracting(DealQuotationDto::contactName).containsExactly("สมหญิง ใจดี");
+    }
+
+    /**
+     * Owner feedback F7 (2026-09-10): the deal card now edits the SELECTED customer's
+     * เลขที่ผู้เสียภาษี / โทร. in place, and promises "the values on screen at save time". That was
+     * false while {@code updateHeader} left the four {@code customer_*} columns alone — correcting
+     * a wrong tax id and re-saving the draft still printed the old one. Wrong-way-round half: the
+     * freeze must STILL hold once the document is approved, which is the whole reason the snapshot
+     * exists.
+     */
+    @Test
+    void customerSnapshot_isReSnapshottedOnEveryDraftSave_butFrozenOnceApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.customerTaxId()).isEqualTo("0100000000099");
+        assertThat(created.customerPhone()).isEqualTo("02-999-9999");
+
+        // The rep corrects the customer master (exactly what PUT /api/customers/{id} does) …
+        customers.update(customer.id(), null, "0105566778899", null, null, "02-777-7777");
+        // … and re-saves the DRAFT.
+        DealQuotationDto resaved = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(resaved.customerTaxId()).as("the correction reached the snapshot").isEqualTo("0105566778899");
+        assertThat(resaved.customerPhone()).isEqualTo("02-777-7777");
+        assertThat(renderedStrings(resaved.id()))
+            .as("and the rendered document prints it, not the stale one")
+            .anyMatch(s -> s.contains("0105566778899"))
+            .anyMatch(s -> s.contains("02-777-7777"))
+            .noneMatch(s -> s.contains("0100000000099"));
+
+        // Approve, then correct the customer AGAIN: the approved document must not move.
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(resaved.id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        customers.update(customer.id(), null, "0999999999999", null, null, "02-000-0000");
+
+        DealQuotationDto reread = quotationService.get(approved.id(), salesActor);
+        assertThat(reread.customerTaxId()).as("frozen at approval").isEqualTo("0105566778899");
+        assertThat(reread.customerPhone()).isEqualTo("02-777-7777");
+        assertThat(renderedStrings(reread.id()))
+            .anyMatch(s -> s.contains("0105566778899"))
+            .noneMatch(s -> s.contains("0999999999999"));
+        // And the DRAFT-only WHERE clause is what enforces it — an update at all is a 409 here.
+        assertThatThrownBy(() -> quotationService.update(approved.id(),
+                upsertRequest(List.of(sampleItem("100.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+    }
+
+    /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X"
+     * without hardcoding which cell the adapter happens to put it in. */
+    private List<String> renderedStrings(long quotationId) {
+        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
+        List<String> out = new java.util.ArrayList<>();
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            for (var row : sheet) {
+                for (var cell : row) {
+                    if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                        out.add(cell.getStringCellValue());
+                    }
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+        return out;
+    }
+
+    @Test
+    void create_withoutAnyResolvableContact_isBadRequest() {
+        ProjectDto project = projects.create(customer.id(), "โครงการไม่มีผู้ติดต่อ");
+        long noContactTicket = createTicket("ดีลไม่มีผู้สั่งซื้อ", project.id(), null, salesActor);
+        assertThatThrownBy(() -> quotationService.create(noContactTicket,
+                upsertRequest(List.of(sampleItem("100.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
+        assertThat(quotationRepository.findByTicket(noContactTicket)).as("nothing was inserted").isEmpty();
+    }
+
+    /** An explicit {@code contactId} overrides the deal's default — and a contact of ANOTHER
+     * customer is refused with the same 400, wrong-way-round. */
+    @Test
+    void create_withExplicitContact_usesIt_andRefusesAnotherCustomersContact() {
+        ContactDto second = contacts.create(customer.id(), "วิชัย", null, null, null, "082-222-3333");
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(second.id(), List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isEqualTo(second.id());
+        assertThat(created.contactName()).isEqualTo("วิชัย");
+        assertThat(created.contactEmail()).isNull();
+
+        CustomerDto otherCustomer = customers.create("บริษัท อื่น จำกัด", "0100000000098", "1 ถนนอื่น", "สนญ.", null);
+        ContactDto foreign = contacts.create(otherCustomer.id(), "คนนอก", "ลูกค้าอื่น", null, null, null);
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(foreign.id(), List.of(sampleItem("100.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
+        // A contact id that does not exist at all: same answer, nothing leaks.
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+                upsertRequest(999_999_999L, List.of(sampleItem("100.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    /** update: an omitted {@code contactId} keeps the draft's own contact (re-snapshotted from the
+     * row as it stands now); an explicit one switches it. */
+    @Test
+    void update_keepsTheDraftsContactWhenOmitted_andSwitchesOnAnExplicitId() {
+        ContactDto second = contacts.create(customer.id(), "วิชัย", "สลับ", null, null, null);
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(second.id(), List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.contactId()).isEqualTo(second.id());
+
+        DealQuotationDto kept = quotationService.update(created.id(),
+            upsertRequest(null, List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(kept.contactId()).as("omitted -> the draft's own contact, not the ticket's").isEqualTo(second.id());
+
+        DealQuotationDto switched = quotationService.update(created.id(),
+            upsertRequest(contact.id(), List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(switched.contactId()).isEqualTo(contact.id());
+        assertThat(switched.contactName()).isEqualTo("สมหญิง ใจดี");
+    }
+
+    /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
+     * Reproduced by blanking the snapshot straight in the DB. */
+    @Test
+    void submit_refusesARowWithNoContactSnapshot() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        jdbc.update("UPDATE sales.quotation SET contact_id = NULL, contact_name = NULL WHERE quotation_id = :id",
+            java.util.Map.of("id", created.id()));
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessage("กรุณาระบุผู้สั่งซื้อ");
+    }
+
+    @Test
+    void createRevision_copiesTheParentsContactSnapshotVerbatim() {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        jdbc.update("UPDATE customers.contact SET first_name = 'เปลี่ยน' WHERE contact_id = :id",
+            java.util.Map.of("id", contact.id()));
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        assertThat(revision.contactId()).isEqualTo(contact.id());
+        assertThat(revision.contactName()).as("the parent's frozen name, not the live row").isEqualTo("สมหญิง ใจดี");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Owner feedback pass 1 — F2/F4 on the rendered document: slot 4 name + the dates row
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The 0-based index of the signature LABELS row in a rendered sheet, found by its own text —
+     * the footer block floats with the item count and the remark layout, so no fixed row number
+     * is safe here (the renderer's own unit tests pin 44 only for their single-remark fixture). */
+    private static int labelsRow(org.apache.poi.ss.usermodel.Sheet sheet) {
+        for (var row : sheet) {
+            var cell = row.getCell(0);
+            if (cell != null && cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING
+                && cell.getStringCellValue().contains("ผู้พิมพ์") && cell.getStringCellValue().contains("ผู้สั่งซื้อ")) {
+                return row.getRowNum();
+            }
+        }
+        throw new AssertionError("signature labels row not found in the rendered XLS");
+    }
+
+    /** Reads the three signature rows (labels, names, dates) out of the rendered XLS. */
+    private String[] signatureRows(byte[] xls) throws Exception {
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            int r = labelsRow(sheet);
+            return new String[]{
+                sheet.getRow(r).getCell(0).getStringCellValue(),
+                sheet.getRow(r + 1).getCell(0).getStringCellValue(),
+                sheet.getRow(r + 2).getCell(0).getStringCellValue()};
+        }
+    }
+
+    private static String thaiShort(java.time.Instant at) {
+        LocalDate d = at.atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
+        return "วันที่ " + d.getDayOfMonth() + "/" + d.getMonthValue() + "/" + (d.getYear() + 543);
+    }
+
+    @Test
+    void render_draft_printsContactNameInSlot4_andOnlyThePrintedOnDate() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
+        String names = rows[1];
+        String dates = rows[2];
+        assertThat(names).contains("(สมหญิง ใจดี)");
+        // Slot 4 is the LAST slot: the contact's name comes after the sales rep's.
+        assertThat(names.indexOf("(สมหญิง ใจดี)")).isGreaterThan(names.indexOf("(" + created.salesRepName() + ")"));
+        // Draft: no approver name yet -> one dotted name placeholder (slot 3).
+        assertThat(names).containsOnlyOnce("(..........................)");
+        // Dates: ผู้พิมพ์ = created date; the other three slots stay dotted.
+        assertThat(dates).contains(thaiShort(created.createdAt()));
+        assertThat(dates.split("วันที่........./........./.........", -1)).as("three dotted date slots").hasSize(4);
+    }
+
+    @Test
+    void render_approved_printsAllThreeDates_andOrderedByStaysDotted() throws Exception {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        String[] rows = signatureRows(quotationService.renderXlsx(approved.id(), salesActor));
+        String dates = rows[2];
+        assertThat(dates).contains(thaiShort(approved.createdAt()));
+        assertThat(dates).contains(thaiShort(approved.submittedAt()));
+        assertThat(dates).contains(thaiShort(approved.approvedAt()));
+        // ผู้สั่งซื้อ never gets a date -- the customer signs and dates on paper.
+        assertThat(dates.split("วันที่........./........./.........", -1)).as("exactly one dotted date slot").hasSize(2);
+        assertThat(dates.lastIndexOf("วันที่........./........./.........")).isGreaterThan(dates.lastIndexOf(thaiShort(approved.approvedAt())));
+        assertThat(rows[1]).contains("(สมหญิง ใจดี)").contains("(" + approved.approvedByName() + ")");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Owner feedback pass 1 — F3: the approver's signature image, whichever role approved
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** Real PNG bytes (a drawn squiggle, not just magic bytes) — POI must be able to read the
+     * image's dimensions for the anchor to be placed at all. */
+    private MockMultipartFile realSignatureFile() {
+        return new MockMultipartFile("file", "sig.png", "image/png", HtmlXlsFidelityTest.signaturePng());
+    }
+
+    /** The picture whose anchor BOTTOM sits in the signature labels row (F6: on the rule) — null
+     * when none is anchored there. The letterhead/cert pictures sit near row 0 and never match. */
+    private org.apache.poi.hssf.usermodel.HSSFPicture signaturePicture(byte[] xls) throws Exception {
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            int labels = labelsRow(sheet);
+            var hssf = (org.apache.poi.hssf.usermodel.HSSFSheet) sheet;
+            org.apache.poi.hssf.usermodel.HSSFPicture found = null;
+            for (var shape : hssf.getDrawingPatriarch().getChildren()) {
+                // Owner feedback F6-amended (2026-09-10): the picture's bottom now deliberately
+                // crosses the underscore rule and so lands in the row BELOW the labels row —
+                // this used to require row2 == labels exactly, which stopped finding it. Top at
+                // or above the labels row, bottom in it or just past it; the letterhead/cert
+                // images sit near row 0 and match neither.
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic
+                    && pic.getClientAnchor().getRow1() <= labels
+                    && pic.getClientAnchor().getRow2() >= labels
+                    && pic.getClientAnchor().getRow2() <= labels + 1) {
+                    found = pic;
+                }
+            }
+            return found;
+        }
+    }
+
+    @Test
+    void approvedByCeo_documentCarriesTheCeosSignatureImageAndName() throws Exception {
+        signatureService.upload(ceoId, realSignatureFile(), ceoActor);
+        assertApproverSignatureRendered(ceoActor);
+    }
+
+    @Test
+    void approvedBySalesManager_documentCarriesTheManagersSignatureImageAndName() throws Exception {
+        signatureService.upload(salesManagerId, realSignatureFile(), salesManagerActor);
+        assertApproverSignatureRendered(salesManagerActor);
+    }
+
+    /** Slot 3 is the approver whoever they are: the picture must be anchored in the signature
+     * rows of the XLS (the same workbook both PDF engines print), and the name row must carry
+     * the approver's name. The PDF half runs only where a converter exists. */
+    private void assertApproverSignatureRendered(UserPrincipal approver) throws Exception {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, approver);
+        assertThat(approved.approvedById()).isEqualTo(approver.id());
+        assertThat(approved.approverHasSignature()).isTrue();
+
+        byte[] xls = quotationService.renderXlsx(approved.id(), salesActor);
+        var picture = signaturePicture(xls);
+        assertThat(picture).as("approver signature picture anchored in the signature rows").isNotNull();
+        String[] rows = signatureRows(xls);
+        assertThat(rows[1]).contains("(" + approved.approvedByName() + ")");
+
+        // A draft on the same deal (no approver yet) must NOT carry the image.
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(signaturePicture(quotationService.renderXlsx(draft.id(), salesActor))).isNull();
+
+        Assumptions.assumeTrue(ChromiumPdfPrinter.isAvailable() || LibreOfficePdfConverter.isAvailable(),
+            "neither Chromium nor LibreOffice available locally");
+        byte[] pdf = quotationService.renderPdf(approved.id(), salesActor);
+        String flat = new org.apache.pdfbox.text.PDFTextStripper()
+            .getText(org.apache.pdfbox.Loader.loadPDF(pdf)).replaceAll("\\s+", "");
+        assertThat(flat).contains("(" + approved.approvedByName().replaceAll("\\s+", "") + ")");
+        int xObjects = 0;
+        try (var doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+            for (var page : doc.getPages()) {
+                for (var ignored : page.getResources().getXObjectNames()) xObjects++;
+            }
+        }
+        // Template pictures (logo + badge) plus the signature: strictly more than the two the
+        // template itself embeds.
+        assertThat(xObjects).isGreaterThan(2);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Owner feedback pass 1 — F5: the "แก้" bucket (needsRework) + per-status counts, owner-scoped
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** Rep A: a rejected draft, a revision-in-progress draft, a plain draft, a pending one; rep B:
+     * a rejected draft of their own. Wrong-way-round first: B never sees A's rework rows, and A's
+     * plain DRAFT is not "rework". */
+    @Test
+    void needsRework_returnsRejectedAndRevisionDraftsOnly_ownerScopedForSales() {
+        DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        quotationService.submit(rejected.id(), salesActor);
+        quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        DealQuotationDto plainDraft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto pending = quotationService.submit(
+            quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+
+        DealQuotationDto othersRejected = quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+        quotationService.submit(othersRejected.id(), otherSalesActor);
+        quotationService.reject(othersRejected.id(), new RejectRequest("แก้"), salesManagerActor);
+
+        List<Long> othersView = quotationService.search(null, true, otherSalesActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(othersView).as("rep B must not see rep A's rework rows").doesNotContain(rejected.id(), revision.id());
+        assertThat(othersView).containsExactly(othersRejected.id());
+
+        List<Long> ownView = quotationService.search(null, true, salesActor).stream().map(DealQuotationDto::id).toList();
+        assertThat(ownView).containsExactlyInAnyOrder(rejected.id(), revision.id());
+        assertThat(ownView).doesNotContain(plainDraft.id(), pending.id(), approved.id());
+
+        // Composes with a status filter (AND): DRAFT + needsRework == the same two rows; a
+        // status that excludes DRAFT yields nothing.
+        assertThat(quotationService.search(List.of("DRAFT"), true, salesActor)).extracting(DealQuotationDto::id)
+            .containsExactlyInAnyOrder(rejected.id(), revision.id());
+        assertThat(quotationService.search(List.of("PENDING_APPROVAL"), true, salesActor)).isEmpty();
+
+        // The approver queue (unscoped) sees every rep's rework rows.
+        assertThat(quotationService.search(null, true, salesManagerActor)).extracting(DealQuotationDto::id)
+            .containsExactlyInAnyOrder(rejected.id(), revision.id(), othersRejected.id());
+    }
+
+    /** Counts are the list's own sizes under the same scope — pinned by computing both. */
+    @Test
+    void counts_matchTheListsUnderTheSameScope_andExcludeOtherRepsRows() {
+        DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        quotationService.submit(rejected.id(), salesActor);
+        quotationService.reject(rejected.id(), new RejectRequest("แก้ราคา"), salesManagerActor);
+        createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        quotationService.submit(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+        quotationService.cancel(quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
+            new CancelRequest(null), salesActor);
+        quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
+        // Rep B's rows must not leak into rep A's counts.
+        DealQuotationDto othersPending = quotationService.submit(
+            quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor).id(), otherSalesActor);
+        quotationService.approve(othersPending.id(), new ApproveRequest(null), ceoActor);
+
+        DealQuotationCountsDto own = quotationService.counts(salesActor);
+        assertThat(own.all()).isEqualTo(5);
+        assertThat(own.pendingApproval()).isEqualTo(1);
+        assertThat(own.needsRework()).isEqualTo(1);
+        assertThat(own.cancelled()).isEqualTo(1);
+        assertThat(own.approved()).isEqualTo(1);
+        assertCountsMatchLists(own, salesActor);
+
+        DealQuotationCountsDto others = quotationService.counts(otherSalesActor);
+        assertThat(others.all()).as("rep B sees only their own row").isEqualTo(1);
+        assertThat(others.approved()).isEqualTo(1);
+        assertThat(others.needsRework()).isZero();
+        assertCountsMatchLists(others, otherSalesActor);
+
+        DealQuotationCountsDto queue = quotationService.counts(salesManagerActor);
+        assertThat(queue.all()).isEqualTo(6);
+        assertThat(queue.approved()).isEqualTo(2);
+        assertCountsMatchLists(queue, salesManagerActor);
+
+        // Same gate as search: a role outside VIEW_ROLES with no grant is 403.
+        assertForbidden(() -> quotationService.counts(qcActor));
+    }
+
+    private void assertCountsMatchLists(DealQuotationCountsDto counts, UserPrincipal actor) {
+        assertThat(counts.all()).isEqualTo(quotationService.search(null, false, actor).size());
+        assertThat(counts.pendingApproval()).isEqualTo(quotationService.search(List.of("PENDING_APPROVAL"), false, actor).size());
+        assertThat(counts.needsRework()).isEqualTo(quotationService.search(null, true, actor).size());
+        assertThat(counts.cancelled()).isEqualTo(quotationService.search(List.of("CANCELLED"), false, actor).size());
+        assertThat(counts.approved()).isEqualTo(quotationService.search(List.of("APPROVED"), false, actor).size());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authz — wrong-way-round (the caller must NOT reach what they should not)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -666,7 +1143,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto others = quotationService.create(otherTicketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
 
-        List<DealQuotationDto> results = quotationService.search(null, salesActor);
+        List<DealQuotationDto> results = quotationService.search(null, false, salesActor);
         assertThat(results).extracting(DealQuotationDto::id).contains(own.id());
         assertThat(results).extracting(DealQuotationDto::id).doesNotContain(others.id());
     }
@@ -689,7 +1166,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.renderPdf(created.id(), qcActor));
         // search() with no grant and a role outside VIEW_ROLES also 403s (unlike `sales`, which
         // is IN VIEW_ROLES and gets scoped to zero rows instead -- qc has neither path open).
-        assertForbidden(() -> quotationService.search(null, qcActor));
+        assertForbidden(() -> quotationService.search(null, false, qcActor));
     }
 
     @Test
@@ -700,7 +1177,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(quotationService.get(created.id(), reader).id()).isEqualTo(created.id());
             assertThat(quotationService.listForTicket(ticketId, reader))
                 .extracting(DealQuotationDto::id).contains(created.id());
-            assertThat(quotationService.search(null, reader))
+            assertThat(quotationService.search(null, false, reader))
                 .extracting(DealQuotationDto::id).contains(created.id());
             // Still read-only: neither role may create/edit/approve.
             assertForbidden(() -> quotationService.update(created.id(),
@@ -891,7 +1368,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private UpsertDealQuotationRequest upsertRequest(List<ItemInput> items) {
-        return new UpsertDealQuotationRequest("P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+        return upsertRequest(null, items);
+    }
+
+    /** {@code contactId} null = "default to the deal's contact" (the normal wire shape). */
+    private UpsertDealQuotationRequest upsertRequest(Long contactId, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", items);
     }
 
