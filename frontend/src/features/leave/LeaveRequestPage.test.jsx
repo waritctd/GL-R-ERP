@@ -452,14 +452,18 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(attachmentFile.name).toBe('sick-note.pdf');
   });
 
-  it('toggling sub-day leave forces endDate to startDate and sends the chosen times', async () => {
+  it('unticking ลาทั้งวัน (single day) sends the chosen times without touching endDate', async () => {
     await goToStep2ForVacation();
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
-    fireEvent.click(screen.getByLabelText(/ลาบางส่วนของวัน/));
+    // "ลาทั้งวัน" is TICKED by default (V166) -- unticking it reveals the time fields.
+    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
 
+    // Partial-day span (V166): endDate is NO LONGER forced to startDate when timed -- it was
+    // already handleStartDateChange's own sync (endDate === startDate here only because the user
+    // never touched endDate after setting startDate, same as before this feature).
     expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(futureDate);
     fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
     fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
@@ -476,6 +480,39 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(payload.endDate).toBe(futureDate);
     expect(payload.startTime).toBe('08:30');
     expect(payload.endTime).toBe('12:30');
+  });
+
+  // The owner's own motivating case (CLAUDE.md task brief): a timed span that crosses a calendar
+  // day, now possible since V166 relaxed chk_leave_time_single_day. This is the behaviour the old
+  // "sub-day" feature could never represent (endDate used to be force-locked to startDate).
+  it('a timed span can now cross calendar days -- endDate stays independently editable', async () => {
+    await goToStep2ForVacation();
+
+    const startDate = '2099-12-31';
+    const endDate = '2100-01-01';
+    fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: startDate } });
+    fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: endDate } });
+    fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ลาบ่ายต่อเนื่องถึงวันถัดไป' } });
+    fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
+
+    // Still both dates as chosen -- unticking "ลาทั้งวัน" must never collapse a multi-day span.
+    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe(startDate);
+    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(endDate);
+    fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '13:00' } });
+    fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '17:30' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
+    await screen.findByText(/ขั้นตอนที่ 3\/3/);
+    const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
+    await waitFor(() => expect(submitButton.disabled).toBe(false));
+    fireEvent.click(submitButton);
+
+    await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
+    const payload = api.leave.create.mock.calls[0][0];
+    expect(payload.startDate).toBe(startDate);
+    expect(payload.endDate).toBe(endDate);
+    expect(payload.startTime).toBe('13:00');
+    expect(payload.endTime).toBe('17:30');
   });
 
   it('deep link (?type=&start=&end=) lands directly on step 2 with the type/dates prefilled', async () => {

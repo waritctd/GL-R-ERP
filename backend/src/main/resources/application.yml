@@ -47,6 +47,12 @@ spring:
       max-file-size: ${APP_MAX_FILE_SIZE:10MB}
       max-request-size: ${APP_MAX_REQUEST_SIZE:12MB}
 app:
+  quotation:
+    # Direct-deal quotation PDF engine (docs/sales/quotation-v2-plan.md "PDF renderer"):
+    #   xls      — POI template → LibreOffice (the long-standing path, default)
+    #   chromium — the same POI sheet drawn as HTML by SheetHtmlRenderer → headless Chromium;
+    #              503s loudly when no Chromium can be launched.
+    pdf-renderer: ${APP_QUOTATION_PDF_RENDERER:xls}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
   attendance:

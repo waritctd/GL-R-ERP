@@ -93,7 +93,7 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc),
             new FileStorageService("/tmp/glr-sales-mail-rollback-uploads"), factoryQuoteCarryForward());
         TicketService ticketService = new TicketService(tickets, notifications,
-            objectMapper, customers, new QuotationRenderer(), pricingRequestService);
+            objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         long salesRepId = createEmployee(employees, "ณภา ขายดี", "napa.sales@glr.co.th", "SALES", "ฝ่ายขาย");
         // Real recipients for the two notifications submit() raises, so the "no mail" assertion is

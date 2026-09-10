@@ -179,6 +179,20 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets'],
     },
+    // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09).
+    // Mirrors ROLE_PERMISSIONS.canViewDealQuotations (sales/sales_manager/ceo/import/account)
+    // OR'd with the per-employee canCreateQuotation capability grant, same as the '/quotations'
+    // PATH_GUARDS entry (app/permissions.js) -- a grant-holder's role need not be in that list at
+    // all. `sales` sees only its own deals' quotations, scoped server-side, not by this nav item.
+    {
+      path: '/quotations',
+      label: 'ใบเสนอราคา',
+      helper: 'Direct deal quotations',
+      icon: 'fileText',
+      group: 'sales',
+      show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation)) && SALES_ENABLED,
+      match: ['/quotations'],
+    },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog),
     // not just the feature flag — previously any authenticated role could

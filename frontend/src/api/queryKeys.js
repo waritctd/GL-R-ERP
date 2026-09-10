@@ -32,6 +32,8 @@ export const queryKeys = {
   notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
+  // Manager team-quota summary (2026-09) -- TeamLeaveTab.jsx.
+  leaveTeamBalances: (year) => ['leave', 'balances', 'team', year],
   leaveEmployees: () => ['leave', 'employees'],
   leaveTypes: () => ['leave', 'types'],
   leaveContactDefaults: (employeeId) => ['leave', 'contactDefaults', employeeId],
@@ -49,8 +51,13 @@ export const queryKeys = {
   // in the key, switching the composer's carry-in/own-quota toggle would refetch the SAME cache
   // entry the old preference already populated -- the split shown would silently stay pinned to
   // whichever pool order was previewed first, never updating to reflect the new choice.
+  // Partial-day span (V166, 2026-09-10): startTime/endTime are now part of the key -- without
+  // them, two previews sharing the same startDate/endDate but DIFFERENT times (e.g. toggling
+  // ลาทั้งวัน off, or narrowing a timed span's hours) would collide on the same cache entry and
+  // show a STALE totalDays.
   leavePreview: (params = {}) => ['leave', 'preview',
     params.employeeId ?? '', params.leaveTypeCode ?? '', params.startDate ?? '', params.endDate ?? '',
+    params.startTime ?? '', params.endTime ?? '',
     params.purposeCode ?? '', params.requestedAsEmergency ?? false, params.hasAttachment ?? false,
     params.depth ?? 'FULL', params.quotaPoolPreference ?? 'CARRIED_IN_FIRST'],
   // Leave-surface IA rebuild, Phase A3: rules tab's policy-document link availability probe.
@@ -137,6 +144,12 @@ export const queryKeys = {
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
   // CEO discount-approval workflow, Phase 2 (V155): per-line approval status for one quotation.
   discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). A sibling key space to
+  // pricingRequests'/customerQuotations' above, never sharing an entry with them.
+  dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
+  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? ''],
+  dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
+  employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range
   // (mirrors GET /api/holidays?from&to) since the tab's year selector re-queries per year; the

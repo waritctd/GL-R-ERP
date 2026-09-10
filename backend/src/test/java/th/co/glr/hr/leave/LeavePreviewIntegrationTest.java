@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,6 +84,40 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     void approvedVacationRequestAgreesOnBothSides() {
         long employeeId = insertEmployee("PREV-OK-001", LocalDate.parse("2015-01-01"), null);
         assertPreviewAgreesWithSubmit(employeeId, "VACATION", "2026-07-13", "2026-07-13", null, false, null);
+    }
+
+    /**
+     * Partial-day span (V166, 2026-09-10): {@link LeavePreviewRequest}'s startTime/endTime widening
+     * -- previewed BEFORE submitting, the owner's own motivating multi-day case (half-day afternoon
+     * + full next day = 1.50) must show the IDENTICAL {@code totalDays}/{@code paidDays} a real
+     * submit would persist, the same "preview never lies" guarantee this whole class exists to
+     * prove, now extended to a timed span rather than only a whole-day one.
+     */
+    @Test
+    void timedMultiDaySpanPreviewAgreesWithSubmitOnTheOwnersOwnCase() {
+        long employeeId = insertEmployee("PREV-SPAN-001", LocalDate.parse("2015-01-01"), null);
+
+        LeavePreviewDto preview = leaveService.preview(new LeavePreviewRequest(
+            "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-12"), employeeId,
+            null, false, false, LeavePreviewDepth.FULL, null,
+            LocalTime.of(13, 0), LocalTime.of(17, 30)),
+            employee(employeeId));
+
+        assertThat(preview.blocking()).isNull();
+        assertThat(preview.totalDays()).isEqualByComparingTo("1.50");
+        assertThat(preview.paidDays()).isEqualByComparingTo("1.50");
+        assertThat(preview.unpaidDays()).isEqualByComparingTo("0.00");
+
+        LeaveRequestDto submitted = leaveService.submit(new SubmitLeaveRequest(
+            employeeId, "VACATION", LocalDate.parse("2026-08-11"), LocalDate.parse("2026-08-12"),
+            "half day then full day", LocalTime.of(13, 0), LocalTime.of(17, 30),
+            null, null, null, null, null, null, null),
+            employee(employeeId));
+
+        assertThat(submitted.totalDays())
+            .as("previewed and submitted totalDays must never drift apart for the identical request")
+            .isEqualByComparingTo(preview.totalDays());
+        assertThat(submitted.paidDays()).isEqualByComparingTo(preview.paidDays());
     }
 
     // ─────────────────────────────────────────────────────────────────────

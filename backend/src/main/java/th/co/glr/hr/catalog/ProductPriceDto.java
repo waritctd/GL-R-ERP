@@ -16,5 +16,20 @@ public record ProductPriceDto(
     BigDecimal price,
     String     currency,
     String     priceUnit,
-    BigDecimal sqmPerPiece
+    BigDecimal sqmPerPiece,
+    // Quotation v2 (direct deal quotation, V165): the item editor's catalog typeahead autofills
+    // thickness/pieces-per-box/sqm-per-box straight from the catalog row so Sales does not have to
+    // re-type them (see docs/sales/quotation-v2-plan.md's Catalog section) -- appended at the end so every
+    // pre-existing 13-arg construction site (CatalogRepository's other query, tests) keeps compiling.
+    BigDecimal thicknessMm,
+    BigDecimal pcsPerBox,
+    BigDecimal sqmPerBox,
+    // Item completeness rule (inline-deal-spec.md, owner ruling 2026-09-10): the editor autofills
+    // ประเทศต้นทาง (+ its default lead-time range) from the catalog row the same way it already
+    // autofills thickness/pieces-per-box -- price_catalog.factories.country via
+    // product_prices.factory_id, the SAME base-table join CatalogRepository#findPricingKeys'
+    // CatalogPricingKey already uses (never sales.factory_config.country -- V151). Appended last,
+    // same reason as thicknessMm/pcsPerBox/sqmPerBox: every pre-existing 16-arg construction site
+    // keeps compiling.
+    String originCountryCode
 ) {}

@@ -17,6 +17,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import { LeaveFilterBar } from './LeaveFilterBar.jsx';
+import { LeaveReportDownload } from './LeaveReportDownload.jsx';
 import {
   formatDateRange, formatDays, todayIso,
 } from './leaveFormatting.js';
@@ -24,6 +25,7 @@ import {
   buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
   PendingApproverNote, renderLeaveRequestExpanded,
 } from './leaveRequestTable.jsx';
+import { TeamQuotaSummary } from './TeamQuotaSummary.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
 // Same forward horizon MyLeaveTab.jsx uses for its own "วันลาที่กำลังจะถึง" panel -- the team and
@@ -423,6 +425,18 @@ export function TeamLeaveTab({ user, showToast }) {
         emptyTitle="ยังไม่มีวันลาที่กำลังจะถึง"
         emptyDescription="วันลาที่อนุมัติแล้วหรือรออนุมัติในช่วง 90 วันข้างหน้าจะแสดงที่นี่"
       />
+
+      {/* Owner ask: "there is no summary of like how much each employee have left" -- direct
+          reports only (LeaveService#teamBalances), never the whole division. Its own query, so a
+          slow/failed quota fetch never blocks the request table below it. */}
+      <TeamQuotaSummary
+        title={canViewAllLeave ? 'โควตาวันลาคงเหลือของพนักงานทั้งหมด' : 'โควตาวันลาคงเหลือของทีม'}
+        emptyDescription={canViewAllLeave
+          ? 'โควตาวันลาคงเหลือของพนักงานแต่ละคนจะแสดงที่นี่เมื่อมีข้อมูล'
+          : 'เมื่อมีพนักงานที่รายงานตรงต่อคุณ โควตาวันลาคงเหลือของแต่ละคนจะแสดงที่นี่'}
+      />
+
+      <LeaveReportDownload scope="team" showToast={showToast} />
 
       {/* Directly above the history table -- the one section it governs. */}
       <LeaveFilterBar

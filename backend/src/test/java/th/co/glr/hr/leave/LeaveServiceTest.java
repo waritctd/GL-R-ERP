@@ -13,12 +13,14 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,6 +32,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -40,6 +43,14 @@ class LeaveServiceTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     // Wednesday 2026-07-01 09:00 Asia/Bangkok — all leave dates below are fixed relative to this.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
+    // Partial-day span (V166): the seeded standard schedule (08:30-17:30, 9h/540min, Mon-Fri) --
+    // same fixture LeaveDayMathTest/AttendanceDailyCalculatorTest already use. Still resolved per
+    // boundary date to validate TIME BOUNDS (LeaveService#validateWithinSchedule); the day-FRACTION
+    // itself is the fixed 480-worked-minute/12:30-13:30-break rule (LeaveDayMath), not this
+    // schedule's own span.
+    private static final WorkSchedule STANDARD_SCHEDULE = new WorkSchedule(
+        BUSINESS_ZONE, LocalTime.of(8, 30), LocalTime.of(17, 30), 5,
+        EnumSet.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY));
 
     private final LeaveRepository leaveRepository = mock(LeaveRepository.class);
     private final LeaveAttachmentRepository leaveAttachments = mock(LeaveAttachmentRepository.class);
@@ -68,6 +79,13 @@ class LeaveServiceTest {
         // "schedule/holiday-aware" section near the bottom of this file) re-stub this per test.
         when(leaveRepository.workingDayPredicate(anyLong(), any(), any()))
             .thenReturn(LeaveDayMath::isWorkingDay);
+        // Partial-day span (V166): LeaveService now resolves leaveRepository.resolveOwnSchedule(...)
+        // for every TIMED request's boundary date(s) -- default every test to the seeded standard
+        // 08:30-17:30 Mon-Fri schedule (the same fixture LeaveDayMathTest/AttendanceDailyCalculatorTest
+        // already use), so the timed-request tests below (which pre-date this stub) keep working
+        // without each one re-declaring it. Tests that care about a DIFFERENT schedule (e.g. a
+        // six-day division) re-stub this per test.
+        when(leaveRepository.resolveOwnSchedule(anyLong(), any())).thenReturn(STANDARD_SCHEDULE);
         // §5.3.5 pool split (V161): LeaveService#carriedInRemaining/#ownQuotaRemaining subtract
         // these from a pool's size, and Mockito defaults an unstubbed BigDecimal-returning method to
         // NULL -- which NPEs inside BigDecimal.subtract for EVERY test that reaches
@@ -426,8 +444,13 @@ class LeaveServiceTest {
 
     @Test
     void submitAcceptsSubDayLeaveAndComputesFractionalTotalDays() {
-        // Sub-day leave (2026-07-25): 08:30-12:30 = 4 clock-hours / 8 = 0.50 day (no lunch
-        // subtraction). Quota is fully used already (6/6) -> the whole 0.50 request is unpaid.
+        // Partial-day span (V166, FINAL owner ruling 2026-09-10): 08:30-12:30 = 240 clock-minutes,
+        // ZERO overlap with the 12:30-13:30 lunch break (the segment ends exactly as the break
+        // starts) -> 240 worked minutes / 480 = 0.50 HALF_UP. An intermediate draft of this feature
+        // divided by the day's own resolved WorkSchedule span instead (240/540 = 0.44) -- WRONG,
+        // superseded (see LeaveDayMath's "Partial-day span" section header) -- asserted
+        // wrong-way-round below: 0.44 must NOT be what gets persisted. Quota is fully used already
+        // (6/6) -> the whole 0.50 request is unpaid.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "VACATION",
@@ -465,6 +488,10 @@ class LeaveServiceTest {
             unpaidDays.capture(), eq(request.startDate().getYear()),
             eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("0.50");
+        // Wrong-way-round (CLAUDE.md): the superseded schedule-span-divisor draft (0.44) is NOT what
+        // should be persisted -- if a future edit reintroduced it, THIS assertion (not just the
+        // positive one above) must go red.
+        assertThat(totalDays.getValue()).isNotEqualByComparingTo("0.44");
         assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.50");
     }

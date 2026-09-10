@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', () => ({
       list: vi.fn(),
       cancel: vi.fn(),
       downloadAttachment: vi.fn(),
+      teamBalances: vi.fn(),
     },
   },
 }));
@@ -139,6 +140,7 @@ describe('TeamLeaveTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.leave.employees.mockResolvedValue({ employees: teamEmployeeOptions });
+    api.leave.teamBalances.mockResolvedValue({ team: [] });
   });
 
   afterEach(() => {
@@ -339,6 +341,76 @@ describe('TeamLeaveTab', () => {
 
       expect(await screen.findByText('ยังไม่มีคำขอลาของทีม')).not.toBeNull();
       expect(screen.getByText('คำขอลาของคุณและลูกทีมที่รายงานตรงต่อคุณจะแสดงที่นี่เมื่อมีการยื่น')).not.toBeNull();
+    });
+  });
+
+  // Manager team-quota summary (2026-09): TeamQuotaSummary.jsx, reading GET
+  // /api/leave/balances/team (LeaveService#teamBalances). Backend scope enforcement -- direct
+  // reports only, never a colleague's -- is proven server-side by
+  // LeaveTeamBalancesIntegrationTest against real Postgres (CLAUDE.md: never claim a permission
+  // fact from mock-driven rendering). These tests cover only what this component RENDERS from
+  // whatever api.leave.teamBalances() returns.
+  describe('team quota summary panel', () => {
+    const teamBalancesResponse = {
+      team: [
+        {
+          employeeId: 6,
+          employeeCode: 'GLR-006',
+          employeeName: 'ลูกทีม หนึ่ง',
+          departmentName: 'ฝ่ายขาย',
+          balances: [
+            {
+              leaveTypeCode: 'SICK', leaveTypeNameTh: 'ลาป่วย', leaveTypeNameEn: 'Sick',
+              annualQuotaDays: 30, approvedDays: 1, pendingDays: 0, remainingDays: 29,
+              requiresAttachment: false, carriedInDays: 0, carriedInFromYear: null,
+              carriedInExpiresOn: null, carriedInRemainingDays: 0, ownQuotaRemainingDays: 29,
+            },
+            {
+              leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', leaveTypeNameEn: 'Vacation',
+              annualQuotaDays: 6, approvedDays: 6, pendingDays: 0, remainingDays: 0,
+              requiresAttachment: false, carriedInDays: 0, carriedInFromYear: null,
+              carriedInExpiresOn: null, carriedInRemainingDays: 0, ownQuotaRemainingDays: 0,
+            },
+          ],
+        },
+      ],
+    };
+
+    it("renders each direct report's remaining-days chips, per leave type", async () => {
+      api.leave.list.mockResolvedValue({ requests: [] });
+      api.leave.teamBalances.mockResolvedValue(teamBalancesResponse);
+      renderTeamLeaveTab();
+
+      expect(await screen.findByText('ลูกทีม หนึ่ง')).not.toBeNull();
+      expect(screen.getByText('GLR-006 · ฝ่ายขาย')).not.toBeNull();
+      expect(screen.getByText('29 วัน')).not.toBeNull();
+    });
+
+    it('a leave type at zero remaining still renders (not hidden) -- the point is spotting exactly this', async () => {
+      api.leave.list.mockResolvedValue({ requests: [] });
+      api.leave.teamBalances.mockResolvedValue(teamBalancesResponse);
+      renderTeamLeaveTab();
+
+      await screen.findByText('ลูกทีม หนึ่ง');
+      expect(screen.getByText('0 วัน')).not.toBeNull();
+    });
+
+    it('an empty team renders the "ยังไม่มีลูกทีม" empty state, not an error', async () => {
+      api.leave.list.mockResolvedValue({ requests: [] });
+      api.leave.teamBalances.mockResolvedValue({ team: [] });
+      renderTeamLeaveTab();
+
+      expect(await screen.findByText('ยังไม่มีลูกทีม')).not.toBeNull();
+    });
+
+    it('the quota-summary panel title follows the same hr/ceo-vs-manager split as the request table', async () => {
+      const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr' };
+      api.leave.list.mockResolvedValue({ requests: [] });
+      api.leave.teamBalances.mockResolvedValue({ team: [] });
+      renderTeamLeaveTab(hr);
+
+      expect(await screen.findByRole('heading', { name: 'โควตาวันลาคงเหลือของพนักงานทั้งหมด' })).not.toBeNull();
+      expect(screen.queryByRole('heading', { name: 'โควตาวันลาคงเหลือของทีม' })).toBeNull();
     });
   });
 });

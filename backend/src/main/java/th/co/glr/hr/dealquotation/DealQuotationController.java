@@ -1,0 +1,163 @@
+package th.co.glr.hr.dealquotation;
+
+import jakarta.servlet.http.HttpSession;
+import jakarta.validation.Valid;
+import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
+
+/**
+ * Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API"
+ * section for the exact routes/envelopes this implements. Detail-shaped responses are wrapped as
+ * {@code {quotation: ...}}, list-shaped as {@code {items: [...]}} and the single-item preview as
+ * {@code {item: ...}} — mirrors {@code CustomerQuotationController}'s own envelope convention.
+ *
+ * <p>Every authz decision lives in {@link DealQuotationService}; this class only resolves the
+ * session and delegates.
+ */
+@RestController
+@RequestMapping("/api")
+public class DealQuotationController {
+    private final DealQuotationService quotations;
+    private final SessionContext sessions;
+
+    public DealQuotationController(DealQuotationService quotations, SessionContext sessions) {
+        this.quotations = quotations;
+        this.sessions = sessions;
+    }
+
+    @PostMapping("/tickets/{ticketId}/deal-quotations")
+    ResponseEntity<Map<String, DealQuotationDto>> create(@PathVariable long ticketId,
+                                                          @Valid @RequestBody UpsertDealQuotationRequest request,
+                                                          HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ResponseEntity.status(HttpStatus.CREATED)
+            .body(Map.of("quotation", quotations.create(ticketId, request, user)));
+    }
+
+    @GetMapping("/tickets/{ticketId}/deal-quotations")
+    Map<String, List<DealQuotationDto>> listForTicket(@PathVariable long ticketId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", quotations.listForTicket(ticketId, user));
+    }
+
+    @GetMapping("/deal-quotations")
+    Map<String, List<DealQuotationDto>> search(@RequestParam(required = false) List<String> status,
+                                               HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", quotations.search(status, user));
+    }
+
+    @GetMapping("/deal-quotations/{id}")
+    Map<String, DealQuotationDto> get(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.get(id, user));
+    }
+
+    @PutMapping("/deal-quotations/{id}")
+    Map<String, DealQuotationDto> update(@PathVariable long id,
+                                         @Valid @RequestBody UpsertDealQuotationRequest request,
+                                         HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.update(id, request, user));
+    }
+
+    @PostMapping("/deal-quotations/calculate-line")
+    Map<String, DealQuotationItemDto> calculateLine(@Valid @RequestBody ItemInput input, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("item", quotations.calculateLine(input, user));
+    }
+
+    @PostMapping("/deal-quotations/{id}/submit")
+    Map<String, DealQuotationDto> submit(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.submit(id, user));
+    }
+
+    @PostMapping("/deal-quotations/{id}/approve")
+    Map<String, DealQuotationDto> approve(@PathVariable long id,
+                                          @RequestBody(required = false) ApproveRequest request,
+                                          HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.approve(id, request != null ? request : new ApproveRequest(null), user));
+    }
+
+    @PostMapping("/deal-quotations/{id}/reject")
+    Map<String, DealQuotationDto> reject(@PathVariable long id, @Valid @RequestBody RejectRequest request,
+                                         HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.reject(id, request, user));
+    }
+
+    @PostMapping("/deal-quotations/{id}/revisions")
+    Map<String, DealQuotationDto> createRevision(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.createRevision(id, user));
+    }
+
+    @PostMapping("/deal-quotations/{id}/cancel")
+    Map<String, DealQuotationDto> cancel(@PathVariable long id,
+                                         @RequestBody(required = false) CancelRequest request,
+                                         HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.cancel(id, request != null ? request : new CancelRequest(null), user));
+    }
+
+    @GetMapping("/deal-quotations/{id}/file")
+    ResponseEntity<byte[]> file(@PathVariable long id, @RequestParam(defaultValue = "pdf") String format,
+                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        if (!"xlsx".equalsIgnoreCase(format) && !"pdf".equalsIgnoreCase(format)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับรูปแบบไฟล์ '" + format + "'");
+        }
+        // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf"
+        // told the rep nothing about which document they just downloaded when they have several
+        // deals open. quotations.get() re-runs requireViewAccess (also re-run inside
+        // renderPdf/renderXlsx below) -- an extra read, not a second authz decision; both are the
+        // same view-access check on the same row.
+        String number = quotations.get(id, user).number();
+        String filename = sanitizeFilename(number);
+        if ("xlsx".equalsIgnoreCase(format)) {
+            byte[] bytes = quotations.renderXlsx(id, user);
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + ".xls\"")
+                .contentType(MediaType.parseMediaType("application/vnd.ms-excel"))
+                .body(bytes);
+        }
+        byte[] bytes = quotations.renderPdf(id, user);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + ".pdf\"")
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(bytes);
+    }
+
+    /** Keeps a quotation number ({@code QT-2026-0042} or a revision's {@code QT-2026-0042-2})
+     * safe as a bare Content-Disposition filename token: anything outside a conservative
+     * filesystem-safe set becomes {@code _}, and a wiped-out result falls back to a generic name
+     * rather than emitting an empty/blank filename. */
+    private String sanitizeFilename(String number) {
+        String base = number == null ? "" : number.trim().replaceAll("[^A-Za-z0-9._-]", "_");
+        return base.isEmpty() ? "quotation" : base;
+    }
+}

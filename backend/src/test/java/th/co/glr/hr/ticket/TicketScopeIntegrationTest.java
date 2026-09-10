@@ -89,7 +89,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
         // repository.
         ticketService = new TicketService(tickets, notifications,
-            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService);
+            new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         depositNoticeService = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             notifications, new DepositNoticeRenderer(), new RemainingInvoiceRenderer(), customers,

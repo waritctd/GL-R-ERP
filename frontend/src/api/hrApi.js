@@ -37,6 +37,58 @@ export const api = {
     // the plaintext is returned ONCE and is not retrievable afterwards, so the caller must show it
     // to the operator immediately and must never log, cache or persist it.
     resetPassword: (id) => apiRequest(API_ROUTES.employees.resetPassword(id), { method: 'POST' }),
+    // Quotation v2's approver signature (hr.employee_signature, V166). Multipart upload — same
+    // idiom as pricingRequests.uploadAttachment below — png/jpeg <= 1 MB, gated self/ceo/admin.
+    uploadSignature: async (id, file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.employees.signature(id), {
+        method: 'PUT',
+        credentials: 'include',
+        // csrfHeaders('PUT') is required, not decorative -- CsrfCookieFilter 403s any unsafe
+        // /api/ method missing X-XSRF-TOKEN; see the tax-allowance upload's own comment on the
+        // older attachment call sites that forgot this and only 403'd in production.
+        headers: { ...csrfHeaders('PUT') },
+        body: formData,
+      });
+      // EmployeeSignatureController's PUT returns 204 with no body on success -- mirrors
+      // apiRequest's own `if (response.status === 204) return null` in client.js. This call
+      // can't reuse apiRequest itself (it needs a raw fetch for the multipart body), but must
+      // not call res.json() unconditionally on a 204: that throws "Unexpected end of JSON
+      // input" and the caller's onSuccess never runs (#H1). A 204 is by definition a 2xx
+      // success (`res.ok`) -- the old `if (!res.ok) throw ...` nested inside this branch could
+      // never run and was dead code; an error response never carries status 204 in the first
+      // place (the controller's only other paths are exceptions the global handler maps to a
+      // 4xx/5xx WITH a JSON body, handled below).
+      if (res.status === 204) return null;
+      const contentType = res.headers.get('content-type') ?? '';
+      const payload = contentType.includes('application/json') ? await res.json().catch(() => ({})) : null;
+      if (!res.ok) {
+        throw new Error(payload?.message || 'อัปโหลดไม่สำเร็จ');
+      }
+      return payload;
+    },
+    // Returns the URL to GET, not a fetch — same idiom as pricingRequests.attachmentUrl /
+    // attachments.fileUrl below: an <img src> hits this directly (session cookie carries auth),
+    // there is no JSON envelope to unwrap.
+    getSignature: (id) => API_ROUTES.employees.signature(id),
+    // Probe-only existence check, used by SignatureCard.jsx to decide whether to render an image
+    // at all (#M1) instead of finding out via the browser's onerror handler AFTER a broken-image
+    // box already flashed. EmployeeSignatureService#get 404s when hr.employee_signature has no
+    // row for this employee — any non-2xx here means "no signature", not just a 404.
+    //
+    // HEAD, not GET: EmployeeSignatureController declares only @GetMapping on this route, but
+    // Spring MVC's annotated-controller support maps HEAD to the same handler transparently
+    // whenever GET is mapped (RequestMappingInfo always adds HEAD alongside a declared GET, and
+    // the framework strips the body via HttpHeadResponseWrapper before it reaches the client) --
+    // confirmed by reading EmployeeSignatureController itself, which has no separate @RequestMapping
+    // for HEAD. A probe that only needs res.ok has no reason to pull the image bytes over the
+    // wire just to throw them away.
+    hasSignature: async (id) => {
+      const res = await fetch(API_ROUTES.employees.signature(id), { method: 'HEAD', credentials: 'include' });
+      return res.ok;
+    },
+    deleteSignature: (id) => apiRequest(API_ROUTES.employees.signature(id), { method: 'DELETE' }),
   },
   profileRequests: {
     list: () => apiRequest(API_ROUTES.profileRequests.list),
@@ -141,6 +193,8 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.leave.employees),
     types: () => apiRequest(API_ROUTES.leave.types),
     balances: (params) => apiRequest(withQuery(API_ROUTES.leave.balances, params)),
+    // Manager team-quota summary (2026-09) -- see routes.js's own comment on the scope.
+    teamBalances: (params) => apiRequest(withQuery(API_ROUTES.leave.teamBalances, params)),
     // Sub-day leave + paper-form contact block (2026-07-25): autofill for the
     // contact-during-leave block, reusing the /balances access predicate.
     contactDefaults: (params) => apiRequest(withQuery(API_ROUTES.leave.contactDefaults, params)),
@@ -310,6 +364,26 @@ export const api = {
     // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
     // reads on this namespace (balances/list) rather than positional (from, to) args.
     calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
+    // Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) -- see routes.js's comment on the
+    // scope. `params` is { year, month } (month optional, whole-year when omitted); read as a blob
+    // (a PDF), same fetch-not-apiRequest shape as downloadPayslip/downloadAttachment above. Mirrors
+    // LeaveController#ownReportPdf / #teamReportPdf.
+    downloadMyReport: async (params) => {
+      const res = await fetch(withQuery(API_ROUTES.leave.reportMe, params), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดรายงานใบลาไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+    downloadTeamReport: async (params) => {
+      const res = await fetch(withQuery(API_ROUTES.leave.reportTeam, params), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดรายงานใบลาไม่สำเร็จ');
+      }
+      return res.blob();
+    },
   },
   tickets: {
     list: (params) => apiRequest(withQuery(API_ROUTES.tickets.list, params)),
@@ -997,5 +1071,32 @@ export const api = {
       API_ROUTES.pricingRequests.attachmentIncludeInFactoryEmail(id),
       { method: 'PUT', body: { includeInFactoryEmail } },
     ),
+  },
+  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Mirrors
+  // th.co.glr.hr.dealquotation.DealQuotationController.
+  dealQuotations: {
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.dealQuotations.listForTicket(ticketId)),
+    list: (params) => apiRequest(API_ROUTES.dealQuotations.list(params)),
+    get: (id) => apiRequest(API_ROUTES.dealQuotations.detail(id)),
+    create: (ticketId, payload) => apiRequest(API_ROUTES.dealQuotations.create(ticketId), { method: 'POST', body: payload }),
+    update: (id, payload) => apiRequest(API_ROUTES.dealQuotations.detail(id), { method: 'PUT', body: payload }),
+    // Stateless preview — same calc the server applies on save, run against one item input with
+    // nothing persisted. Debounced 300ms by the editor; see QuotationEditorPage.jsx.
+    calculateLine: (payload) => apiRequest(API_ROUTES.dealQuotations.calculateLine, { method: 'POST', body: payload }),
+    submit: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.submit(id), { method: 'POST', body: payload }),
+    approve: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.approve(id), { method: 'POST', body: payload }),
+    reject: (id, payload) => apiRequest(API_ROUTES.dealQuotations.reject(id), { method: 'POST', body: payload }),
+    createRevision: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.revisions(id), { method: 'POST', body: payload }),
+    cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
+    downloadPdf: async (id) => {
+      const res = await fetch(API_ROUTES.dealQuotations.file(id, 'pdf'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
+    downloadXlsx: async (id) => {
+      const res = await fetch(API_ROUTES.dealQuotations.file(id, 'xlsx'), { credentials: 'include' });
+      if (!res.ok) throw new Error('Download failed');
+      return res.blob();
+    },
   },
 };

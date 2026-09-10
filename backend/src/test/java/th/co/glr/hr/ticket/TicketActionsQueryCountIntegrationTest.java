@@ -113,7 +113,7 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
         // Every collaborator that owns SQL is wired on the counted template, so a future gate that
         // reaches for a different repository is counted too rather than silently invisible.
         ticketService = new TicketService(tickets, new NotificationRepository(counted, SalesNotificationMailer.NO_OP),
-            new ObjectMapper(), new CustomerRepository(counted), new QuotationRenderer(), pricingRequests);
+            new ObjectMapper(), new CustomerRepository(counted), new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

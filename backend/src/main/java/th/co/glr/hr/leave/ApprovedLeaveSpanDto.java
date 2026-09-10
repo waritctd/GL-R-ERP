@@ -20,8 +20,10 @@ import java.time.LocalTime;
  * a hardcoded copy anywhere else would silently drift from it the next time HR renames a type.
  *
  * <p>{@code startTime}/{@code endTime} are both null for a whole-day request and both non-null for
- * a sub-day one ({@code chk_leave_time_pairing}); a non-null pair also implies
- * {@code startDate.equals(endDate)} ({@code chk_leave_time_single_day}) -- see V90's migration.
+ * a timed one ({@code chk_leave_time_pairing}, V90). A non-null pair no longer implies
+ * {@code startDate.equals(endDate)} -- V166 (2026-09-10) relaxed {@code chk_leave_time_single_day}
+ * to let a timed request span multiple calendar days; see {@code AttendanceMonthlySummaryService}'s
+ * own "Leave-day attribution" Javadoc for how a multi-day timed span is now attributed.
  */
 public record ApprovedLeaveSpanDto(
     long employeeId,

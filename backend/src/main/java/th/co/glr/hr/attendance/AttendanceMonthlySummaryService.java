@@ -63,10 +63,15 @@ import th.co.glr.hr.leave.LeaveRepository;
  *       schedule + holiday calendar) rather than recomputing the same answer a second way. A leave
  *       date that lands on a weekend/holiday was never a day the employee would otherwise have
  *       worked, so it contributes nothing to either ลา or ขาดงาน.
- *   <li>Sub-day request ({@code startTime}/{@code endTime} non-null, always single-day per
- *       {@code chk_leave_time_single_day}): contributes that request's own {@code total_days}
- *       fraction to that one date, regardless of the workday check above -- an employee who filed a
- *       half-day off has, by definition, already accounted for the working half themselves.
+ *   <li>Timed request ({@code startTime}/{@code endTime} non-null): a SINGLE-day one (still the
+ *       common case) contributes that request's own {@code total_days} fraction to that one date,
+ *       regardless of the workday check above -- an employee who filed a half-day off has, by
+ *       definition, already accounted for the working half themselves. A MULTI-day one (V166,
+ *       2026-09-10, relaxing the old {@code chk_leave_time_single_day} constraint) is instead split
+ *       across every date it actually covers via {@link LeaveRepository#spanDayFractions} -- a
+ *       partial fraction on its first/last date, a flat {@code 1.00} on every working date strictly
+ *       between -- so a 1.5-day span reports 0.5 on its first date and 1.0 on its second, never the
+ *       whole 1.5 dumped onto {@code startDate} alone.
  *   <li>ขาดงาน = workday AND status {@code NO_RECORD} AND this date has NO leave contribution at
  *       all. The ลา columns and the ขาดงาน count both read the SAME per-(employee, date) ledger
  *       (see {@link #attributeLeave}), so the two can never disagree about which dates are covered.
@@ -311,13 +316,33 @@ public class AttendanceMonthlySummaryService {
             LocalDate from, LocalDate to) {
         Map<EmployeeDay, List<LeaveContribution>> byDay = new HashMap<>();
         for (ApprovedLeaveSpanDto span : spans) {
-            if (span.startTime() != null) {
-                // Sub-day: chk_leave_time_single_day guarantees startDate == endDate, and the
-                // overlap predicate (start_date <= to AND end_date >= from) guarantees that single
-                // date already falls inside [from, to]. Contributes regardless of workday -- see
-                // this class's javadoc for why.
+            if (span.startTime() != null && span.startDate().equals(span.endDate())) {
+                // Single-day timed (unchanged): the overlap predicate (start_date <= to AND
+                // end_date >= from) guarantees that single date already falls inside [from, to].
+                // Contributes regardless of workday -- see this class's javadoc for why.
                 addContribution(
                     byDay, new EmployeeDay(span.employeeId(), span.startDate()), span, nz(span.totalDays()));
+                continue;
+            }
+            if (span.startTime() != null) {
+                // Partial-day span (V166): a MULTI-day timed request -- start_date != end_date is now
+                // possible (chk_leave_time_single_day, V90, was relaxed by V166). This request's
+                // total_days is no longer a single date's whole contribution: it is fractionally
+                // split across every date it actually covers (a partial boundary day plus 1.00 per
+                // full day between), so it can no longer be dumped onto span.startDate() alone --
+                // doing so would report a 1.5-day span as entirely "on" its first date and miss the
+                // second date's own contribution completely. LeaveRepository#spanDayFractions
+                // recomputes the SAME per-date ledger LeaveService persisted total_days from (see
+                // that method's Javadoc), then this loop clips it to [from, to] exactly like the
+                // whole-day branch below does for its own date walk.
+                Map<LocalDate, BigDecimal> fractions = leaveRepository.spanDayFractions(
+                    span.employeeId(), span.startDate(), span.endDate(), span.startTime(), span.endTime(),
+                    span.leaveTypeCode());
+                fractions.forEach((date, value) -> {
+                    if (!date.isBefore(from) && !date.isAfter(to)) {
+                        addContribution(byDay, new EmployeeDay(span.employeeId(), date), span, value);
+                    }
+                });
                 continue;
             }
             // Whole-day: walk only the slice of [startDate, endDate] that falls inside the reported

@@ -343,6 +343,83 @@ class LeaveDayMathTest {
     // repository, which Mockito/plain-object fakes here cannot verify.
     // ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * Direct coverage for the {@link LeaveDayMath#spanDayFractions} ledger itself. Every other test
+     * of the span path reaches it through {@code LeaveService#submit}, which proves the TOTAL but
+     * not the per-DATE shape -- and the per-date shape is what payroll-month attribution and the
+     * attendance summary both consume, so a ledger that summed correctly while bucketing wrongly
+     * would pass every existing test.
+     */
+    @Test
+    void spanDayFractionsPutsThePartialFractionOnTheBoundaryDatesAndAFullDayOnEveryDateBetween() {
+        Predicate<LocalDate> everyDayIsWorking = date -> true;
+        Map<LocalDate, BigDecimal> ledger = LeaveDayMath.spanDayFractions(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-14"),
+            LocalTime.of(13, 30), LocalTime.of(12, 30),
+            LeaveDayCountBasis.WORKING_DAYS, everyDayIsWorking,
+            FIVE_DAY_SCHEDULE, FIVE_DAY_SCHEDULE);
+
+        // First day 13:30-17:30 = 240 min, no break overlap -> 0.50.
+        // Last day 08:30-12:30 = 240 min, no break overlap -> 0.50.
+        // The two dates strictly between are full days.
+        assertThat(ledger).containsExactly(
+            Map.entry(LocalDate.parse("2026-09-11"), new BigDecimal("0.50")),
+            Map.entry(LocalDate.parse("2026-09-12"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2026-09-13"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2026-09-14"), new BigDecimal("0.50")));
+        assertThat(LeaveDayMath.sumFractions(ledger)).isEqualByComparingTo("3.00");
+    }
+
+    /** A non-working date contributes NOTHING to the ledger -- not a zero entry, no entry at all. */
+    @Test
+    void spanDayFractionsOmitsNonWorkingDatesEntirelyRatherThanRecordingThemAsZero() {
+        Predicate<LocalDate> weekdaysOnly = date -> FIVE_DAY_SCHEDULE.isWorkday(date);
+        Map<LocalDate, BigDecimal> ledger = LeaveDayMath.spanDayFractions(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-15"),
+            LocalTime.of(13, 30), LocalTime.of(12, 30),
+            LeaveDayCountBasis.WORKING_DAYS, weekdaysOnly,
+            FIVE_DAY_SCHEDULE, FIVE_DAY_SCHEDULE);
+
+        // 11 Sep 2026 is a Friday; 12-13 Sep are the weekend and must be ABSENT, not 0.00.
+        assertThat(ledger.keySet()).containsExactly(
+            LocalDate.parse("2026-09-11"), LocalDate.parse("2026-09-14"), LocalDate.parse("2026-09-15"));
+        assertThat(LeaveDayMath.sumFractions(ledger)).isEqualByComparingTo("2.00");
+    }
+
+    /**
+     * {@link LeaveDayMath#unpaidByMonthFromFractionsAcrossYears} is the seam payroll reads when a
+     * timed span crosses BOTH a month and a calendar-year boundary: each year carries its own
+     * paidDays (quota is per year), so the unpaid remainder must be worked out per year and only
+     * then merged by month. Summing the whole span against one paidDays figure would silently
+     * mis-attribute the deduction.
+     */
+    @Test
+    void unpaidByMonthAcrossYearsResolvesEachYearAgainstItsOwnPaidDaysBeforeMergingByMonth() {
+        Map<LocalDate, BigDecimal> ledger = new java.util.LinkedHashMap<>();
+        ledger.put(LocalDate.parse("2026-12-30"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2026-12-31"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2027-01-04"), new BigDecimal("1.00"));
+        ledger.put(LocalDate.parse("2027-01-05"), new BigDecimal("0.50"));
+
+        // 2026 has 1.00 of its 2.00 paid; 2027 has none of its 1.50 paid.
+        List<LeaveQuotaYearSplit> perYear = List.of(
+            new LeaveQuotaYearSplit(2026, new BigDecimal("2.00"), new BigDecimal("1.00"),
+                new BigDecimal("1.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO),
+            new LeaveQuotaYearSplit(2027, new BigDecimal("1.50"), BigDecimal.ZERO,
+                new BigDecimal("1.50"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO));
+
+        Map<LocalDate, BigDecimal> byMonth =
+            LeaveDayMath.unpaidByMonthFromFractionsAcrossYears(ledger, perYear);
+
+        // Dec 2026: 2.00 in the ledger, 1.00 paid (earliest first) -> 1.00 unpaid.
+        // Jan 2027: nothing paid -> the whole 1.50 is unpaid.
+        assertThat(byMonth).containsExactly(
+            Map.entry(LocalDate.parse("2026-12-01"), new BigDecimal("1.00")),
+            Map.entry(LocalDate.parse("2027-01-01"), new BigDecimal("1.50")));
+    }
+
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final WorkSchedule FIVE_DAY_SCHEDULE = new WorkSchedule(
         BUSINESS_ZONE, LocalTime.of(8, 30), LocalTime.of(17, 30), 5,
@@ -433,5 +510,58 @@ class LeaveDayMathTest {
             new BigDecimal("7.00"), LeaveDayCountBasis.CALENDAR_DAYS, rejectsEveryDate);
 
         assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-08-01"), new BigDecimal("2.00")));
+    }
+
+    // --- formatDuration (leave-records report, 2026-09): days/hours/minutes, NEVER a decimal -----
+
+    @Test
+    void formatDurationOnAWholeDayPrintsNoTrailingZeroHours() {
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("1.00"))).isEqualTo("1 วัน");
+    }
+
+    @Test
+    void formatDurationOnAFractionalDayPrintsDaysAndHoursAndMinutes() {
+        // The brief's own worked example: 1.56 * 480 = 748.8min, snapped to the nearest 5-minute
+        // step = 750min = 1 whole day (480min) + a 270-minute (4h30m) remainder.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("1.56"))).isEqualTo("1 วัน 4 ชม. 30 น.");
+    }
+
+    @Test
+    void formatDurationUnderOneDayOmitsTheDaysUnit() {
+        // 0.5625 * 480 = 270min exactly = 4h30m, zero whole days.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.5625"))).isEqualTo("4 ชม. 30 น.");
+    }
+
+    @Test
+    void formatDurationOnAnExactHourOmitsTheMinutesUnit() {
+        // 0.25 * 480 = 120min = 2h0m.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.25"))).isEqualTo("2 ชม.");
+    }
+
+    @Test
+    void formatDurationUnderOneHourPrintsMinutesOnly() {
+        // 0.0625 * 480 = 30min.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.0625"))).isEqualTo("30 น.");
+    }
+
+    @Test
+    void formatDurationOnZeroPrintsZeroDaysNotBlank() {
+        assertThat(LeaveDayMath.formatDuration(BigDecimal.ZERO)).isEqualTo("0 วัน");
+    }
+
+    @Test
+    void formatDurationOnNullReadsAsZero() {
+        assertThat(LeaveDayMath.formatDuration(null)).isEqualTo("0 วัน");
+    }
+
+    @Test
+    void formatDurationNeverEmitsADecimalPoint() {
+        // A bare `doesNotContain(".")` is WRONG here and fails on correct output: the Thai unit
+        // abbreviations themselves end in a full stop ("6 วัน 3 ชม."). What must never appear is a
+        // DECIMAL point -- a digit, a dot, then another digit -- which is how "6.37" would leak
+        // through if the days->hours conversion were ever dropped.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("6.37")))
+            .isEqualTo("6 วัน 3 ชม.")
+            .doesNotMatch(".*\\d\\.\\d.*");
     }
 }

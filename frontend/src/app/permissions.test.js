@@ -358,6 +358,16 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets', ceo)).toBe(true);
     expect(canAccessPath('/tickets', { role: 'sales_manager', employeeId: 4 })).toBe(true);
   });
+
+  // #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the
+  // '/quotations' guard -- a grant holder's ROLE need not be in ROLE_PERMISSIONS
+  // .canViewDealQuotations at all (qc is not).
+  it('refuses /quotations to a qc user with no grant, admits one with the grant', () => {
+    expect(canAccessPath('/quotations', { role: 'qc', employeeId: 20 })).toBe(false);
+    expect(canAccessPath('/quotations/new', { role: 'qc', employeeId: 20 })).toBe(false);
+    expect(canAccessPath('/quotations', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
+    expect(canAccessPath('/quotations/new', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
+  });
 });
 
 describe('isDivisionManager', () => {
