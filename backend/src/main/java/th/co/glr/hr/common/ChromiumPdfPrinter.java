@@ -81,6 +81,18 @@ public final class ChromiumPdfPrinter {
     /** After a failed launch, {@link #isAvailable()} answers {@code false} without retrying for
      * this long; then the next caller launches again. */
     static final long LAUNCH_RETRY_COOLDOWN_MS = 60_000;
+    /**
+     * Where a system Chromium may live, tried in order when {@code CHROMIUM_PATH} is unset or
+     * points at nothing. Debian's package installs {@code /usr/bin/chromium}; Ubuntu's (and the
+     * GitHub runner image) {@code /usr/bin/chromium-browser}; some hosts provide Chrome instead.
+     */
+    static final List<String> SYSTEM_CHROMIUM_CANDIDATES = List.of(
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable"
+    );
+
     /** See the class Javadoc, "Container launch flags". */
     static final List<String> SYSTEM_CHROMIUM_ARGS = List.of(
         "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--font-render-hinting=none");
@@ -244,12 +256,26 @@ public final class ChromiumPdfPrinter {
         String override = executablePathForTest;
         if (override != null) return override;
         String envPath = System.getenv("CHROMIUM_PATH");
-        if (envPath != null && !envPath.isBlank() && new File(envPath).isFile()) {
-            return envPath;
+        if (envPath != null && !envPath.isBlank()) {
+            if (new File(envPath).isFile()) {
+                return envPath;
+            }
+            // Loud, because this is exactly how the engine went missing once: the image set
+            // CHROMIUM_PATH=/usr/bin/chromium while the Debian package had installed
+            // /usr/bin/chromium-browser, so resolution fell through to a bundled browser that
+            // PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD had kept out of the image — every PDF request
+            // would have 503'd, and nothing in the build or boot logs said why.
+            log.warn("CHROMIUM_PATH is set to '{}' but no file is there — falling back to the "
+                + "known package paths, then to Playwright's bundled browser", envPath);
         }
-        File dockerDefault = new File("/usr/bin/chromium");
-        if (dockerDefault.isFile()) {
-            return dockerDefault.getAbsolutePath();
+        // Package layouts differ across base images and Debian/Ubuntu releases, so try each known
+        // location rather than trusting one. Order: Debian's chromium, Ubuntu's chromium-browser,
+        // then Google Chrome, which some runners provide instead.
+        for (String candidate : SYSTEM_CHROMIUM_CANDIDATES) {
+            File binary = new File(candidate);
+            if (binary.isFile()) {
+                return binary.getAbsolutePath();
+            }
         }
         return null;
     }
