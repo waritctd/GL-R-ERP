@@ -53,13 +53,35 @@ import {
 //                            same floor QuotationDocumentView.jsx uses for เป็นเงิน, deliberately —
 //                            a grand total is at least as large as any line total on it.
 //   สถานะ   4.75rem/76px    the widest badge label, อนุมัติแล้ว, plus the badge's own padding.
-//   วันที่   6.125rem/98px   `30 พ.ย. 2569` = 95.9px in the fallback.
-//   พนักงานขาย 4rem/64px     a floor only, not a fit: this column WRAPS (see its render), so it
-//                            needs just enough to keep the longer of the two name words on a line.
+//   วันที่   6.5rem/104px    ALL TWELVE months measured, not one. `เม.ย.` is the widest — four glyph
+//                            clusters, not three — at 100.13px in the fallback, so the 98px this was
+//                            first set to CLIPPED every April date on a host without Sarabun. `พ.ค.`
+//                            96.74 and `ต.ค.` 96.16 had under 2px to spare. Never size a Thai date
+//                            column from one sample month. The cell renders a bare string, so it
+//                            truncates rather than wraps — see the note on พนักงานขาย below for why
+//                            it is deliberately NOT wrapped in a <span>.
+//   พนักงานขาย —            NO floor, deliberately. It wraps, and the longest real surname
+//                            (`วงศ์ประเสริฐ`, 82.5px) exceeds any floor this budget can afford, so a
+//                            floor could never prevent a mid-word break — its only actual effect
+//                            was taking 64px from the absorber. Both free-text columns now share
+//                            what the four floored columns leave, by their `fr` weights.
 //
-// ลูกค้า / โครงการ keeps `minmax(0, …)` and is the designated absorber — it is the one column
-// carrying free text over two stacked lines, so it can give up width without losing anything.
-const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(4rem,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.125rem,1fr)]';
+// ลูกค้า / โครงการ and พนักงานขาย keep `minmax(0, …)`: they are the two columns of free text, both
+// wrap, and so they are the two that can give up width without losing anything.
+//
+// ⚠️ This string must stay ONE unbroken literal. Splitting it across a `+` concatenation — a
+// natural-looking edit — leaves Tailwind's scanner unable to see the arbitrary value, so the rule is
+// never emitted, `grid-template-columns` goes unset, and the row collapses to a single implicit
+// track (measured: 63.5px tall becomes 242px, cells stacked). Lint, the unit suite and `npm run
+// build` ALL stay green, and the dev server keeps working from its cache, so nothing catches it
+// except reading `dist/assets/*.css`. The guard test asserts this file's own source text for that
+// reason.
+//
+// ⚠️ At a browser root font-size above about 18.6px the floors (30rem total) exceed the 559px the
+// row has at a 721px viewport. The wrapping <section> is `overflow-x-auto`, so that degrades to a
+// horizontal scrollbar rather than losing anything — but it is a state the old all-`minmax(0,…)`
+// grid could not reach.
+const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]';
 
 // The tab set itself is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js) — owner feedback F5,
 // 2026-09-10 replaced the old six status chips (ทั้งหมด/รออนุมัติ/ร่าง/อนุมัติแล้ว/ถูกแทนที่/
