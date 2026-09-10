@@ -306,6 +306,44 @@ const SERVER_ONLY = {
   // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
   // where the misreading happened.
 
+  // ── Quotation v2 (direct deal quotation, PR #907) — backend-only branch ─────────────
+  // Fifteen routes for the direct-deal quotation lifecycle and the approver's signature image
+  // (DealQuotationController, EmployeeSignatureController; authz proven wrong-way-round against
+  // real Postgres by DealQuotationIntegrationTest). This branch ships the backend alone so the
+  // migration + services + gate tests stay reviewable; the UI is PR #908, stacked on it, whose
+  // hrApi calls every one of these — and whose merge deletes these entries, because the
+  // stale-entry test below refuses to keep an exemption for a called endpoint.
+  'GET /api/deal-quotations':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'GET /api/deal-quotations/{}':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'GET /api/deal-quotations/{}/file':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'GET /api/tickets/{}/deal-quotations':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/tickets/{}/deal-quotations':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'PUT /api/deal-quotations/{}':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/calculate-line':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/{}/submit':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/{}/approve':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/{}/reject':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/{}/cancel':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'POST /api/deal-quotations/{}/revisions':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'GET /api/employees/{}/signature':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'PUT /api/employees/{}/signature':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+  'DELETE /api/employees/{}/signature':
+    'Quotation v2 UI lands in PR #908 (stacked on this branch); its hrApi calls these.',
+
   // CEO discount-approval workflow, Phase 2 (V155). The task's actual UI requirement — a line
   // shows sales it needs approval and why it was rejected; the CEO approves/rejects with a
   // reason — is satisfied per-quotation, on the same PricingRequestDetailPage screen the CEO
