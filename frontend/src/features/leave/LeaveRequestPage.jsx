@@ -46,6 +46,42 @@ import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js
 const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
 const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม';
 
+// Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- SICK, and only SICK, is
+// exempt from the "start date must not be before today" block below. Deliberately unlimited: there
+// is no retroactive window on it, unlike OT (OT_RETROACTIVE_WINDOW_DAYS in
+// features/overtime/OvertimePanel.jsx). It is also not HR-only -- an employee filing for themselves
+// gets the same exemption, which is the case that prompted the ruling (paper F-HR-020 sick forms
+// were reaching HR days late and could not be entered through this form at all). Every OTHER type
+// keeps the block: a widening to all types was considered on the same day and explicitly dropped.
+//
+// The backend applies its own §5.1 gates, which this exemption does not touch and which surface in
+// the preview response at BOTH step 2 and step 3 (step2FieldTarget below already routes the SICK
+// certificate codes to the attachment field): LeaveService#sickCertificateRuleOutcome returns
+// SICK_CERTIFICATE_WINDOW when an attachment IS present and today falls more than
+// certificate_filing_window_days (3, as seeded) WORKING days after startDate.
+//
+// UPDATED 2026-09-10 (V164): that gate is now a WARNING, not a rejection. An earlier draft of this
+// comment said a paper form arriving after the window "still auto-rejects", and flagged it as the
+// one part of "ได้ตลอด" this change could not deliver. That is no longer true --
+// SICK_CERTIFICATE_WINDOW's LeaveRuleEnforcement is WARN_UNPAID_ALL, so a late-filed sick leave now
+// SUBMITS, carries the warning, and is unpaid if approved rather than being refused outright. So
+// unblocking the form here genuinely does deliver the owner's "ได้ตลอด" end to end: the employee can
+// file it, and a manager decides. Do not restore the old wording.
+//
+// SICK-only here is the OWNER'S POLICY CHOICE, not a limit the backend imposes. Do not restate it
+// as one: the advance-notice gate is `if (noticeDays > 0)`, and advance_notice_days is 0 for SICK,
+// LEAVE_WITHOUT_PAY, MATERNITY, MILITARY and ORDINATION alike (PERSONAL 1 / VACATION 3 are the only
+// non-zero ones), so the backend would accept a backdated request for any of those five.
+const BACKDATE_ALLOWED_LEAVE_TYPE_CODES = new Set(['SICK']);
+
+// Single source of truth for the past-start-date rule -- both the zod schema and the render-time
+// `startDateInPast` derivation below call THIS, so the exemption cannot drift between the two.
+function isStartDateBlockedAsPast(leaveTypeCode, startDate, minStartDate) {
+  if (!startDate || !minStartDate) return false;
+  if (BACKDATE_ALLOWED_LEAVE_TYPE_CODES.has(leaveTypeCode)) return false;
+  return startDate < minStartDate;
+}
+
 // Step 1's secondary disclosure leads each rare type with its own gating condition (the brief's
 // own framing: "each leading with its *gating condition*") -- this only echoes each type's OWN
 // metadata columns (minServiceMonths/oncePerEmployment/requiresAttachment, already present on the
@@ -145,7 +181,7 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     if (requireEmployeeId && !data.employeeId) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['employeeId'], message: 'กรุณาเลือกพนักงาน' });
     }
-    if (data.startDate && data.startDate < minStartDate) {
+    if (isStartDateBlockedAsPast(data.leaveTypeCode, data.startDate, minStartDate)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: LEAVE_START_PAST_MESSAGE });
     }
     if (data.subDay) {
@@ -366,7 +402,11 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       'quotaPoolPreference',
     ],
   });
-  const startDateInPast = Boolean(startDate && startDate < todayIso());
+  // Not memoised on purpose: `leaveTypeCode` is watched, so this recomputes on a type switch.
+  // That alone only clears the DERIVED half (this flag, and with it the button's disabled state);
+  // a message already written into `errors.startDate` by the previous type is cleared by
+  // selectType's explicit trigger('startDate') below. Both halves are needed -- see that comment.
+  const startDateInPast = isStartDateBlockedAsPast(leaveTypeCode, startDate, todayIso());
   const startDateError = startDateInPast ? LEAVE_START_PAST_MESSAGE : errors.startDate?.message;
 
   // Seed the acting employee once options load, same convention as the pre-A2 form.
@@ -403,6 +443,13 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   function selectType(code) {
     setValue('leaveTypeCode', code, { shouldValidate: true });
+    // `shouldValidate` re-runs the whole schema but writes back ONLY the named field's error, so a
+    // past-date error raised under the previous type would otherwise still be rendered after
+    // switching to a backdate-exempt one (ลาพักร้อน -> ลาป่วย). Re-validate startDate explicitly --
+    // but only once it holds a value, or an empty field would answer a type click with its own
+    // "กรุณาเลือกวันที่เริ่ม" required error before the user has reached step 2.
+    if (getValues('startDate')) trigger('startDate');
+
     // A different type invalidates whatever purpose/emergency choice belonged to the old one.
     setValue('purposeCode', '', { shouldValidate: true });
     setValue('requestedAsEmergency', false, { shouldValidate: true });
