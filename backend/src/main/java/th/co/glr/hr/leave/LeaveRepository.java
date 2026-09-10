@@ -151,6 +151,37 @@ public class LeaveRepository {
         return scheduleResolver.resolve(employeeId, context.divisionId(), context.departmentId(), onDate);
     }
 
+    /**
+     * Partial-day span (V166): the public, cross-package entry point to {@link
+     * LeaveDayMath#spanDayFractions} -- {@code th.co.glr.hr.attendance.AttendanceMonthlySummaryService}
+     * (a DIFFERENT package, so it cannot reach this package-private {@code LeaveDayMath} directly)
+     * calls this to correctly split a multi-day TIMED {@code ApprovedLeaveSpanDto} across the dates
+     * it actually covers, instead of dumping its whole {@code totalDays} onto {@code startDate} alone
+     * (which is only valid for a SINGLE-day sub-day span -- see that service's own "Leave-day
+     * attribution" Javadoc, unchanged for that case). Resolves {@code startDate}/{@code endDate}'s
+     * schedules and the request's own {@link #workingDayPredicate} internally, the same two-query
+     * cost every other schedule-aware method in this class already pays -- never called for a
+     * single-day span, where the caller's existing "attribute the whole total_days to that one date"
+     * rule already needs no schedule lookup at all.
+     *
+     * <p>{@code leaveTypeCode} resolves its own {@link LeaveDayCountBasis} via {@link #findLeaveType}
+     * -- falls back to {@link LeaveDayCountBasis#WORKING_DAYS} if the type has since been
+     * deactivated/removed, same defensive fallback {@code LeaveService#recordPayrollCorrectionIfNeeded}
+     * already uses for the identical reason.
+     */
+    public Map<LocalDate, BigDecimal> spanDayFractions(
+            long employeeId, LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
+            String leaveTypeCode) {
+        LeaveDayCountBasis basis = findLeaveType(leaveTypeCode)
+            .map(LeaveTypeDto::dayCountBasis)
+            .orElse(LeaveDayCountBasis.WORKING_DAYS);
+        Predicate<LocalDate> isWorkingDay = workingDayPredicate(employeeId, startDate, endDate);
+        WorkSchedule startSchedule = resolveOwnSchedule(employeeId, startDate);
+        WorkSchedule endSchedule = resolveOwnSchedule(employeeId, endDate);
+        return LeaveDayMath.spanDayFractions(
+            startDate, endDate, startTime, endTime, basis, isWorkingDay, startSchedule, endSchedule);
+    }
+
     public boolean employeeExists(long employeeId) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -825,8 +856,8 @@ public class LeaveRepository {
         LocalDate monthEndInclusive = monthStart.plusMonths(1).minusDays(1);
         int year = monthStart.getYear();
         List<UnpaidLeaveSpan> spans = jdbc.query("""
-            SELECT lr.employee_id, lr.start_date, lr.end_date, lrqy.paid_days, lrqy.total_days,
-                   lt.day_count_basis, e.division_id, e.department_id
+            SELECT lr.employee_id, lr.start_date, lr.end_date, lr.start_time, lr.end_time,
+                   lrqy.paid_days, lrqy.total_days, lt.day_count_basis, e.division_id, e.department_id
               FROM hr.leave_request lr
               JOIN hr.leave_request_quota_year lrqy
                 ON lrqy.leave_request_id = lr.leave_request_id
@@ -846,6 +877,8 @@ public class LeaveRepository {
                 rs.getLong("employee_id"),
                 rs.getObject("start_date", LocalDate.class),
                 rs.getObject("end_date", LocalDate.class),
+                rs.getObject("start_time", LocalTime.class),
+                rs.getObject("end_time", LocalTime.class),
                 rs.getObject("paid_days", BigDecimal.class),
                 rs.getObject("total_days", BigDecimal.class),
                 LeaveDayCountBasis.valueOf(rs.getString("day_count_basis")),
@@ -866,12 +899,39 @@ public class LeaveRepository {
             }
             Predicate<LocalDate> isWorkingDay = LeaveDayMath.workingDayPredicate(
                 scheduleResolver, span.employeeId(), span.divisionId(), span.departmentId(), holidaysThisMonth);
-            // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
-            // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
-            BigDecimal unpaidInMonth = LeaveDayMath
-                .unpaidWorkingDaysByMonth(
-                    clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis(), isWorkingDay)
-                .get(monthStart);
+            BigDecimal unpaidInMonth;
+            // Partial-day span (V166): a multi-day TIMED request needs the fraction-aware ledger --
+            // the plain rank-based #unpaidWorkingDaysByMonth below cannot represent a fractional
+            // boundary day. Built from the request's TRUE (un-clipped) start/end date+time -- the
+            // boundary fraction only means something relative to the REAL start/end -- then FILTERED
+            // to this year's clipped sub-range before consuming `span.paidDays()`, mirroring exactly
+            // how the pre-existing whole-day path already clips to `year` before applying that year's
+            // own paid_days (see LeaveQuotaYearSplit's "paid consumption resets per calendar year"
+            // rule). Every other request shape (whole-day, or single-day timed) is UNCHANGED, still
+            // reading #unpaidWorkingDaysByMonth exactly as before this migration.
+            if (span.startTime() != null && !span.startDate().equals(span.endDate())) {
+                WorkSchedule startSchedule = scheduleResolver.resolve(
+                    span.employeeId(), span.divisionId(), span.departmentId(), span.startDate());
+                WorkSchedule endSchedule = scheduleResolver.resolve(
+                    span.employeeId(), span.divisionId(), span.departmentId(), span.endDate());
+                Map<LocalDate, BigDecimal> fractions = LeaveDayMath.spanDayFractions(
+                    span.startDate(), span.endDate(), span.startTime(), span.endTime(),
+                    span.basis(), isWorkingDay, startSchedule, endSchedule);
+                Map<LocalDate, BigDecimal> yearFractions = new LinkedHashMap<>();
+                fractions.forEach((date, value) -> {
+                    if (!date.isBefore(clipped[0]) && !date.isAfter(clipped[1])) {
+                        yearFractions.put(date, value);
+                    }
+                });
+                unpaidInMonth = LeaveDayMath.unpaidByMonthFromFractions(yearFractions, span.paidDays()).get(monthStart);
+            } else {
+                // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
+                // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
+                unpaidInMonth = LeaveDayMath
+                    .unpaidWorkingDaysByMonth(
+                        clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis(), isWorkingDay)
+                    .get(monthStart);
+            }
             if (unpaidInMonth != null && unpaidInMonth.signum() > 0) {
                 byEmployee.merge(span.employeeId(), unpaidInMonth, BigDecimal::add);
             }
@@ -1025,8 +1085,8 @@ public class LeaveRepository {
     }
 
     private record UnpaidLeaveSpan(
-        long employeeId, LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
-        LeaveDayCountBasis basis, Long divisionId, Long departmentId) {
+        long employeeId, LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
+        BigDecimal paidDays, BigDecimal totalDays, LeaveDayCountBasis basis, Long divisionId, Long departmentId) {
     }
 
     public long create(

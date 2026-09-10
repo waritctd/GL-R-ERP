@@ -3858,27 +3858,81 @@ function workingDaysBetween(startDate, endDate) {
 
 const LEAVE_WORKDAY_START = '08:30';
 const LEAVE_WORKDAY_END = '17:30';
+// Partial-day span (V166, 2026-09-10): the mock has no per-employee hr.work_schedule concept (see
+// workingDaysBetween's own "KNOWN DIVERGENCE" comment above) -- every timed request here is
+// measured against this ONE hardcoded 08:30-17:30 (9h/540min) window, the seeded default schedule
+// most employees are actually on. This REPLACES the old 480 (8h) divisor -- see
+// LeaveDayMath#spanDayFractions's Javadoc on the backend for why 8h was wrong (the seeded day is 9
+// CLOCK hours, not 8) -- but still does NOT resolve a six-day-division or other non-default
+// schedule the way TieredWorkScheduleResolver does; do not "verify" a six-day employee's partial-day
+// total under VITE_USE_MOCKS=true.
+const LEAVE_WORKDAY_MINUTES = 9 * 60;
 
-// Sub-day leave (2026-07-25): mirrors LeaveService#computeTotalDays -- clock-hours(start,end) / 8,
-// no lunch subtraction (decided rule), rounded to 2dp, capped at 1.00 (a sub-day request can never
-// exceed one whole day). Times must fall within the standard workday (08:30-17:30), and the date
-// itself must be a weekday -- mirrors LeaveService#validateSubDayTimes: without this a
-// Saturday/Sunday half-day would slip through while the identical whole-day request is rejected by
-// workingDaysBetween.
-function workingDayFraction(startDate, startTime, endTime) {
+function timeToMinutes(value) {
+  const [h, m] = value.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// Partial-day span (V166, 2026-09-10, widened from the original single-day-only sub-day feature):
+// mirrors LeaveDayMath#spanDayFractions -- a timed request's boundary day(s) are measured against
+// LEAVE_WORKDAY_MINUTES (the mock's one hardcoded schedule length), not a hardcoded 8-hour divisor;
+// full days strictly between the boundaries count 1.00 each. Returns the plain SUM (mirrors
+// LeaveService#computeTotalDays reading LeaveDayMath#sumFractions), matching the real endpoint's
+// single `totalDays` figure -- the mock has no per-day breakdown to expose (nothing here reads one).
+//
+// Single-day (startDate === endDate): identical shape to the pre-V166 sub-day fraction, just
+// against the new 540min divisor instead of the old 480min one.
+function spanTotalDays(startDate, endDate, startTime, endTime) {
   if (!startTime || !endTime) fail('การลาแบบระบุช่วงเวลาต้องระบุเวลาเริ่มต้นและเวลาสิ้นสุด', 400);
-  const dayOfWeek = new Date(`${startDate}T00:00:00`).getDay();
-  if (dayOfWeek === 0 || dayOfWeek === 6) fail('ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน', 400);
-  if (startTime < LEAVE_WORKDAY_START || startTime > LEAVE_WORKDAY_END
-    || endTime < LEAVE_WORKDAY_START || endTime > LEAVE_WORKDAY_END) {
-    fail('เวลาลาต้องอยู่ในช่วงเวลาทำงาน (08:30-17:30)', 400);
+  if (startDate === endDate && endTime <= startTime) {
+    fail('เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น', 400);
   }
-  const [startH, startM] = startTime.split(':').map(Number);
-  const [endH, endM] = endTime.split(':').map(Number);
-  const minutes = (endH * 60 + endM) - (startH * 60 + startM);
-  if (minutes <= 0) fail('เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น', 400);
-  const fraction = Math.round((minutes / (8 * 60)) * 100) / 100;
-  return Math.min(1, fraction);
+  const isWeekday = (iso) => {
+    const day = new Date(`${iso}T00:00:00`).getDay();
+    return day !== 0 && day !== 6;
+  };
+  const boundaryFraction = (fromMinutes, toMinutes) => {
+    const minutes = toMinutes - fromMinutes;
+    if (minutes <= 0) return 0;
+    return Math.min(1, Math.round((minutes / LEAVE_WORKDAY_MINUTES) * 100) / 100);
+  };
+  const validateBounds = (iso, time) => {
+    if (time < LEAVE_WORKDAY_START || time > LEAVE_WORKDAY_END) {
+      fail(`เวลาลาวันที่ ${iso} ต้องอยู่ในช่วงเวลาทำงาน (${LEAVE_WORKDAY_START}-${LEAVE_WORKDAY_END})`, 400);
+    }
+  };
+
+  if (startDate === endDate) {
+    if (!isWeekday(startDate)) fail('ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน', 400);
+    validateBounds(startDate, startTime);
+    validateBounds(startDate, endTime);
+    return boundaryFraction(timeToMinutes(startTime), timeToMinutes(endTime));
+  }
+
+  let total = 0;
+  let anyWorkday = false;
+  if (isWeekday(startDate)) {
+    anyWorkday = true;
+    validateBounds(startDate, startTime);
+    total += boundaryFraction(timeToMinutes(startTime), timeToMinutes(LEAVE_WORKDAY_END));
+  }
+  const cursor = new Date(`${startDate}T00:00:00`);
+  cursor.setDate(cursor.getDate() + 1);
+  const endCursor = new Date(`${endDate}T00:00:00`);
+  while (cursor < endCursor) {
+    if (cursor.getDay() !== 0 && cursor.getDay() !== 6) {
+      anyWorkday = true;
+      total += 1;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  if (isWeekday(endDate)) {
+    anyWorkday = true;
+    validateBounds(endDate, endTime);
+    total += boundaryFraction(timeToMinutes(LEAVE_WORKDAY_START), timeToMinutes(endTime));
+  }
+  if (!anyWorkday || total <= 0) fail('ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน', 400);
+  return Math.round(total * 100) / 100;
 }
 
 function leaveUsedDays(employeeId, leaveTypeCode, quotaYear, statuses) {
@@ -5716,14 +5770,13 @@ export const api = {
       if (employeeId !== user.employeeId && !canReviewLeave(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const employee = findEmployee(employeeId);
       const leaveType = leaveTypeByCode(payload.leaveTypeCode);
-      // Sub-day leave (2026-07-25): times present -> fractional day, single-date only (mirrors
-      // LeaveService#computeTotalDays / #validateSubDayTimes). No times -> existing whole-day count.
+      // Partial-day span (V166, 2026-09-10, widened from the original single-day-only sub-day
+      // feature): times present -> fractional/multi-day span total via spanTotalDays (mirrors
+      // LeaveService#computeTotalDays / #validateSubDayTimes -- a timed request may now span more
+      // than one calendar day). No times -> existing whole-day count, unchanged.
       const hasSubDayTimes = Boolean(payload.startTime && payload.endTime);
-      if (hasSubDayTimes && payload.startDate !== payload.endDate) {
-        fail('การลาแบบระบุช่วงเวลาต้องเริ่มต้นและสิ้นสุดในวันเดียวกัน', 400);
-      }
       const totalDays = hasSubDayTimes
-        ? workingDayFraction(payload.startDate, payload.startTime, payload.endTime)
+        ? spanTotalDays(payload.startDate, payload.endDate, payload.startTime, payload.endTime)
         : workingDaysBetween(payload.startDate, payload.endDate);
       const quotaYear = Number(payload.startDate.slice(0, 4));
       const used = leaveUsedDays(employeeId, leaveType.code, quotaYear, ['SUBMITTED', 'APPROVED']);
@@ -5952,7 +6005,13 @@ export const api = {
       }
       const blocking = LEAVE_PREVIEW_BLOCKING_FIXTURE[leaveType.code] ?? null;
       const depth = payload.depth === 'QUICK' ? 'QUICK' : 'FULL';
-      const totalDays = workingDaysBetween(payload.startDate, payload.endDate);
+      // Partial-day span (V166, 2026-09-10): widened from "no sub-day times in this shape at all"
+      // -- mirrors LeavePreviewRequest's own widening on the backend, so a mock-mode preview shows
+      // the SAME totalDays a real one would for a timed (single- or multi-day) span.
+      const hasSubDayTimes = Boolean(payload.startTime && payload.endTime);
+      const totalDays = hasSubDayTimes
+        ? spanTotalDays(payload.startDate, payload.endDate, payload.startTime, payload.endTime)
+        : workingDaysBetween(payload.startDate, payload.endDate);
       const quotaYear = Number(String(payload.startDate).slice(0, 4));
       // A BLOCKing gate always reports an empty ruleWarnings/0 unpaidByRuleDays -- same dominance
       // reading LeavePreviewDto's own Javadoc documents ("a BLOCK wins outright"; this DTO never has
