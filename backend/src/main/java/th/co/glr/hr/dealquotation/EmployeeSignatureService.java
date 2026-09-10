@@ -17,6 +17,13 @@ import th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage;
  * re-implementing the same live {@code hr.employee.is_admin} check a second way). Every other
  * caller — including {@code sales_manager}, who approves quotations but does not manage other
  * employees' signatures — is 403.
+ *
+ * <p>Existence: after the authz decision, an {@code employeeId} with no {@code hr.employee} row
+ * is 404 on every verb ({@code ไม่พบพนักงาน…}) — the real-backend write sweep
+ * ({@code e2e-real/write-authz.spec.js}) found {@code DELETE /api/employees/999999/signature}
+ * answering 204, a write "succeeding" against nothing. Authz comes FIRST so a caller without the
+ * capability still sees 403 and learns nothing about which ids exist. Deleting an EXISTING
+ * employee's absent signature stays 204: DELETE is idempotent.
  */
 @Service
 public class EmployeeSignatureService {
@@ -32,6 +39,7 @@ public class EmployeeSignatureService {
 
     public void upload(long employeeId, MultipartFile file, UserPrincipal actor) {
         requireManage(employeeId, actor);
+        requireEmployee(employeeId);
         if (file == null || file.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกไฟล์ลายเซ็น");
         }
@@ -54,13 +62,21 @@ public class EmployeeSignatureService {
 
     public SignatureImage get(long employeeId, UserPrincipal actor) {
         requireManage(employeeId, actor);
+        requireEmployee(employeeId);
         return signatures.find(employeeId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ยังไม่มีลายเซ็นสำหรับพนักงานนี้"));
     }
 
     public void delete(long employeeId, UserPrincipal actor) {
         requireManage(employeeId, actor);
+        requireEmployee(employeeId);
         signatures.delete(employeeId);
+    }
+
+    private void requireEmployee(long employeeId) {
+        if (!signatures.employeeExists(employeeId)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบพนักงานรหัส " + employeeId);
+        }
     }
 
     private void requireManage(long employeeId, UserPrincipal actor) {

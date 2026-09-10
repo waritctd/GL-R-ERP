@@ -835,6 +835,40 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
     }
 
+    /** Wrong-way-round: an employee id with no {@code hr.employee} row is 404 on all three verbs —
+     * the real-backend write sweep found DELETE answering 204 against id 999999. The 403 gate
+     * still comes first, so a caller without the capability learns nothing about which ids exist. */
+    @Test
+    void signature_unknownEmployee_isNotFoundOnEveryVerb_andStillForbiddenWithoutTheCapability() {
+        long unknown = 999_999L;
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM hr.employee WHERE employee_id = :id",
+            java.util.Map.of("id", unknown), Integer.class)).as("fixture: id must not exist").isZero();
+
+        assertNotFound(() -> signatureService.delete(unknown, ceoActor), "ไม่พบพนักงาน");
+        assertNotFound(() -> signatureService.get(unknown, ceoActor), "ไม่พบพนักงาน");
+        assertNotFound(() -> signatureService.upload(unknown, pngFile(), ceoActor), "ไม่พบพนักงาน");
+
+        assertForbidden(() -> signatureService.delete(unknown, employeeActor));
+        assertForbidden(() -> signatureService.get(unknown, salesManagerActor));
+    }
+
+    /** DELETE stays idempotent for an employee that EXISTS: no signature stored is 204, not 404. */
+    @Test
+    void signatureDelete_existingEmployeeWithoutSignature_isIdempotent() {
+        signatureService.delete(salesRepId, ceoActor); // nothing stored yet — must not throw
+        signatureService.upload(salesRepId, pngFile(), ceoActor);
+        signatureService.delete(salesRepId, ceoActor);
+        assertNotFound(() -> signatureService.get(salesRepId, ceoActor), "ยังไม่มีลายเซ็น");
+        signatureService.delete(salesRepId, ceoActor); // and again
+    }
+
+    private void assertNotFound(Runnable action, String messageFragment) {
+        assertThatThrownBy(action::run)
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.NOT_FOUND)
+            .hasMessageContaining(messageFragment);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
