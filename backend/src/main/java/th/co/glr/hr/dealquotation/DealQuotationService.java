@@ -27,6 +27,7 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.ContactSnapshot;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.CustomerSnapshot;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.InsertDraftParams;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.NewItem;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
@@ -125,12 +126,12 @@ public class DealQuotationService {
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         List<NewItem> items = buildItems(request.items());
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
-        CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
+        CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
         String number = quotations.nextQuotationCode();
         long id = quotations.insertDraft(new InsertDraftParams(
             ticketId, number, actor.id(), ticket.createdById(),
-            ticket.customerName(), customer != null ? customer.address() : null,
-            customer != null ? customer.taxId() : null, customer != null ? customer.phone() : null,
+            customerSnapshot.name(), customerSnapshot.address(),
+            customerSnapshot.taxId(), customerSnapshot.phone(),
             contact,
             ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
@@ -212,7 +213,13 @@ public class DealQuotationService {
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
-        int rows = quotations.updateHeader(id, contact, blankToNull(request.deptCode()), blankToNull(request.unitCode()),
+        // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
+        // save. The deal card now edits เลขที่ผู้เสียภาษี / โทร. in place, and the promise made
+        // there is "the values on screen at save time" -- which only holds if this save rewrites
+        // them. updateHeader's own WHERE clause keeps it DRAFT-only, so an issued/approved document
+        // stays frozen at what it was approved with.
+        int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
+            blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()), subtotal);
         if (rows == 0) {
@@ -494,6 +501,27 @@ public class DealQuotationService {
     // ─────────────────────────────────────────────────────────────────────────────────────
     // ผู้สั่งซื้อ — owner feedback F2 (2026-09-10): mandatory, snapshotted (V167).
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The ลูกค้า snapshot to stamp onto the quotation, read from the LIVE customer row — the one
+     * place create and update both build it, so the two can never drift into snapshotting different
+     * things. Owner feedback F7 (2026-09-10) made เลขที่ผู้เสียภาษี / โทร. editable on the deal
+     * card; this is what makes an edit reach the document, since {@code updateHeader} now rewrites
+     * these columns on every DRAFT save.
+     *
+     * <p>{@code name} deliberately still comes from the ticket (its own join on the customer row,
+     * i.e. equally live) rather than from {@code CustomerDto}, so a deal whose customer row has been
+     * deleted out from under it still prints the name it was created with instead of a blank.
+     */
+    private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket) {
+        CustomerDto customer = ticket.customerId() != null
+            ? customers.findById(ticket.customerId()).orElse(null) : null;
+        return new CustomerSnapshot(
+            ticket.customerName(),
+            customer != null ? customer.address() : null,
+            customer != null ? customer.taxId() : null,
+            customer != null ? customer.phone() : null);
+    }
 
     /**
      * Resolves the ผู้สั่งซื้อ for a create/update and returns the FROZEN snapshot to store —

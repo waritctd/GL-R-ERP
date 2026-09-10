@@ -142,6 +142,12 @@ public class DealQuotationRepository {
      * DealQuotationService#resolveContact}; a revision copies its parent's verbatim. */
     public record ContactSnapshot(Long contactId, String name, String phone, String email) {}
 
+    /** The ลูกค้า snapshot on {@code sales.quotation} — written at insert AND re-written on every
+     * DRAFT save (see {@link #updateHeader}), so a tax id / phone the rep corrects on the deal card
+     * reaches the document instead of being frozen at the value the deal happened to carry when the
+     * draft was first created. Built in ONE place, {@code DealQuotationService#customerSnapshot}. */
+    public record CustomerSnapshot(String name, String address, String taxId, String phone) {}
+
     public record InsertDraftParams(
         long ticketId, String number, long createdById, long salesRepId,
         String customerName, String customerAddress, String customerTaxId, String customerPhone,
@@ -275,14 +281,27 @@ public class DealQuotationRepository {
     }
 
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller
-     * could forget (mirrors {@code CustomerQuotationRepository.updateHeader}'s contract). */
-    public int updateHeader(long quotationId, ContactSnapshot contact, String deptCode, String unitCode,
+     * could forget (mirrors {@code CustomerQuotationRepository.updateHeader}'s contract).
+     *
+     * <p>The four {@code customer_*} columns are RE-SNAPSHOTTED here, not only at insert. Owner
+     * feedback F7 (2026-09-10) puts เลขที่ผู้เสียภาษี / โทร. on screen as editable fields on the
+     * SELECTED customer, and promised "the values on screen at save time" — which was false while
+     * this statement left the columns alone: correcting a wrong tax id and re-saving the draft
+     * still printed the old one forever. Re-snapshotting on every DRAFT save is safe precisely
+     * because of the {@code doc_status = 'DRAFT'} predicate below: an issued/approved/superseded
+     * document is not matched by this UPDATE at all, so the freeze that makes a sent document
+     * trustworthy still holds. A revision is its own DRAFT row, so it picks up the correction the
+     * first time the rep saves it — which is the point of taking a revision. */
+    public int updateHeader(long quotationId, ContactSnapshot contact, CustomerSnapshot customer,
+                            String deptCode, String unitCode,
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
                             Integer validityDays, String customerNotes, BigDecimal subtotal) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
                    contact_phone = :contactPhone, contact_email = :contactEmail,
+                   customer_name = :customerName, customer_address = :customerAddress,
+                   customer_tax_id = :customerTaxId, customer_phone = :customerPhone,
                    dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
@@ -295,6 +314,10 @@ public class DealQuotationRepository {
                 .addValue("contactName", contact.name())
                 .addValue("contactPhone", contact.phone())
                 .addValue("contactEmail", contact.email())
+                .addValue("customerName", customer.name())
+                .addValue("customerAddress", customer.address())
+                .addValue("customerTaxId", customer.taxId())
+                .addValue("customerPhone", customer.phone())
                 .addValue("deptCode", deptCode)
                 .addValue("unitCode", unitCode)
                 .addValue("offerDate", offerDate)

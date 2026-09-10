@@ -706,6 +706,73 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .extracting(DealQuotationDto::contactName).containsExactly("สมหญิง ใจดี");
     }
 
+    /**
+     * Owner feedback F7 (2026-09-10): the deal card now edits the SELECTED customer's
+     * เลขที่ผู้เสียภาษี / โทร. in place, and promises "the values on screen at save time". That was
+     * false while {@code updateHeader} left the four {@code customer_*} columns alone — correcting
+     * a wrong tax id and re-saving the draft still printed the old one. Wrong-way-round half: the
+     * freeze must STILL hold once the document is approved, which is the whole reason the snapshot
+     * exists.
+     */
+    @Test
+    void customerSnapshot_isReSnapshottedOnEveryDraftSave_butFrozenOnceApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.customerTaxId()).isEqualTo("0100000000099");
+        assertThat(created.customerPhone()).isEqualTo("02-999-9999");
+
+        // The rep corrects the customer master (exactly what PUT /api/customers/{id} does) …
+        customers.update(customer.id(), null, "0105566778899", null, null, "02-777-7777");
+        // … and re-saves the DRAFT.
+        DealQuotationDto resaved = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(resaved.customerTaxId()).as("the correction reached the snapshot").isEqualTo("0105566778899");
+        assertThat(resaved.customerPhone()).isEqualTo("02-777-7777");
+        assertThat(renderedStrings(resaved.id()))
+            .as("and the rendered document prints it, not the stale one")
+            .anyMatch(s -> s.contains("0105566778899"))
+            .anyMatch(s -> s.contains("02-777-7777"))
+            .noneMatch(s -> s.contains("0100000000099"));
+
+        // Approve, then correct the customer AGAIN: the approved document must not move.
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(resaved.id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        customers.update(customer.id(), null, "0999999999999", null, null, "02-000-0000");
+
+        DealQuotationDto reread = quotationService.get(approved.id(), salesActor);
+        assertThat(reread.customerTaxId()).as("frozen at approval").isEqualTo("0105566778899");
+        assertThat(reread.customerPhone()).isEqualTo("02-777-7777");
+        assertThat(renderedStrings(reread.id()))
+            .anyMatch(s -> s.contains("0105566778899"))
+            .noneMatch(s -> s.contains("0999999999999"));
+        // And the DRAFT-only WHERE clause is what enforces it — an update at all is a 409 here.
+        assertThatThrownBy(() -> quotationService.update(approved.id(),
+                upsertRequest(List.of(sampleItem("100.00", 10))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+    }
+
+    /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X"
+     * without hardcoding which cell the adapter happens to put it in. */
+    private List<String> renderedStrings(long quotationId) {
+        byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
+        List<String> out = new java.util.ArrayList<>();
+        try (var wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            for (var row : sheet) {
+                for (var cell : row) {
+                    if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                        out.add(cell.getStringCellValue());
+                    }
+                }
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+        return out;
+    }
+
     @Test
     void create_withoutAnyResolvableContact_isBadRequest() {
         ProjectDto project = projects.create(customer.id(), "โครงการไม่มีผู้ติดต่อ");
