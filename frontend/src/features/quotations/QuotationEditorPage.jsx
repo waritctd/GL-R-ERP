@@ -1120,7 +1120,13 @@ export function QuotationEditorPage({ user, showToast }) {
                       เครดิต
                       <input
                         id="creditDays"
-                        aria-label="จำนวนวันเครดิต"
+                        /* NOT "จำนวนวันเครดิต": an accessible name STARTING with "จำนวน"
+                           collides with the item row's own จำนวน field under the prefix
+                           queries the tests use, and this input renders only in CREDIT mode,
+                           so the collision appears or vanishes with a remembered preference —
+                           i.e. it made a test's outcome depend on which test ran before it.
+                           Leading with เครดิต keeps the name specific and unambiguous. */
+                        aria-label="เครดิต (จำนวนวัน)"
                         type="number"
                         className="w-16"
                         value={terms.creditDays}
