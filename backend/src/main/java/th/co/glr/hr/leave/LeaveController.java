@@ -7,6 +7,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Map;
 // Both resource kinds now serve from Postgres: ByteArrayResource for the leave POLICY DOCUMENT
 // (V133) and, as of V134, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only
@@ -58,18 +59,21 @@ public class LeaveController {
     private final LeavePolicyDocumentRepository leavePolicyDocuments;
     private final LeaveCalendarContextService calendarContextService;
     private final FileAttachmentBlobRepository attachmentBlobs;
+    private final LeaveReportRenderer leaveReportRenderer;
 
     public LeaveController(
             LeaveService leaveService,
             SessionContext sessions,
             LeavePolicyDocumentRepository leavePolicyDocuments,
             LeaveCalendarContextService calendarContextService,
-            FileAttachmentBlobRepository attachmentBlobs) {
+            FileAttachmentBlobRepository attachmentBlobs,
+            LeaveReportRenderer leaveReportRenderer) {
         this.leaveService = leaveService;
         this.sessions = sessions;
         this.leavePolicyDocuments = leavePolicyDocuments;
         this.calendarContextService = calendarContextService;
         this.attachmentBlobs = attachmentBlobs;
+        this.leaveReportRenderer = leaveReportRenderer;
     }
 
     @GetMapping
@@ -277,6 +281,60 @@ public class LeaveController {
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveTeamBalancesResponse(leaveService.teamBalances(user, year));
+    }
+
+    /**
+     * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): the CALLING employee's own
+     * section for {@code year}/optional {@code month}. No {@code employeeId} parameter -- see
+     * {@link LeaveService#ownLeaveReport}'s Javadoc for why that removes the authorization
+     * question this endpoint would otherwise need to answer.
+     */
+    @GetMapping("/reports/me.pdf")
+    ResponseEntity<byte[]> ownReportPdf(
+            @RequestParam(value = "year", required = false) Integer year,
+            @RequestParam(value = "month", required = false) Integer month,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        List<LeaveReportEmployeeDto> sections = leaveService.ownLeaveReport(user, year, month);
+        byte[] body = leaveReportRenderer.toPdf(sections, resolvedYear(year), month, false);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("glr-my-leave-report-" + resolvedYear(year) + ".pdf")
+                .build()
+                .toString())
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(body);
+    }
+
+    /**
+     * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): ONE grouped PDF covering every
+     * direct report (or, for hr/ceo, every active employee -- {@link
+     * LeaveService#teamBalances}'s existing {@code canViewAll} reach) for {@code year}/optional
+     * {@code month}. Owner ruling: one document, grouped per employee, not one PDF per person. No
+     * {@code employeeId} parameter -- the scope is entirely server-derived from {@link
+     * LeaveService#teamLeaveReport}, see its Javadoc.
+     */
+    @GetMapping("/reports/team.pdf")
+    ResponseEntity<byte[]> teamReportPdf(
+            @RequestParam(value = "year", required = false) Integer year,
+            @RequestParam(value = "month", required = false) Integer month,
+            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(user, year, month);
+        byte[] body = leaveReportRenderer.toPdf(sections, resolvedYear(year), month, true);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename("glr-team-leave-report-" + resolvedYear(year) + ".pdf")
+                .build()
+                .toString())
+            .contentType(MediaType.APPLICATION_PDF)
+            .body(body);
+    }
+
+    /** Same "no year given -> this year" default {@link LeaveService}'s own report/balances
+     * methods already apply, needed here again only for the download filename. */
+    private static int resolvedYear(Integer year) {
+        return year == null ? LocalDate.now().getYear() : year;
     }
 
     @PostMapping("/{id}/approve")

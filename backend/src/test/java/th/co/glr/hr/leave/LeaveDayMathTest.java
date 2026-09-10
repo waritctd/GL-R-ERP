@@ -511,4 +511,57 @@ class LeaveDayMathTest {
 
         assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-08-01"), new BigDecimal("2.00")));
     }
+
+    // --- formatDuration (leave-records report, 2026-09): days/hours/minutes, NEVER a decimal -----
+
+    @Test
+    void formatDurationOnAWholeDayPrintsNoTrailingZeroHours() {
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("1.00"))).isEqualTo("1 วัน");
+    }
+
+    @Test
+    void formatDurationOnAFractionalDayPrintsDaysAndHoursAndMinutes() {
+        // The brief's own worked example: 1.56 * 480 = 748.8min, snapped to the nearest 5-minute
+        // step = 750min = 1 whole day (480min) + a 270-minute (4h30m) remainder.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("1.56"))).isEqualTo("1 วัน 4 ชม. 30 น.");
+    }
+
+    @Test
+    void formatDurationUnderOneDayOmitsTheDaysUnit() {
+        // 0.5625 * 480 = 270min exactly = 4h30m, zero whole days.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.5625"))).isEqualTo("4 ชม. 30 น.");
+    }
+
+    @Test
+    void formatDurationOnAnExactHourOmitsTheMinutesUnit() {
+        // 0.25 * 480 = 120min = 2h0m.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.25"))).isEqualTo("2 ชม.");
+    }
+
+    @Test
+    void formatDurationUnderOneHourPrintsMinutesOnly() {
+        // 0.0625 * 480 = 30min.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("0.0625"))).isEqualTo("30 น.");
+    }
+
+    @Test
+    void formatDurationOnZeroPrintsZeroDaysNotBlank() {
+        assertThat(LeaveDayMath.formatDuration(BigDecimal.ZERO)).isEqualTo("0 วัน");
+    }
+
+    @Test
+    void formatDurationOnNullReadsAsZero() {
+        assertThat(LeaveDayMath.formatDuration(null)).isEqualTo("0 วัน");
+    }
+
+    @Test
+    void formatDurationNeverEmitsADecimalPoint() {
+        // A bare `doesNotContain(".")` is WRONG here and fails on correct output: the Thai unit
+        // abbreviations themselves end in a full stop ("6 วัน 3 ชม."). What must never appear is a
+        // DECIMAL point -- a digit, a dot, then another digit -- which is how "6.37" would leak
+        // through if the days->hours conversion were ever dropped.
+        assertThat(LeaveDayMath.formatDuration(new BigDecimal("6.37")))
+            .isEqualTo("6 วัน 3 ชม.")
+            .doesNotMatch(".*\\d\\.\\d.*");
+    }
 }

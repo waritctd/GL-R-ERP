@@ -18,6 +18,7 @@ import { UpcomingHolidays } from '../../components/common/UpcomingHolidays.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
 import { LeaveFilterBar } from './LeaveFilterBar.jsx';
+import { LeaveReportDownload } from './LeaveReportDownload.jsx';
 import {
   formatDateRange, formatDays, todayIso, yearFrom,
 } from './leaveFormatting.js';
@@ -652,6 +653,8 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           { key: 'remaining', label: 'โควตาคงเหลือ', value: formatDays(totals.remainingDays), helper: 'รวมประเภทที่เลือกได้', wrapValue: true },
         ]}
       />
+
+      <LeaveReportDownload scope="own" showToast={showToast} />
 
       {/* Card-diet, round 2 (owner feedback, 2026-08): showing all seven balances at once
           "over-populated the page with cards" -- the fix is not fewer, smaller cards (that's

@@ -450,12 +450,16 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
     await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(3002, { reviewerNote: null }));
   });
 
-  it('a row with no attachment never renders a download button', async () => {
+  it('a row with no attachment never renders a certificate download button', async () => {
     api.leave.list.mockResolvedValue({ requests: [ownSubmittedRow] });
     renderMyLeaveTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /ดูรายละเอียด/ }));
-    expect(screen.queryByRole('button', { name: /ดาวน์โหลด/ })).toBeNull();
+    // Exact match, not the substring `/ดาวน์โหลด/` this used to be: the panel-level leave-records
+    // report button (LeaveReportDownload.jsx, "ดาวน์โหลดรายงานของฉัน") is unrelated to this row's
+    // certificate and is always on screen, attachment or not -- a loose regex here would fail for
+    // that reason alone, not because a certificate button leaked in.
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด' })).toBeNull();
   });
 
   it('downloads the requester\'s own attachment via GET /api/leave/attachments/{id}', async () => {

@@ -124,6 +124,13 @@ export const API_ROUTES = {
     // LeaveController#calendarContext's Javadoc for why this is deliberately not
     // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
     calendarContext: '/api/leave/calendar-context',
+    // Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): an employee's own history for a
+    // chosen year/optional month, or a manager's ONE grouped PDF covering every direct report for
+    // the same period. Neither takes an employeeId param -- see LeaveService#ownLeaveReport /
+    // #teamLeaveReport's Javadoc for why the scope is entirely server-derived. `year`/`month` are
+    // appended as a query string by hrApi.js's withQuery, same shape as balances/teamBalances above.
+    reportMe: '/api/leave/reports/me.pdf',
+    reportTeam: '/api/leave/reports/team.pdf',
   },
   // Read-only enumerations served by the backend so no client re-declares them.
   meta: {

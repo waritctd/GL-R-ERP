@@ -39,7 +39,7 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
         repository = new LeavePolicyDocumentRepository(jdbc);
         controller = new LeaveController(
             /* leaveService */ null, new SessionContext(), repository, /* calendarContextService */ null,
-            /* attachmentBlobs */ null);
+            /* attachmentBlobs */ null, /* leaveReportRenderer */ null);
     }
 
     // --- GET: read path, unchanged access (any authenticated user) -------------------------

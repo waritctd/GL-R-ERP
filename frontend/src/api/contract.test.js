@@ -190,6 +190,8 @@ const ARITY_EXEMPTIONS = {
   'payroll.getComponentTaxTreatments': 'Returns an empty single-year fixture; the mock stores no per-year tax classification matrix for the year argument to select.',
   'payroll.saveComponentTaxTreatments': 'Deliberate "not supported in mock mode" stub — the classification matrix drives real withholding tax.',
   'pricingRequests.deleteFactoryQuoteAttachment': 'The `reason` argument is an audit note the real service writes to a deletion audit column; the mock hard-deletes from an in-memory array with no audit row to record it on.',
+  'leave.downloadMyReport': 'Deliberate "not supported in mock mode" stub — the quota block must read the real LeaveService#balanceFor numbers (#914); a mock render would only prove plumbing, never the day-math.',
+  'leave.downloadTeamReport': 'Deliberate "not supported in mock mode" stub — same reasoning as downloadMyReport.',
 };
 
 function arityDivergence(namespace, method) {
