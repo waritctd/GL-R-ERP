@@ -498,6 +498,11 @@ export const api = {
   },
   customers: {
     create: (payload) => apiRequest(API_ROUTES.customers.create, { method: 'POST', body: payload }),
+    // Owner feedback F7 (2026-09-10): เลขที่ผู้เสียภาษี / โทร. are editable on the SELECTED customer
+    // in DealCustomerCard, so a wrong one can be corrected at the point the rep notices it. PATCH
+    // semantics on the PUT verb — send ONLY the changed fields; an omitted field is left alone
+    // (CustomerController#update). Gated by DealEntryAccess, exactly like create().
+    update: (id, payload) => apiRequest(API_ROUTES.customers.update(id), { method: 'PUT', body: payload }),
     search: (q) => apiRequest(API_ROUTES.customers.search(q ?? '')),
     contacts: (customerId) => apiRequest(API_ROUTES.customers.contacts(customerId)),
     createContact: (customerId, payload) => apiRequest(API_ROUTES.customers.createContact(customerId), { method: 'POST', body: payload }),
@@ -1057,6 +1062,12 @@ export const api = {
   dealQuotations: {
     listForTicket: (ticketId) => apiRequest(API_ROUTES.dealQuotations.listForTicket(ticketId)),
     list: (params) => apiRequest(API_ROUTES.dealQuotations.list(params)),
+    // `{ all, pendingApproval, needsRework, cancelled, approved }` — DealQuotationCountsDto
+    // itself, BARE, with no `{ counts: ... }` envelope. DealQuotationController#counts returns the
+    // record directly, unlike its wrapping neighbours; this comment claimed the envelope and was
+    // wrong (review finding MED-3). Scoped exactly like list() above (owner feedback F5,
+    // 2026-09-10). No parameters: the scope is the caller's session, same as the list.
+    counts: () => apiRequest(API_ROUTES.dealQuotations.counts),
     get: (id) => apiRequest(API_ROUTES.dealQuotations.detail(id)),
     create: (ticketId, payload) => apiRequest(API_ROUTES.dealQuotations.create(ticketId), { method: 'POST', body: payload }),
     update: (id, payload) => apiRequest(API_ROUTES.dealQuotations.detail(id), { method: 'PUT', body: payload }),

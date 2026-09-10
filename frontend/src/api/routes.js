@@ -206,6 +206,9 @@ export const API_ROUTES = {
   },
   customers: {
     create: '/api/customers',
+    // PUT /api/customers/{id} — a PATCH-shaped update on a PUT verb: a field the body omits is
+    // left alone (owner feedback F7, 2026-09-10; see CustomerController#update).
+    update: (customerId) => `/api/customers/${customerId}`,
     search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
     contacts: (customerId) => `/api/customers/${customerId}/contacts`,
     createContact: (customerId) => `/api/customers/${customerId}/contacts`,
@@ -457,13 +460,25 @@ export const API_ROUTES = {
   dealQuotations: {
     listForTicket: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
     create: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
-    // Approver queue / role-scoped list. `status` is the only server-side filter the plan
-    // documents (`GET /deal-quotations?status=...`); sales is scoped to its own deals server-side.
+    // Approver queue / role-scoped list. `status` filters by docStatus; sales is scoped to its own
+    // deals server-side.
+    //
+    // `needsRework=true` (owner feedback F5, 2026-09-10) is the list page's "แก้" tab and is NOT a
+    // docStatus: it is DRAFT rows sent back with a reason (`approvalNote`) OR DRAFT revisions in
+    // progress (`parentQuotationId`). It exists as a SERVER-side filter on purpose -- the two
+    // senses live in different columns, so expressing it client-side would mean fetching a list
+    // the server may have truncated and then filtering a different set of rows than the count
+    // says. Mutually exclusive with `status` in practice; both are sent if both are passed, and
+    // the server ANDs them.
     list: (params = {}) => {
       const p = new URLSearchParams();
       if (params.status) p.set('status', params.status);
+      if (params.needsRework) p.set('needsRework', 'true');
       return `/api/deal-quotations${p.toString() ? `?${p}` : ''}`;
     },
+    // Per-status counts for the caller's OWN list scope, for the tab labels (F5). One request for
+    // all five numbers rather than five list fetches.
+    counts: '/api/deal-quotations/counts',
     detail: (id) => `/api/deal-quotations/${id}`,
     calculateLine: '/api/deal-quotations/calculate-line',
     submit: (id) => `/api/deal-quotations/${id}/submit`,

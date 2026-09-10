@@ -47,7 +47,9 @@ import {
 // the PricingRequest chain entirely. Status transition table shared with the UI so the mock's
 // gate can't drift from the frontend's own copy of QuotationStatus (the authoritative table lives
 // in the backend dealquotation/ package once it lands).
-import { canTransitionDealQuotation } from '../features/quotations/quotationMeta.js';
+import {
+  canTransitionDealQuotation, isDealQuotationNeedingRework,
+} from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
 // and for the small local `round2`/`mockInvoiceCalculation` helpers that replace this import
@@ -480,6 +482,14 @@ const mockCustomers = [
   { id: 2, name: 'บริษัท ไทยแลนด์ ดีเวลลอปเมนท์ จำกัด', taxId: '0105556789012', address: '456 ถนนรัชดาภิเษก แขวงลาดยาว กรุงเทพฯ 10900',  branch: 'สำนักงานใหญ่', phone: '02-234-5678' },
   { id: 3, name: 'บริษัท พรีเมียม ดีไซน์ กรุ๊ป จำกัด',   taxId: '0105578901234', address: '789 ถนนพระราม 4 แขวงพระโขนง กรุงเทพฯ 10260',    branch: 'สำนักงานใหญ่', phone: '02-345-6789' },
   { id: 4, name: 'บริษัท เรืองแสง พร็อพเพอร์ตี้ จำกัด',  taxId: '0105591234567', address: '321 ถนนนวมินทร์ แขวงคลองกุ่ม กรุงเทพฯ 10240',  branch: 'สำนักงานใหญ่', phone: '02-456-7890' },
+  // The customer ticket 18 (demoSales.js, SALES1's "ศูนย์การค้า Fashion Island" deal) actually
+  // names. Added with owner feedback F2 (2026-09-10), which made ผู้สั่งซื้อ REQUIRED on the
+  // quotation: without a customer row and a contact under it, ticket 18 — the one deal every
+  // seeded ใบเสนอราคา hangs off — could never satisfy that rule in mock mode, so บันทึกร่าง would
+  // have been permanently disabled on the surface this fixture exists to demonstrate. That is the
+  // inverse of the usual fixture lie (a mock more permissive than production): a fixture too
+  // EMPTY to reach the code path at all is just as useless for verification.
+  { id: 5, name: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',        taxId: '0105545678901', address: '587, 589 ถนนรามอินทรา แขวงคันนายาว กรุงเทพฯ 10230', branch: 'สำนักงานใหญ่', phone: '02-947-5000' },
 ];
 let mockCustomerSeq = mockCustomers.length + 1;
 
@@ -489,6 +499,10 @@ const mockContacts = [
   { id: 3, customerId: 2, firstName: 'ปรีชา',  lastName: 'วงศ์สกุล', position: 'จัดซื้อ',          email: 'preecha@tld.co.th',     phone: '083-555-6666' },
   { id: 4, customerId: 3, firstName: 'สุภาพร', lastName: 'ทองดี',    position: 'ผู้อำนวยการ',       email: 'supaporn@pdg.co.th',    phone: '084-777-8888' },
   { id: 5, customerId: 4, firstName: 'กมล',    lastName: 'เรืองศรี', position: 'ผู้จัดการ',         email: 'kamol@rp.co.th',        phone: '085-999-0000' },
+  // ผู้สั่งซื้อ for customer 5 / ticket 18 — see that customer's own comment above. Two of them,
+  // so the picker on the seeded deal has something to CHANGE to and not just one forced answer.
+  { id: 6, customerId: 5, firstName: 'ณัฐพงศ์', lastName: 'ศรีวิไล',  position: 'ฝ่ายจัดซื้อ',      email: 'nattapong@fashionisland.co.th', phone: '086-222-3333' },
+  { id: 7, customerId: 5, firstName: 'พิมพ์ใจ', lastName: 'บุญมาก',   position: 'ผู้จัดการโครงการ', email: 'pimjai@fashionisland.co.th',    phone: '086-444-5555' },
 ];
 let mockContactSeq = mockContacts.length + 1;
 
@@ -4674,6 +4688,44 @@ function requireDealQuotationWriteAccess(ticket, user) {
   if (!(owns || user.role === 'sales_manager')) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
+// The rows GET /api/deal-quotations would return for this caller BEFORE any status filter --
+// factored out so list() and counts() (owner feedback F5, 2026-09-10) read the exact same set.
+// Two independent copies of this scope is precisely how a tab count ends up promising rows the
+// list then refuses to show. Mirrors DealQuotationService.list: sales is scoped to its own deals;
+// a canCreateQuotation grant sees everything, same as sales_manager (#H4).
+function scopedDealQuotationsFor(user) {
+  const grant = hasDealQuotationMockGrant(user);
+  if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  if (!grant && user.role === 'sales') {
+    return mockDealQuotations.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
+  }
+  return mockDealQuotations;
+}
+
+// ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
+// Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
+// `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
+// belong to the deal's customer. 400 "กรุณาระบุผู้สั่งซื้อ" otherwise — the same Thai string the
+// frontend's own pre-save check uses.
+//
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): the customer-ownership check below approximates
+// the Java service's and is NOT authoritative. Verify it against DealQuotationService, never here.
+function resolveDealQuotationContact(ticket, payload, current = null) {
+  const requested = payload?.contactId ?? current?.contactId ?? ticket?.contactId ?? null;
+  if (requested == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+  const contact = mockContacts.find((c) => c.id === Number(requested));
+  if (!contact) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+  if (ticket?.customerId != null && contact.customerId !== ticket.customerId) {
+    fail('ผู้สั่งซื้อไม่ได้อยู่ในสังกัดลูกค้ารายนี้', 400);
+  }
+  return {
+    contactId: contact.id,
+    contactName: `${contact.firstName} ${contact.lastName ?? ''}`.trim(),
+    contactPhone: contact.phone ?? null,
+    contactEmail: contact.email ?? null,
+  };
+}
+
 function requireDealQuotationEditable(row) {
   if (row.docStatus !== 'DRAFT') fail(`แก้ไขได้เฉพาะสถานะร่างเท่านั้น (สถานะปัจจุบัน: '${row.docStatus}')`, 409);
 }
@@ -4844,7 +4896,13 @@ function buildDealQuotationDto(row) {
     customerAddress: row.customerAddress,
     customerTaxId: row.customerTaxId,
     customerPhone: row.customerPhone,
+    // ผู้สั่งซื้อ — the FROZEN snapshot V167 stores at create/update (owner feedback F2,
+    // 2026-09-10), never a live read of the ticket's contact. Mirrors DealQuotationDto's own
+    // four fields; contactName is what the renderer prints in signature slot 4.
+    contactId: row.contactId ?? null,
     contactName: row.contactName,
+    contactPhone: row.contactPhone ?? null,
+    contactEmail: row.contactEmail ?? null,
     projectName: row.projectName,
     deptCode: row.deptCode,
     unitCode: row.unitCode,
@@ -4903,7 +4961,10 @@ const mockDealQuotations = [
     approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
     quotationDate: '2026-09-01',
     customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
-    customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+    customerAddress: null, customerTaxId: null, customerPhone: null,
+    // ผู้สั่งซื้อ snapshot (V167 / owner feedback F2, 2026-09-10) — mockContacts[6], the ticket-18
+    // customer's own purchasing contact. Frozen at create time, exactly like the real column.
+    contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล', contactPhone: '086-222-3333', contactEmail: 'nattapong@fashionisland.co.th',
     projectName: null,
     deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-01',
     depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30, validityDays: 30, validityDate: null,
@@ -4950,7 +5011,10 @@ const mockDealQuotations = [
     approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
     quotationDate: '2026-09-05',
     customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
-    customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+    customerAddress: null, customerTaxId: null, customerPhone: null,
+    // ผู้สั่งซื้อ snapshot (V167 / owner feedback F2, 2026-09-10) — mockContacts[6], the ticket-18
+    // customer's own purchasing contact. Frozen at create time, exactly like the real column.
+    contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล', contactPhone: '086-222-3333', contactEmail: 'nattapong@fashionisland.co.th',
     projectName: null,
     deptCode: 'P003', unitCode: 'D002', offerDate: '2026-09-05',
     depositPercent: 50, remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 45, validityDate: null,
@@ -8971,7 +9035,18 @@ export const api = {
         || pgAsc(a.collection, b.collection)
         || pgAsc(a.productCode, b.productCode)
       ));
-      return delay({ items: results.slice(0, cap) });
+      // `originCountryCode` (ProductPriceDto, V165 tail / owner feedback F1, 2026-09-10) — the
+      // quotation item editor autofills ประเทศต้นทาง + its lead-time range from it. DERIVED here
+      // rather than duplicated onto every mockProductPrices row, because that is exactly what the
+      // real query does: `price_catalog.factories.country` joined through `product_prices
+      // .factory_id` (CatalogRepository), never sales.factory_config.country (V151). Storing it
+      // twice would let the two fixtures disagree about one factory's country.
+      return delay({
+        items: results.slice(0, cap).map((row) => ({
+          ...row,
+          originCountryCode: mockPriceImportFactories.find((f) => f.factoryId === row.factoryId)?.country ?? null,
+        })),
+      });
     },
     // addProduct/updateProduct/deleteProduct are ceo/import only (#205), mirroring
     // CatalogController.requireCatalogEditor. The reads above are open by decision;
@@ -9307,6 +9382,28 @@ export const api = {
       const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null };
       mockCustomers.push(customer);
       return delay({ customer });
+    },
+    // Owner feedback F7 (2026-09-10). Same requireDealEntry() gate as create() above — mirrors
+    // CustomerController#update's DealEntryAccess.requireCanEnterDeal, and deliberately not one
+    // notch looser (the direction CLAUDE.md warns about). PATCH semantics mirroring
+    // CustomerRepository.update's `SET x = COALESCE(:x, x)` EXACTLY: null -- which is also what an
+    // omitted JSON key deserializes to on the Java side -- means "leave it alone", and any other
+    // value is written, '' included, so a wrong tax id can be cleared. The cleared value is ''
+    // and not NULL because that is what the SQL stores. name/branch are NOT NULL columns, so a
+    // blank for either is a 400 (CustomerController#requireNotBlankIfPresent) rather than a
+    // constraint violation.
+    // ⚠️ AUTHZ CAVEAT: this gate approximates the Java one and is NOT authoritative — verify
+    // against DealEntryAccess, never here.
+    async update(id, payload = {}) {
+      requireDealEntry();
+      const customer = mockCustomers.find((c) => c.id === Number(id));
+      if (!customer) fail('ไม่พบลูกค้ารายนี้', 404);
+      if (payload.name != null && !String(payload.name).trim()) fail('กรุณาระบุชื่อลูกค้า', 400);
+      if (payload.branch != null && !String(payload.branch).trim()) fail('กรุณาระบุสาขา', 400);
+      for (const key of ['name', 'taxId', 'address', 'branch', 'phone']) {
+        if (payload[key] != null) customer[key] = payload[key];
+      }
+      return delay({ customer: { ...customer } });
     },
     // Ordering + truncation mirror CustomerRepository.search: `ORDER BY name LIMIT 30`, with the
     // 30 hardcoded in the Java (no caller-supplied limit). This mock previously returned every
@@ -11585,16 +11682,34 @@ export const api = {
     // sees everything, same as sales_manager -- the grant is "any deal", not "own deal only"
     // (mirrors DealQuotationService.list's own comment, #H4).
     async list(params = {}) {
-      const user = requireSession();
-      const grant = hasDealQuotationMockGrant(user);
-      if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      let list = mockDealQuotations;
-      if (!grant && user.role === 'sales') {
-        list = list.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
-      }
-      if (params.status) list = list.filter((q) => q.docStatus === params.status);
-      const sorted = [...list].sort((a, b) => b.id - a.id);
+      const list = scopedDealQuotationsFor(requireSession());
+      const filtered = list.filter((q) => (
+        (!params.status || q.docStatus === params.status)
+        && (!params.needsRework || isDealQuotationNeedingRework(q))
+      ));
+      const sorted = [...filtered].sort((a, b) => b.id - a.id);
       return delay({ items: sorted.map(buildDealQuotationDto) });
+    },
+
+    // Per-status counts for the tab labels (owner feedback F5, 2026-09-10). Computed from the
+    // SAME scoped rows list() reads -- never a looser set -- so the count next to a tab can never
+    // promise rows the list then refuses to show. Mirrors DealQuotationDtos.DealQuotationCountsDto's
+    // field names exactly; the real endpoint does this in one SQL statement.
+    //
+    // ⚠️ BARE object, no `{ counts: ... }` envelope (review finding MED-3): DealQuotationController
+    // #counts returns the DTO itself, unlike every neighbouring endpoint here, which wraps. This
+    // mock wrapped it and the page read `r?.counts ?? r`, so all three could disagree and nothing
+    // failed. The controller is the contract; see mockApi.dealQuotations.test.js for the shape
+    // assertion that now pins it.
+    async counts() {
+      const list = scopedDealQuotationsFor(requireSession());
+      return delay({
+        all: list.length,
+        pendingApproval: list.filter((q) => q.docStatus === 'PENDING_APPROVAL').length,
+        needsRework: list.filter(isDealQuotationNeedingRework).length,
+        cancelled: list.filter((q) => q.docStatus === 'CANCELLED').length,
+        approved: list.filter((q) => q.docStatus === 'APPROVED').length,
+      });
     },
 
     async get(id) {
@@ -11607,6 +11722,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationWriteAccess(ticket, user);
+      const contactSnapshot = resolveDealQuotationContact(ticket, payload);
       const now = new Date().toISOString();
       const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
       const row = {
@@ -11633,7 +11749,8 @@ export const api = {
         approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
         quotationDate: now.slice(0, 10),
         customerName: ticket.customerName ?? null,
-        customerAddress: null, customerTaxId: null, customerPhone: null, contactName: null,
+        customerAddress: null, customerTaxId: null, customerPhone: null,
+        ...contactSnapshot,
         projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
@@ -11661,6 +11778,7 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
       requireDealQuotationWriteAccess(ticket, user);
       requireDealQuotationEditable(row);
+      const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
@@ -11677,6 +11795,7 @@ export const api = {
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
         customerNotes: payload.customerNotes ?? null,
+        ...contactSnapshot,
         items,
         updatedAt: new Date().toISOString(),
       });
@@ -11701,6 +11820,9 @@ export const api = {
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
+      // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
+      // none, and that document cannot go for approval with an empty signature slot.
+      if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
       const now = new Date().toISOString();
       row.docStatus = 'PENDING_APPROVAL';
       row.submittedAt = now;

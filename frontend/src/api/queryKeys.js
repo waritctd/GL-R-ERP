@@ -147,7 +147,11 @@ export const queryKeys = {
   // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). A sibling key space to
   // pricingRequests'/customerQuotations' above, never sharing an entry with them.
   dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
-  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? ''],
+  // `needsRework` is part of the key, not just `status` — the "แก้" tab (owner feedback F5,
+  // 2026-09-10) is a DIFFERENT server-side filter at the same empty `status`, so keying on status
+  // alone would serve ทั้งหมด's cached rows to แก้ and vice versa.
+  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? '', filters.needsRework ? 'rework' : ''],
+  dealQuotationCounts: () => ['dealQuotations', 'counts'],
   dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
   employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.

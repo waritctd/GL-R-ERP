@@ -468,6 +468,12 @@ export function buildDemoSalesSeed() {
       createdById: SALES1.id, createdByName: SALES1.name,
       assignedToId: IMPORT1.id, assignedToName: IMPORT1.name,
       customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
+      // The only seeded ticket carrying a customerId/contactId, added with owner feedback F2
+      // (2026-09-10): ผู้สั่งซื้อ is now REQUIRED on a ใบเสนอราคา, and this is the deal every
+      // seeded ใบเสนอราคา hangs off, so without these two ids the whole quotation surface would be
+      // unreachable in mock mode. They point at mockApi.js's `mockCustomers[5]` / `mockContacts[6]`
+      // — see that customer row's own comment for why it exists.
+      customerId: 5, contactId: 6,
       note: null,
       createdAt: '2026-06-25', updatedAt: daysAgoIso(2, '').slice(0, 10), closedAt: null,
       salesStage: 'QUOTE_BUYER', lostReason: null, lostAt: null,

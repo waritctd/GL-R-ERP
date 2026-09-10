@@ -198,6 +198,172 @@ export function defaultLeadTimeForOrigin(originCountry) {
   return { leadTimeMinDays: option?.leadTimeMinDays ?? null, leadTimeMaxDays: option?.leadTimeMaxDays ?? null };
 }
 
+// ISO-3166 alpha-2 -> the ORIGIN_COUNTRY_OPTIONS code above (owner feedback F1, 2026-09-10:
+// "autofill as much as you can"). ProductPriceDto.originCountryCode is `price_catalog.factories
+// .country` joined through `product_prices.factory_id` -- the SAME base table CatalogRepository
+// #findPricingKeys reads, never sales.factory_config.country (V151). Deliberately a SHORT,
+// explicit map rather than a country-name lookup: only these four codes have an agreed Thai
+// ประเทศต้นทาง option and an agreed default lead-time range, and any other code (a European
+// factory outside IT/ES, say) must leave the field BLANK for the rep to choose rather than be
+// silently filed under "อื่นๆ" -- "อื่นๆ" carries no lead time, so guessing it would look filled
+// in while telling the customer nothing.
+const ORIGIN_COUNTRY_BY_ISO_CODE = {
+  IT: 'อิตาลี',
+  ES: 'สเปน',
+  CN: 'จีน',
+  TH: 'ไทย-สต็อก',
+};
+
+/** '' (never null) when the code is unknown/absent, so a caller can spread the result into a
+ * patch and have `originCountry: ''` mean "still unset" exactly like emptyQuotationItem does. */
+export function originCountryFromCode(originCountryCode) {
+  if (!originCountryCode) return '';
+  return ORIGIN_COUNTRY_BY_ISO_CODE[String(originCountryCode).trim().toUpperCase()] ?? '';
+}
+
+// ── List-page status tabs (owner feedback F5, 2026-09-10) ────────────────────────────────────
+// "for สถานะ make it ทั้งหมด, รออนุมัติ, แก้, ยกเลิก" + อนุมัติแล้ว, kept as a fifth tab per the
+// owner's ruling the same evening. `key` is what travels in the URL (`/quotations?status=`), so
+// these strings are a user-visible contract -- a bookmarked or shared tab link must keep working.
+//
+// แก้ is NOT a docStatus: it is DRAFT rows that were sent back with a reason (`approvalNote`) OR
+// DRAFT revisions in progress (`parentQuotationId`), which is why it travels as its own
+// server-side `needsRework=true` filter rather than `status=DRAFT` -- see
+// DealQuotationDtos.DealQuotationCountsDto's javadoc, which defines the two the same way. A
+// client-side post-filter would be wrong here for the reason CLAUDE.md gives about truncation:
+// the server may cap the list, and filtering after the cap filters a different set of rows.
+export const DEAL_QUOTATION_STATUS_TABS = [
+  { key: 'all', label: 'ทั้งหมด', countKey: 'all', params: {} },
+  { key: 'PENDING_APPROVAL', label: 'รออนุมัติ', countKey: 'pendingApproval', params: { status: 'PENDING_APPROVAL' } },
+  { key: 'NEEDS_REWORK', label: 'แก้', countKey: 'needsRework', params: { needsRework: true } },
+  { key: 'CANCELLED', label: 'ยกเลิก', countKey: 'cancelled', params: { status: 'CANCELLED' } },
+  { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: 'APPROVED' } },
+];
+
+/** Approvers (sales_manager/ceo) land on the queue that is waiting on THEM; everyone else on
+ * ทั้งหมด. Only used when the URL carries no `?status=` -- an explicit tab in the URL always
+ * wins, so a shared link opens the same tab for whoever follows it. */
+export function defaultDealQuotationStatusTab(user) {
+  return canApproveDealQuotation(user) ? 'PENDING_APPROVAL' : 'all';
+}
+
+export function dealQuotationStatusTab(key) {
+  return DEAL_QUOTATION_STATUS_TABS.find((tab) => tab.key === key) ?? null;
+}
+
+// ── ตำแหน่งติดตั้ง location groups (owner feedback F1, 2026-09-10) ────────────────────────────
+// "if there were to be a ตำแหน่งติดตั้ง there might be multiple รายการ in one ตำแหน่งติดตั้ง".
+//
+// THE DATA MODEL IS UNCHANGED: `location_label` stays a per-ITEM column, the wire format stays a
+// flat `items` array, and the renderer still prints one heading per RUN of equal labels. Grouping
+// is purely an editor-side view over that flat list -- a group is "the maximal run of consecutive
+// items carrying the same label", which is exactly what the document prints. That equivalence is
+// what makes the round-trip lossless: what the rep sees grouped is what the customer sees grouped.
+//
+// The editor therefore keeps ONE flat, ordered `items` array (unchanged from before) plus a
+// parallel ordered `groups` list, and maintains the invariant that items sharing a groupId are
+// CONTIGUOUS in that array, in group order. Save is then `items.map(...)` with no re-sorting at
+// all, and load is the reverse walk below.
+
+/** What a blank ตำแหน่งติดตั้ง label reads as in the editor. A blank label prints NO heading row on
+ * the document (the renderer groups only non-blank labels), so this text is UI-only and is never
+ * sent to the server -- `locationLabel` stays null for such a group. */
+export const UNLABELLED_LOCATION_TEXT = 'ไม่ระบุตำแหน่ง';
+
+let locationGroupSeq = 0;
+export function newLocationGroupId() {
+  locationGroupSeq += 1;
+  return `loc-${locationGroupSeq}`;
+}
+
+/**
+ * Rebuilds the editor's groups from a flat, ordered item list — "loading rebuilds groups from
+ * consecutive equal labels". Returns `{ groups, items }` where every item carries the `groupId`
+ * of the run it belongs to; the returned items keep their input order, so the contiguity
+ * invariant above holds by construction.
+ *
+ * A null/undefined/'' label is its own value, so two blank-labelled items that are ADJACENT share
+ * one unlabelled group, while a blank item between two "ชั้น 1" items splits ชั้น 1 into two
+ * groups — which is precisely what the printed document does with the same rows. Never
+ * "collect all blanks together": that would reorder the items and change the document.
+ */
+export function locationGroupsFromItems(items) {
+  const groups = [];
+  let previousLabel = null;
+  const nextItems = (items ?? []).map((item, index) => {
+    const label = item.locationLabel ?? '';
+    if (index === 0 || label !== previousLabel) {
+      groups.push({ groupId: newLocationGroupId(), label });
+    }
+    previousLabel = label;
+    return { ...item, groupId: groups[groups.length - 1].groupId };
+  });
+  if (groups.length === 0) groups.push({ groupId: newLocationGroupId(), label: '' });
+  return { groups, items: nextItems };
+}
+
+// ── MED-4: the round trip is LOSSY, so the editor prevents the lossy states ──────────────────────
+// Review finding MED-4: two deliberately separate groups carrying the SAME label collapse into one
+// on reload, and a group with no items vanishes entirely.
+//
+// **Why a stable per-item group key cannot fix this, plainly:** a group key would have to survive
+// `items[] -> server -> items[]`, and the wire format carries exactly one grouping field,
+// `locationLabel` — a per-ITEM column on `sales.quotation_item`. Adding a key means a schema
+// change AND a wire change. And even then it would not buy what it looks like it buys, because the
+// DOCUMENT has the same limitation by design: QuotationRenderer prints one heading per RUN of
+// equal labels, so two adjacent same-label groups are not merely lost in the editor — they are
+// literally one heading on the printed page, which is what the customer sees. An editor that
+// showed two groups there would be lying about the output. An empty group is the same story: it
+// contributes no item rows, so it cannot exist on the document at all.
+//
+// So the editor makes the ambiguity UNREACHABLE instead of pretending to round-trip it: a
+// duplicate label is a save-blocking error, an empty group is a visible warning, and neither is
+// ever silently swallowed. Both helpers are pure functions of the editor's own state.
+
+/** Group ids whose trimmed label duplicates an EARLIER group's — blank counts as a value, since
+ * two blank-labelled groups merge exactly like two "ชั้น 1" ones. The first occurrence is never
+ * reported: it is the one that is fine, and the later one is what the rep has to rename. */
+export function duplicateLocationLabelGroupIds(groups) {
+  const seen = new Set();
+  const duplicates = new Set();
+  (groups ?? []).forEach((group) => {
+    const key = (group.label ?? '').trim();
+    if (seen.has(key)) duplicates.add(group.groupId);
+    else seen.add(key);
+  });
+  return duplicates;
+}
+
+/** Group ids holding no items — they print nothing and do not survive a save, so the editor says
+ * so out loud rather than letting one quietly disappear on the next reload. */
+export function emptyLocationGroupIds(groups, items) {
+  const populated = new Set((items ?? []).map((item) => item.groupId));
+  return new Set((groups ?? []).filter((g) => !populated.has(g.groupId)).map((g) => g.groupId));
+}
+
+// ── The "แก้" tab's predicate (owner feedback F5, 2026-09-10) ───────────────────────────────────
+/**
+ * A DRAFT that was sent back with a reason, OR a DRAFT revision in progress. Both senses, per the
+ * owner's ruling that แก้ means both. Mirrors DealQuotationRepository.NEEDS_REWORK_PREDICATE:
+ *
+ *   (q.doc_status = 'DRAFT' AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))
+ *
+ * Note a SUPERSEDED or APPROVED row with an approvalNote is NOT included — the DRAFT status is part
+ * of the definition, not incidental to it.
+ *
+ * ⚠️ `!= null`, NOT `Boolean(...)` (review finding MED-5). SQL's IS NOT NULL is TRUE for the empty
+ * string, so a truthiness test diverges on exactly that row: a DRAFT carrying `approvalNote: ''` is
+ * IN the แก้ tab on the real backend and was OUT of it in the mock, in the direction where the mock
+ * shows FEWER rows than production and nobody notices. `!= null` catches null and undefined and
+ * nothing else, which is the JS spelling of IS NOT NULL.
+ *
+ * Lives here rather than inside mockApi.js so it can be tested as the pure predicate it is —
+ * mockApi imports it, exactly as it already imports canTransitionDealQuotation.
+ */
+export function isDealQuotationNeedingRework(row) {
+  return row?.docStatus === 'DRAFT' && (row.approvalNote != null || row.parentQuotationId != null);
+}
+
 // ── Item completeness (frontend pass 4, owner ruling 2026-09-10) ────────────────────────────────
 // "Autofill as much as possible when the item is in the database; sales can also fill in their own
 // item if it is not in the database, but ALL info about the tile has to be completed." A catalog
