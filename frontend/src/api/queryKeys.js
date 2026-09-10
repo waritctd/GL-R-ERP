@@ -32,6 +32,8 @@ export const queryKeys = {
   notifications: () => ['notifications'],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
+  // Manager team-quota summary (2026-09) -- TeamLeaveTab.jsx.
+  leaveTeamBalances: (year) => ['leave', 'balances', 'team', year],
   leaveEmployees: () => ['leave', 'employees'],
   leaveTypes: () => ['leave', 'types'],
   leaveContactDefaults: (employeeId) => ['leave', 'contactDefaults', employeeId],
