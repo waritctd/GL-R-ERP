@@ -528,6 +528,11 @@ export function itemInputFromRow(item, priceMode = 'NET') {
   const type = lineTypeOf(item);
   if (type === LINE_TYPE_PLAIN) {
     return {
+      // Stable item ids (V170+ picture storage, being paired on the backend): a row the server
+      // already has an id for is sent WITH it, so DealQuotationService#update can upsert this row
+      // in place instead of deleting + re-inserting it — which is how a per-item picture (keyed by
+      // item id) would otherwise be silently orphaned on every save. `null` on a row never saved.
+      id: item.id ?? null,
       lineType: LINE_TYPE_PLAIN,
       locationLabel: item.locationLabel || null,
       description: item.description?.trim() || null,
@@ -542,6 +547,8 @@ export function itemInputFromRow(item, priceMode = 'NET') {
   const directNet = item.directNetPrice === '' || item.directNetPrice == null ? null : Number(item.directNetPrice);
   const unitPrice = item.unitPrice === '' || item.unitPrice == null ? null : item.unitPrice;
   return {
+    // See the PLAIN branch's comment above -- same reason, same contract.
+    id: item.id ?? null,
     ...tileInputFromRow(item),
     lineType: LINE_TYPE_TILE,
     // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
@@ -564,6 +571,8 @@ export function adjustmentInputFromRow(adjustment) {
   const flat = adjustment.adjustmentKind === 'AMOUNT';
   const number = (value) => (value === '' || value == null ? null : Number(value));
   return {
+    // See itemInputFromRow's PLAIN branch -- same stable-id contract.
+    id: adjustment.id ?? null,
     lineType: LINE_TYPE_ADJUSTMENT,
     locationLabel: null,
     adjustmentPct: flat ? null : number(adjustment.adjustmentPct),

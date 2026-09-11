@@ -4967,8 +4967,20 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET') {
   return common;
 }
 
-function buildDealQuotationItemRow(input, seq, priceMode = 'NET') {
-  return { id: mockDealQuotationItemSeq++, seq, ...computeDealQuotationV3Line(input, priceMode) };
+// Mirrors DealQuotationService#update's item upsert: a sent row whose `id` matches one of the
+// quotation's CURRENT item ids is kept (updated in place); anything else — no id, or an id that
+// belongs to some other quotation entirely — is treated as a new row and gets a freshly-minted
+// one. `existingIds` is null on create (nothing exists yet, so every row is new) and the current
+// row's own item-id set on update. The `id`/`seq` keys are spread in AFTER
+// computeDealQuotationV3Line(...) rather than before: that function's PLAIN/ADJUSTMENT branches
+// spread `...input` (which carries whatever `id` the CLIENT sent, including `null` for a brand-new
+// row), and spreading before it would let that client value silently clobber the id decided here.
+function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = null) {
+  const requestedId = input?.id != null ? Number(input.id) : null;
+  const id = existingIds && requestedId != null && existingIds.has(requestedId)
+    ? requestedId
+    : mockDealQuotationItemSeq++;
+  return { ...computeDealQuotationV3Line(input, priceMode), id, seq };
 }
 
 /** DealQuotationService's v3/v3b write-path rules, in the order the service applies them. Returns
@@ -4995,7 +5007,7 @@ function resolveDealQuotationV3Header(payload, current = null) {
  * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
  * and a document whose total goes negative is refused — checked only where the mock KNOWS the
  * total (every adjustment flat); a percentage adjustment is not computed here at all. */
-function buildDealQuotationItems(inputs, priceMode) {
+function buildDealQuotationItems(inputs, priceMode, existingItems = null) {
   const list = inputs ?? [];
   if (list.length === 0) fail('ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ', 400);
   const products = list.filter((it) => dealQuotationLineType(it) !== 'ADJUSTMENT');
@@ -5009,7 +5021,11 @@ function buildDealQuotationItems(inputs, priceMode) {
       fail('ส่วนลดพิเศษต้องมากกว่าศูนย์', 400);
     }
   });
-  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode));
+  // update() passes its row's CURRENT items here (pre-overwrite) so an id the client echoed back
+  // can be recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow.
+  // null on create, where nothing exists yet.
+  const existingIds = existingItems ? new Set(existingItems.map((it) => it.id)) : null;
+  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode, existingIds));
   const known = items.every((it) => it.lineAmount != null);
   if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
     fail('ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ', 400);
@@ -11957,7 +11973,7 @@ export const api = {
       requireDealQuotationEditable(row);
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
-      const items = buildDealQuotationItems(payload.items, header.priceMode);
+      const items = buildDealQuotationItems(payload.items, header.priceMode, row.items);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an

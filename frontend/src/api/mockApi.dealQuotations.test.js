@@ -54,6 +54,32 @@ describe('mock dealQuotations.update -- #M7 direct assignment, null clears', () 
   });
 });
 
+describe('mock dealQuotations.update -- item id upsert (mirrors DealQuotationService#update, V170 pictures pairing)', () => {
+  it('keeps a sent id that matches one of the quotation\'s CURRENT item ids; mints a fresh one for anything else', async () => {
+    await api.auth.login(salesUser);
+    const before = await api.dealQuotations.get(1);
+    const existingId = before.quotation.items[0].id;
+
+    const { quotation } = await api.dealQuotations.update(1, {
+      items: [
+        { ...ONE_ITEM, id: existingId }, // this quotation's own row -- kept
+        { ...ONE_ITEM, id: 999999 }, // an id that belongs to nothing here -- treated as new
+        { ...ONE_ITEM }, // no id at all -- also new
+      ],
+    });
+
+    expect(quotation.items[0].id).toBe(existingId);
+    expect(quotation.items[1].id).not.toBe(999999);
+    expect(new Set(quotation.items.map((it) => it.id)).size).toBe(3);
+  });
+
+  it('a create never preserves a client-sent id -- there is nothing to match against yet', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { items: [{ ...ONE_ITEM, id: 4242 }] });
+    expect(quotation.items[0].id).not.toBe(4242);
+  });
+});
+
 describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
   it('produces QT-{year}-{4-digit seq}, matching DealQuotationRepository.nextQuotationCode, not QD{BE-year}', async () => {
     await api.auth.login(salesUser);
