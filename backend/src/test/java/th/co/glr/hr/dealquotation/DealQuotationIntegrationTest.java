@@ -622,6 +622,54 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(updated.items()).hasSize(1);
     }
 
+    /** {@code findItemsForQuotations} batches every id's items into ONE query, ordered
+     * {@code (quotation_id, seq)}, via a RowCallbackHandler -- Spring has ALREADY called
+     * {@code rs.next()} to position the ResultSet on the current row before invoking it. A stray
+     * inner {@code while (rs.next())} there re-advances past that row and consumes the rest of the
+     * result set in one call, so Spring's own outer loop finds nothing left and stops -- net effect,
+     * the very FIRST row of the WHOLE result set is silently dropped on every {@code hydrate} call,
+     * regardless of how many ids it was asked for. Two quotations here only make the fixture
+     * legible (which row is "first" is otherwise arbitrary) -- the SAME bug drops the first line
+     * item of a SINGLE quotation too, e.g. {@code findByTicket} on a ticket with exactly one
+     * quotation renders that quotation missing its own first item. {@code search} here (import
+     * reads every deal, unscoped) routes through {@code DealQuotationService#search ->
+     * DealQuotationRepository#hydrate -> #findItemsForQuotations}, the same path {@code
+     * findByTicket} and the approver queue use. {@link #findById} (single-quotation {@code GET})
+     * uses the unbatched {@code #findItems} instead and is unaffected -- this test is what proves
+     * the batched path specifically. */
+    @Test
+    void search_returnsEveryItemAcrossMultipleQuotations_firstQuotationsSeqOneItemNotDropped() {
+        DealQuotationDto first = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("111.00", 1), sampleItem("222.00", 1))), salesActor);
+        DealQuotationDto second = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("333.00", 1), sampleItem("444.00", 1))), otherSalesActor);
+        // The bug is keyed on ORDER BY quotation_id -- confirm which one sorts first so the
+        // assertions below are checking the row the bug actually drops, not by luck.
+        assertThat(first.id()).isLessThan(second.id());
+
+        List<DealQuotationDto> results = quotationService.search(null, false, importActor);
+
+        // Ties the fixture to the bug's actual trigger (the SMALLEST quotation_id in the whole
+        // result set, not just relative to `second`) -- guards against this test going silently
+        // vacuous if a future fixture/migration ever seeds another DEAL_DIRECT quotation with a
+        // lower id than `first`, which would make some OTHER row the one the bug drops.
+        assertThat(first.id()).isEqualTo(
+            results.stream().mapToLong(DealQuotationDto::id).min().orElseThrow());
+
+        DealQuotationDto hydratedFirst = results.stream()
+            .filter(q -> q.id() == first.id()).findFirst().orElseThrow();
+        DealQuotationDto hydratedSecond = results.stream()
+            .filter(q -> q.id() == second.id()).findFirst().orElseThrow();
+        assertThat(hydratedFirst.items())
+            .as("seq-1 item of the quotation with the SMALLEST quotation_id must not be dropped")
+            .extracting(DealQuotationItemDto::seq).containsExactly(1, 2);
+        assertThat(hydratedFirst.items())
+            .extracting(DealQuotationItemDto::unitPrice)
+            .usingElementComparator(BigDecimal::compareTo)
+            .containsExactly(new BigDecimal("111.00"), new BigDecimal("222.00"));
+        assertThat(hydratedSecond.items()).extracting(DealQuotationItemDto::seq).containsExactly(1, 2);
+    }
+
     @Test
     void renderPdfAndXlsx_nonEmptyBytes() {
         // H1: a locationLabel forces QuotationRenderer down its heading-row path
