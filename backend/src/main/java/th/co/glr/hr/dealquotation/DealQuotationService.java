@@ -6,7 +6,6 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,7 +34,6 @@ import th.co.glr.hr.dealquotation.DealQuotationRepository.CustomerSnapshot;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.InsertDraftParams;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.NewItem;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
-import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureLink;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
@@ -243,7 +241,7 @@ public class DealQuotationService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Update (DRAFT-only; FULL replace of items)
+    // Update (DRAFT-only; item ids are STABLE across a save — see #update's own comment)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
@@ -294,12 +292,40 @@ public class DealQuotationService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
-        // GLA-75: the full replace below mints new item ids, so read the pictures off the OLD rows
-        // first and re-point the new rows the client identified by their previous `id`.
-        Map<Long, PictureLink> previousPictures = quotations.findPictureLinks(id);
-        quotations.deleteItems(id);
-        quotations.insertItems(id, items);
-        carryPicturesForward(id, request.items(), previousPictures);
+        // Item ids are STABLE across a draft save (fix for the picture-dropping race this
+        // replaced — a full delete+insert used to mint new ids on every save, so any client that
+        // reused ids from an earlier load, e.g. after its own first autosave, a second tab, or a
+        // save racing another save, silently lost every picture; see #orderedInputs' Javadoc for
+        // the ordering this relies on). Walk the inputs in STORED order: an input whose id is one
+        // of THIS quotation's current item ids, and not already claimed by an earlier input in
+        // this same payload, is UPDATED IN PLACE — same quotation_item_id, so its picture (set by
+        // the GLA-75 endpoints, never touched by this UPDATE) survives untouched. Everything else
+        // (a null id, a foreign id, a stale id, or a duplicate within the payload) is INSERTED as
+        // a new row instead. Any of this quotation's rows the payload did not claim is deleted
+        // FIRST, and its picture dropped unless something else (a parent revision) still uses it.
+        List<ItemInput> ordered = orderedInputs(request.items());
+        Set<Long> currentItemIds = new HashSet<>(quotations.findItemIds(id));
+        Set<Long> claimedItemIds = new HashSet<>();
+        List<DealQuotationRepository.ExistingItem> updates = new ArrayList<>();
+        List<DealQuotationRepository.SeqItem> inserts = new ArrayList<>();
+        for (int i = 0; i < ordered.size(); i++) {
+            int seq = i + 1;
+            Long inputId = ordered.get(i).id();
+            NewItem item = items.get(i);
+            // Short-circuits before touching claimedItemIds for a null/foreign/stale id, so those
+            // never spuriously "claim" anything; claimedItemIds.add returns false for a genuine
+            // duplicate of an id already claimed earlier in this payload, which is what routes the
+            // SECOND occurrence to the insert branch instead of a second UPDATE of the same row.
+            if (inputId != null && currentItemIds.contains(inputId) && claimedItemIds.add(inputId)) {
+                updates.add(new DealQuotationRepository.ExistingItem(inputId, seq, item));
+            } else {
+                inserts.add(new DealQuotationRepository.SeqItem(seq, item));
+            }
+        }
+        List<Long> droppedPictureIds = quotations.deleteUnclaimedItems(id, claimedItemIds);
+        quotations.deletePicturesIfUnreferenced(droppedPictureIds);
+        quotations.updateItemsInPlace(id, updates);
+        quotations.insertItemsAtSeq(id, inserts);
         return requireQuotation(id);
     }
 
@@ -789,8 +815,9 @@ public class DealQuotationService {
 
     /** The order items are STORED in (seq 1..n): every non-adjustment row in the order sent, then
      * every adjustment row. The ONE statement of that rule — {@link #buildItems} numbers rows by it
-     * and {@link #carryPicturesForward} maps a sent item to its stored seq by it, so the two can
-     * never disagree about which row a picture belongs to. */
+     * and {@link #update} walks inputs by it too, so {@code items.get(i)} and {@code ordered.get(i)}
+     * always agree on which input produced seq {@code i + 1} — which is what lets {@code update}
+     * match a sent item id to the SAME row {@code buildItems} priced for it. */
     private List<ItemInput> orderedInputs(List<ItemInput> inputs) {
         List<ItemInput> ordered = new ArrayList<>();
         List<ItemInput> adjustments = new ArrayList<>();
@@ -803,30 +830,6 @@ public class DealQuotationService {
         }
         ordered.addAll(adjustments);
         return ordered;
-    }
-
-    /**
-     * GLA-75: after a draft save replaced every item row, re-point each new row at the picture its
-     * previous row carried — but only for items the client identified by their previous
-     * {@code id} ({@link ItemInput#id}), and only ids that were THIS quotation's items a moment ago
-     * ({@code previous} was read from this quotation alone), so a foreign or stale id cannot attach
-     * anyone else's picture. Whatever picture no row points at afterwards is deleted.
-     */
-    private void carryPicturesForward(long quotationId, List<ItemInput> inputs, Map<Long, PictureLink> previous) {
-        if (previous.isEmpty()) {
-            return;
-        }
-        List<ItemInput> ordered = orderedInputs(inputs);
-        Map<Integer, PictureLink> bySeq = new HashMap<>();
-        for (int i = 0; i < ordered.size(); i++) {
-            Long previousItemId = ordered.get(i).id();
-            PictureLink link = previousItemId == null ? null : previous.get(previousItemId);
-            if (link != null) {
-                bySeq.put(i + 1, link);
-            }
-        }
-        quotations.linkPictures(quotationId, bySeq);
-        quotations.deletePicturesIfUnreferenced(previous.values().stream().map(PictureLink::pictureId).toList());
     }
 
     /** {@code null}/blank {@code lineType} reads as TILE — every pre-v3 client keeps working

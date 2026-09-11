@@ -307,7 +307,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             withId(sampleItem("200.00", 3), null), withId(sampleItem("100.00", 10), first))), salesActor);
 
         DealQuotationItemDto keptRow = saved.items().get(1);
-        assertThat(keptRow.id()).as("the save minted new item ids").isNotEqualTo(first);
+        assertThat(keptRow.id()).as("item ids are STABLE across a draft save").isEqualTo(first);
         assertThat(keptRow.hasPicture()).as("item sent back with its id keeps its picture; stored rows: %s",
             jdbc.queryForList("SELECT quotation_item_id, seq, picture_id, picture_placement FROM sales.quotation_item"
                 + " WHERE quotation_id = :id ORDER BY seq", Map.of("id", q.id()))).isTrue();
@@ -315,6 +315,67 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.getItemPicture(q.id(), keptRow.id(), salesActor).image()).isEqualTo(png(60, 30));
         assertThat(saved.items().get(0).hasPicture()).as("item sent without an id is a new item").isFalse();
         assertThat(pictureRows()).as("the dropped picture's row is deleted").isEqualTo(1);
+    }
+
+    /**
+     * The headline case the stable-id fix exists for: an editor loads a draft, autosaves it once
+     * (picking up its own already-stable ids), and autosaves it again a moment later WITHOUT
+     * re-keying — exactly what a v3 editor, a second browser tab, or two saves racing each other
+     * all look like on the wire. Every id must survive BOTH saves, not just one.
+     */
+    @Test
+    void aPicture_survivesTwoConsecutiveDraftSaves_fromAnEditorShapedPayload_withStableIds() {
+        DealQuotationDto q0 = draft(ticketId, salesActor, 2);
+        long tile1 = q0.items().get(0).id();
+        long tile2 = q0.items().get(1).id();
+
+        // The editor's own first save after load: it adds a PLAIN row and an ADJUSTMENT row,
+        // resending the two tile ids the create just handed back.
+        DealQuotationDto q1 = quotationService.update(q0.id(), upsert(List.of(
+            withId(sampleItem("100.00", 10), tile1),
+            withId(sampleItem("100.00", 11), tile2),
+            plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
+            adjustmentPctItem("5"))), salesActor);
+        assertThat(q1.items()).hasSize(4);
+        assertThat(q1.items().get(0).id()).isEqualTo(tile1);
+        assertThat(q1.items().get(1).id()).isEqualTo(tile2);
+        long plainId = q1.items().get(2).id();
+        long adjustmentId = q1.items().get(3).id();
+
+        // This is "the ORIGINAL load" the editor's next two saves work from.
+        byte[] png = png(80, 40);
+        DealQuotationDto loaded =
+            quotationService.uploadItemPicture(q1.id(), tile1, file("a.png", png), "BESIDE", salesActor);
+        assertThat(loaded.items().get(0).hasPicture()).isTrue();
+
+        // Save #1: every item sent back with the id from the ORIGINAL load, one field changed.
+        DealQuotationDto saved1 = quotationService.update(q1.id(), upsert(List.of(
+            withId(sampleItem("150.00", 10), tile1),   // unitPrice 100 -> 150
+            withId(sampleItem("100.00", 11), tile2),
+            withId(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"), plainId),
+            withId(adjustmentPctItem("5"), adjustmentId))), salesActor);
+        assertThat(saved1.items().get(0).id()).as("id survives save #1").isEqualTo(tile1);
+        assertThat(saved1.items().get(0).hasPicture()).as("picture survives save #1").isTrue();
+
+        // Save #2: the editor never re-keyed -- it resends the SAME original ids, with another
+        // field changed.
+        DealQuotationDto saved2 = quotationService.update(q1.id(), upsert(List.of(
+            withId(sampleItem("150.00", 12), tile1),   // pieces 10 -> 12
+            withId(sampleItem("100.00", 11), tile2),
+            withId(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"), plainId),
+            withId(adjustmentPctItem("5"), adjustmentId))), salesActor);
+
+        DealQuotationItemDto item1After = saved2.items().get(0);
+        assertThat(item1After.id()).as("id survives TWO consecutive saves").isEqualTo(tile1);
+        assertThat(item1After.hasPicture()).as("picture survives TWO consecutive saves").isTrue();
+        assertThat(item1After.picturePlacement()).isEqualTo("BESIDE");
+        assertThat(quotationService.getItemPicture(saved2.id(), item1After.id(), salesActor).image())
+            .isEqualTo(png);
+        assertThat(saved2.items().get(1).id()).isEqualTo(tile2);
+        assertThat(saved2.items().get(2).id()).isEqualTo(plainId);
+        assertThat(saved2.items().get(3).id()).isEqualTo(adjustmentId);
+        assertThat(item1After.piecesFinal()).as("the edited value persisted").isEqualTo(12);
+        assertThat(pictureRows()).isEqualTo(1);
     }
 
     @Test
@@ -328,6 +389,35 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             upsert(List.of(withId(sampleItem("100.00", 10), theirItem))), salesActor);
         assertThat(saved.items().get(0).hasPicture()).isFalse();
         assertThat(storedLink(theirItem)).isEqualTo("BELOW");
+    }
+
+    /** Wrong-way-round (CLAUDE.md "Permission changes must ship evidence"): sending another
+     * quotation's item id, with different data attached, must not modify that row at all — not
+     * its quotation_id, not its brand, not its price. The membership check (this quotation's OWN
+     * current ids) is the decision; the UPDATE's {@code quotation_id = :quotationId} predicate is
+     * the enforcement underneath it. */
+    @Test
+    void aDraftSave_sendingAnotherQuotationsItemId_leavesThatRowEntirelyUntouched_andCreatesANewRowOnMine() {
+        DealQuotationDto mine = draft(ticketId, salesActor, 1);
+        DealQuotationDto theirs = draft(otherTicketId, otherSalesActor, 1);
+        long theirItem = theirs.items().get(0).id();
+
+        Map<String, Object> before = jdbc.queryForMap("""
+            SELECT quotation_id, brand, unit_price FROM sales.quotation_item WHERE quotation_item_id = :id
+            """, Map.of("id", theirItem));
+
+        DealQuotationDto saved = quotationService.update(mine.id(),
+            upsert(List.of(withId(sampleItem("999.00", 999), theirItem))), salesActor);
+
+        Map<String, Object> after = jdbc.queryForMap("""
+            SELECT quotation_id, brand, unit_price FROM sales.quotation_item WHERE quotation_item_id = :id
+            """, Map.of("id", theirItem));
+        assertThat(after).as("another quotation's row — quotation_id, brand, price — is entirely untouched")
+            .isEqualTo(before);
+
+        assertThat(saved.items()).hasSize(1);
+        assertThat(saved.items().get(0).id()).as("mine gets a NEW row, never theirs").isNotEqualTo(theirItem);
+        assertThat(saved.items().get(0).unitPrice()).isEqualByComparingTo(new BigDecimal("999.00"));
     }
 
     @Test
@@ -351,6 +441,76 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         quotationService.removeItemPicture(child.id(), childItem.id(), salesActor);
         assertThat(quotationService.getItemPicture(q.id(), parentItem, salesActor).image()).isEqualTo(png);
         assertThat(pictureRows()).as("still referenced by the parent, so not deleted").isEqualTo(1);
+    }
+
+    /**
+     * An item OMITTED from a draft save's payload is deleted along with its row — and so is its
+     * picture, UNLESS something else still references that exact picture row. Both halves need a
+     * row each, or the fix and its absence look identical: the child revision's FIRST item SHARES
+     * its picture with the (immutable, approved) parent (dropping it must not delete a picture the
+     * parent still prints), while the child's SECOND item carries a picture of its own that
+     * nothing else references (dropping it must delete the row).
+     */
+    @Test
+    void aDraftSave_thatOmitsAnItem_deletesItsRow_andItsPicture_unlessAParentRevisionStillUsesIt() {
+        DealQuotationDto q = draft(ticketId, salesActor, 2);
+        long first = q.items().get(0).id();
+        byte[] pngShared = png(40, 40);
+        quotationService.uploadItemPicture(q.id(), first, file("a.png", pngShared), "BELOW", salesActor);
+        quotationService.submit(q.id(), salesActor);
+        quotationService.approve(q.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto child = quotationService.createRevision(q.id(), salesActor);
+        long childFirst = child.items().get(0).id();
+        long childSecond = child.items().get(1).id();
+        assertThat(child.items().get(0).hasPicture()).isTrue();
+        assertThat(pictureRows()).isEqualTo(1);
+
+        // The child's OWN second item gets a picture the parent never had — NOT shared.
+        byte[] pngChildOnly = png(20, 20);
+        quotationService.uploadItemPicture(child.id(), childSecond, file("b.png", pngChildOnly), "BELOW", salesActor);
+        assertThat(pictureRows()).isEqualTo(2);
+
+        // The child's draft save drops BOTH picture-carrying items — neither id is in the payload.
+        DealQuotationDto savedChild = quotationService.update(child.id(),
+            upsert(List.of(sampleItem("100.00", 5))), salesActor);
+        assertThat(savedChild.items()).hasSize(1);
+        assertThat(jdbc.queryForList(
+            "SELECT 1 FROM sales.quotation_item WHERE quotation_item_id IN (:ids)",
+            Map.of("ids", List.of(childFirst, childSecond))))
+            .as("both omitted rows are deleted").isEmpty();
+
+        // The parent's approved document still prints exactly what it was approved with...
+        assertThat(quotationService.getItemPicture(q.id(), first, salesActor).image()).isEqualTo(pngShared);
+        // ...and only the picture NOTHING else references is actually gone: the shared one
+        // survives, the child-only one does not.
+        assertThat(pictureRows())
+            .as("shared picture kept (still referenced by the parent); child-only picture deleted")
+            .isEqualTo(1);
+    }
+
+    /** Two inputs in the SAME payload sending the SAME existing item id — the editor sending a
+     * corrupted or duplicated row, not a client this code otherwise expects. The first occurrence
+     * claims the row (and keeps its picture); the second is inserted as a brand-new row (no
+     * picture); no exception. */
+    @Test
+    void aDraftSave_withADuplicateIdWithinOnePayload_keepsTheFirstOccurrence_andInsertsTheSecondAsNew() {
+        DealQuotationDto q = draft(ticketId, salesActor, 1);
+        long itemId = q.items().get(0).id();
+        quotationService.uploadItemPicture(q.id(), itemId, file("a.png", png(50, 25)), "BELOW", salesActor);
+
+        DealQuotationDto saved = quotationService.update(q.id(), upsert(List.of(
+            withId(sampleItem("100.00", 10), itemId),
+            withId(sampleItem("200.00", 20), itemId))), salesActor);
+
+        assertThat(saved.items()).hasSize(2);
+        DealQuotationItemDto firstRow = saved.items().get(0);
+        DealQuotationItemDto secondRow = saved.items().get(1);
+        assertThat(firstRow.id()).as("the first occurrence claims the row").isEqualTo(itemId);
+        assertThat(firstRow.hasPicture()).as("the first occurrence keeps the picture").isTrue();
+        assertThat(secondRow.id()).as("the second occurrence is a NEW row").isNotEqualTo(itemId);
+        assertThat(secondRow.hasPicture()).isFalse();
+        assertThat(pictureRows()).isEqualTo(1);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────
@@ -402,6 +562,26 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             new BigDecimal("10"), null, WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
             WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก",
             30, 45, null);
+    }
+
+    /** S2 — a PLAIN row (description/quantity/unit/price, no tile machinery). Same shape as
+     * {@code DealQuotationIntegrationTest#plainItem}. */
+    private static ItemInput plainItem(String description, String quantity, String unit, String unitPrice) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal(unitPrice), null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    /** S3 — an ADJUSTMENT row entered as a percent. Same shape as
+     * {@code DealQuotationIntegrationTest#adjustmentPctItem}. */
+    private static ItemInput adjustmentPctItem(String pct) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, null, null, null,
+            null, null, new BigDecimal(pct), null, null);
     }
 
     private static ItemInput withId(ItemInput in, Long id) {

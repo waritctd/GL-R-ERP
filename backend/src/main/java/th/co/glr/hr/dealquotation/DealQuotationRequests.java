@@ -102,16 +102,19 @@ public final class DealQuotationRequests {
         @DecimalMax("99999999") BigDecimal adjustmentAmount,
 
         /**
-         * GLA-75 (V170): the EXISTING item's id, exactly as {@code DealQuotationItemDto#id} served
-         * it — optional, and meaningful on UPDATE only.
+         * GLA-75 (V170), stable-id follow-up: the EXISTING item's id, exactly as
+         * {@code DealQuotationItemDto#id} served it — optional, and meaningful on UPDATE only.
          *
-         * <p>{@code PUT /api/deal-quotations/{id}} is a FULL REPLACE of the draft's item rows, so
-         * every save mints new item ids. An item's picture is carried onto its replacement row
-         * ONLY when the client sends that row's previous {@code id} back here; an item sent
-         * without it is saved as a new item with no picture. The id is matched against THIS
-         * quotation's own current items only — an id from any other quotation, or a stale one, is
-         * ignored, never an error and never a way to reach someone else's picture. Ignored on
-         * create and by calculate-line.
+         * <p>{@code PUT /api/deal-quotations/{id}} keeps item ids STABLE: an input whose {@code id}
+         * matches one of THIS quotation's current item ids — and is not already claimed by an
+         * earlier item in the same payload — is UPDATED IN PLACE (same {@code
+         * quotation_item_id}), so its picture (and its {@code /items/{itemId}/picture} URL)
+         * survives the save untouched. An input with a null id, a foreign id (another quotation's),
+         * a stale id (no longer one of this quotation's rows), or a duplicate of an id already
+         * claimed earlier in the same payload is INSERTED as a new row instead, with no picture.
+         * Any of this quotation's rows not claimed by the payload is deleted, and its picture is
+         * dropped unless another row (e.g. a parent revision sharing it) still references it.
+         * Ignored on create and by calculate-line.
          */
         Long id
     ) {
