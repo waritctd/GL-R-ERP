@@ -1,7 +1,44 @@
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
-import { dealQuotationStatusLabel, remainderModeLabel } from './quotationMeta.js';
+import { formatThaiDate } from '../../utils/format.js';
+import {
+  currencyForLanguage, dealQuotationStatusLabel, documentDiscountLabel, formatQuotationMoney,
+  LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
+} from './quotationMeta.js';
+
+// v3b: the item table, totals and signature block follow the DOCUMENT's language, because this
+// view's whole job is to look like the page the customer receives. The Thai labels are the ones
+// every pre-v3b test and the printed F-SM-002 already use; the English ones are read off the
+// owner's F-SM-008 samples (QN6900902-6): Description & Conditions / Qty / Unit price / Disc. /
+// Net price / Amount (USD), Grand Total (USD) with NO VAT row, and Printed by / Quoted by /
+// Approved by / Ordered by. The surrounding panels (customer, terms) stay Thai — they are the
+// app's own chrome, not a reproduction of the form.
+const DOC_LABELS = {
+  TH: {
+    description: 'รายละเอียด', quantity: 'จำนวน', unitPrice: 'ราคา/หน่วย', discount: 'ส่วนลด',
+    net: 'สุทธิ', amount: 'เป็นเงิน', subtotal: 'รวมเป็นเงิน', vat: 'ภาษีมูลค่าเพิ่ม 7%',
+    grand: 'ยอดรวมทั้งสิ้น', printedBy: 'ผู้พิมพ์', quotedBy: 'พนักงานขาย',
+    approvedBy: 'ผู้จัดการฝ่ายขาย', orderedBy: 'ผู้สั่งซื้อ',
+  },
+  EN: {
+    description: 'Description & Conditions', quantity: 'Qty', unitPrice: 'Unit price', discount: 'Disc.',
+    net: 'Net price', amount: 'Amount (USD)', subtotal: 'Total (USD)', vat: null,
+    grand: 'Grand Total (USD)', printedBy: 'Printed by', quotedBy: 'Quoted by',
+    approvedBy: 'Approved by', orderedBy: 'Ordered by',
+  },
+};
+
+/** "184 แผ่น", "85 Bags", "1 JOB" — and "-1" with an EMPTY unit for a ส่วนลดพิเศษ row, exactly as
+ * her QN6900704-2 prints it. `quantity`/`unit` are the v3 per-row fields; a pre-v3 DTO (or fixture)
+ * without them falls back to the tile's own piecesFinal/แผ่น, which is what they always meant. */
+function quantityCell(item) {
+  const type = lineTypeOf(item);
+  const quantity = item.quantity ?? item.piecesFinal;
+  const shown = quantity == null ? '-' : Number(quantity).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (type === LINE_TYPE_ADJUSTMENT) return shown;
+  const unit = item.unit ?? (type === LINE_TYPE_TILE ? 'แผ่น' : '');
+  return unit ? `${shown} ${unit}` : shown;
+}
 
 // `reflow-cards` (styles.css ~L1330, mirrored by every other DataTable-style grid in this app —
 // see OvertimePanel.jsx's OVERTIME_TABLE_GRID for the same pattern): below 720px it hides
@@ -56,6 +93,14 @@ const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem
  */
 export function QuotationDocumentView({ quotation }) {
   const status = dealQuotationStatusLabel(quotation.docStatus);
+  const language = quotation.documentLanguage === 'EN' ? 'EN' : 'TH';
+  const labels = DOC_LABELS[language];
+  const currency = quotation.currency || currencyForLanguage(language);
+  const money = (value) => formatQuotationMoney(value, currency);
+  // The English signature block prints English names and FALLS BACK to the Thai one when an
+  // employee has none on file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the
+  // screen never shows an empty slot the paper would have filled.
+  const name = (en, th) => (language === 'EN' ? (en || th) : th);
   return (
     <div className="grid gap-[18px]">
       <Panel title="ข้อมูลลูกค้า">
@@ -81,16 +126,16 @@ export function QuotationDocumentView({ quotation }) {
 
       <Panel title="รายการสินค้า" flush>
         <div className={`${ITEM_GRID} table-head`}>
-          <span>รายละเอียด</span>
-          <span className="text-right">จำนวน</span>
-          <span className="text-right">ราคา/หน่วย</span>
-          <span className="text-right">ส่วนลด</span>
-          <span className="text-right">สุทธิ</span>
-          <span className="text-right">เป็นเงิน</span>
+          <span>{labels.description}</span>
+          <span className="text-right">{labels.quantity}</span>
+          <span className="text-right">{labels.unitPrice}</span>
+          <span className="text-right">{labels.discount}</span>
+          <span className="text-right">{labels.net}</span>
+          <span className="text-right">{labels.amount}</span>
         </div>
         {quotation.items.map((item, index) => (
-          <div key={item.id ?? item.seq} className={`${ITEM_GRID} data-row`}>
-            <span data-label="รายละเอียด" className="min-w-0">
+          <div key={item.id ?? item.seq} className={`${ITEM_GRID} data-row`} data-line-type={lineTypeOf(item)}>
+            <span data-label={labels.description} className="min-w-0">
               {/* ONE ตำแหน่งติดตั้ง heading per RUN of equal labels (owner feedback F1,
                   2026-09-10) — the same grouping the renderer applies to the printed document,
                   and the same one locationGroupsFromItems rebuilds in the editor. Repeating the
@@ -113,18 +158,30 @@ export function QuotationDocumentView({ quotation }) {
               <span className="font-bold">{item.descriptionLine}</span>
               {item.sizeLine ? <span className="text-2xs text-text-muted">{item.sizeLine}</span> : null}
               {item.calculationLine ? <span className="text-2xs text-text-muted">{item.calculationLine}</span> : null}
+              {/* v3: "(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)" under a SPECIAL_SQM tile —
+                  a <span> for the same wrapper-clip reason as the two lines above. */}
+              {item.specialPriceLine ? <span className="text-2xs text-text-muted">{item.specialPriceLine}</span> : null}
             </span>
-            <span data-label="จำนวน" className="tabular-nums text-right">{item.piecesFinal ?? '-'} แผ่น</span>
-            <span data-label="ราคา/หน่วย" className="tabular-nums text-right">{formatMoney(item.unitPrice)}</span>
-            <span data-label="ส่วนลด" className="tabular-nums text-right">{item.discountPct ? `${item.discountPct}%` : 'Net'}</span>
-            <span data-label="สุทธิ" className="tabular-nums text-right">{formatMoney(item.netUnitPrice)}</span>
-            <span data-label="เป็นเงิน" className="tabular-nums text-right font-bold">{formatMoney(item.lineAmount)}</span>
+            {/* v3: a ส่วนลดพิเศษ row prints จำนวน -1, NO unit, NO ส่วนลด, a POSITIVE ราคา and
+                คงเหลือ and a NEGATIVE เป็นเงิน — her QN6900704-2, and what the server already
+                stores (quantity -1 × a positive net IS the negative amount), so nothing here is
+                special-cased beyond the two empty cells. */}
+            <span data-label={labels.quantity} className="tabular-nums text-right">{quantityCell(item)}</span>
+            <span data-label={labels.unitPrice} className="tabular-nums text-right">{money(item.unitPrice)}</span>
+            <span data-label={labels.discount} className="tabular-nums text-right">{documentDiscountLabel(item, quotation.priceMode, language)}</span>
+            <span data-label={labels.net} className="tabular-nums text-right">{money(item.netUnitPrice)}</span>
+            <span data-label={labels.amount} className="tabular-nums text-right font-bold">{money(item.lineAmount)}</span>
           </div>
         ))}
         <div className="flex flex-col items-end gap-1 border-t border-border px-5 py-4">
-          <span className="text-sm text-text-muted">รวมเป็นเงิน <span className="tabular-nums text-text">{formatMoney(quotation.subtotalAmount)}</span></span>
-          <span className="text-sm text-text-muted">ภาษีมูลค่าเพิ่ม 7% <span className="tabular-nums text-text">{formatMoney(quotation.vatAmount)}</span></span>
-          <span className="text-lg font-extrabold">ยอดรวมทั้งสิ้น <span className="tabular-nums">{formatMoney(quotation.grandTotal)}</span></span>
+          {/* v3b: the English form has NO subtotal/VAT rows — only Grand Total (USD). */}
+          {labels.vat ? (
+            <>
+              <span className="text-sm text-text-muted">{labels.subtotal} <span className="tabular-nums text-text">{money(quotation.subtotalAmount)}</span></span>
+              <span className="text-sm text-text-muted">{labels.vat} <span className="tabular-nums text-text">{money(quotation.vatAmount)}</span></span>
+            </>
+          ) : null}
+          <span className="text-lg font-extrabold">{labels.grand} <span className="tabular-nums">{money(quotation.grandTotal)}</span></span>
         </div>
       </Panel>
 
@@ -151,21 +208,21 @@ export function QuotationDocumentView({ quotation }) {
       <Panel title="ผู้เกี่ยวข้อง">
         <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้พิมพ์</span>
-            <strong className="block mt-6 border-t border-border pt-2">{quotation.createdByName ?? '-'}</strong>
+            <span className="block text-2xs font-bold uppercase text-text-muted">{labels.printedBy}</span>
+            <strong className="block mt-6 border-t border-border pt-2">{name(quotation.createdByNameEn, quotation.createdByName) ?? '-'}</strong>
           </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span>
-            <strong className="block mt-6 border-t border-border pt-2">{quotation.salesRepName ?? '-'}</strong>
+            <span className="block text-2xs font-bold uppercase text-text-muted">{labels.quotedBy}</span>
+            <strong className="block mt-6 border-t border-border pt-2">{name(quotation.salesRepNameEn, quotation.salesRepName) ?? '-'}</strong>
           </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้จัดการฝ่ายขาย</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">{labels.approvedBy}</span>
             <strong className="block mt-6 border-t border-border pt-2">
-              {quotation.docStatus === 'APPROVED' ? (quotation.approvedByName ?? '-') : ''}
+              {quotation.docStatus === 'APPROVED' ? (name(quotation.approvedByNameEn, quotation.approvedByName) ?? '-') : ''}
             </strong>
           </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ผู้สั่งซื้อ</span>
+            <span className="block text-2xs font-bold uppercase text-text-muted">{labels.orderedBy}</span>
             <strong className="block mt-6 border-t border-border pt-2">{quotation.contactName ?? '-'}</strong>
           </div>
         </div>

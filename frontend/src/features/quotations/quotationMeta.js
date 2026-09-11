@@ -382,7 +382,13 @@ export function isDealQuotationNeedingRework(row) {
 // Optional per the plan (never validated here): ยี่ห้อ (brand), รหัสสินค้า (productCode),
 // ตำแหน่งติดตั้ง (locationLabel), ประเทศต้นทาง (originCountry) + its lead-time range, หมายเหตุ
 // (itemNotes), ส่วนลด % (discountPct, defaults to 0).
-export function validateQuotationItem(item) {
+//
+// v3 (2026-09-11): `priceMode` makes the PRICE half mode-aware — SPECIAL_SQM also needs the
+// ราคาพิเศษ, DIRECT_NET needs the net per piece and treats the list price as optional (a blank one
+// is sent as the net itself, which prints "Net" — see itemInputFromRow). A PLAIN row is validated
+// by validatePlainItem instead; an ADJUSTMENT row never reaches here (it lives in its own list).
+export function validateQuotationItem(item, priceMode = 'NET') {
+  if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   const errors = {};
   if (!item?.model?.trim()) errors.model = 'กรุณาระบุรุ่น';
   if (!item?.color?.trim()) errors.color = 'กรุณาระบุสี';
@@ -391,7 +397,20 @@ export function validateQuotationItem(item) {
   if (!(Number(item?.thicknessMm) > 0)) errors.thicknessMm = 'กรุณาระบุความหนา (มม.)';
   if (!(Number(item?.piecesPerBox) >= 1)) errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
   if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุตร.ม./แผ่น';
-  if (!(Number(item?.unitPrice) > 0)) errors.unitPrice = 'กรุณาระบุราคา/หน่วย';
+  if (priceMode === 'DIRECT_NET') {
+    if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
+    // Optional here, but a typed one must still be positive — the server refuses a non-positive
+    // unitPrice on every TILE row whatever the mode.
+    if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
+      errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
+    }
+  } else if (!(Number(item?.unitPrice) > 0)) {
+    errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง/แผ่น' : 'กรุณาระบุราคา/หน่วย';
+  }
+  if (priceMode === 'SPECIAL_SQM') {
+    if (!(Number(item?.specialPriceSqm) > 0)) errors.specialPriceSqm = 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
+    else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+  }
   if (item?.quantityMode === 'PIECES') {
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
   } else if (!(Number(item?.areaSqm) > 0)) {
@@ -405,13 +424,18 @@ export function validateQuotationItem(item) {
 // the same left-to-right order the item row itself lays the fields out in, so the summary reads
 // in the order the rep will actually scan the row.
 const QUOTATION_ITEM_FIELD_ORDER = [
-  'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
-  'unitPrice', 'areaSqm', 'piecesInput',
+  'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
+  'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
+  'adjustmentPct', 'adjustmentAmount',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
   sqmPerPiece: 'ตร.ม./แผ่น', piecesPerBox: 'แผ่น/กล่อง', unitPrice: 'ราคา/หน่วย',
   areaSqm: 'จำนวน (พื้นที่)', piecesInput: 'จำนวน (แผ่น)',
+  // v3
+  description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',
+  specialPriceSqm: 'ราคาพิเศษ', directNetPrice: 'ราคาสุทธิ/แผ่น',
+  adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -424,4 +448,216 @@ export function quotationItemMissingSummary(errors, index) {
   const ordered = QUOTATION_ITEM_FIELD_ORDER.filter((key) => keys.includes(key));
   const labels = ordered.map((key) => QUOTATION_ITEM_FIELD_LABELS[key]);
   return `รายการที่ ${index + 1}: ขาด ${labels.join(', ')}`;
+}
+
+// ── Quotation v3 / v3b (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
+// Owner's standing rule for this whole feature: "sales should have manual type as less as
+// possible". Everything below exists so a rep picks a mode ONCE per quotation and the rows adapt,
+// rather than choosing per row. Mirrors th.co.glr.hr.dealquotation.WastageCalculator's constants
+// (LINE_TYPE_*, PRICE_MODE_*, DOCUMENT_LANGUAGE_*, CURRENCY_*) and DealQuotationService's
+// language/mode rules — the SERVICE enforces every one of these; the UI only avoids offering what
+// it would refuse.
+
+export const LINE_TYPE_TILE = 'TILE';
+export const LINE_TYPE_PLAIN = 'PLAIN';
+export const LINE_TYPE_ADJUSTMENT = 'ADJUSTMENT';
+
+/** A pre-v3 row (and every mock/fixture row that predates V168) carries no lineType; the server
+ * normalises a stored NULL to TILE on read, and so does this. */
+export function lineTypeOf(item) {
+  return item?.lineType || LINE_TYPE_TILE;
+}
+
+export const DOCUMENT_LANGUAGE_OPTIONS = [
+  { code: 'TH', label: 'ไทย', currency: 'THB', hint: 'ใบเสนอราคาภาษาไทย (F-SM-002) · บาท · มี VAT 7%' },
+  { code: 'EN', label: 'English', currency: 'USD', hint: 'ใบเสนอราคาภาษาอังกฤษ (F-SM-008) · USD · ไม่มี VAT' },
+];
+
+/** TH→THB, EN→USD — DealQuotationService#resolveCurrency refuses any other pairing, so the UI
+ * derives the currency rather than offering it as a second choice. */
+export function currencyForLanguage(documentLanguage) {
+  return documentLanguage === 'EN' ? 'USD' : 'THB';
+}
+
+/** VAT applies to the Thai form only (v3b: the English F-SM-008 has no VAT row at all). */
+export function vatRateForLanguage(documentLanguage) {
+  return documentLanguage === 'EN' ? 0 : 0.07;
+}
+
+export const PRICE_MODE_OPTIONS = [
+  { code: 'NET', label: 'ราคาตั้ง − ส่วนลด %', hint: 'กรอกราคาตั้งต่อแผ่นและส่วนลด % (แบบเดิม)' },
+  { code: 'SPECIAL_SQM', label: 'ราคาพิเศษ บาท/ตร.ม.', hint: 'กรอกราคาพิเศษต่อ ตร.ม. รวม VAT แล้ว ระบบคำนวณราคาสุทธิต่อแผ่นให้' },
+  { code: 'DIRECT_NET', label: 'ราคาสุทธิต่อแผ่น', hint: 'กรอกราคาสุทธิต่อแผ่นตรง ๆ' },
+];
+
+/**
+ * The tile price modes a document in `documentLanguage` may use. SPECIAL_SQM is a Thai-market
+ * concept (a VAT-INCLUSIVE บาท/ตร.ม. price divided back out by 1.07), and the English form carries
+ * no VAT, so DealQuotationService#requirePriceModeAvailableInLanguage refuses it there with a 400.
+ * Not offering it is the UI half of that rule, never a substitute for it.
+ */
+export function availablePriceModes(documentLanguage) {
+  return PRICE_MODE_OPTIONS.filter((opt) => !(documentLanguage === 'EN' && opt.code === 'SPECIAL_SQM'));
+}
+
+/**
+ * What a language switch does to the price mode. A document already in SPECIAL_SQM that becomes
+ * English is MOVED to DIRECT_NET — and `moved` is true so the caller says so out loud, rather than
+ * the mode changing silently under the rep (the brief's own words: "with a clear message rather
+ * than silently"). DIRECT_NET, not NET, because it is the mode that still lets the rep state a net
+ * per piece, which is what a ราคาพิเศษ document was expressing.
+ */
+export function priceModeForLanguage(priceMode, documentLanguage) {
+  const allowed = availablePriceModes(documentLanguage).some((opt) => opt.code === priceMode);
+  if (allowed) return { priceMode, moved: false };
+  return { priceMode: 'DIRECT_NET', moved: true };
+}
+
+/**
+ * The controlled หน่วย list for a PLAIN row. The backend accepts any string up to 30 characters
+ * (ItemInput.unit is `@Size(max = 30)`, matching sales.quotation_item.raw_unit), so this list is a
+ * UI choice, not a server rule: every unit the owner's nine documents actually print, split by the
+ * language of the form they appear on (JOB/Bags/Barrels are all from her English samples). The
+ * current document's language is listed first; the other stays available because a Thai document
+ * can legitimately carry "SQM" and vice versa.
+ */
+export const PLAIN_UNIT_OPTIONS = {
+  TH: ['แผ่น', 'ตร.ม.', 'กล่อง', 'ชุด', 'ชิ้น', 'ถุง', 'ถัง', 'งาน'],
+  EN: ['JOB', 'SQM', 'Bags', 'Barrels'],
+};
+
+/**
+ * One-click starting points for the PLAIN rows the owner's documents actually carry, so the
+ * commonest non-tile lines take a click and a price rather than a typed sentence. Only offered on a
+ * blank row (the component decides that); each fills description + unit (+ quantity 1 for a
+ * one-off service) and nothing the rep has not seen.
+ */
+export const PLAIN_ROW_PRESETS = {
+  TH: [
+    { label: 'ค่าขนส่ง', description: 'ค่าขนส่ง', unit: 'งาน', quantity: 1 },
+    { label: 'ค่าบริการตัดกระเบื้อง', description: 'ค่าบริการตัดกระเบื้องตามแบบ', unit: 'แผ่น' },
+  ],
+  EN: [
+    { label: 'Transportation', description: 'Transportation Charges', unit: 'JOB', quantity: 1 },
+  ],
+};
+
+/** `$` for USD rather than `US$`: the document's own column heading already says "Amount (USD)"
+ * and the settings block names the currency, and the เป็นเงิน column floor (QuotationDocumentView's
+ * ITEM_GRID) was measured for a one-glyph symbol. A negative amount — an ADJUSTMENT row's
+ * เป็นเงิน — prints the sign BEFORE the symbol ("-฿38,198.21"), not "฿-38,198.21". */
+export function formatQuotationMoney(value, currency = 'THB') {
+  if (value === null || value === undefined || value === '') return '-';
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '-';
+  const symbol = currency === 'USD' ? '$' : '฿';
+  const body = Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${amount < 0 ? '-' : ''}${symbol}${body}`;
+}
+
+/** 3 → "3", 2.5 → "2.5", 1350 → "1,350" — DealQuotationLines#format's `#,##0.##`. */
+function formatPlainNumber(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '';
+  return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+
+/**
+ * The ส่วนลดพิเศษ description, for the EDITOR's preview only — the saved row's `descriptionLine`
+ * comes from DealQuotationLines#adjustmentDescription and is what is printed. Same phrasing and the
+ * same zero-padded dd/MM/BE date that method emits ("31/07/2569"), so the preview and the saved
+ * line read identically. A flat adjustment with the rep's own wording keeps that wording, exactly
+ * as the service does.
+ */
+export function adjustmentDescriptionPreview(adjustment) {
+  if (adjustment?.adjustmentKind === 'AMOUNT' && adjustment?.description?.trim()) {
+    return adjustment.description.trim();
+  }
+  const pct = adjustment?.adjustmentKind === 'AMOUNT' ? null : adjustment?.adjustmentPct;
+  const head = `ส่วนลดพิเศษ${pct !== null && pct !== undefined && pct !== '' ? ` ${formatPlainNumber(pct)}%` : ''}`;
+  const deadline = adjustment?.adjustmentDeadline;
+  if (!deadline || !/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return head;
+  const [year, month, day] = deadline.split('-').map(Number);
+  return `${head} สำหรับการสั่งซื้อภายใน ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year + 543}`;
+}
+
+/**
+ * A client-side ESTIMATE of a ส่วนลดพิเศษ row's magnitude, shown only while the editor holds unsaved
+ * edits — once saved, the editor shows the server's own figure instead (see QuotationAdjustmentRow).
+ *
+ * Why the editor needs one at all: `calculate-line` is a single-row preview with no quotation, so it
+ * has no "rows above" to take a percentage OF (DealQuotationService#calculateLine passes a ZERO base)
+ * and would answer 0 for every percentage adjustment. The estimate is `base × pct / 100` rounded
+ * half-up to satang — WastageCalculator#adjustmentAmount's rule — with the base being every
+ * NON-adjustment row's line amount, because two adjustments do NOT compound on the server. It is
+ * labelled an estimate wherever it is shown. It is deliberately NOT in mockApi.js: a mock that
+ * mirrored it would make mock-driven tests evidence of nothing about the server's figure.
+ */
+export function estimateAdjustmentAmount(adjustment, base) {
+  if (adjustment?.adjustmentKind === 'AMOUNT') {
+    const flat = Number(adjustment.adjustmentAmount);
+    return Number.isFinite(flat) && flat > 0 ? flat : null;
+  }
+  const pct = Number(adjustment?.adjustmentPct);
+  if (!(pct > 0) || !Number.isFinite(Number(base))) return null;
+  return Math.round(Number(base) * pct) / 100;
+}
+
+/**
+ * The ส่วนลด column of the document view, for one row — DealQuotationRenderAdapter#discountLabel,
+ * so the screen and the printed page say the same thing. ADJUSTMENT prints NOTHING (the owner's
+ * QN6900704-2 leaves the cell empty); a TILE row reads พิเศษ in SPECIAL_SQM, and in DIRECT_NET when
+ * the typed net differs from the list price; everything else is `Net` or `N%`. On an English
+ * document the word is "Special" — the English form has no Thai text in the item table.
+ */
+export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') {
+  const type = lineTypeOf(item);
+  if (type === LINE_TYPE_ADJUSTMENT) return '';
+  const special = documentLanguage === 'EN' ? 'Special' : 'พิเศษ';
+  if (type === LINE_TYPE_TILE) {
+    if (priceMode === 'SPECIAL_SQM') return special;
+    if (priceMode === 'DIRECT_NET') {
+      const differs = item.unitPrice != null && item.netUnitPrice != null
+        && Number(item.unitPrice) !== Number(item.netUnitPrice);
+      return differs ? special : 'Net';
+    }
+  }
+  const pct = Number(item.discountPct);
+  return !pct ? 'Net' : `${formatPlainNumber(pct)}%`;
+}
+
+/** Up to `places` decimals — the backend's `@Digits(fraction = N)` bounds (quantity 2, the
+ * ราคาพิเศษ 2, adjustmentPct 3). A value beyond them is a 400 from bean validation, so the editor
+ * says so on the field instead of letting the save fail. */
+function withinDecimals(value, places) {
+  const text = String(value ?? '');
+  const dot = text.indexOf('.');
+  return dot < 0 || text.length - dot - 1 <= places;
+}
+
+/** PLAIN row completeness — DealQuotationService#buildPlainItem's own list (รายละเอียด, จำนวน,
+ * หน่วย) plus the positive price #requirePriceValidForType demands of every non-adjustment row. */
+export function validatePlainItem(item) {
+  const errors = {};
+  if (!item?.description?.trim()) errors.description = 'กรุณาระบุรายละเอียด';
+  if (!(Number(item?.quantity) > 0)) errors.quantity = 'กรุณาระบุจำนวน';
+  else if (!withinDecimals(item.quantity, 2)) errors.quantity = 'จำนวนทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+  if (!item?.unit?.trim()) errors.unit = 'กรุณาเลือกหน่วย';
+  if (!(Number(item?.unitPrice) > 0)) errors.unitPrice = 'กรุณาระบุราคา/หน่วย';
+  return errors;
+}
+
+/** ส่วนลดพิเศษ completeness — #requirePriceValidForType's "exactly one of percent / flat, and
+ * positive". The deadline is optional on the server (the description simply omits the date). */
+export function validateAdjustment(adjustment) {
+  const errors = {};
+  if (adjustment?.adjustmentKind === 'AMOUNT') {
+    if (!(Number(adjustment?.adjustmentAmount) > 0)) errors.adjustmentAmount = 'กรุณาระบุจำนวนเงินส่วนลด';
+  } else {
+    const pct = Number(adjustment?.adjustmentPct);
+    if (!(pct > 0)) errors.adjustmentPct = 'กรุณาระบุเปอร์เซ็นต์ส่วนลด';
+    else if (pct > 100) errors.adjustmentPct = 'ส่วนลดต้องไม่เกิน 100%';
+    else if (!withinDecimals(adjustment.adjustmentPct, 3)) errors.adjustmentPct = 'ทศนิยมได้ไม่เกิน 3 ตำแหน่ง';
+  }
+  return errors;
 }

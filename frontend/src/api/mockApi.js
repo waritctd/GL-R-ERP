@@ -48,7 +48,7 @@ import {
 // gate can't drift from the frontend's own copy of QuotationStatus (the authoritative table lives
 // in the backend dealquotation/ package once it lands).
 import {
-  canTransitionDealQuotation, isDealQuotationNeedingRework,
+  canTransitionDealQuotation, isDealQuotationNeedingRework, adjustmentDescriptionPreview,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -4862,13 +4862,151 @@ function computeDealQuotationLine(input = {}) {
   };
 }
 
-function buildDealQuotationItemRow(input, seq) {
-  return { id: mockDealQuotationItemSeq++, seq, ...computeDealQuotationLine(input) };
+// ── Quotation v3 / v3b (V168/V169) — mirrors DealQuotationService's RULES, never its MATH ─────
+//
+// The mock mirrors the v3 wire SHAPE faithfully (every DTO field the frontend keys on) and the
+// cheap, rule-shaped refusals — SPECIAL_SQM on an English document, a currency that disagrees
+// with the language, an adjustment-only document, "exactly one of percent / flat" — because a mock
+// more PERMISSIVE than the service is the dangerous direction (CLAUDE.md "Mock API contract").
+//
+// It deliberately does NOT reproduce the two computations this pass added:
+//   - the ราคาพิเศษ net per piece (WastageCalculator#netPerPieceFromSpecialSqm — its rounding
+//     order is the whole point, and a copy here would make every mock-driven test agree with the
+//     copy rather than with the server), and
+//   - a PERCENTAGE ส่วนลดพิเศษ (WastageCalculator#adjustmentAmount over the rows above).
+// Both come back as `null` money with a calculationLine that SAYS "not computed in mock mode", so
+// a mock-mode screen shows a visible gap instead of a plausible-looking number. What the mock does
+// fill in is only what needs no algorithm: a DIRECT_NET net IS the typed net, a FLAT adjustment IS
+// the typed amount, and a PLAIN row reuses the same stub `quantity × price` the NET tile already
+// uses. Verify every v3 figure against the real service (e2e-real/write-quotation.spec.js).
+const MOCK_NOT_COMPUTED = '(โหมดทดสอบ: ไม่คำนวณรายการนี้ — ตรวจตัวเลขกับระบบจริง)';
+
+function dealQuotationLineType(input) {
+  return input?.lineType || 'TILE';
 }
 
-function dealQuotationTotals(items) {
+/** DealQuotationService#inferPriceMode — what calculate-line uses, having no quotation. */
+function inferMockPriceMode(input) {
+  if (input?.specialPriceSqm != null) return 'SPECIAL_SQM';
+  if (input?.directNetPrice != null) return 'DIRECT_NET';
+  return 'NET';
+}
+
+function computeDealQuotationV3Line(input = {}, priceMode = 'NET') {
+  const lineType = dealQuotationLineType(input);
+  const v3Nulls = {
+    specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
+    specialPriceLine: null, adjustmentAmount: null,
+  };
+  if (lineType === 'PLAIN') {
+    const quantity = Number(input.quantity) || 1;
+    const netUnitPrice = round2((Number(input.unitPrice) || 0) * (1 - (Number(input.discountPct) || 0) / 100));
+    return {
+      ...input, ...v3Nulls, lineType,
+      quantity, unit: input.unit ?? null,
+      piecesPerSqm: null, piecesBeforeWastage: 0, piecesAfterWastage: 0, piecesFinal: 0, boxes: null,
+      netUnitPrice, lineAmount: round2(quantity * netUnitPrice),
+      descriptionLine: input.description?.trim() ?? null, sizeLine: null, calculationLine: null,
+    };
+  }
+  if (lineType === 'ADJUSTMENT') {
+    const flat = input.adjustmentPct == null && input.adjustmentAmount != null;
+    const amount = flat ? round2(Number(input.adjustmentAmount)) : null;
+    return {
+      ...input, ...v3Nulls, lineType,
+      quantity: -1, unit: null, discountPct: null,
+      adjustmentPct: input.adjustmentPct ?? null,
+      adjustmentDeadline: input.adjustmentDeadline ?? null,
+      adjustmentAmount: flat ? amount : null,
+      piecesPerSqm: null, piecesBeforeWastage: 0, piecesAfterWastage: 0, piecesFinal: 0, boxes: null,
+      unitPrice: amount, netUnitPrice: amount, lineAmount: amount == null ? null : -amount,
+      descriptionLine: adjustmentDescriptionPreview({
+        adjustmentKind: flat ? 'AMOUNT' : 'PERCENT', adjustmentPct: input.adjustmentPct,
+        adjustmentDeadline: input.adjustmentDeadline, description: input.description,
+      }),
+      sizeLine: null,
+      calculationLine: flat ? null : MOCK_NOT_COMPUTED,
+    };
+  }
+  const tile = computeDealQuotationLine(input);
+  const common = { ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: 'แผ่น' };
+  if (priceMode === 'SPECIAL_SQM') {
+    return {
+      ...common,
+      specialPriceSqm: input.specialPriceSqm ?? null,
+      discountPct: null,
+      netUnitPrice: null, lineAmount: null,
+      calculationLine: `${tile.calculationLine} ${MOCK_NOT_COMPUTED}`,
+      specialPriceLine: input.specialPriceSqm != null
+        ? `(ราคาพิเศษ ${Number(input.specialPriceSqm).toLocaleString('en-US', { maximumFractionDigits: 2 })} บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)`
+        : null,
+    };
+  }
+  if (priceMode === 'DIRECT_NET') {
+    const net = input.directNetPrice == null ? null : round2(Number(input.directNetPrice));
+    return {
+      ...common, discountPct: null, netUnitPrice: net,
+      lineAmount: net == null ? null : round2(tile.piecesFinal * net),
+    };
+  }
+  return common;
+}
+
+function buildDealQuotationItemRow(input, seq, priceMode = 'NET') {
+  return { id: mockDealQuotationItemSeq++, seq, ...computeDealQuotationV3Line(input, priceMode) };
+}
+
+/** DealQuotationService's v3/v3b write-path rules, in the order the service applies them. Returns
+ * the resolved `{ priceMode, documentLanguage, currency }`. `current` is the stored row on UPDATE,
+ * where a MISSING priceMode/documentLanguage KEEPS the stored one (review fix F1) — never a
+ * default. */
+function resolveDealQuotationV3Header(payload, current = null) {
+  const priceMode = payload.priceMode || current?.priceMode || 'NET';
+  if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET'].includes(priceMode)) fail('ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+  const documentLanguage = String(payload.documentLanguage || current?.documentLanguage || 'TH').toUpperCase();
+  if (!['TH', 'EN'].includes(documentLanguage)) fail('ต้องเป็น TH หรือ EN', 400);
+  const expectedCurrency = documentLanguage === 'EN' ? 'USD' : 'THB';
+  const currency = payload.currency ? String(payload.currency).toUpperCase() : expectedCurrency;
+  if (currency !== expectedCurrency) {
+    fail(`สกุลเงิน ${currency} ใช้กับเอกสารภาษา ${documentLanguage} ไม่ได้ (ต้องเป็น ${expectedCurrency})`, 400);
+  }
+  if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
+    fail('ราคาพิเศษ (บาท/ตร.ม. รวมภาษี) ใช้กับเอกสารภาษาอังกฤษไม่ได้ เนื่องจากเอกสารภาษาอังกฤษไม่มีภาษีมูลค่าเพิ่ม กรุณาเลือกราคาสุทธิต่อแผ่นแทน', 400);
+  }
+  return { priceMode, documentLanguage, currency };
+}
+
+/** DealQuotationService#buildItems' ordering and refusals: ADJUSTMENT rows move LAST (stably),
+ * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
+ * and a document whose total goes negative is refused — checked only where the mock KNOWS the
+ * total (every adjustment flat); a percentage adjustment is not computed here at all. */
+function buildDealQuotationItems(inputs, priceMode) {
+  const list = inputs ?? [];
+  if (list.length === 0) fail('ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ', 400);
+  const products = list.filter((it) => dealQuotationLineType(it) !== 'ADJUSTMENT');
+  const adjustments = list.filter((it) => dealQuotationLineType(it) === 'ADJUSTMENT');
+  if (products.length === 0) fail('ใบเสนอราคาต้องมีรายการสินค้าอย่างน้อยหนึ่งรายการ ก่อนจะใส่ส่วนลดพิเศษได้', 400);
+  adjustments.forEach((adj) => {
+    const hasPct = adj.adjustmentPct != null;
+    const hasFlat = adj.adjustmentAmount != null;
+    if (hasPct === hasFlat) fail('ส่วนลดพิเศษต้องระบุเป็นเปอร์เซ็นต์ หรือเป็นจำนวนเงิน อย่างใดอย่างหนึ่ง', 400);
+    if ((hasPct && !(Number(adj.adjustmentPct) > 0)) || (hasFlat && !(Number(adj.adjustmentAmount) > 0))) {
+      fail('ส่วนลดพิเศษต้องมากกว่าศูนย์', 400);
+    }
+  });
+  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode));
+  const known = items.every((it) => it.lineAmount != null);
+  if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
+    fail('ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ', 400);
+  }
+  return items;
+}
+
+function dealQuotationTotals(items, documentLanguage = 'TH') {
   const subtotalAmount = round2(items.reduce((sum, it) => sum + (Number(it.lineAmount) || 0), 0));
-  const vatAmount = round2(subtotalAmount * 0.07);
+  // v3b: the English form has no VAT at all — vatAmount 0 and grandTotal == subtotal, exactly as
+  // DealQuotationDto documents it. A rule, not arithmetic worth guarding against a copy.
+  const vatAmount = documentLanguage === 'EN' ? 0 : round2(subtotalAmount * 0.07);
   const grandTotal = round2(subtotalAmount + vatAmount);
   return { subtotalAmount, vatAmount, grandTotal };
 }
@@ -4883,12 +5021,17 @@ function buildDealQuotationDto(row) {
     parentQuotationId: row.parentQuotationId,
     createdById: row.createdById,
     createdByName: row.createdByName,
+    // v3b: English names for the F-SM-008 signature block. The mock's demo employees carry none,
+    // so these are null — which is the real fallback case (the document then prints the Thai name).
+    createdByNameEn: row.createdByNameEn ?? null,
     salesRepId: row.salesRepId,
     salesRepName: row.salesRepName,
+    salesRepNameEn: row.salesRepNameEn ?? null,
     salesRepPhone: row.salesRepPhone,
     submittedAt: row.submittedAt,
     approvedById: row.approvedById,
     approvedByName: row.approvedByName,
+    approvedByNameEn: row.approvedByNameEn ?? null,
     approvedAt: row.approvedAt,
     approvalNote: row.approvalNote,
     quotationDate: row.quotationDate,
@@ -4913,8 +5056,11 @@ function buildDealQuotationDto(row) {
     validityDays: row.validityDays,
     validityDate: row.validityDate,
     customerNotes: row.customerNotes,
-    ...dealQuotationTotals(row.items),
-    currency: row.currency ?? 'THB',
+    // v3/v3b: never null on the wire — a stored null normalises to NET / TH, as the DTO does.
+    priceMode: row.priceMode || 'NET',
+    documentLanguage: row.documentLanguage || 'TH',
+    ...dealQuotationTotals(row.items, row.documentLanguage || 'TH'),
+    currency: row.currency ?? (row.documentLanguage === 'EN' ? 'USD' : 'THB'),
     approverHasSignature: row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById)),
     items: row.items.map((item) => ({ ...item })),
     createdAt: row.createdAt,
@@ -11740,7 +11886,8 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user);
       const contactSnapshot = resolveDealQuotationContact(ticket, payload);
       const now = new Date().toISOString();
-      const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
+      const header = resolveDealQuotationV3Header(payload);
+      const items = buildDealQuotationItems(payload.items, header.priceMode);
       const row = {
         id: mockDealQuotationSeq++,
         number: nextMockDealQuotationNumber(),
@@ -11777,7 +11924,7 @@ export const api = {
         validityDays: payload.validityDays ?? null,
         validityDate: null,
         customerNotes: payload.customerNotes ?? null,
-        currency: 'THB',
+        ...header,
         items,
         createdAt: now, updatedAt: now,
       };
@@ -11795,7 +11942,8 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user);
       requireDealQuotationEditable(row);
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
-      const items = (payload.items ?? []).map((item, index) => buildDealQuotationItemRow(item, index));
+      const header = resolveDealQuotationV3Header(payload, row);
+      const items = buildDealQuotationItems(payload.items, header.priceMode);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -11812,6 +11960,7 @@ export const api = {
         validityDays: payload.validityDays ?? null,
         customerNotes: payload.customerNotes ?? null,
         ...contactSnapshot,
+        ...header,
         items,
         updatedAt: new Date().toISOString(),
       });
@@ -11823,7 +11972,9 @@ export const api = {
     // placeholder, not WastageCalculator.
     async calculateLine(payload = {}) {
       requireSession();
-      return delay({ item: computeDealQuotationLine(payload ?? {}) });
+      // v3: no quotation, so the mode is inferred FROM THE ROW, as DealQuotationService does; an
+      // ADJUSTMENT previews with no base (the service passes ZERO) — here, with no number at all.
+      return delay({ item: { id: 0, seq: 0, ...computeDealQuotationV3Line(payload ?? {}, inferMockPriceMode(payload)) } });
     },
 
     async submit(id, payload = {}) {
@@ -11934,7 +12085,9 @@ export const api = {
         validityDate: null,
         quotationDate: now.slice(0, 10),
         createdAt: now, updatedAt: now,
-        items: parent.items.map((item, index) => buildDealQuotationItemRow(item, index)),
+        // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
+        // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
+        items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
       };
       mockDealQuotations.push(child);
       return delay({ quotation: buildDealQuotationDto(child) });
