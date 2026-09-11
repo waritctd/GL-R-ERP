@@ -1,0 +1,558 @@
+columnUnitTwips=102
+printArea=Update!$A$1:$I$42
+fitToPage=false fitW=1 fitH=1 scale=84 landscape=false
+repeatingRows=null
+footer=
+rowBreaks=[]
+col 0 w=1228
+col 1 w=17408
+col 2 w=1843
+col 3 w=1587
+col 4 w=2100
+col 5 w=1228
+col 6 w=1126
+col 7 w=2508
+col 8 w=3123
+col 9 w=1075
+col 10 w=2355
+row 0 h=630
+  c1 STRING style=88 b=NONE/NONE/NONE/NONE font=6 wrap=false al=GENERAL : "                          บริษัท จี แอล แอนด์ อาร์ แทปส์  แอนด์ ไทลส์ จำกัด"
+  c7 STRING style=90 b=NONE/NONE/NONE/NONE font=9 wrap=false al=CENTER : "        ใบเสนอราคา"
+  c8 BLANK style=91 b=NONE/NONE/NONE/NONE font=10 wrap=false al=CENTER : 
+  c9 BLANK style=91 b=NONE/NONE/NONE/NONE font=10 wrap=false al=CENTER : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+row 1 h=405
+  c1 STRING style=92 b=NONE/NONE/NONE/NONE font=11 wrap=false al=GENERAL : "                           201 ซอยสุขุมวิท 63 ถ.สุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กทม.10110"
+  c8 STRING style=92 b=NONE/NONE/NONE/NONE font=11 wrap=false al=GENERAL : "***"
+  c9 BLANK style=92 b=NONE/NONE/NONE/NONE font=11 wrap=false al=GENERAL : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+  c11 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 2 h=405
+  c1 STRING style=113 b=NONE/NONE/NONE/NONE font=5 wrap=false al=GENERAL : "                            โทรศัพท์ 0-2711-5995    e-mail : info@glr.co.th    Line:@glr_tiles"
+  c7 STRING style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : "ฝ่าย"
+  c8 STRING style=66 b=NONE/NONE/NONE/NONE font=14 wrap=false al=LEFT : "P003"
+  c9 BLANK style=66 b=NONE/NONE/NONE/NONE font=14 wrap=false al=LEFT : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+  c11 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 3 h=405
+  c0 STRING style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "วันที่"
+  c1 STRING style=106 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "10 กันยายน 2569"
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c3 BLANK style=98 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=98 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=98 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=98 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 STRING style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "เลขที่อ้างอิง"
+  c8 STRING style=68 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : "QT-2026-0099"
+  c9 BLANK style=68 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+  c11 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 4 h=405
+  c0 STRING style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "เรียน"
+  c1 STRING style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "คุณลูกค้า   /   Test Customer Co., Ltd.   เลขที่ผู้เสียภาษี : 0105542000000"
+  c2 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c3 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 STRING style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "หน่วยงาน"
+  c8 STRING style=69 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : "D002"
+  c9 BLANK style=69 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+  c11 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 5 h=405
+  c1 STRING style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
+  c2 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c3 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 STRING style=160 b=NONE/NONE/NONE/NONE font=20 wrap=false al=RIGHT : "Sales/สมชาย ใจดี T.081-234-5678"
+  c8 BLANK style=68 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c9 BLANK style=68 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=146 b=NONE/NONE/NONE/NONE font=18 wrap=false al=CENTER : 
+  c11 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 6 h=405
+  c0 STRING style=108 b=THIN/THIN/THIN/THIN font=13 wrap=false al=CENTER : "ลำดับ"
+  c1 BLANK style=109 b=THIN/THIN/THIN/NONE font=13 wrap=false al=CENTER : 
+  c2 STRING style=110 b=THIN/THIN/THIN/THIN font=13 wrap=false al=CENTER : "จำนวน"
+  c3 STRING style=111 b=THIN/THIN/NONE/NONE font=13 wrap=false al=CENTER : "หน่วย"
+  c4 STRING style=112 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : "ราคา"
+  c5 STRING style=147 b=THIN/THIN/THIN/NONE font=13 wrap=false al=CENTER : "ส่วนลด"
+  c6 BLANK style=148 b=THIN/THIN/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 STRING style=80 b=THIN/THIN/NONE/THIN font=13 wrap=false al=CENTER : "คงเหลือ"
+  c8 STRING style=71 b=THIN/THIN/THIN/THIN font=13 wrap=false al=CENTER : "เป็นเงิน (บาท) "
+  c9 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+row 7 h=405
+  c0 BLANK style=78 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=161 b=NONE/NONE/THIN/NONE font=15 wrap=false al=CENTER : "Project  : Showroom V2 Project"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=79 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=84 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 FORMULA style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : =IF(G8="พิเศษ",K8,IF(E8-E8*F8=0,"",E8-E8*F8))
+  c8 FORMULA style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : =IF(H8="","",H8*C8)
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+row 8 h=405
+  c0 BLANK style=73 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 BLANK style=126 b=NONE/NONE/THIN/NONE font=19 wrap=false al=CENTER : 
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=79 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 FORMULA style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : =IF(G9="พิเศษ",K9,IF(E9-E9*F9=0,"",E9-E9*F9))
+  c8 FORMULA style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : =IF(H9="","",H9*C9)
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+row 9 h=465
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=169 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องน้ำชั้น 1"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 10 h=450
+  c0 NUMERIC style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 1.0
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "กระเบื้อง รุ่น Model 1 สี White ผิว Matte"
+  c2 NUMERIC style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 37.0
+  c3 STRING style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : "แผ่น"
+  c4 NUMERIC style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 450.0
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 STRING style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : "Net"
+  c7 NUMERIC style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 405.0
+  c8 NUMERIC style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 14985.0
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=116 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+row 11 h=465
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "ขนาด 60x60 cm. หนา 10 มม."
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=116 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+row 12 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+row 13 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "(1 กล่อง)"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 14 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=169 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องครัว"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 15 h=450
+  c0 NUMERIC style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 2.0
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "กระเบื้อง รุ่น Model 2 สี White ผิว Matte"
+  c2 NUMERIC style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 37.0
+  c3 STRING style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : "แผ่น"
+  c4 NUMERIC style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 450.0
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 STRING style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : "10%"
+  c7 NUMERIC style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 405.0
+  c8 NUMERIC style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 14985.0
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 16 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "ขนาด 60x60 cm. หนา 10 มม."
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 17 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 18 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=127 b=NONE/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "(2 กล่อง)"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 19 h=450
+  c0 NUMERIC style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 3.0
+  c1 STRING style=127 b=NONE/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "กระเบื้อง รุ่น Model 3 สี White ผิว Matte"
+  c2 NUMERIC style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 37.0
+  c3 STRING style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : "แผ่น"
+  c4 NUMERIC style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 450.0
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 STRING style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : "Net"
+  c7 NUMERIC style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 405.0
+  c8 NUMERIC style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 14985.0
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 20 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=129 b=NONE/NONE/THIN/NONE font=15 wrap=false al=GENERAL : "ขนาด 60x60 cm. หนา 10 มม."
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 21 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 22 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "(3 กล่อง)"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 23 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=162 b=THIN/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "หมายเหตุ"
+  c2 BLANK style=163 b=THIN/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=164 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=165 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=166 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=167 b=THIN/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=168 b=THIN/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 24 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=129 b=NONE/NONE/THIN/NONE font=15 wrap=false al=GENERAL : "1. วันที่รับจำนวน 10 กันยายน 2569"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 25 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=129 b=NONE/NONE/THIN/NONE font=15 wrap=false al=GENERAL : "2. มัดจำ 30% ของยอดรวม"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 26 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=133 b=NONE/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "3. ส่วนที่เหลือเครดิต 30 วัน"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 27 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=133 b=NONE/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "4. สินค้าจากไทย-สต็อก ส่งภายใน 30-45 วัน"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 28 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=134 b=NONE/NONE/THIN/THIN font=15 wrap=true al=GENERAL : "5. ราคานี้ยืนราคา 30 วัน"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 29 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=129 b=NONE/NONE/THIN/NONE font=15 wrap=false al=GENERAL : "6. หมายเหตุ"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 30 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=129 b=NONE/NONE/THIN/NONE font=15 wrap=false al=GENERAL : "7. โปรดตรวจสอบรายการ"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 31 h=450
+  c0 BLANK style=151 b=NONE/THIN/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=152 b=NONE/THIN/THIN/NONE font=15 wrap=false al=GENERAL : "8. ขอบคุณที่ใช้บริการ"
+  c2 BLANK style=153 b=NONE/THIN/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=154 b=NONE/THIN/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=155 b=NONE/THIN/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=156 b=NONE/THIN/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=157 b=NONE/THIN/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=158 b=NONE/THIN/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=159 b=NONE/THIN/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 32 h=450
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c7 STRING style=70 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "รวมเป็นเงิน"
+  c8 NUMERIC style=122 b=NONE/THIN/THIN/THIN font=15 wrap=false al=GENERAL : 44955.0
+  c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=141 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 33 h=450
+  c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c4 STRING style=149 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "ภาษีมูลค่าเพิ่ม"
+  c5 BLANK style=149 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c6 BLANK style=149 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c7 NUMERIC style=75 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : 0.07
+  c8 NUMERIC style=74 b=THIN/THIN/THIN/THIN font=15 wrap=false al=GENERAL : 3146.85
+  c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=141 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 34 h=450
+  c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c3 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 STRING style=70 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "รวมเป็นเงินทั้งสิ้น"
+  c8 NUMERIC style=74 b=THIN/THIN/THIN/THIN font=15 wrap=false al=GENERAL : 48101.85
+  c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=141 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 35 h=450
+  c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c7 BLANK style=70 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c8 BLANK style=114 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 36 h=450
+  c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 STRING style=170 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น"
+  c3 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=103 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 37 h=405
+  c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=123 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c5 BLANK style=123 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=123 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c7 BLANK style=123 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c8 BLANK style=123 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c9 BLANK style=103 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 38 h=405
+  c0 STRING style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "ผู้พิมพ์__________________________พนักงานขาย_____________________ผู้จัดการฝ่ายขาย__________________ผู้สั่งซื้อ__________________________"
+  c1 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c3 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c4 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c5 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c6 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c7 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c8 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c9 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=143 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 39 h=405
+  c0 STRING style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                         (จุฑาทิพ)                                           (ผึ้ง)                                         (สมหญิง ใจดี)                 "
+  c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c4 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c5 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c7 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c8 BLANK style=117 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c9 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c10 BLANK style=121 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+row 40 h=405
+  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                วันที่ 10/9/2569                                วันที่ 10/9/2569                                วันที่ 11/9/2569                         วันที่........./........./.........         "
+  c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c4 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c5 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c6 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c7 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c8 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 41 h=555
+  c0 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c3 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c4 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c7 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=104 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : 
+  c9 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 42 h=375
+  c0 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c1 BLANK style=144 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 43 h=405
+  c0 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c1 BLANK style=144 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 44 h=375
+  c0 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c1 BLANK style=144 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 45 h=375
+  c0 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+  c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 46 h=375
+  c0 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 47 h=375
+  c0 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 48 h=375
+  c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 49 h=375
+row 50 h=360
+row 51 h=225
+row 52 h=225
+row 53 h=225
+row 54 h=225
+row 55 h=225
+merges=[A39:I39, A40:I40, A41:I41, B24:H24, B25:H25, B26:H26, B27:H27, B28:H28, B29:H29, B30:H30, B31:H31, B32:H32, B5:G5, B6:G6, C37:I37, E34:G34, F7:G7, H6:I6, K1:K6]
+picture r0+41 c0+213 -> r2+164 c1+199 md5=37c268c5f55b95434005f145ab9f68f6
+picture r0+81 c3+363 -> r2+114 c6+465 md5=cd52dfb83fa021c48b4eb6b18f57fc10
+picture r37+189 c2+810 -> r38+206 c4+361 md5=c55f225dbf14a022d81c0ea1ba629d41

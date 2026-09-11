@@ -32,6 +32,7 @@ import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
 import th.co.glr.hr.common.sheet.LibreOfficeMetrics;
 import th.co.glr.hr.customer.CustomerDto;
+import th.co.glr.hr.ticket.QuotationRenderModel.ItemPicture;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
@@ -414,7 +415,12 @@ public class QuotationRenderer {
             applyMargins(sh);
 
             boolean alwaysShowSeq = model.signatureLabelsV2();
-            int emittedRows = countEmittedRows(items, alwaysShowSeq);
+            // GLA-75: every item's printed lines AND its picture rows, decided ONCE here and read
+            // by #countEmittedRows, #fillItems and #insertNoSplitPageBreaks alike, so the three
+            // can never disagree about how many rows an item takes (they used to each re-derive
+            // the wrap). Column B's width is final by now (#sizeMoneyColumns touches E/H/I only).
+            List<ItemLayout> layouts = layoutItems(sh, items, alwaysShowSeq);
+            int emittedRows = countEmittedRows(items, layouts);
 
             // Pick the layout from the real geometry rather than hardcoded row counts:
             //   contentH = letterhead + emittedRows·rowHeight + footer   (all measured from the template)
@@ -426,11 +432,11 @@ public class QuotationRenderer {
             int footerEnd = FOOTER_END + footerShift;
             int delta;
             if (emittedRows <= NATIVE_ITEM_CAPACITY) {
-                renderSinglePage(sh, items, subtotal, alwaysShowSeq, footerShift, english);
+                renderSinglePage(sh, items, layouts, subtotal, alwaysShowSeq, footerShift, english);
                 delta = 0;
             } else if (onePageScale(sh, emittedRows, footerShift) >= MIN_SCALE) {
                 double scale = onePageScale(sh, emittedRows, footerShift);
-                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift, english);
+                delta = layoutFlowing(sh, items, layouts, subtotal, alwaysShowSeq, footerShift, english);
                 // H5: the TEMPLATE carries its own fixed print area (A1:I47, dumped from the raw
                 // file) — layoutFlowing relocates the footer to footerEnd + delta, which for any
                 // delta > 0 sits PAST that stale native range, so the relocated
@@ -442,7 +448,7 @@ public class QuotationRenderer {
                 sh.getWorkbook().setPrintArea(idxOnePage, 0, 8, 0, footerEnd + delta);
                 fitToOnePageAtScale(sh, scale * 100.0);
             } else {
-                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift, english);
+                delta = layoutFlowing(sh, items, layouts, subtotal, alwaysShowSeq, footerShift, english);
                 // The box is closed at the bottom of every PAGE, not under the last item row: a
                 // previous version bordered FOOTER_START + delta - 1 unconditionally, which is
                 // right only when the footer moves to the next page (then that row IS a page
@@ -473,7 +479,7 @@ public class QuotationRenderer {
                 // (remarks+totals+signature together, never just the signature portion), and by
                 // walking the SAME per-item row accounting #fillItems used, so an item's own
                 // heading+lines never straddle either.
-                insertNoSplitPageBreaks(sh, items, alwaysShowSeq, FOOTER_START + delta, footerEnd + delta);
+                insertNoSplitPageBreaks(sh, items, layouts, FOOTER_START + delta, footerEnd + delta);
                 fitToWidthPaginate(sh);
             }
 
@@ -553,9 +559,10 @@ public class QuotationRenderer {
      * footer block (notes/totals/signature) at its native template rows so it sits anchored near the
      * page bottom — filling the page exactly like the Excel template's "Save as PDF".
      */
-    private void renderSinglePage(Sheet sh, List<RenderItem> items, BigDecimal subtotal, boolean alwaysShowSeq,
+    private void renderSinglePage(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, BigDecimal subtotal,
+                                   boolean alwaysShowSeq,
                                    int footerShift, boolean englishForm) {
-        int emitted = fillItems(sh, items, alwaysShowSeq);
+        int emitted = fillItems(sh, items, layouts, alwaysShowSeq);
         // Blank the template item-zone rows the items didn't reach: the pre-seeded "2."/"แผ่น"/"Net"
         // placeholder at row 12 and the per-row H/I formulas through row 21 would otherwise show as
         // phantom lines below the last real item. Content only — the footer stays put.
@@ -579,7 +586,8 @@ public class QuotationRenderer {
      * been physically compacted, so the footer's captured range must end at {@code FOOTER_END +
      * footerShift}, not the raw template constant.
      */
-    private int layoutFlowing(Sheet sh, List<RenderItem> items, BigDecimal subtotal, boolean alwaysShowSeq,
+    private int layoutFlowing(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, BigDecimal subtotal,
+                               boolean alwaysShowSeq,
                                int footerShift, boolean englishForm) {
         int footerEnd = FOOTER_END + footerShift;
         List<CellRec> footer = captureBlock(sh, FOOTER_START, footerEnd);
@@ -587,7 +595,7 @@ public class QuotationRenderer {
         List<int[]> merges = captureMerges(sh, FOOTER_START, footerEnd);
         clearBlock(sh, FOOTER_START, footerEnd);
 
-        int emitted = fillItems(sh, items, alwaysShowSeq);
+        int emitted = fillItems(sh, items, layouts, alwaysShowSeq);
 
         int delta = (ITEM_START_ROW + emitted) - FOOTER_START;
         placeBlock(sh, footer, delta);
@@ -648,7 +656,7 @@ public class QuotationRenderer {
      * row only). Rows past the template's native zone (row 20) get the item-row style cloned from
      * {@link #ITEM_STYLE_PROTO_ROW}. Returns the total number of rows emitted.
      */
-    private int fillItems(Sheet sh, List<RenderItem> items, boolean alwaysShowSeq) {
+    private int fillItems(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, boolean alwaysShowSeq) {
         Row proto = sh.getRow(ITEM_STYLE_PROTO_ROW);
         boolean showSeq = alwaysShowSeq || items.size() > 1;
         int r = ITEM_START_ROW;
@@ -658,7 +666,9 @@ public class QuotationRenderer {
         // H1: local to this render call — see #underlinedStyle's Javadoc for why this can never
         // again be a field on this @Component singleton.
         Map<Short, CellStyle> underlineCache = new HashMap<>();
-        for (RenderItem item : items) {
+        for (int i = 0; i < items.size(); i++) {
+            RenderItem item = items.get(i);
+            ItemLayout layout = layouts.get(i);
             seq++;
             if (headingNeeded(item.headingLabel(), prevLabel, prevSet)) {
                 ensureRowStyle(sh, r, proto);
@@ -672,18 +682,39 @@ public class QuotationRenderer {
             // (alwaysShowSeq is true only for the v2/direct-deal path; legacy items keep the
             // template's own wrap-text-cell/tall-row behaviour on their single description line,
             // never this multi-row emission — see the class Javadoc's "stays content-equivalent").
-            List<String> physicalLines = alwaysShowSeq
-                ? wrapDescriptionLines(item.descriptionLines())
-                : item.descriptionLines();
+            // The wrap itself was decided in #layoutItems (narrower beside a BESIDE thumbnail).
+            List<String> physicalLines = layout.lines();
 
+            int firstRow = r;
             ensureRowStyle(sh, r, proto);
             fillItemMainRow(sh, r, showSeq ? seq : -1, physicalLines.isEmpty() ? "" : physicalLines.get(0), item);
             r++;
 
-            for (int i = 1; i < physicalLines.size(); i++) {
+            for (int l = 1; l < physicalLines.size(); l++) {
                 ensureRowStyle(sh, r, proto);
-                fillContinuationRow(sh, r, physicalLines.get(i));
+                fillContinuationRow(sh, r, physicalLines.get(l));
                 r++;
+            }
+
+            // GLA-75: the rows the item's picture needs beyond its text — BELOW: the picture's own
+            // rows under the last line; BESIDE: blank rows only when the text is shorter than the
+            // thumbnail. Written as EMPTY continuation rows, so the next item starts below the
+            // picture and it can never overlap it (or, for the last item, the remark box).
+            int textRows = Math.max(1, physicalLines.size());
+            boolean below = layout.picture() != null && !layout.picture().beside();
+            for (int extra = textRows; extra < layout.rows(); extra++) {
+                ensureRowStyle(sh, r, proto);
+                fillContinuationRow(sh, r, "");
+                if (below) {
+                    // Exactly the item-row height #layoutItems counted in — a native template row
+                    // here can be 23.25pt, and the page arithmetic assumes the prototype's.
+                    Row pictureRow = sh.getRow(r);
+                    pictureRow.setHeightInPoints((float) itemRowHeight(sh));
+                }
+                r++;
+            }
+            if (layout.picture() != null) {
+                anchorItemPicture(sh, layout.picture(), below ? firstRow + textRows : firstRow);
             }
         }
         return r - ITEM_START_ROW;
@@ -694,18 +725,16 @@ public class QuotationRenderer {
      * Must stay in exact lockstep with {@link #fillItems}'s own row math, including the v2
      * width-aware wrap — a mismatch here picks the wrong layout branch for the row count that
      * actually gets written. */
-    private int countEmittedRows(List<RenderItem> items, boolean alwaysShowSeq) {
+    private int countEmittedRows(List<RenderItem> items, List<ItemLayout> layouts) {
         int rows = 0;
         String prevLabel = null;
         boolean prevSet = false;
-        for (RenderItem item : items) {
+        for (int i = 0; i < items.size(); i++) {
+            RenderItem item = items.get(i);
             if (headingNeeded(item.headingLabel(), prevLabel, prevSet)) rows++;
             prevLabel = item.headingLabel();
             prevSet = true;
-            List<String> lines = alwaysShowSeq
-                ? wrapDescriptionLines(item.descriptionLines())
-                : item.descriptionLines();
-            rows += Math.max(1, lines.size());
+            rows += layouts.get(i).rows();
         }
         return rows;
     }
@@ -715,10 +744,14 @@ public class QuotationRenderer {
     // already calibrates for, so it reuses that value rather than a second magic number: item rows
     // and remark rows are the same font size in the template (see both rows' captured heights).
     private List<String> wrapDescriptionLines(List<String> lines) {
+        return wrapDescriptionLines(lines, REMARK_LINE_CHAR_BUDGET);
+    }
+
+    private List<String> wrapDescriptionLines(List<String> lines, int budget) {
         List<String> out = new ArrayList<>();
         for (String line : lines) {
-            if (line != null && line.length() > REMARK_LINE_CHAR_BUDGET) {
-                out.addAll(wrapToWidth(line, REMARK_LINE_CHAR_BUDGET));
+            if (line != null && line.length() > budget) {
+                out.addAll(wrapToWidth(line, budget));
             } else {
                 out.add(line);
             }
@@ -1628,14 +1661,18 @@ public class QuotationRenderer {
      * degenerate (zero-height) row can never spin this loop.
      */
     private int[] rowOffsetToAnchor(Sheet sh, int baseRow, double offsetPt) {
+        return rowOffsetToAnchor(sh, baseRow, offsetPt, SIGNATURE_MAX_ROW_WALK);
+    }
+
+    private int[] rowOffsetToAnchor(Sheet sh, int baseRow, double offsetPt, int maxRowWalk) {
         int row = baseRow;
         double offset = offsetPt;
         int walked = 0;
-        while (offset < 0 && row > 0 && walked++ < SIGNATURE_MAX_ROW_WALK) {
+        while (offset < 0 && row > 0 && walked++ < maxRowWalk) {
             row--;
             offset += rowHeightPoints(sh, row);
         }
-        while (offset >= rowHeightPoints(sh, row) && walked++ < SIGNATURE_MAX_ROW_WALK) {
+        while (offset >= rowHeightPoints(sh, row) && walked++ < maxRowWalk) {
             offset -= rowHeightPoints(sh, row);
             row++;
         }
@@ -1724,6 +1761,169 @@ public class QuotationRenderer {
         return total;
     }
 
+    // ── GLA-75: per-item pictures ─────────────────────────────────────────────────
+
+    /**
+     * How one item prints: its physical description {@code lines}, its picture plan (null when it
+     * has none), and the TOTAL rows it occupies — text rows, plus the rows a BELOW picture sits
+     * on, or padding up to a BESIDE thumbnail's height. Heading rows are counted separately (they
+     * belong to a location group, not an item).
+     */
+    private record ItemLayout(List<String> lines, PicturePlan picture, int rows) {}
+
+    /**
+     * Where a picture goes, in engine-neutral terms: a horizontal slice of column B expressed as
+     * FRACTIONS of its width ({@code leftFraction}, {@code widthFraction}), and a height in points
+     * from the top of its first row. Fractions, not pixels, because a {@link ClientAnchor}'s dx is
+     * itself a fraction of its column — so the picture lands on the same slice of column B in
+     * LibreOffice and in the HTML engine however each one sizes the column. That is the lesson of
+     * the signature's 5 mm drift (see {@link #fontPixelToAnchorPixelScale}): that drift came from
+     * positioning an anchor with FONT-advance pixels; nothing here is measured in font pixels.
+     * The aspect ratio IS a physical quantity, so column B's physical width is taken from
+     * LibreOffice's own column arithmetic ({@link #descriptionColumnMm}), the width both engines
+     * actually print.
+     */
+    private record PicturePlan(ItemPicture source, boolean beside, double leftFraction, double widthFraction,
+                               double heightPt, int textBudget) {}
+
+    // Owner, 2026-09-10: "make sure the sizing appropriate like the reference picture". The
+    // references need two sizes, not one:
+    //  • BELOW (QN6900902-6's mosaic panel, QN6900782-2's cut drawings) — the full width of the
+    //    description column less a small inset, aspect kept, capped at BELOW_MAX_HEIGHT_MM so a
+    //    tall portrait image cannot eat a page. ~60 mm is "fairly large": about eight item rows.
+    //  • BESIDE (QN6900971-4's tap, towel ring, shower set) — a thumbnail about TWO text rows tall
+    //    at the right of the description cell, no wider than BESIDE_MAX_WIDTH_FRACTION of it so a
+    //    wide image cannot push into the text.
+    private static final double PICTURE_INSET_MM = 1.5;
+    private static final double PICTURE_PAD_PT = 2.0;
+    private static final double BELOW_MAX_HEIGHT_MM = 60.0;
+    private static final int BESIDE_ROWS = 2;
+    private static final double BESIDE_MAX_WIDTH_FRACTION = 0.30;
+    private static final double BESIDE_TEXT_GAP_MM = 2.0;
+    // A BELOW picture spans at most ~9 rows; this only bounds the anchor walk.
+    private static final int PICTURE_MAX_ROW_WALK = 64;
+    // Never wrap a line narrower than this beside a thumbnail, whatever the image's shape.
+    private static final int BESIDE_MIN_TEXT_BUDGET = 20;
+
+    private List<ItemLayout> layoutItems(Sheet sh, List<RenderItem> items, boolean alwaysShowSeq) {
+        List<ItemLayout> out = new ArrayList<>(items.size());
+        double columnMm = -1;
+        double rowHeightPt = itemRowHeight(sh);
+        for (RenderItem item : items) {
+            PicturePlan plan = null;
+            if (item.picture() != null && item.picture().data() != null) {
+                if (columnMm < 0) columnMm = descriptionColumnMm(sh);
+                plan = planPicture(item.picture(), columnMm, rowHeightPt);
+            }
+            List<String> lines;
+            if (!alwaysShowSeq) {
+                lines = item.descriptionLines();
+            } else if (plan != null && plan.beside()) {
+                lines = wrapDescriptionLines(item.descriptionLines(), plan.textBudget());
+            } else {
+                lines = wrapDescriptionLines(item.descriptionLines());
+            }
+            int textRows = Math.max(1, lines.size());
+            int rows = textRows;
+            if (plan != null) {
+                // The picture plus a pad above and below, in whole item rows. The pad keeps the
+                // anchor's bottom strictly INSIDE the picture's last row — a bottom on the next
+                // row's top edge would belong to the next item (and, across a page break, the
+                // HTML engine would drop a picture whose end row is on another page).
+                int pictureRows = (int) Math.ceil((plan.heightPt() + 2 * PICTURE_PAD_PT) / rowHeightPt - 1e-9);
+                rows = plan.beside() ? Math.max(textRows, pictureRows) : textRows + pictureRows;
+            }
+            out.add(new ItemLayout(lines, plan, rows));
+        }
+        return out;
+    }
+
+    private PicturePlan planPicture(ItemPicture picture, double columnMm, double rowHeightPt) {
+        int[] natural = th.co.glr.hr.dealquotation.QuotationItemPictures.headerDimensions(picture.data());
+        if (natural == null || columnMm <= 0) {
+            // Validated at upload, so this is a corrupt stored row: print the item without it
+            // rather than fail the whole document.
+            log.warn("Quotation item picture unreadable; rendering the item without it");
+            return null;
+        }
+        double aspect = natural[1] / (double) natural[0]; // height / width
+        double widthMm;
+        double heightMm;
+        double leftMm;
+        int textBudget = REMARK_LINE_CHAR_BUDGET;
+        if (picture.beside()) {
+            double maxHeightMm = (BESIDE_ROWS * rowHeightPt - 2 * PICTURE_PAD_PT) / POINTS_PER_INCH * MM_PER_INCH;
+            double maxWidthMm = columnMm * BESIDE_MAX_WIDTH_FRACTION;
+            heightMm = maxHeightMm;
+            widthMm = heightMm / aspect;
+            if (widthMm > maxWidthMm) {
+                widthMm = maxWidthMm;
+                heightMm = widthMm * aspect;
+            }
+            leftMm = columnMm - PICTURE_INSET_MM - widthMm;
+            // Wrap the item's text to the part of column B left of the thumbnail, in the same
+            // characters-per-column-width unit REMARK_LINE_CHAR_BUDGET is calibrated in.
+            double textFraction = (leftMm - BESIDE_TEXT_GAP_MM) / columnMm;
+            textBudget = Math.max(BESIDE_MIN_TEXT_BUDGET, (int) Math.floor(REMARK_LINE_CHAR_BUDGET * textFraction));
+        } else {
+            widthMm = columnMm - 2 * PICTURE_INSET_MM;
+            heightMm = widthMm * aspect;
+            if (heightMm > BELOW_MAX_HEIGHT_MM) {
+                heightMm = BELOW_MAX_HEIGHT_MM;
+                widthMm = heightMm / aspect;
+            }
+            leftMm = PICTURE_INSET_MM;
+        }
+        return new PicturePlan(picture, picture.beside(), leftMm / columnMm, widthMm / columnMm,
+            heightMm / MM_PER_INCH * POINTS_PER_INCH, textBudget);
+    }
+
+    /** Column B's printed width in mm, by LibreOffice's column arithmetic (the width both the
+     * LibreOffice PDF and the HTML engine lay out); POI's own figure only if that is unavailable. */
+    private double descriptionColumnMm(Sheet sh) {
+        try {
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            double twips = LibreOfficeMetrics.columnTwips(sh.getColumnWidth(LABEL_VALUE_COL), charWidthTwips);
+            return twips / LibreOfficeMetrics.TWIPS_PER_INCH * MM_PER_INCH;
+        } catch (RuntimeException e) {
+            log.debug("LibreOffice column unit unavailable; sizing item pictures in POI pixels: {}", e.getMessage());
+            return sh.getColumnWidthInPixels(LABEL_VALUE_COL) / ASSUMED_IMAGE_DPI * MM_PER_INCH;
+        }
+    }
+
+    /**
+     * Anchors the picture inside column B (col1 == col2 == B, so it can never reach the จำนวน
+     * column), from {@code topRow}'s top edge plus a pad, for exactly the planned height. Reuses the
+     * template's existing drawing patriarch, like {@link #anchorApproverSignature}; a failure is
+     * logged and the item prints without its picture — its rows are already reserved, so nothing
+     * below moves.
+     */
+    private void anchorItemPicture(Sheet sh, PicturePlan plan, int topRow) {
+        try {
+            Drawing<?> patriarch = sh.getDrawingPatriarch();
+            if (patriarch == null) {
+                patriarch = sh.createDrawingPatriarch();
+            }
+            String mime = plan.source().mimeType();
+            int pictureType = mime != null && mime.toLowerCase(Locale.ROOT).contains("jpeg")
+                ? Workbook.PICTURE_TYPE_JPEG : Workbook.PICTURE_TYPE_PNG;
+            int pictureIdx = sh.getWorkbook().addPicture(plan.source().data(), pictureType);
+            int dx1 = clampDx((int) Math.round(plan.leftFraction() * 1024));
+            int dx2 = clampDx((int) Math.round((plan.leftFraction() + plan.widthFraction()) * 1024));
+            int[] top = rowOffsetToAnchor(sh, topRow, PICTURE_PAD_PT, PICTURE_MAX_ROW_WALK);
+            int[] bottom = rowOffsetToAnchor(sh, topRow, PICTURE_PAD_PT + plan.heightPt(), PICTURE_MAX_ROW_WALK);
+            ClientAnchor anchor = patriarch.createAnchor(dx1, top[1], dx2, bottom[1],
+                LABEL_VALUE_COL, top[0], LABEL_VALUE_COL, bottom[0]);
+            patriarch.createPicture(anchor, pictureIdx);
+        } catch (RuntimeException e) {
+            log.warn("Quotation item picture anchor failed; the item prints without it: {}", e.getMessage(), e);
+        }
+    }
+
+    private static int clampDx(int dx) {
+        return Math.max(0, Math.min(1023, dx));
+    }
+
     // ── dynamic-layout geometry & sizing ──────────────────────────────────────────
 
     // ① Size each money column to the widest number it will actually show, so values never clip to
@@ -1804,7 +2004,7 @@ public class QuotationRenderer {
      * LibreOffice's own rounding at the boundary can never drop an automatic break INSIDE a
      * block that this method judged to fit.
      */
-    private void insertNoSplitPageBreaks(Sheet sh, List<RenderItem> items, boolean alwaysShowSeq,
+    private void insertNoSplitPageBreaks(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts,
                                           int footerStartRow, int footerEndRow) {
         int zoom = fitWidthZoomPercent(sh);
         int bodyHmm = th.co.glr.hr.common.sheet.LibreOfficeMetrics.A4_HEIGHT_HMM
@@ -1817,12 +2017,14 @@ public class QuotationRenderer {
         int r = ITEM_START_ROW;
         String prevLabel = null;
         boolean prevSet = false;
-        for (RenderItem item : items) {
+        for (int i = 0; i < items.size(); i++) {
+            RenderItem item = items.get(i);
             boolean heading = headingNeeded(item.headingLabel(), prevLabel, prevSet);
             prevLabel = item.headingLabel();
             prevSet = true;
-            List<String> lines = alwaysShowSeq ? wrapDescriptionLines(item.descriptionLines()) : item.descriptionLines();
-            int blockRows = (heading ? 1 : 0) + Math.max(1, lines.size());
+            // GLA-75: the block is the item's text AND its picture rows (ItemLayout#rows), so a
+            // picture moves to the next page WITH its item and is never cut by a page break.
+            int blockRows = (heading ? 1 : 0) + layouts.get(i).rows();
             int blockHmm = scaledRowsHmm(sh, r, r + blockRows - 1, zoom);
             if (usedOnPage > 0 && usedOnPage + blockHmm > capacity) {
                 sh.setRowBreak(r - 1);
