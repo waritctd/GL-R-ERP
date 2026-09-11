@@ -183,6 +183,58 @@ public final class DealQuotationDtos {
          * percent or an amount". Derived on read rather than stored — see V168's note on why a
          * duplicate column would only invite drift.
          */
-        BigDecimal adjustmentAmount
-    ) {}
+        BigDecimal adjustmentAmount,
+
+        // ── GLA-75 item pictures (V170) ───────────────────────────────────────────────────────
+        /** Whether this item carries a picture. The BYTES are never inlined in this DTO — fetch
+         * them from {@link #pictureUrl}. */
+        boolean hasPicture,
+        /** "BELOW" (large, under the description lines) | "BESIDE" (small thumbnail at the right
+         * of the description cell); null exactly when {@link #hasPicture} is false. */
+        String picturePlacement,
+        /** {@code /api/deal-quotations/{id}/items/{itemId}/picture} (same view access as the
+         * quotation itself), or null when there is no picture. ⚠️ The item id in it changes on
+         * every draft save — {@code PUT /api/deal-quotations/{id}} replaces the item rows — so
+         * read it off the latest response, and send each item's {@code id} back on that PUT or its
+         * picture is dropped (see {@code DealQuotationRequests.ItemInput#id}). */
+        String pictureUrl
+    ) {
+        /** The pre-GLA-75 shape — no picture. Kept so existing call sites (the calculate-line
+         * preview and many test fixtures) compile unchanged; same device as
+         * {@code DealQuotationRequests.ItemInput}'s legacy constructor. */
+        public DealQuotationItemDto(
+            long id, int seq, String locationLabel, Long catalogPriceId, String productCode,
+            String brand, String model, String color, String texture, String sizeText,
+            BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm,
+            Integer piecesInput, String wastageMode, BigDecimal wastageValue, Integer piecesPerBox,
+            BigDecimal unitPrice, BigDecimal discountPct, String originCountry,
+            Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            BigDecimal piecesPerSqm, int piecesBeforeWastage, int piecesAfterWastage, int piecesFinal,
+            Integer boxes, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            String descriptionLine, String sizeLine, String calculationLine,
+            String lineType, BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+            BigDecimal adjustmentPct, LocalDate adjustmentDeadline, String specialPriceLine,
+            BigDecimal adjustmentAmount) {
+            this(id, seq, locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes,
+                piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice,
+                lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity, unit,
+                specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                false, null, null);
+        }
+
+        /** This item with its picture fields set from the stored link (repository read path). */
+        public DealQuotationItemDto withPicture(long quotationId, String placement) {
+            boolean has = placement != null;
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                has, has ? placement : null,
+                has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null);
+        }
+    }
 }

@@ -50,6 +50,20 @@ public final class DealQuotationRenderAdapter {
     public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
                                                       String approverSignatureMime,
                                                       List<String> bankBlockLines) {
+        return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, bankBlockLines,
+            java.util.Map.of());
+    }
+
+    /**
+     * GLA-75: {@code itemPictures} is item id → the stored picture (V170), resolved by the caller
+     * for the same reason the signature bytes are — this class stays a pure function. An item
+     * whose DTO says {@code hasPicture} but has no entry here (a race with a removal) simply
+     * prints without one; an item with an entry but {@code hasPicture=false} is never given one.
+     */
+    public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
+                                                      String approverSignatureMime,
+                                                      List<String> bankBlockLines,
+                                                      java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
         // B4 (header วันที่) = the date the SALES REP CREATED the quotation, for every status —
         // owner feedback F8, 2026-09-10: "for วันที่ at the top of the page it should be the date
         // it was created by the sale". It used to print the APPROVED date once approved (and
@@ -103,7 +117,7 @@ public final class DealQuotationRenderAdapter {
 
         List<RenderItem> items = quotation.items().stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq()))
-            .map(item -> toRenderItem(item, quotation.priceMode()))
+            .map(item -> toRenderItem(item, quotation.priceMode(), itemPictures))
             .toList();
 
         // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
@@ -144,7 +158,8 @@ public final class DealQuotationRenderAdapter {
      * is byte-identical to the previous expression for every pre-v3 document; an ADJUSTMENT row
      * carries −1 and a NULL unit, which the renderer prints as an EMPTY unit cell.
      */
-    private static RenderItem toRenderItem(DealQuotationItemDto item, String priceMode) {
+    private static RenderItem toRenderItem(DealQuotationItemDto item, String priceMode,
+                                           java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
         List<String> lines = new ArrayList<>();
         lines.add(item.descriptionLine());
         if (item.sizeLine() != null) {
@@ -156,10 +171,14 @@ public final class DealQuotationRenderAdapter {
         if (item.specialPriceLine() != null) {
             lines.add(item.specialPriceLine());
         }
+        DealQuotationRepository.PictureImage stored = item.hasPicture() && itemPictures != null
+            ? itemPictures.get(item.id()) : null;
+        QuotationRenderModel.ItemPicture picture = stored == null ? null
+            : new QuotationRenderModel.ItemPicture(stored.image(), stored.mimeType(), item.picturePlacement());
         return new RenderItem(
             item.locationLabel(), lines,
             item.quantity(), printedUnit(item), item.unitPrice(), discountLabel(item, priceMode),
-            item.netUnitPrice(), item.lineAmount());
+            item.netUnitPrice(), item.lineAmount(), picture);
     }
 
     /**

@@ -566,13 +566,14 @@ public class DealQuotationRepository {
 
     private List<DealQuotationItemDto> findItems(long quotationId) {
         return jdbc.query("""
-            SELECT quotation_item_id, seq, location_label, catalog_price_id, product_code,
+            SELECT quotation_id, quotation_item_id, seq, location_label, catalog_price_id, product_code,
                    brand, model, color, texture, size, thickness_mm, sqm_per_piece,
                    quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
                    unit_price, discount_pct, origin_country, lead_time_min_days, lead_time_max_days,
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
-                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline
+                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
+                   picture_placement
               FROM sales.quotation_item
              WHERE quotation_id = :id
              ORDER BY seq
@@ -590,7 +591,8 @@ public class DealQuotationRepository {
                    unit_price, discount_pct, origin_country, lead_time_min_days, lead_time_max_days,
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
-                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline
+                   raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
+                   picture_placement
               FROM sales.quotation_item
              WHERE quotation_id IN (:ids)
              ORDER BY quotation_id, seq
@@ -716,7 +718,16 @@ public class DealQuotationRepository {
         );
     }
 
+    /** GLA-75: the stored row, plus its picture link (V170) — only the placement is read here;
+     * the bytes are served separately by {@link #findItemPicture}. An item without a picture
+     * keeps the legacy constructor's {@code hasPicture=false} shape exactly. */
     private DealQuotationItemDto mapItem(ResultSet rs) throws SQLException {
+        DealQuotationItemDto item = mapItemColumns(rs);
+        String placement = rs.getString("picture_placement");
+        return placement == null ? item : item.withPicture(rs.getLong("quotation_id"), placement);
+    }
+
+    private DealQuotationItemDto mapItemColumns(ResultSet rs) throws SQLException {
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
@@ -822,6 +833,168 @@ public class DealQuotationRepository {
             // never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-75 item pictures (V170). Bytes live once, immutable, in sales.quotation_item_picture;
+    // an item references one by picture_id + picture_placement. See V170's header for why.
+    // Every item-scoped statement below is keyed by BOTH quotation_id and quotation_item_id, so an
+    // item id from another quotation can never be reached through this quotation's URL.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    public record PictureLink(long pictureId, String placement) {}
+
+    public record PictureImage(String mimeType, byte[] image) {}
+
+    /** item id → its picture link, for this quotation's items that have one. */
+    public Map<Long, PictureLink> findPictureLinks(long quotationId) {
+        Map<Long, PictureLink> links = new HashMap<>();
+        jdbc.query("""
+            SELECT quotation_item_id, picture_id, picture_placement
+              FROM sales.quotation_item
+             WHERE quotation_id = :id AND picture_id IS NOT NULL
+            """, Map.of("id", quotationId), (ResultSet rs) -> {
+                // A RowCallbackHandler: Spring has ALREADY advanced to this row. An inner
+                // `while (rs.next())` here silently drops the first row — which, for a quotation
+                // with one picture, is every picture.
+                links.put(rs.getLong("quotation_item_id"),
+                    new PictureLink(rs.getLong("picture_id"), rs.getString("picture_placement")));
+            });
+        return links;
+    }
+
+    /** Points this quotation's items, addressed by {@code seq}, at existing picture rows — the
+     * draft-save carry-forward (see {@code DealQuotationService#update}). */
+    public void linkPictures(long quotationId, Map<Integer, PictureLink> bySeq) {
+        if (bySeq.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = bySeq.entrySet().stream()
+            .map(e -> new MapSqlParameterSource()
+                .addValue("quotationId", quotationId)
+                .addValue("seq", e.getKey())
+                .addValue("pictureId", e.getValue().pictureId())
+                .addValue("placement", e.getValue().placement()))
+            .toArray(MapSqlParameterSource[]::new);
+        jdbc.batchUpdate("""
+            UPDATE sales.quotation_item
+               SET picture_id = :pictureId, picture_placement = :placement
+             WHERE quotation_id = :quotationId AND seq = :seq
+            """, batch);
+    }
+
+    /** A revision copies its parent's items verbatim and in the same order, so {@code seq} lines
+     * the two sets up exactly; the child SHARES the parent's picture rows (immutable). */
+    public int copyPictureLinks(long fromQuotationId, long toQuotationId) {
+        return jdbc.update("""
+            UPDATE sales.quotation_item child
+               SET picture_id = parent.picture_id, picture_placement = parent.picture_placement
+              FROM sales.quotation_item parent
+             WHERE parent.quotation_id = :fromId
+               AND parent.picture_id IS NOT NULL
+               AND child.quotation_id = :toId
+               AND child.seq = parent.seq
+            """, Map.of("fromId", fromQuotationId, "toId", toQuotationId));
+    }
+
+    public long insertPicture(String mimeType, byte[] image, long uploadedBy) {
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.quotation_item_picture (mime_type, image, uploaded_by, uploaded_at)
+            VALUES (:mimeType, :image, :uploadedBy, now())
+            """,
+            new MapSqlParameterSource()
+                .addValue("mimeType", mimeType)
+                .addValue("image", image)
+                .addValue("uploadedBy", uploadedBy),
+            keyHolder, new String[]{"picture_id"});
+        return keyHolder.getKey().longValue();
+    }
+
+    /** The item's current picture id (null when none, or when the item is not this quotation's). */
+    public Long findItemPictureId(long quotationId, long itemId) {
+        List<Long> ids = jdbc.query("""
+            SELECT picture_id FROM sales.quotation_item
+             WHERE quotation_id = :quotationId AND quotation_item_id = :itemId AND picture_id IS NOT NULL
+            """, Map.of("quotationId", quotationId, "itemId", itemId), (rs, rowNum) -> rs.getLong("picture_id"));
+        return ids.isEmpty() ? null : ids.get(0);
+    }
+
+    /** The DRAFT predicate every picture write shares — the ENFORCEMENT, in the statement itself,
+     * exactly like {@link #updateHeader}'s; the service's own status check only chooses the
+     * error message. */
+    private static final String EDITABLE_DRAFT_ITEM = """
+             WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
+               AND EXISTS (SELECT 1 FROM sales.quotation q
+                            WHERE q.quotation_id = :quotationId
+                              AND q.origin = 'DEAL_DIRECT' AND q.doc_status = 'DRAFT')
+            """;
+
+    public int setItemPicture(long quotationId, long itemId, long pictureId, String placement) {
+        return jdbc.update("UPDATE sales.quotation_item SET picture_id = :pictureId, picture_placement = :placement"
+                + EDITABLE_DRAFT_ITEM,
+            new MapSqlParameterSource()
+                .addValue("quotationId", quotationId)
+                .addValue("itemId", itemId)
+                .addValue("pictureId", pictureId)
+                .addValue("placement", placement));
+    }
+
+    public int clearItemPicture(long quotationId, long itemId) {
+        return jdbc.update("UPDATE sales.quotation_item SET picture_id = NULL, picture_placement = NULL"
+                + EDITABLE_DRAFT_ITEM,
+            Map.of("quotationId", quotationId, "itemId", itemId));
+    }
+
+    public int setItemPicturePlacement(long quotationId, long itemId, String placement) {
+        return jdbc.update("UPDATE sales.quotation_item SET picture_placement = :placement"
+                + EDITABLE_DRAFT_ITEM + " AND picture_id IS NOT NULL",
+            new MapSqlParameterSource()
+                .addValue("quotationId", quotationId)
+                .addValue("itemId", itemId)
+                .addValue("placement", placement));
+    }
+
+    /** One item's picture bytes — scoped to the quotation, so the caller's view access on THAT
+     * quotation is what governs the read. */
+    public Optional<PictureImage> findItemPicture(long quotationId, long itemId) {
+        List<PictureImage> found = jdbc.query("""
+            SELECT p.mime_type, p.image
+              FROM sales.quotation_item i
+              JOIN sales.quotation_item_picture p ON p.picture_id = i.picture_id
+             WHERE i.quotation_id = :quotationId AND i.quotation_item_id = :itemId
+            """, Map.of("quotationId", quotationId, "itemId", itemId),
+            (rs, rowNum) -> new PictureImage(rs.getString("mime_type"), rs.getBytes("image")));
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
+    }
+
+    /** item id → picture bytes, for rendering this quotation. */
+    public Map<Long, PictureImage> findPictureImagesForQuotation(long quotationId) {
+        Map<Long, PictureImage> images = new HashMap<>();
+        jdbc.query("""
+            SELECT i.quotation_item_id, p.mime_type, p.image
+              FROM sales.quotation_item i
+              JOIN sales.quotation_item_picture p ON p.picture_id = i.picture_id
+             WHERE i.quotation_id = :id
+            """, Map.of("id", quotationId), (ResultSet rs) -> {
+                // RowCallbackHandler — one call per row; see #findPictureLinks.
+                images.put(rs.getLong("quotation_item_id"),
+                    new PictureImage(rs.getString("mime_type"), rs.getBytes("image")));
+            });
+        return images;
+    }
+
+    /** Deletes each picture row NO item references any more (on any quotation — a revision shares
+     * its parent's). A still-referenced row is left alone; the FK would refuse it anyway. */
+    public void deletePicturesIfUnreferenced(java.util.Collection<Long> pictureIds) {
+        if (pictureIds == null || pictureIds.isEmpty()) {
+            return;
+        }
+        jdbc.update("""
+            DELETE FROM sales.quotation_item_picture p
+             WHERE p.picture_id IN (:ids)
+               AND NOT EXISTS (SELECT 1 FROM sales.quotation_item i WHERE i.picture_id = p.picture_id)
+            """, Map.of("ids", List.copyOf(new java.util.HashSet<>(pictureIds))));
     }
 
     private Long nullableLong(ResultSet rs, String column) throws SQLException {
