@@ -17,15 +17,17 @@ import {
   canApproveDealQuotation, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
-  availablePriceModes, adjustmentDescriptionPreview, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
+  availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   estimateAdjustmentAmount, formatQuotationMoney, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
-  locationGroupsFromItems, newLocationGroupId, quotationItemMissingSummary,
+  locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
 } from './quotationMeta.js';
+import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
+import { QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 import {
@@ -172,6 +174,28 @@ export function QuotationEditorPage({ user, showToast }) {
   });
   const ticket = ticketQuery.data ?? null;
 
+  // The deal's customer MASTER row (owner, 2026-09-11: fill in the address, "autofill in later on
+  // if they get the same customer"). On the ?ticket= and existing-draft paths the rep can now edit
+  // ที่อยู่ / เลขที่ผู้เสียภาษี / โทร. here too, and the checklist needs the LIVE values — the
+  // quotation's own columns are a snapshot as of its last save.
+  //
+  // ⚠️ There is no GET /api/customers/{id}; the only read is the name search (ORDER BY name
+  // LIMIT 30, CustomerRepository.search). So this searches the deal's customer name and matches
+  // on id. If the row is not in those 30 (a name that is a substring of 30+ others), it falls
+  // back to the quotation's snapshot below — degraded, never wrong about which customer.
+  const customerRecordQuery = useQuery({
+    queryKey: queryKeys.customerRecord(ticket?.customerId),
+    queryFn: async () => {
+      const res = await api.customers.search(ticket.customerName ?? '');
+      return (res?.customers ?? []).find((c) => Number(c.id) === Number(ticket.customerId)) ?? null;
+    },
+    // `ticket` is null on the inline-create path (DealCustomerCard holds the full record there), so
+    // this only ever runs on the ?ticket= and editable-draft paths.
+    enabled: Boolean(ticket?.customerId) && (!id || quotation?.docStatus === 'DRAFT'),
+  });
+  // What the rep just saved through CustomerDetailsFields, until the refetch catches up.
+  const [customerOverride, setCustomerOverride] = useState(null);
+
   // Owner ask 2026-09-10 ("inline deal creation"): /quotations/new with NEITHER an :id NOR a
   // ?ticket= is a brand-new deal that does not exist anywhere yet -- the rep picks/creates the
   // customer and project right here instead of being sent to /tickets first. Stable per-render
@@ -263,8 +287,13 @@ export function QuotationEditorPage({ user, showToast }) {
       // F2: seeded from the frozen snapshot on the DTO, so the picker shows the right ผู้สั่งซื้อ
       // before (and even if) the customer's contact list ever loads -- see
       // QuotationContactPicker's own note on injecting a selected-but-unlisted option.
+      // The snapshot's phone/email ride along (raw — `undefined` on a DTO that lacks them means
+      // "unknown", which QuotationContactPicker's onResolve then fills from the contact list).
       setContact(quotation.contactId
-        ? { id: quotation.contactId, firstName: quotation.contactName ?? '', lastName: '' }
+        ? {
+          id: quotation.contactId, firstName: quotation.contactName ?? '', lastName: '',
+          phone: quotation.contactPhone, email: quotation.contactEmail,
+        }
         : null);
       setTerms({
         deptCode: quotation.deptCode ?? '', unitCode: quotation.unitCode ?? '',
@@ -611,60 +640,47 @@ export function QuotationEditorPage({ user, showToast }) {
   );
   const adjustmentErrorsByRow = useMemo(() => adjustments.map((a) => validateAdjustment(a)), [adjustments]);
 
-  // Thai messages, shown inline AND as the disabled button's tooltip -- advisory only, the server
-  // re-validates regardless (e.g. submit's own "ต้องมีอย่างน้อยหนึ่งรายการ" 400).
-  //
-  // Inline-create adds its own precondition on top: ลูกค้า/โครงการ (owner ask 2026-09-10) are what
-  // handleInlineCreate needs to even attempt tickets.create, so the same disabled-button + inline
-  // Thai-hint mechanism gates them exactly like every other precondition here.
-  const validationErrors = useMemo(() => {
-    const errors = [];
-    if (isInlineCreate) {
-      if (!dealForm.customer) errors.push('ต้องเลือกลูกค้าก่อนบันทึกร่าง');
-      if (!dealForm.project) errors.push('ต้องเลือกโครงการก่อนบันทึกร่าง');
+  // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
+  // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
+  // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
+  // QUOTATION_BLOCKING_CHECKS, and is exactly what the backend already refuses), and the
+  // ส่งขออนุมัติ confirm dialog's list of optional gaps. The blocking messages are the same Thai
+  // strings this page showed before — advisory only, the server re-validates regardless.
+  const snapshotCustomer = ticket?.customerId
+    ? {
+      id: ticket.customerId,
+      name: quotation?.customerName ?? ticket.customerName,
+      // Raw from the DTO: a real one always carries these (null when empty); `undefined` on
+      // anything else reads as "unknown" and raises no warning.
+      ...(quotation ? { address: quotation.customerAddress, taxId: quotation.customerTaxId, phone: quotation.customerPhone } : {}),
     }
-    // ผู้สั่งซื้อ (owner feedback F2, 2026-09-10) — REQUIRED before บันทึกร่าง on every entry
-    // path. The exact Thai wording matches the backend's own 400 for the same condition
-    // (DealQuotationService, "กรุณาระบุผู้สั่งซื้อ"), so a rep who somehow reaches the server
-    // without one is told the same thing twice rather than two different things.
-    if (!contact?.id) errors.push('กรุณาระบุผู้สั่งซื้อ');
-    // MED-4: two groups with the same (or both blank) label are ONE group on the printed document
-    // and would silently merge on the next reload, so the rep is asked to distinguish them before
-    // the save that would lose one.
-    if (duplicateGroupIds.size > 0) {
-      errors.push('ชื่อตำแหน่งติดตั้งซ้ำกัน กรุณาตั้งชื่อให้ต่างกัน (ตำแหน่งที่ชื่อซ้ำจะถูกรวมเป็นตำแหน่งเดียวในเอกสาร)');
-    }
+    : null;
+  const summaryCustomer = (customerOverride && Number(customerOverride.id) === Number(ticket?.customerId) ? customerOverride : null)
+    ?? customerRecordQuery.data ?? snapshotCustomer;
+  const checklistCustomer = isInlineCreate ? dealForm.customer : summaryCustomer;
+  const checklistProjectName = isInlineCreate ? null : (quotation ? quotation.projectName : (ticket ? ticket.projectName : undefined));
+  const duplicateGroupIndex = duplicateGroupIds.size
+    ? groups.findIndex((g) => duplicateGroupIds.has(g.groupId)) : null;
+  const checklist = useMemo(() => buildQuotationChecklist({
+    isInlineCreate,
+    customer: checklistCustomer,
+    hasProject: Boolean(dealForm.project),
+    projectName: checklistProjectName,
+    contact,
+    contactFieldId: isInlineCreate ? 'deal-contact' : 'quotation-contact',
+    items,
+    itemErrorsByRow,
+    adjustments,
+    adjustmentErrorsByRow,
+    duplicateGroupIndex,
     // v3b, wrong-way-round: the settings control never OFFERS this pairing (availablePriceModes)
-    // and changeLanguage moves a document off it — this line is what keeps it unsaveable if some
-    // other path (a stale state, a future control) ever reaches it. The server 400s it regardless.
-    if (docSettings.documentLanguage === 'EN' && docSettings.priceMode === 'SPECIAL_SQM') {
-      errors.push('เอกสารภาษาอังกฤษใช้ราคาพิเศษ บาท/ตร.ม. ไม่ได้ กรุณาเลือกวิธีกรอกราคาอื่น');
-    }
-    if (items.length === 0) {
-      // v3: an adjustment is a percentage of the rows ABOVE it, so a quotation that is only a
-      // ส่วนลดพิเศษ is refused by the server ("ต้องมีรายการสินค้าอย่างน้อยหนึ่งรายการ ก่อนจะใส่ส่วนลด
-      // พิเศษได้"). Said here, specifically, when the rep deleted the last product under one.
-      errors.push(adjustments.length
-        ? 'ส่วนลดพิเศษต้องมีรายการสินค้าอย่างน้อย 1 รายการอยู่ด้านบน'
-        : 'ต้องมีรายการสินค้าอย่างน้อย 1 รายการ');
-      return errors;
-    }
-    // The per-row "ขาด ..." summary is NOT gated on touchedRowIds -- unlike the inline hints on
-    // each field, this box is the whole reason the button is disabled, so it always shows every
-    // incomplete row regardless of whether the rep has touched it yet.
-    itemErrorsByRow.forEach((rowErrors, index) => {
-      const summary = quotationItemMissingSummary(rowErrors, index);
-      if (summary) errors.push(summary);
-    });
-    // Adjustments print after every product row, so their "รายการที่ N" continues the count —
-    // the same N the server's own 400 would name (it numbers rows after moving these last).
-    adjustmentErrorsByRow.forEach((rowErrors, index) => {
-      const summary = quotationItemMissingSummary(rowErrors, items.length + index);
-      if (summary) errors.push(summary);
-    });
-    return errors;
-  }, [items, adjustments, itemErrorsByRow, adjustmentErrorsByRow, isInlineCreate, dealForm.customer, dealForm.project,
-    contact, duplicateGroupIds, docSettings]);
+    // and changeLanguage moves a document off it — this keeps it unsaveable if some other path
+    // (a stale state, a future control) ever reaches it. The server 400s it regardless.
+    priceModeLanguageConflict: docSettings.documentLanguage === 'EN' && docSettings.priceMode === 'SPECIAL_SQM',
+  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
+    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
+  const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
+  const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
   /**
    * Whether to SHOW that checklist — separate from whether it exists, which still gates the save
@@ -863,7 +879,18 @@ export function QuotationEditorPage({ user, showToast }) {
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 
   const submitMutation = useMutation({
-    mutationFn: () => api.dealQuotations.submit(id),
+    // Unsaved edits are SAVED first. Submit acts on the STORED quotation, and the autosave is a
+    // 2-second debounce — so a rep who corrects the ที่อยู่ (which only reaches the document when
+    // the draft is re-saved and re-snapshots the customer) and clicks ส่งขออนุมัติ at once would
+    // otherwise send the document without it.
+    mutationFn: async () => {
+      if (dirty) {
+        const saved = await api.dealQuotations.update(id, buildUpsertPayload());
+        queryClient.setQueryData(queryKeys.dealQuotationDetail(id), saved.quotation);
+        setDirty(false);
+      }
+      return api.dealQuotations.submit(id);
+    },
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
@@ -1081,6 +1108,11 @@ export function QuotationEditorPage({ user, showToast }) {
         </Panel>
       ) : (
         <>
+          {/* "ข้อมูลที่ยังไม่ครบ" — first thing in the form, so it is read before ส่งขออนุมัติ (which
+              lives in the header above). Hidden on a pristine /quotations/new for the reason
+              showValidationSummary documents; shown at once on an existing draft. */}
+          {dirty || quotation ? <QuotationChecklist entries={checklist} /> : null}
+
           {isInlineCreate ? (
             // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ผู้ติดต่อ/ช่องทาง are
             // picked (or created) right here instead of the read-only summary below, which has
@@ -1111,6 +1143,19 @@ export function QuotationEditorPage({ user, showToast }) {
                     <Link to={`/tickets/${effectiveTicketId}`} className="text-sm text-info underline">ดูรายละเอียดดีลนี้</Link>
                   </div>
                 ) : null}
+                {/* Owner, 2026-09-11: the customer's ที่อยู่ / เลขที่ผู้เสียภาษี / โทร., prefilled
+                    from the customer record and editable here too — the SAME component the
+                    inline-create card renders. A save marks the quotation dirty, because only the
+                    next draft save re-snapshots the customer onto the document. */}
+                {summaryCustomer?.id ? (
+                  <div className="col-span-full">
+                    <CustomerDetailsFields
+                      customer={summaryCustomer}
+                      onChange={(next) => { setCustomerOverride(next); setDirty(true); }}
+                      showToast={showToast}
+                    />
+                  </div>
+                ) : null}
                 {/* ผู้สั่งซื้อ (owner feedback F2) — the SAME picker DealCustomerCard renders on
                     the inline-create path, so the required-ness and the inline-add fields cannot
                     diverge between the two. Prefilled from the deal's own contact (see the init
@@ -1119,6 +1164,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   customerId={contactCustomerId}
                   value={contact}
                   onChange={(next) => { setContact(next); setDirty(true); }}
+                  onResolve={setContact}
                   error={contactError}
                   showToast={showToast}
                   idPrefix="quotation-contact"
@@ -1356,15 +1402,6 @@ export function QuotationEditorPage({ user, showToast }) {
             </div>
           </Panel>
 
-          {showValidationSummary ? (
-            <div className="rounded-md border border-warning-border bg-warning/10 p-3.5 text-xs text-warning" role="alert">
-              <strong className="block">กรอกข้อมูลให้ครบก่อนบันทึกหรือส่งขออนุมัติ</strong>
-              <ul className="m-0 mt-1 list-disc pl-4">
-                {validationErrors.map((message) => <li key={message}>{message}</li>)}
-              </ul>
-            </div>
-          ) : null}
-
           <Panel title="เงื่อนไข">
             <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
               {/* V8 (owner review 2026-09-10): this was labelled "วันที่รับจำนวน", which reads as
@@ -1527,6 +1564,18 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          {/* The optional gaps, restated at the moment of sending — never a blocker (see
+              QUOTATION_BLOCKING_CHECKS), but the last chance to notice the document will print
+              without them. */}
+          {checklistWarnings.length ? (
+            <div className="mt-3 rounded-md border border-warning-border bg-warning/10 p-3 text-xs text-warning" data-testid="submit-warnings">
+              <strong className="block">ยังไม่ได้กรอก (ไม่บังคับ — ส่งได้ แต่ข้อมูลนี้จะว่างในเอกสาร)</strong>
+              <ul className="m-0 mt-1 list-disc pl-4">
+                {checklistWarnings.map((entry) => <li key={entry.check}>{entry.message}</li>)}
+              </ul>
+            </div>
+          ) : null}
+          {dirty ? <p className="mt-2 text-xs text-text-muted">การแก้ไขที่ยังไม่บันทึกจะถูกบันทึกก่อนส่ง</p> : null}
         </Modal>
       ) : null}
 

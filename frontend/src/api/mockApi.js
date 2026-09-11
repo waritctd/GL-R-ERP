@@ -4726,6 +4726,21 @@ function resolveDealQuotationContact(ticket, payload, current = null) {
   };
 }
 
+/** Mirrors DealQuotationService#customerSnapshot: the ลูกค้า columns are read from the deal's LIVE
+ * customer row at create AND on every DRAFT update (F7), so a ที่อยู่/เลขภาษี/โทร. corrected on the
+ * customer master reaches the document on the next save. This used to write null for all three,
+ * which is the "mock OMITS a field the feature keys on" shape: the address feature's code path
+ * could never be driven in mock mode. The name comes from the TICKET, exactly as the service's. */
+function mockDealQuotationCustomerSnapshot(ticket) {
+  const customer = ticket?.customerId != null ? mockCustomers.find((c) => c.id === Number(ticket.customerId)) : null;
+  return {
+    customerName: ticket?.customerName ?? null,
+    customerAddress: customer?.address || null,
+    customerTaxId: customer?.taxId || null,
+    customerPhone: customer?.phone || null,
+  };
+}
+
 function requireDealQuotationEditable(row) {
   if (row.docStatus !== 'DRAFT') fail(`แก้ไขได้เฉพาะสถานะร่างเท่านั้น (สถานะปัจจุบัน: '${row.docStatus}')`, 409);
 }
@@ -11911,8 +11926,7 @@ export const api = {
         approvedById: null, approvedByName: null, approvedAt: null,
         approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
         quotationDate: now.slice(0, 10),
-        customerName: ticket.customerName ?? null,
-        customerAddress: null, customerTaxId: null, customerPhone: null,
+        ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
         projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
         deptCode: payload.deptCode ?? null,
@@ -11959,6 +11973,8 @@ export const api = {
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
         customerNotes: payload.customerNotes ?? null,
+        // F7: re-snapshot the ลูกค้า columns on every DRAFT save — DealQuotationService#update.
+        ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
         ...header,
         items,

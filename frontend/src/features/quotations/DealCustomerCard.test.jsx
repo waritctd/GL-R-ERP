@@ -241,3 +241,52 @@ describe('DealCustomerCard', () => {
     expect(screen.getByText('กรุณาเลือกโครงการ')).not.toBeNull();
   });
 });
+
+// ── Owner, 2026-09-11: "a way for the sales to fill in the customer address" ────────────────────
+describe('DealCustomerCard — ที่อยู่ on the selected customer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.projects.mockResolvedValue({ projects: [testProject] });
+    api.customers.contacts.mockResolvedValue({ contacts: [testContact] });
+  });
+
+  const repeat = { ...testCustomer, phone: '02-111-2222', address: '201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110' };
+  const initial = (customer) => ({ customer, project: null, contact: null, entryChannel: 'UNSPECIFIED' });
+
+  it('a REPEAT customer arrives with every saved detail prefilled, the address multi-line', () => {
+    render(wrap(<Harness initial={initial(repeat)} />));
+    const address = screen.getByLabelText(/^ที่อยู่/);
+    expect(address.tagName).toBe('TEXTAREA');
+    expect(address.value).toBe('201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110');
+    expect(screen.getByLabelText(/^เลขที่ผู้เสียภาษี/).value).toBe('0105565012345');
+    expect(screen.getByLabelText(/^โทร\./).value).toBe('02-111-2222');
+  });
+
+  it('a blank address is an empty, fillable field — and a blur PUTs ONLY the address', async () => {
+    api.customers.update.mockResolvedValue({ customer: { ...testCustomer, address: '1 ถนนพระราม 9' } });
+    render(wrap(<Harness initial={initial(testCustomer)} />));
+    const address = screen.getByLabelText(/^ที่อยู่/);
+    expect(address.value).toBe('');
+    fireEvent.change(address, { target: { value: '  1 ถนนพระราม 9  ' } });
+    fireEvent.blur(address);
+    await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(testCustomer.id, { address: '1 ถนนพระราม 9' }));
+    await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe('1 ถนนพระราม 9'));
+  });
+
+  it('blurring an UNCHANGED address sends nothing', () => {
+    render(wrap(<Harness initial={initial(repeat)} />));
+    fireEvent.blur(screen.getByLabelText(/^ที่อยู่/));
+    expect(api.customers.update).not.toHaveBeenCalled();
+  });
+
+  it('a refused address save restores the previous value and says why', async () => {
+    const showToast = vi.fn();
+    api.customers.update.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+    render(wrap(<Harness initial={initial(repeat)} showToast={showToast} />));
+    const address = screen.getByLabelText(/^ที่อยู่/);
+    fireEvent.change(address, { target: { value: 'ที่อยู่ผิด' } });
+    fireEvent.blur(address);
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
+    await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe(repeat.address));
+  });
+});

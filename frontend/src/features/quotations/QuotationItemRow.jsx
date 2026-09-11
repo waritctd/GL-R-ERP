@@ -36,6 +36,11 @@ export function QuotationItemRow({
   // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
   // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
   priceMode = 'NET', currency = 'THB',
+  // Extension point for per-item PICTURES (GLA-75 — being built on another branch, not merged).
+  // A render prop rather than an upload control here, so that branch can slot its uploader and
+  // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
+  // Unused today, which renders nothing.
+  renderMedia = null,
 }) {
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -495,6 +500,8 @@ export function QuotationItemRow({
       <FormField label="หมายเหตุรายการ" htmlFor={`notes-${index}`}>
         <input id={`notes-${index}`} disabled={readOnly} value={item.itemNotes ?? ''} onChange={(e) => patch({ itemNotes: e.target.value })} />
       </FormField>
+
+      {renderMedia ? renderMedia(item, index) : null}
 
       {/* Live calculation line -- from calculate-line, debounced by the parent. */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">

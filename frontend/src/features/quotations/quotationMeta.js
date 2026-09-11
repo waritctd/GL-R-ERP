@@ -661,3 +661,181 @@ export function validateAdjustment(adjustment) {
   }
   return errors;
 }
+
+// ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ──────────────────────────────────────────
+// "validate with the quotation which field have not been filled yet". The fields are the ones her
+// reference documents print in their HEADER — customer name, ที่อยู่, เลขที่ผู้เสียภาษี, โทร., the
+// ผู้สั่งซื้อ and its โทร./อีเมล, โครงการ — plus each item's own completeness.
+//
+// ⚠️ Two tiers, and the split is deliberately NOT invented here. A check BLOCKS บันทึกร่าง /
+// ส่งขออนุมัติ only when the backend ALREADY refuses the same state:
+//   customer / project   → TicketService.create ("ต้องเลือกโครงการก่อนสร้างดีล"), inline path only
+//   contact              → DealQuotationService#resolveContact / #submit ("กรุณาระบุผู้สั่งซื้อ")
+//   items                → #buildItem / #requireStoredItemComplete, and "at least one row"
+//   locationLabels       → the editor's own MED-4 rule (an unsaveable-without-loss state, pre-existing)
+//   priceModeLanguage    → #requirePriceModeAvailableInLanguage (SPECIAL_SQM on EN → 400)
+// Everything else is a WARNING: shown, clickable, never blocking. An earlier owner ruling
+// (F7, 2026-09-10) says a customer with no tax id must still be quotable, and the owner has NOT
+// ruled on whether a missing ที่อยู่ or โทร. should block — so they do not, until she does.
+//
+// `dealProject` is a separate key from `project` on purpose: on the ?ticket= / existing-draft paths
+// the project belongs to the DEAL and cannot be chosen here, and neither the quotation create nor
+// its submit refuses a deal without one (only TicketService.create does, for NEW deals since V50).
+export const QUOTATION_CHECK = Object.freeze({
+  CUSTOMER: 'customer',
+  PROJECT: 'project',
+  DEAL_PROJECT: 'dealProject',
+  CONTACT: 'contact',
+  CONTACT_PHONE: 'contactPhone',
+  CONTACT_EMAIL: 'contactEmail',
+  CUSTOMER_ADDRESS: 'customerAddress',
+  CUSTOMER_TAX_ID: 'customerTaxId',
+  CUSTOMER_PHONE: 'customerPhone',
+  LOCATION_LABELS: 'locationLabels',
+  PRICE_MODE_LANGUAGE: 'priceModeLanguage',
+  ITEMS: 'items',
+});
+
+/** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
+ * ส่งขออนุมัติ. Every other check is a warning. Change it only on an owner ruling. */
+export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
+  QUOTATION_CHECK.CUSTOMER,
+  QUOTATION_CHECK.PROJECT,
+  QUOTATION_CHECK.CONTACT,
+  QUOTATION_CHECK.LOCATION_LABELS,
+  QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
+  QUOTATION_CHECK.ITEMS,
+]));
+
+/** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
+ * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
+ * time). */
+export const QUOTATION_FIELD_IDS = Object.freeze({
+  customer: 'deal-customer',
+  project: 'deal-project',
+  customerAddress: 'deal-customer-address',
+  customerTaxId: 'deal-customer-tax-id',
+  customerPhone: 'deal-customer-phone',
+});
+
+// Per-row field → the id prefix the row component gives that control (`${prefix}-${index}`).
+// Kept beside QUOTATION_ITEM_FIELD_ORDER so a new required field cannot be added to the summary
+// without the checklist being able to jump to it.
+const ITEM_FIELD_ID_PREFIX = {
+  TILE: {
+    model: 'model', color: 'color', texture: 'texture', sizeText: 'size', thicknessMm: 'thickness',
+    sqmPerPiece: 'sqm', piecesPerBox: 'ppb', unitPrice: 'price', specialPriceSqm: 'special',
+    directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
+  },
+  PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
+  ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },
+};
+
+/** The DOM id of the FIRST missing field in a row's `errors` (validateQuotationItem /
+ * validateAdjustment output), in the row's own left-to-right order — or null if none. */
+export function firstMissingItemFieldId(item, errors, index) {
+  const prefixes = ITEM_FIELD_ID_PREFIX[lineTypeOf(item)] ?? ITEM_FIELD_ID_PREFIX.TILE;
+  const first = QUOTATION_ITEM_FIELD_ORDER.find((key) => errors?.[key] && prefixes[key]);
+  return first ? `${prefixes[first]}-${index}` : null;
+}
+
+function blankValue(value) {
+  return value === null || value === undefined || String(value).trim() === '';
+}
+
+/**
+ * The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor
+ * reads top to bottom. Pure: every input is editor state the caller already holds.
+ *
+ * `customer` / `contact` carry the details the document prints. A field whose value is
+ * `undefined` is UNKNOWN (still loading, or a stand-in seeded from a name only) and produces no
+ * warning — only a known-empty one (null / '') does, so the list never flashes "missing" at a
+ * value that simply has not arrived yet.
+ *
+ * The blocking messages are the exact strings the editor showed before this checklist existed
+ * (and, for ผู้สั่งซื้อ, the backend's own 400 wording), so a rep sees one sentence for one problem.
+ */
+export function buildQuotationChecklist({
+  isInlineCreate = false,
+  customer = null,
+  hasProject = false,
+  // undefined = not loaded yet (the deal is still in flight) → no warning; null/'' = no project.
+  projectName = undefined,
+  contact = null,
+  contactFieldId = 'quotation-contact',
+  items = [],
+  itemErrorsByRow = [],
+  adjustments = [],
+  adjustmentErrorsByRow = [],
+  duplicateGroupIndex = null,
+  priceModeLanguageConflict = false,
+} = {}) {
+  const entries = [];
+  const push = (check, message, targetId = null) => {
+    entries.push({ check, message, targetId, blocking: QUOTATION_BLOCKING_CHECKS.has(check) });
+  };
+
+  if (isInlineCreate) {
+    if (!customer) push(QUOTATION_CHECK.CUSTOMER, 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.customer);
+    if (!hasProject) push(QUOTATION_CHECK.PROJECT, 'ต้องเลือกโครงการก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.project);
+  } else if (projectName !== undefined && blankValue(projectName)) {
+    push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
+  }
+  if (!contact?.id) push(QUOTATION_CHECK.CONTACT, 'กรุณาระบุผู้สั่งซื้อ', contactFieldId);
+
+  if (customer) {
+    if (customer.address !== undefined && blankValue(customer.address)) {
+      push(QUOTATION_CHECK.CUSTOMER_ADDRESS, 'ยังไม่ได้กรอกที่อยู่ลูกค้า', QUOTATION_FIELD_IDS.customerAddress);
+    }
+    if (customer.taxId !== undefined && blankValue(customer.taxId)) {
+      push(QUOTATION_CHECK.CUSTOMER_TAX_ID, 'ยังไม่ได้กรอกเลขที่ผู้เสียภาษี', QUOTATION_FIELD_IDS.customerTaxId);
+    }
+    if (customer.phone !== undefined && blankValue(customer.phone)) {
+      push(QUOTATION_CHECK.CUSTOMER_PHONE, 'ยังไม่ได้กรอกเบอร์โทรลูกค้า', QUOTATION_FIELD_IDS.customerPhone);
+    }
+  }
+  if (contact?.id) {
+    if (contact.phone !== undefined && blankValue(contact.phone)) {
+      push(QUOTATION_CHECK.CONTACT_PHONE, 'ผู้สั่งซื้อยังไม่มีเบอร์โทร', contactFieldId);
+    }
+    if (contact.email !== undefined && blankValue(contact.email)) {
+      push(QUOTATION_CHECK.CONTACT_EMAIL, 'ผู้สั่งซื้อยังไม่มีอีเมล', contactFieldId);
+    }
+  }
+
+  if (duplicateGroupIndex != null) {
+    push(QUOTATION_CHECK.LOCATION_LABELS,
+      'ชื่อตำแหน่งติดตั้งซ้ำกัน กรุณาตั้งชื่อให้ต่างกัน (ตำแหน่งที่ชื่อซ้ำจะถูกรวมเป็นตำแหน่งเดียวในเอกสาร)',
+      `group-label-${duplicateGroupIndex}`);
+  }
+  if (priceModeLanguageConflict) {
+    push(QUOTATION_CHECK.PRICE_MODE_LANGUAGE, 'เอกสารภาษาอังกฤษใช้ราคาพิเศษ บาท/ตร.ม. ไม่ได้ กรุณาเลือกวิธีกรอกราคาอื่น');
+  }
+
+  if (items.length === 0) {
+    // An adjustment is a percentage of the rows ABOVE it, so a quotation that is only a
+    // ส่วนลดพิเศษ is refused by the server — said specifically when that is the case.
+    push(QUOTATION_CHECK.ITEMS, adjustments.length
+      ? 'ส่วนลดพิเศษต้องมีรายการสินค้าอย่างน้อย 1 รายการอยู่ด้านบน'
+      : 'ต้องมีรายการสินค้าอย่างน้อย 1 รายการ');
+    return entries;
+  }
+  items.forEach((item, index) => {
+    const summary = quotationItemMissingSummary(itemErrorsByRow[index], index);
+    if (summary) push(QUOTATION_CHECK.ITEMS, summary, firstMissingItemFieldId(item, itemErrorsByRow[index], index));
+  });
+  // Adjustments print after every product row, so their "รายการที่ N" continues the count — the
+  // same N the server's own 400 would name (it numbers rows after moving these last).
+  adjustments.forEach((adjustment, adjIndex) => {
+    const index = items.length + adjIndex;
+    const summary = quotationItemMissingSummary(adjustmentErrorsByRow[adjIndex], index);
+    if (summary) push(QUOTATION_CHECK.ITEMS, summary, firstMissingItemFieldId(adjustment, adjustmentErrorsByRow[adjIndex], index));
+  });
+  return entries;
+}
+
+/** Joins only the parts that are present — so a missing value leaves no dangling separator
+ * ("คุณธนพล · โทร. 081…" with no " · " when there is no email, and '' when there is nothing). */
+export function joinPresent(parts, separator = ' · ') {
+  return (parts ?? []).filter((part) => !blankValue(part)).map((part) => String(part).trim()).join(separator);
+}

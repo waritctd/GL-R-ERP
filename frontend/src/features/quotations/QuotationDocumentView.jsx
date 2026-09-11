@@ -3,7 +3,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
   currencyForLanguage, dealQuotationStatusLabel, documentDiscountLabel, formatQuotationMoney,
-  LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
+  joinPresent, LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
 } from './quotationMeta.js';
 
 // v3b: the item table, totals and signature block follow the DOCUMENT's language, because this
@@ -101,6 +101,11 @@ export function QuotationDocumentView({ quotation }) {
   // employee has none on file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the
   // screen never shows an empty slot the paper would have filled.
   const name = (en, th) => (language === 'EN' ? (en || th) : th);
+  const contactLine = joinPresent([
+    quotation.contactName,
+    quotation.contactPhone?.trim() ? `โทร. ${quotation.contactPhone.trim()}` : null,
+    quotation.contactEmail,
+  ]);
   return (
     <div className="grid gap-[18px]">
       <Panel title="ข้อมูลลูกค้า">
@@ -121,6 +126,37 @@ export function QuotationDocumentView({ quotation }) {
             <span className="block text-2xs font-bold uppercase text-text-muted">วันที่เอกสาร</span>
             <strong>{formatThaiDate(quotation.quotationDate)}</strong>
           </div>
+          {/* The header lines the printed document carries (owner, 2026-09-11) — each rendered ONLY
+              when it has a value, so a missing one leaves no bare label and no dangling separator
+              (joinPresent). These are the FROZEN snapshot columns the DTO carries, i.e. exactly
+              what the renderer prints. */}
+          {contactLine ? (
+            <div data-testid="doc-contact">
+              {/* "ติดต่อผู้สั่งซื้อ", not a second "ผู้สั่งซื้อ": that word already heads the fourth
+                  signature slot below, and two identical headings for two different things read
+                  as a duplicate. */}
+              <span className="block text-2xs font-bold uppercase text-text-muted">ติดต่อผู้สั่งซื้อ</span>
+              <strong>{contactLine}</strong>
+            </div>
+          ) : null}
+          {quotation.customerTaxId?.trim() ? (
+            <div data-testid="doc-tax-id">
+              <span className="block text-2xs font-bold uppercase text-text-muted">เลขที่ผู้เสียภาษี</span>
+              <strong>{quotation.customerTaxId.trim()}</strong>
+            </div>
+          ) : null}
+          {quotation.customerPhone?.trim() ? (
+            <div data-testid="doc-customer-phone">
+              <span className="block text-2xs font-bold uppercase text-text-muted">โทร.</span>
+              <strong>{quotation.customerPhone.trim()}</strong>
+            </div>
+          ) : null}
+          {quotation.customerAddress?.trim() ? (
+            <div className="col-span-full" data-testid="doc-address">
+              <span className="block text-2xs font-bold uppercase text-text-muted">ที่อยู่</span>
+              <strong className="whitespace-pre-line">{quotation.customerAddress.trim()}</strong>
+            </div>
+          ) : null}
         </div>
       </Panel>
 
