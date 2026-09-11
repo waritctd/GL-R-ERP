@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -247,7 +247,20 @@ export function QuotationEditorPage({ user, showToast }) {
   // DealCustomerCard because it is required on all three entry paths, only one of which renders
   // that card.
   const [contact, setContact] = useState(null);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirtyState] = useState(false);
+  // #S1 (lost-edit-on-save fix): a monotonically increasing counter of "the form changed" events,
+  // bumped every time something calls setDirty(true) — i.e. once per genuine edit, never once per
+  // render. A save's onSuccess captures this value at the moment it BUILT its request (see
+  // buildSaveRequest below); if the counter has moved on by the time the response lands, an edit
+  // happened WHILE that request was in flight and setDirty(false) must not run, or that edit would
+  // never get its own save (autosave only fires while dirty, and submit's pre-save only fires
+  // `if (dirty)`). Deliberately a ref, not state: it is read-only ever compared for equality, never
+  // rendered, and updating it must never itself cause a re-render.
+  const editSeqRef = useRef(0);
+  const setDirty = useCallback((next) => {
+    if (next) editSeqRef.current += 1;
+    setDirtyState(next);
+  }, []);
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
   // red hints yet. A row seeded from the server (an existing DRAFT the rep reopened) is touched
@@ -316,7 +329,10 @@ export function QuotationEditorPage({ user, showToast }) {
       setDirty(false);
       setInitializedFor(key);
     }
-  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults]);
+    // setDirty is a useCallback with an empty dep list (stable identity forever), so listing it
+    // here can never cause an extra run of this effect -- it only satisfies exhaustive-deps now
+    // that setDirty is no longer the raw, hook-recognised useState setter.
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty]);
 
   // ผู้สั่งซื้อ prefill on the `?ticket=` path (F2: "With `?ticket=`, prefill from the deal's
   // contact, changeable"). Deliberately its OWN effect, not a branch of the seeding effect above.
@@ -699,40 +715,96 @@ export function QuotationEditorPage({ user, showToast }) {
    */
   const showValidationSummary = hasValidationErrors && (dirty || Boolean(quotation));
 
-  function buildUpsertPayload() {
+  // useCallback (not a plain function) so the autosave effect's backoff check (#S4, below) can
+  // list it as a dependency with a STABLE identity -- it only changes when one of the values it
+  // actually reads changes, exactly matching that effect's own [items, adjustments, docSettings,
+  // terms, contact, groups] dependency list (labelByGroupId is itself a groups-keyed useMemo).
+  // Every other caller (buildSaveRequest, createMutation, handleInlineCreate) just calls it same
+  // as before -- a memoized function is still a function.
+  const buildUpsertPayload = useCallback(() => ({
+    // F2: `contactId` is optional on the wire (UpsertDealQuotationRequest) and defaults to the
+    // deal's own contact server-side — but this editor always knows which one is selected, so it
+    // always sends it explicitly rather than relying on that default.
+    contactId: contact?.id ?? null,
+    deptCode: terms.deptCode || null,
+    unitCode: terms.unitCode || null,
+    offerDate: terms.offerDate || null,
+    depositPercent: terms.depositPercent === '' ? null : Number(terms.depositPercent),
+    remainderMode: terms.remainderMode || null,
+    creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
+    validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
+    customerNotes: terms.customerNotes || null,
+    // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language
+    // (the server refuses any other pairing), sent so the request states what the rep saw.
+    priceMode: docSettings.priceMode,
+    documentLanguage: docSettings.documentLanguage,
+    currency: currencyForLanguage(docSettings.documentLanguage),
+    // F1: still the FLAT items array the API has always taken, in group order — `items` is
+    // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
+    // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
+    // now; a blank group label sends null, which prints no heading row on the document.
+    //
+    // v3: each row in the quotation's price mode, then the ส่วนลดพิเศษ rows LAST — which is where
+    // the server would put them anyway, so the order sent is the order printed.
+    items: [
+      ...items.map((item) => ({
+        ...itemInputFromRow(item, docSettings.priceMode),
+        locationLabel: (labelByGroupId.get(item.groupId) || '').trim() || null,
+      })),
+      ...adjustments.map(adjustmentInputFromRow),
+    ],
+  }), [contact, terms, docSettings, items, adjustments, labelByGroupId]);
+
+  /** The ONE place that builds a save request — autosave, manual บันทึกร่าง, AND submit's own
+   * pre-save all call this instead of pairing buildUpsertPayload() with editSeqRef.current
+   * separately, so the payload actually sent and the edit-sequence snapshot describing it can
+   * never disagree (#S1). `sentClientIds` walks `items` then `adjustments` — the SAME two arrays,
+   * in the SAME order, that buildUpsertPayload's own `items:` array above concatenates — so
+   * `sentClientIds[i]` names exactly the row `payload.items[i]` describes. Called from inside a
+   * mutationFn (never onMutate): building it there means the snapshot is taken at the moment the
+   * request is actually issued, not at some earlier point that could go stale before `mutate()`
+   * is even invoked. */
+  function buildSaveRequest() {
     return {
-      // F2: `contactId` is optional on the wire (UpsertDealQuotationRequest) and defaults to the
-      // deal's own contact server-side — but this editor always knows which one is selected, so it
-      // always sends it explicitly rather than relying on that default.
-      contactId: contact?.id ?? null,
-      deptCode: terms.deptCode || null,
-      unitCode: terms.unitCode || null,
-      offerDate: terms.offerDate || null,
-      depositPercent: terms.depositPercent === '' ? null : Number(terms.depositPercent),
-      remainderMode: terms.remainderMode || null,
-      creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
-      validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
-      customerNotes: terms.customerNotes || null,
-      // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language
-      // (the server refuses any other pairing), sent so the request states what the rep saw.
-      priceMode: docSettings.priceMode,
-      documentLanguage: docSettings.documentLanguage,
-      currency: currencyForLanguage(docSettings.documentLanguage),
-      // F1: still the FLAT items array the API has always taken, in group order — `items` is
-      // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
-      // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
-      // now; a blank group label sends null, which prints no heading row on the document.
-      //
-      // v3: each row in the quotation's price mode, then the ส่วนลดพิเศษ rows LAST — which is where
-      // the server would put them anyway, so the order sent is the order printed.
-      items: [
-        ...items.map((item) => ({
-          ...itemInputFromRow(item, docSettings.priceMode),
-          locationLabel: (labelByGroupId.get(item.groupId) || '').trim() || null,
-        })),
-        ...adjustments.map(adjustmentInputFromRow),
-      ],
+      payload: buildUpsertPayload(),
+      sentSeq: editSeqRef.current,
+      sentClientIds: [...items.map((it) => it.clientId), ...adjustments.map((a) => a.clientId)],
     };
+  }
+
+  /** #S3 (item ids): after ANY successful save, the server's response carries each item's
+   * (possibly newly-minted) `id`, in `seq` order — which is the order SENT (buildUpsertPayload
+   * sends non-adjustment rows then adjustments, and DealQuotationService prints/returns them in
+   * that same order). `sentClientIds[i]` is therefore the clientId of whatever row became
+   * `resItems[i]`. A length mismatch means something about the round trip is not what this
+   * function assumes (a concurrent edit that changed row COUNT, a malformed response) — skip
+   * adoption entirely rather than guess at a mapping that could assign the wrong id to the wrong
+   * row, which would be worse than not adopting at all.
+   *
+   * Raw `setItems`/`setAdjustments` — NOT `updateItem`/`updateAdjustment` — because adopting a
+   * server id is bookkeeping, not an edit: it must never bump editSeqRef (that would make a save
+   * that adopted ids look like it landed mid-edit and refuse to clear `dirty`) and must never touch
+   * `clientId` or `touchedRowIds`. Rows added after this request was sent (not in `sentClientIds`)
+   * are untouched; rows removed meanwhile are simply absent from `prev` and skipped. */
+  function adoptServerIds(sentClientIds, resItems) {
+    if (!Array.isArray(resItems) || resItems.length !== sentClientIds.length) return;
+    const idByClientId = new Map(sentClientIds.map((clientId, i) => [clientId, resItems[i].id]));
+    setItems((prev) => prev.map((it) => (
+      idByClientId.has(it.clientId) ? { ...it, id: idByClientId.get(it.clientId) } : it
+    )));
+    setAdjustments((prev) => prev.map((a) => (
+      idByClientId.has(a.clientId) ? { ...a, id: idByClientId.get(a.clientId) } : a
+    )));
+  }
+
+  /** The one place autosave, manual บันทึกร่าง, and submit's pre-save all land after a successful
+   * PUT — adopt whatever ids the response minted, then clear `dirty` ONLY if no edit happened while
+   * this request was in flight (#S1: `editSeqRef.current === sentSeq`, captured by buildSaveRequest
+   * at send time). If the rep kept typing, `dirty` stays true so the NEXT autosave tick (or the
+   * next submit attempt) picks up what this request could not have known about. */
+  function applySavedQuotation(quotation, sentSeq, sentClientIds) {
+    adoptServerIds(sentClientIds, quotation.items);
+    if (editSeqRef.current === sentSeq) setDirty(false);
   }
 
   // "บันทึกอัตโนมัติแล้ว HH:mm" — set by an autosave, cleared by any later manual save so the two
@@ -754,6 +826,11 @@ export function QuotationEditorPage({ user, showToast }) {
   const createMutation = useMutation({
     mutationFn: () => api.dealQuotations.create(effectiveTicketId, buildUpsertPayload()),
     onSuccess: (res) => {
+      // NOT applySavedQuotation: a brand-new quotation has no prior editSeq worth comparing (there
+      // was nothing to race with yet) and this immediately navigates to /quotations/:id, which
+      // re-mounts the page and re-hydrates from the server anyway. A KNOWN, genuinely UNFIXED edge
+      // case, not an oversight: an edit typed while this very create request is in flight is still
+      // lost, same as before this change -- out of scope here (see the handoff for this branch).
       setDirty(false);
       setSaveError(null);
       rememberDefaults();
@@ -767,17 +844,42 @@ export function QuotationEditorPage({ user, showToast }) {
     },
   });
 
+  // #S4 (item-4 backoff): the JSON of the payload of the last UPDATE (autosave or manual) that
+  // failed — e.g. "ยอดรวมหลังหักส่วนลดพิเศษติดลบ" while a flat ส่วนลดพิเศษ outweighs the rows above
+  // it. The autosave effect below refuses to schedule while the CURRENT payload still serializes
+  // to this exact string, so a refusal that no edit has changed does not re-fire (and re-toast)
+  // every AUTOSAVE_DELAY_MS forever. Any edit changes the payload and lifts the backoff on its
+  // own — no separate "reset" path needed. Cleared on the next successful save (see
+  // applySavedQuotation's callers). A MANUAL บันทึกร่าง never consults this ref -- it always
+  // attempts and always toasts, matching how it always did before this existed.
+  const lastFailedAutoPayloadRef = useRef(null);
+
   // `variables.auto` marks an AUTOSAVE (see the debounce effect below): same request, same
   // invalidation, but no toast — a toast every two seconds while typing would be noise, and the
   // "บันทึกอัตโนมัติแล้ว HH:mm" line in the header is the quieter signal that replaces it.
   const updateMutation = useMutation({
-    mutationFn: () => api.dealQuotations.update(id, buildUpsertPayload()),
-    onSuccess: (res, variables) => {
-      setDirty(false);
+    // #S1/#S3: the request and its edit-seq/clientId snapshot are built TOGETHER, inside
+    // mutationFn (never onMutate) so they are read off the exact same instant — see
+    // buildSaveRequest's own comment for why that matters.
+    mutationFn: async () => {
+      const { payload, sentSeq, sentClientIds } = buildSaveRequest();
+      try {
+        const res = await api.dealQuotations.update(id, payload);
+        return { res, sentSeq, sentClientIds };
+      } catch (error) {
+        lastFailedAutoPayloadRef.current = JSON.stringify(payload);
+        throw error;
+      }
+    },
+    onSuccess: ({ res, sentSeq, sentClientIds }, variables) => {
       setSaveError(null);
       rememberDefaults();
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      // #S1/#S3: adopt any ids the response minted, and clear `dirty` only if nothing changed
+      // while this request was in flight — see applySavedQuotation's own comment.
+      applySavedQuotation(res.quotation, sentSeq, sentClientIds);
+      lastFailedAutoPayloadRef.current = null;
       if (variables?.auto) {
         setAutoSavedAt(new Date());
       } else {
@@ -787,11 +889,44 @@ export function QuotationEditorPage({ user, showToast }) {
     },
     // An autosave failure is reported exactly like a manual one. Staying silent would be worse:
     // the rep would keep typing believing their work is safe. It does NOT clear `dirty`, so the
-    // next edit simply schedules another attempt.
+    // next edit simply schedules another attempt (unless that edit reproduces the SAME payload —
+    // see the backoff ref above).
     onError: (error) => {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
     },
+  });
+
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+
+  const submitMutation = useMutation({
+    // Unsaved edits are SAVED first. Submit acts on the STORED quotation, and the autosave is a
+    // 2-second debounce — so a rep who corrects the ที่อยู่ (which only reaches the document when
+    // the draft is re-saved and re-snapshots the customer) and clicks ส่งขออนุมัติ at once would
+    // otherwise send the document without it.
+    //
+    // #S2 (submit-vs-autosave race): this is the ONLY other place besides updateMutation that PUTs
+    // the draft, and autoSaveEligible below is suppressed for as long as `submitConfirmOpen` is
+    // true or this mutation is pending — so the two can never both be in flight at once. Uses
+    // buildSaveRequest/applySavedQuotation exactly like updateMutation's own mutationFn/onSuccess,
+    // so a submit's pre-save adopts server ids and clears `dirty` the same way an autosave would.
+    mutationFn: async () => {
+      if (dirty) {
+        const { payload, sentSeq, sentClientIds } = buildSaveRequest();
+        const saved = await api.dealQuotations.update(id, payload);
+        queryClient.setQueryData(queryKeys.dealQuotationDetail(id), saved.quotation);
+        applySavedQuotation(saved.quotation, sentSeq, sentClientIds);
+        lastFailedAutoPayloadRef.current = null;
+      }
+      return api.dealQuotations.submit(id);
+    },
+    onSuccess: (res) => {
+      queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      showToast('success', 'ส่งขออนุมัติแล้ว');
+      setSubmitConfirmOpen(false);
+    },
+    onError: (error) => showToast('error', error.message || 'ส่งขออนุมัติไม่สำเร็จ'),
   });
 
   // ── Autosave (owner ask 2026-09-10) ─────────────────────────────────────────────────────────
@@ -805,17 +940,36 @@ export function QuotationEditorPage({ user, showToast }) {
   // completeness rule disables บันทึกร่าง, and the server rejects an incomplete upsert, so an
   // autosave there would do nothing but toast an error every two seconds while the rep types.
   //
+  // #S2: also refused for as long as the ส่งขออนุมัติ confirm dialog is open, or submit itself is
+  // pending — submit's OWN pre-save is the one PUT that must happen right before submit fires, and
+  // letting an independently-scheduled autosave land in between (or worse, race it) is exactly
+  // the 409 this fixes. `submitConfirmOpen`/`submitMutation.isPending` flipping false→true is a
+  // dependency change like any other below, so the effect's cleanup clears an already-scheduled
+  // timer the instant the dialog opens — no separate cancel path needed.
+  //
   // The eligibility flag is computed OUTSIDE the effect (rather than early-returning inside it) so
   // that it, and not a re-render, is what the dependency array keys on -- `items`/`terms`/
   // `contact` are the edits themselves, which is what restarts the debounce.
   const autoSaveEligible = Boolean(id) && dirty && !hasValidationErrors && !!quotation
-    && isDealQuotationEditable(quotation) && canEditDealQuotation(user, quotation);
+    && isDealQuotationEditable(quotation) && canEditDealQuotation(user, quotation)
+    && !submitConfirmOpen && !submitMutation.isPending;
   const { mutate: runUpdate, isPending: updatePending } = updateMutation;
   useEffect(() => {
     if (!autoSaveEligible || updatePending) return undefined;
+    // #S4: the same payload that just failed is refused again with no further edit — see
+    // lastFailedAutoPayloadRef's own comment.
+    if (lastFailedAutoPayloadRef.current != null
+      && JSON.stringify(buildUpsertPayload()) === lastFailedAutoPayloadRef.current) {
+      return undefined;
+    }
     const timer = setTimeout(() => runUpdate({ auto: true }), AUTOSAVE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [autoSaveEligible, updatePending, runUpdate, items, adjustments, docSettings, terms, contact]);
+    // `groups` feeds `labelByGroupId`, which buildUpsertPayload (via buildSaveRequest) reads for
+    // every row's locationLabel — an edit that only renames a group must restart the debounce too.
+    // `buildUpsertPayload` itself is listed for the #S4 backoff comparison above; it is a
+    // useCallback keyed on exactly these same values, so listing both is redundant but harmless,
+    // never a source of extra debounce restarts.
+  }, [autoSaveEligible, updatePending, runUpdate, items, adjustments, docSettings, terms, contact, groups, buildUpsertPayload]);
 
   // Owner ask 2026-09-10 ("inline deal creation"): the FIRST บันทึกร่าง on an inline-create visit
   // has to mint the ticket itself before there is anything to hang a quotation off of --
@@ -873,33 +1027,12 @@ export function QuotationEditorPage({ user, showToast }) {
     else createMutation.mutate();
   }
 
-  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  // submitConfirmOpen/submitMutation moved up above the autosave effect -- see that block's own
+  // comment (#S2) for why the effect needs to read submitMutation.isPending.
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
-
-  const submitMutation = useMutation({
-    // Unsaved edits are SAVED first. Submit acts on the STORED quotation, and the autosave is a
-    // 2-second debounce — so a rep who corrects the ที่อยู่ (which only reaches the document when
-    // the draft is re-saved and re-snapshots the customer) and clicks ส่งขออนุมัติ at once would
-    // otherwise send the document without it.
-    mutationFn: async () => {
-      if (dirty) {
-        const saved = await api.dealQuotations.update(id, buildUpsertPayload());
-        queryClient.setQueryData(queryKeys.dealQuotationDetail(id), saved.quotation);
-        setDirty(false);
-      }
-      return api.dealQuotations.submit(id);
-    },
-    onSuccess: (res) => {
-      queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      showToast('success', 'ส่งขออนุมัติแล้ว');
-      setSubmitConfirmOpen(false);
-    },
-    onError: (error) => showToast('error', error.message || 'ส่งขออนุมัติไม่สำเร็จ'),
-  });
 
   const approveMutation = useMutation({
     mutationFn: () => api.dealQuotations.approve(id, {}),
@@ -1054,7 +1187,10 @@ export function QuotationEditorPage({ user, showToast }) {
               <Button
                 variant="secondary"
                 loading={saving}
-                disabled={hasValidationErrors}
+                // #S2: disabled while ส่งขออนุมัติ is running its own pre-save PUT too -- a manual
+                // save firing at the same moment would be the exact race this fix removes, just
+                // from the other button.
+                disabled={hasValidationErrors || submitMutation.isPending}
                 title={hasValidationErrors ? validationErrors.join(' ') : undefined}
                 onClick={handleSaveDraft}
               >
@@ -1064,7 +1200,11 @@ export function QuotationEditorPage({ user, showToast }) {
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               <Button
                 variant="primary"
-                disabled={hasValidationErrors}
+                // #S2: disabled while ANY save is in flight (createMutation/updateMutation/
+                // handleInlineCreate — the same three `saving` already covers), so a rep cannot
+                // open the confirm dialog and submit while an autosave the dialog hasn't had a
+                // chance to suppress yet is still on the wire.
+                disabled={hasValidationErrors || saving}
                 title={hasValidationErrors ? validationErrors.join(' ') : undefined}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
@@ -1563,7 +1703,17 @@ export function QuotationEditorPage({ user, showToast }) {
           footer={(
             <>
               <Button variant="secondary" onClick={() => setSubmitConfirmOpen(false)}>ยกเลิก</Button>
-              <Button variant="primary" loading={submitMutation.isPending} onClick={() => submitMutation.mutate()}>ส่งขออนุมัติ</Button>
+              {/* #S2: disabled while any OTHER save is still in flight — the dialog being open
+                  already suppresses the NEXT autosave tick, but one already on the wire when the
+                  dialog opened is not cancelled by that, only waited out. */}
+              <Button
+                variant="primary"
+                loading={submitMutation.isPending}
+                disabled={saving}
+                onClick={() => submitMutation.mutate()}
+              >
+                ส่งขออนุมัติ
+              </Button>
             </>
           )}
         >

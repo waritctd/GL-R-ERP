@@ -193,10 +193,10 @@ public final class DealQuotationDtos {
          * of the description cell); null exactly when {@link #hasPicture} is false. */
         String picturePlacement,
         /** {@code /api/deal-quotations/{id}/items/{itemId}/picture} (same view access as the
-         * quotation itself), or null when there is no picture. ⚠️ The item id in it changes on
-         * every draft save — {@code PUT /api/deal-quotations/{id}} replaces the item rows — so
-         * read it off the latest response, and send each item's {@code id} back on that PUT or its
-         * picture is dropped (see {@code DealQuotationRequests.ItemInput#id}). */
+         * quotation itself), or null when there is no picture. The item id in it is STABLE across
+         * a draft save that sends this item's {@code id} back (see
+         * {@code DealQuotationRequests.ItemInput#id}) — only an item saved without its id (new, or
+         * one whose id was foreign/stale/a duplicate) gets a new id and therefore a new URL. */
         String pictureUrl
     ) {
         /** The pre-GLA-75 shape — no picture. Kept so existing call sites (the calculate-line
