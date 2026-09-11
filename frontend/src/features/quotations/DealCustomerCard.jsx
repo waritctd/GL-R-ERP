@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -6,6 +5,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
+import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 
 // ช่องทางรับงาน (owner ask 2026-09-10): the same four codes th.co.glr.hr.ticket.EntryChannel
@@ -49,58 +49,9 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const [newCustomer, setNewCustomer] = useState(emptyNewCustomer());
   const [savingCustomer, setSavingCustomer] = useState(false);
 
-  // ── F7: the SELECTED customer's เลขที่ผู้เสียภาษี / โทร., editable in place ────────────────────
-  // Owner feedback F7 (2026-09-10): "for the customer information you also have to have a field
-  // for เลขที่ผู้เสียภาษี and โทร." Both columns and both printed lines already existed (tax id on
-  // the เรียน line, phone on B6) -- what was missing was any way to SEE or CORRECT them at the
-  // moment the rep notices they are wrong, which is while they are quoting. Both stay OPTIONAL: a
-  // customer with no tax id is still quotable, exactly as before.
-  //
-  // Own local state rather than editing `customer` on every keystroke, so a half-typed tax id
-  // never becomes the value a save would snapshot. Re-seeded whenever the underlying record
-  // changes -- including from a save's own response, which is what makes the update "verified"
-  // rather than merely optimistic.
-  const [customerEdits, setCustomerEdits] = useState({ taxId: '', phone: '' });
-  const [savingField, setSavingField] = useState(null);
-  const queryClient = useQueryClient();
-  useEffect(() => {
-    setCustomerEdits({ taxId: customer?.taxId ?? '', phone: customer?.phone ?? '' });
-  }, [customer?.id, customer?.taxId, customer?.phone]);
-
-  /**
-   * Persists ONE field of the selected customer (PUT /api/customers/{id}) on blur -- optimistic,
-   * then verified against what the server says it stored, and rolled back if it refused.
-   *
-   * Sends only the field that changed, never the whole record: the endpoint has PATCH semantics
-   * (an omitted/null key is left alone), so a one-field PUT cannot clobber a value some other
-   * session changed in the meantime. A 403 -- the deal-entry gate is real, DealEntryAccess, and
-   * this component is reachable by roles that hold it -- surfaces the backend's own Thai message
-   * and puts the previous value back in the box, so the rep never walks away believing a
-   * correction was saved.
-   */
-  async function saveCustomerField(field) {
-    if (!customer) return;
-    const previous = customer[field] ?? '';
-    const next = (customerEdits[field] ?? '').trim();
-    if (next === previous) return; // untouched (or re-typed identically) -- no request at all
-    const restore = customer;
-    setSavingField(field);
-    onChange({ customer: { ...customer, [field]: next || null } });
-    try {
-      const res = await api.customers.update(customer.id, { [field]: next });
-      // Adopt what the server ACTUALLY stored rather than what we hoped it did.
-      onChange({ customer: res?.customer ?? { ...customer, [field]: next || null } });
-      // Any cached customer search still holds the stale row; drop the whole `customers` subtree
-      // (queryKeys.customersSearch's own prefix) so the next typeahead reads the corrected one.
-      queryClient.invalidateQueries({ queryKey: ['customers'] });
-    } catch (error) {
-      onChange({ customer: restore });
-      setCustomerEdits((prev) => ({ ...prev, [field]: previous }));
-      showToast?.('error', error.message || 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
-    } finally {
-      setSavingField(null);
-    }
-  }
+  // F7 (2026-09-10) + owner 2026-09-11: the SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่
+  // are edited through the shared CustomerDetailsFields (see its own doc) — the editor renders the
+  // same component on the paths where this card is absent.
 
   // ── โครงการ / ผู้ติดต่อ, loaded once a customer is selected ─────────────────────────────────
   const [projectOptions, setProjectOptions] = useState([]);
@@ -303,36 +254,12 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
       </div>
 
       {customer ? (
-        // F7: present, prefilled and editable the moment a customer is selected -- deliberately
-        // NOT hidden behind an "แก้ไข" affordance, because the point is that the rep sees what the
-        // document is about to print. Saved on blur; neither is required.
-        <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
-          <FormField
-            label="เลขที่ผู้เสียภาษี"
-            htmlFor="deal-customer-tax-id"
-            hint="พิมพ์แก้ไขได้ บันทึกกลับไปที่ข้อมูลลูกค้าอัตโนมัติ"
-          >
-            <input
-              id="deal-customer-tax-id"
-              value={customerEdits.taxId}
-              placeholder="0105xxxxxxxxx"
-              disabled={savingField === 'taxId'}
-              onChange={(e) => setCustomerEdits((prev) => ({ ...prev, taxId: e.target.value }))}
-              onBlur={() => saveCustomerField('taxId')}
-              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            />
-          </FormField>
-          <FormField label="โทร." htmlFor="deal-customer-phone">
-            <input
-              id="deal-customer-phone"
-              value={customerEdits.phone}
-              placeholder="02-xxx-xxxx"
-              disabled={savingField === 'phone'}
-              onChange={(e) => setCustomerEdits((prev) => ({ ...prev, phone: e.target.value }))}
-              onBlur={() => saveCustomerField('phone')}
-              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            />
-          </FormField>
+        // Present, prefilled and editable the moment a customer is selected — deliberately NOT
+        // behind an "แก้ไข" affordance, because the point is that the rep sees what the document is
+        // about to print, and a repeat customer arrives already filled. Saved on blur; none is
+        // required.
+        <div className="mt-3">
+          <CustomerDetailsFields customer={customer} onChange={(next) => onChange({ customer: next })} showToast={showToast} />
         </div>
       ) : null}
 

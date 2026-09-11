@@ -5,8 +5,9 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
+  LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
-  defaultLeadTimeForOrigin, originCountryFromCode,
+  defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
 } from './quotationMeta.js';
 
 /**
@@ -32,6 +33,14 @@ import {
 export function QuotationItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], recentPicks = [], onMove, onDuplicate, onCatalogPicked,
+  // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
+  // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
+  priceMode = 'NET', currency = 'THB',
+  // Extension point for per-item PICTURES (GLA-75 — being built on another branch, not merged).
+  // A render prop rather than an upload control here, so that branch can slot its uploader and
+  // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
+  // Unused today, which renders nothing.
+  renderMedia = null,
 }) {
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -404,20 +413,62 @@ export function QuotationItemRow({
       </div>
 
       <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
-        <FormField label="ราคา/หน่วย" htmlFor={`price-${index}`} required error={errors.unitPrice}>
+        {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
+            "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
+            nine documents shares one mode. Each mode asks for exactly what the rep has in hand:
+              NET          ราคา/หน่วย + ส่วนลด %           (unchanged)
+              SPECIAL_SQM  ราคาตั้ง/แผ่น + ราคาพิเศษ บาท/ตร.ม. รวม VAT → net per piece shown live
+              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")
+            The derived net in SPECIAL_SQM is the SERVER's (calculate-line's netUnitPrice), never
+            a JS copy of WastageCalculator#netPerPieceFromSpecialSqm: its rounding order (the 2dp
+            reciprocal first) is exactly what a copy would get subtly wrong. */}
+        {priceMode === 'DIRECT_NET' ? (
+          <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
+            <input
+              id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.directNetPrice ?? ''}
+              onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+          </FormField>
+        ) : null}
+        <FormField
+          label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
+          htmlFor={`price-${index}`}
+          required={priceMode !== 'DIRECT_NET'}
+          hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+          error={errors.unitPrice}
+        >
           <input
             id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
             value={item.unitPrice ?? ''}
             onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </FormField>
-        <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
-          <input
-            id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
-            value={item.discountPct ?? 0}
-            onChange={(e) => patch({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
-          />
-        </FormField>
+        {priceMode === 'NET' ? (
+          <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
+            <input
+              id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.discountPct ?? 0}
+              onChange={(e) => patch({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
+            />
+          </FormField>
+        ) : null}
+        {priceMode === 'SPECIAL_SQM' ? (
+          <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+            <input
+              id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.specialPriceSqm ?? ''}
+              onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+            <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+              {item.calcPending
+                ? 'กำลังคำนวณราคาสุทธิ...'
+                : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
+                  ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+                  : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
+            </span>
+          </FormField>
+        ) : null}
         <FormField label="ประเทศต้นทาง" htmlFor={`origin-${index}`}>
           <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
             <option value="">-</option>
@@ -450,18 +501,80 @@ export function QuotationItemRow({
         <input id={`notes-${index}`} disabled={readOnly} value={item.itemNotes ?? ''} onChange={(e) => patch({ itemNotes: e.target.value })} />
       </FormField>
 
+      {renderMedia ? renderMedia(item, index) : null}
+
       {/* Live calculation line -- from calculate-line, debounced by the parent. */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
         <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
           {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
         </p>
-        <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(item.lineAmount)}</span>
+        <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
       </div>
     </li>
   );
 }
 
-export function itemInputFromRow(item) {
+/**
+ * The wire `ItemInput` for any editor row. `priceMode` is the QUOTATION's, and it decides which of
+ * a tile row's two mode-specific prices travel — the row itself keeps BOTH in state, so flipping
+ * the mode and back restores what the rep typed.
+ *
+ * ⚠️ Sending only the current mode's price is load-bearing, not tidiness: `POST calculate-line` has
+ * no quotation to read a mode from, so DealQuotationService#inferPriceMode infers it FROM THE ROW —
+ * a present specialPriceSqm means SPECIAL_SQM, a present directNetPrice means DIRECT_NET. A stale
+ * ราคาพิเศษ left on a row in NET mode would make the live preview price it as ราคาพิเศษ.
+ */
+export function itemInputFromRow(item, priceMode = 'NET') {
+  const type = lineTypeOf(item);
+  if (type === LINE_TYPE_PLAIN) {
+    return {
+      lineType: LINE_TYPE_PLAIN,
+      locationLabel: item.locationLabel || null,
+      description: item.description?.trim() || null,
+      quantity: item.quantity === '' || item.quantity == null ? null : Number(item.quantity),
+      unit: item.unit || null,
+      unitPrice: item.unitPrice === '' || item.unitPrice == null ? null : Number(item.unitPrice),
+      discountPct: item.discountPct === '' || item.discountPct == null ? 0 : Number(item.discountPct),
+      itemNotes: item.itemNotes || null,
+    };
+  }
+  if (type === LINE_TYPE_ADJUSTMENT) return adjustmentInputFromRow(item);
+  const directNet = item.directNetPrice === '' || item.directNetPrice == null ? null : Number(item.directNetPrice);
+  const unitPrice = item.unitPrice === '' || item.unitPrice == null ? null : item.unitPrice;
+  return {
+    ...tileInputFromRow(item),
+    lineType: LINE_TYPE_TILE,
+    // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
+    // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
+    // which is the honest reading of "the rep only has a net price".
+    unitPrice: priceMode === 'DIRECT_NET' && unitPrice == null ? directNet : unitPrice,
+    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
+    // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
+    discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
+    specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
+      ? Number(item.specialPriceSqm) : null,
+    directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
+  };
+}
+
+/** A ส่วนลดพิเศษ row's ItemInput — EXACTLY one of adjustmentPct / adjustmentAmount, per
+ * DealQuotationService#requirePriceValidForType. No unitPrice: the server derives it (and would
+ * ignore one anyway — review fix F2). No locationLabel: the row sorts last and prints no heading. */
+export function adjustmentInputFromRow(adjustment) {
+  const flat = adjustment.adjustmentKind === 'AMOUNT';
+  const number = (value) => (value === '' || value == null ? null : Number(value));
+  return {
+    lineType: LINE_TYPE_ADJUSTMENT,
+    locationLabel: null,
+    adjustmentPct: flat ? null : number(adjustment.adjustmentPct),
+    adjustmentAmount: flat ? number(adjustment.adjustmentAmount) : null,
+    adjustmentDeadline: adjustment.adjustmentDeadline || null,
+    // Honoured by the server for a FLAT adjustment only; a percentage one derives its own.
+    description: flat ? (adjustment.description?.trim() || null) : null,
+  };
+}
+
+function tileInputFromRow(item) {
   return {
     locationLabel: item.locationLabel || null,
     catalogPriceId: item.catalogPriceId ?? null,
@@ -508,6 +621,8 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
   return {
     clientId: newItemClientId(),
     groupId,
+    lineType: LINE_TYPE_TILE,
+    specialPriceSqm: '', directNetPrice: '',
     locationLabel: '', catalogPriceId: null, productCode: '',
     brand: '', model: '', color: '', texture: '', sizeText: '', thicknessMm: null, sqmPerPiece: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
@@ -517,6 +632,69 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     itemNotes: '',
     piecesPerSqm: null, piecesBeforeWastage: null, piecesAfterWastage: null, piecesFinal: null, boxes: null,
     netUnitPrice: null, lineAmount: null, descriptionLine: '', sizeLine: '', calculationLine: '',
+    specialPriceLine: null,
     calcPending: false,
+  };
+}
+
+/** A blank PLAIN row (freight, consumables, cut service, sanitary ware) — v3 S2. Same client-only
+ * `clientId`/`groupId` contract as emptyQuotationItem; it lives in a ตำแหน่งติดตั้ง group like a
+ * tile does, because a freight line can belong to a floor as easily as to none. */
+export function emptyPlainItem(groupId = null) {
+  return {
+    clientId: newItemClientId(),
+    groupId,
+    lineType: LINE_TYPE_PLAIN,
+    locationLabel: '',
+    description: '', quantity: '', unit: '', unitPrice: '', discountPct: 0, itemNotes: '',
+    netUnitPrice: null, lineAmount: null, calcPending: false,
+  };
+}
+
+/** A blank ส่วนลดพิเศษ row — v3 S3. Percent by default (her QN6900704-2 is a percent); the
+ * deadline is prefilled with `defaultDeadline` (the caller passes the quotation's ยืนราคา end date)
+ * so the normal case is "type 3, done". */
+export function emptyAdjustment(defaultDeadline = '') {
+  return {
+    clientId: newItemClientId(),
+    lineType: LINE_TYPE_ADJUSTMENT,
+    adjustmentKind: 'PERCENT',
+    adjustmentPct: '', adjustmentAmount: '', adjustmentDeadline: defaultDeadline || '', description: '',
+  };
+}
+
+/**
+ * A server `DealQuotationItemDto` → an editor row. The inverse of itemInputFromRow, and the half of
+ * the GET→PUT round-trip that has to reconstruct what the DTO does not carry verbatim:
+ *   - DIRECT_NET has no column of its own — the typed net IS final_unit_price — so `directNetPrice`
+ *     is recovered from `netUnitPrice`, or a PUT of an untouched draft would 400 "ราคาสุทธิ".
+ *   - A PLAIN row's rep-typed text comes back as `descriptionLine`.
+ *   - An ADJUSTMENT's kind follows which of adjustmentPct / adjustmentAmount is non-null (the DTO
+ *     guarantees exactly one — review fix F2).
+ */
+export function rowFromServerItem(item, priceMode = 'NET') {
+  const base = { ...item, clientId: item.id ?? newItemClientId(), calcPending: false };
+  const type = lineTypeOf(item);
+  if (type === LINE_TYPE_PLAIN) {
+    return {
+      ...base, lineType: LINE_TYPE_PLAIN, description: item.descriptionLine ?? '',
+      quantity: item.quantity ?? '', unit: item.unit ?? '', unitPrice: item.unitPrice ?? '',
+      discountPct: item.discountPct ?? 0,
+    };
+  }
+  if (type === LINE_TYPE_ADJUSTMENT) {
+    const flat = item.adjustmentPct == null && item.adjustmentAmount != null;
+    return {
+      ...base, lineType: LINE_TYPE_ADJUSTMENT,
+      adjustmentKind: flat ? 'AMOUNT' : 'PERCENT',
+      adjustmentPct: item.adjustmentPct ?? '', adjustmentAmount: item.adjustmentAmount ?? '',
+      adjustmentDeadline: item.adjustmentDeadline ?? '',
+      description: flat ? (item.descriptionLine ?? '') : '',
+    };
+  }
+  return {
+    ...base, lineType: LINE_TYPE_TILE,
+    specialPriceSqm: item.specialPriceSqm ?? '',
+    directNetPrice: priceMode === 'DIRECT_NET' ? (item.netUnitPrice ?? '') : '',
   };
 }

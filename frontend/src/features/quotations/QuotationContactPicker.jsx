@@ -32,7 +32,7 @@ function emptyNewContact() {
  * a quotation that in fact has one.
  */
 export function QuotationContactPicker({
-  customerId, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact',
+  customerId, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
 }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -60,6 +60,18 @@ export function QuotationContactPicker({
   const selectedId = value?.id ?? null;
   const hasSelectedOption = selectedId != null && options.some((c) => String(c.id) === String(selectedId));
   const renderedOptions = hasSelectedOption || selectedId == null ? options : [value, ...options];
+  const selected = selectedId == null ? null : (options.find((c) => String(c.id) === String(selectedId)) ?? value);
+
+  // A stand-in seeded from a NAME only (the ?ticket= path seeds `{ id, firstName }` off the
+  // ticket) does not know the ผู้สั่งซื้อ's โทร./อีเมล. Once the real option arrives, hand it up
+  // through `onResolve` — deliberately NOT `onChange`, which the parent treats as the rep's own
+  // edit (it marks the quotation dirty). `phone === undefined` is the "unknown" marker; a known
+  // empty value is null/'' and is left alone.
+  useEffect(() => {
+    if (!onResolve || selectedId == null || value?.phone !== undefined) return;
+    const match = options.find((c) => String(c.id) === String(selectedId));
+    if (match) onResolve(match);
+  }, [options, selectedId, value, onResolve]);
 
   async function handleCreate() {
     if (!customerId || !newContact.firstName.trim()) return;
@@ -101,6 +113,25 @@ export function QuotationContactPicker({
           ))}
           {customerId && !disabled ? <option value="__new__">+ เพิ่มผู้สั่งซื้อใหม่</option> : null}
         </select>
+        {/* The ผู้สั่งซื้อ's own โทร./อีเมล — prefilled from the contact record the moment one is
+            picked (a repeat customer's contacts arrive with them), and shown so a gap is visible
+            before the document is sent. The English form prints the email ("E :").
+            Read-only on purpose: there is NO endpoint to update an existing contact
+            (CustomerController has POST /{id}/contacts but no PUT), so offering an edit box here
+            would be a lie — a new ผู้สั่งซื้อ can carry corrected details via "+ เพิ่มผู้สั่งซื้อใหม่". */}
+        {selected ? (
+          <span className="block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
+            {selected.phone === undefined && selected.email === undefined
+              ? 'กำลังโหลดเบอร์โทร/อีเมล…'
+              : (
+                <>
+                  <span className={selected.phone ? '' : 'text-warning'}>โทร. {selected.phone || 'ยังไม่มี'}</span>
+                  {' · '}
+                  <span className={selected.email ? '' : 'text-warning'}>อีเมล {selected.email || 'ยังไม่มี'}</span>
+                </>
+              )}
+          </span>
+        ) : null}
       </FormField>
 
       {showNew && customerId ? (

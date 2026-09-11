@@ -120,6 +120,11 @@ export const queryKeys = {
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
+  // One customer MASTER row by id (quotation editor, owner 2026-09-11). There is no GET
+  // /api/customers/{id}, so this is resolved through the name search and matched on id — see
+  // QuotationEditorPage. Under the ['customers'] prefix so CustomerDetailsFields' post-save
+  // invalidation refreshes it too.
+  customerRecord: (id) => ['customers', 'record', id ?? ''],
   fxRates: () => ['fxRates'],
   priceCalcConfigs: () => ['priceCalcConfigs'],
   // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).

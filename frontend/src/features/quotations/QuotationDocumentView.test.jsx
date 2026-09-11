@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 
@@ -242,13 +242,137 @@ describe('QuotationDocumentView ตำแหน่งติดตั้ง group
 describe('QuotationDocumentView ผู้สั่งซื้อ signature slot (F2)', () => {
   it('prints the frozen contact name as the fourth signature slot', () => {
     const { getByText } = render(<QuotationDocumentView quotation={docQuotation()} />);
-    expect(getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(getByText('ณัฐพงศ์ ศรีวิไล')).not.toBeNull();
+    // Scoped to the signature panel: since 2026-09-11 the contact name ALSO heads the customer
+    // block (ติดต่อผู้สั่งซื้อ), exactly as the printed header does, so an unscoped query is ambiguous.
+    const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
+    expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
+    expect(signatures.getByText('ณัฐพงศ์ ศรีวิไล')).not.toBeNull();
   });
 
   it('falls back to a dash rather than an empty slot when the snapshot is missing', () => {
     const { getByText, container } = render(<QuotationDocumentView quotation={docQuotation({ contactName: null })} />);
     expect(getByText('ผู้สั่งซื้อ')).not.toBeNull();
     expect(container.textContent).toContain('-');
+  });
+});
+
+// ── Quotation v3 / v3b rows and the English form (owner feedback pass 3, 2026-09-11) ────────────
+describe('QuotationDocumentView — PLAIN / ADJUSTMENT rows, like the printed form', () => {
+  const v3 = {
+    ...quotation,
+    docStatus: 'APPROVED',
+    priceMode: 'SPECIAL_SQM',
+    items: [
+      {
+        id: 21, seq: 1, lineType: 'TILE', descriptionLine: 'Trilogy Ash', sizeLine: '60x60', calculationLine: '(calc)',
+        specialPriceLine: '(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)',
+        quantity: 330, unit: 'แผ่น', piecesFinal: 330, unitPrice: 850, netUnitPrice: 453.84, lineAmount: 149767.2,
+      },
+      {
+        id: 22, seq: 2, lineType: 'PLAIN', descriptionLine: 'Mapei Adhesive (20kg/Bag)', sizeLine: null, calculationLine: null,
+        quantity: 85, unit: 'Bags', piecesFinal: 0, unitPrice: 350, discountPct: 0, netUnitPrice: 350, lineAmount: 29750,
+      },
+      {
+        id: 23, seq: 3, lineType: 'ADJUSTMENT', descriptionLine: 'ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569',
+        quantity: -1, unit: null, piecesFinal: 0, unitPrice: 38198.21, discountPct: null, netUnitPrice: 38198.21, lineAmount: -38198.21,
+      },
+    ],
+  };
+
+  function row(container, lineType) {
+    return container.querySelector(`.data-row[data-line-type="${lineType}"]`);
+  }
+  function cell(rowEl, label) {
+    return rowEl.querySelector(`[data-label="${label}"]`).textContent;
+  }
+
+  it('an ADJUSTMENT prints จำนวน -1, NO unit, an EMPTY ส่วนลด, positive ราคา/คงเหลือ and a NEGATIVE เป็นเงิน', () => {
+    const { container } = render(<QuotationDocumentView quotation={v3} />);
+    const adj = row(container, 'ADJUSTMENT');
+    expect(cell(adj, 'จำนวน')).toBe('-1');
+    expect(cell(adj, 'ส่วนลด')).toBe('');
+    expect(cell(adj, 'ราคา/หน่วย')).toBe('฿38,198.21');
+    expect(cell(adj, 'สุทธิ')).toBe('฿38,198.21');
+    expect(cell(adj, 'เป็นเงิน')).toBe('-฿38,198.21');
+  });
+
+  it('a PLAIN row prints its own quantity and unit, and Net', () => {
+    const { container } = render(<QuotationDocumentView quotation={v3} />);
+    const plain = row(container, 'PLAIN');
+    expect(cell(plain, 'จำนวน')).toBe('85 Bags');
+    expect(cell(plain, 'ส่วนลด')).toBe('Net');
+  });
+
+  it('a SPECIAL_SQM tile prints พิเศษ and its ราคาพิเศษ sub-line as a <span> (the .data-row wrapper-clip rule)', () => {
+    const { container } = render(<QuotationDocumentView quotation={v3} />);
+    const tileRow = row(container, 'TILE');
+    expect(cell(tileRow, 'ส่วนลด')).toBe('พิเศษ');
+    const subLine = [...tileRow.querySelectorAll('span')].find((el) => el.textContent.startsWith('(ราคาพิเศษ'));
+    expect(subLine.tagName).toBe('SPAN');
+    expect(tileRow.querySelector('div')).toBeNull();
+  });
+});
+
+describe('QuotationDocumentView — the English (USD) document', () => {
+  const en = {
+    ...quotation,
+    documentLanguage: 'EN', currency: 'USD', priceMode: 'DIRECT_NET',
+    subtotalAmount: 18900, vatAmount: 0, grandTotal: 18900,
+    salesRepNameEn: 'Jennet Longsakul', createdByNameEn: null,
+  };
+
+  it('uses the F-SM-008 column headings, USD amounts, and NO VAT row', () => {
+    const { container } = render(<QuotationDocumentView quotation={en} />);
+    const head = container.querySelector('.table-head').textContent;
+    expect(head).toContain('Description & Conditions');
+    expect(head).toContain('Amount (USD)');
+    expect(container.textContent).toContain('Grand Total (USD)');
+    expect(container.textContent).toContain('$18,900.00');
+    expect(container.textContent).not.toContain('ภาษีมูลค่าเพิ่ม');
+    expect(container.textContent).not.toContain('฿');
+  });
+
+  it('prints English signatory names, falling back to the Thai one rather than an empty slot', () => {
+    const { container } = render(<QuotationDocumentView quotation={en} />);
+    expect(container.textContent).toContain('Quoted by');
+    expect(container.textContent).toContain('Jennet Longsakul');
+    // createdByNameEn is null → the Thai name, not a blank.
+    expect(container.textContent).toContain('Printed by');
+    expect(container.textContent).toContain('คุณสมหมาย ขายดี');
+  });
+});
+
+describe('QuotationDocumentView — the header lines the document prints (owner, 2026-09-11)', () => {
+  const filled = {
+    ...quotation,
+    customerAddress: '201 ซอยสุขุมวิท 63\nเขตวัฒนา กทม. 10110',
+    customerTaxId: '0105551234567',
+    customerPhone: '02-000-0000',
+    contactName: 'ธนพล ศรีวัฒนกุล', contactPhone: '081-234-5678', contactEmail: 'thanaphon@example.co.th',
+  };
+
+  it('shows every filled field', () => {
+    const { getByTestId } = render(<QuotationDocumentView quotation={filled} />);
+    expect(getByTestId('doc-address').textContent).toContain('201 ซอยสุขุมวิท 63');
+    expect(getByTestId('doc-tax-id').textContent).toContain('0105551234567');
+    expect(getByTestId('doc-customer-phone').textContent).toContain('02-000-0000');
+    expect(getByTestId('doc-contact').textContent).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. 081-234-5678 · thanaphon@example.co.th');
+  });
+
+  it('a missing field leaves NO bare label and NO dangling separator', () => {
+    const { queryByTestId, getByTestId } = render(<QuotationDocumentView quotation={{
+      ...filled, customerAddress: null, customerTaxId: '  ', customerPhone: '', contactPhone: null,
+    }} />);
+    expect(queryByTestId('doc-address')).toBeNull();
+    expect(queryByTestId('doc-tax-id')).toBeNull();
+    expect(queryByTestId('doc-customer-phone')).toBeNull();
+    const contactLine = getByTestId('doc-contact').textContent;
+    expect(contactLine).toBe('ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · thanaphon@example.co.th');
+    expect(contactLine).not.toMatch(/·\s*·|·\s*$|โทร\.\s*(·|$)/);
+  });
+
+  it('renders no ผู้สั่งซื้อ line at all when there is nothing to put in it', () => {
+    const { queryByTestId } = render(<QuotationDocumentView quotation={{ ...quotation, contactName: null }} />);
+    expect(queryByTestId('doc-contact')).toBeNull();
   });
 });
