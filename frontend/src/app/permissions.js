@@ -221,6 +221,27 @@ export function isSelfServicePath(path) {
   return SELF_SERVICE_PATHS.some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
 }
 
+// Quotation release (owner, 2026-09-11): the direct-deal QUOTATION pages open through the lock for
+// the people who create and approve quotations — and ONLY those pages; /tickets, /customers,
+// /catalog, /pricing-requests and the rest of the sales stack stay locked. The audience mirrors
+// DealQuotationService: EDIT_ROLES (sales, sales_manager), APPROVE_ROLES (sales_manager, plus ceo,
+// who is exempt from the lock anyway), and the per-employee can_create_quotation grant (which
+// covers a grantee whose role is none of these, e.g. qc). The service's VIEW-only roles (import,
+// account) are deliberately NOT included: they read quotations, they do not create them.
+// Per-path like the activity-log exemption below, never by exempting roles, which would unlock
+// the whole sales stack as a side effect. Frontend gating only — the backend enforces the rest.
+const QUOTATION_RELEASE_ROLES = ['sales', 'sales_manager'];
+
+export function isQuotationReleaseUser(user) {
+  return QUOTATION_RELEASE_ROLES.includes(user?.role) || Boolean(user?.canCreateQuotation);
+}
+
+function isQuotationPath(path) {
+  // Pathname only, and the prefix needs its slash: `/quotations-archive` must not ride along.
+  const pathname = path.split(/[?#]/)[0];
+  return pathname === '/quotations' || pathname.startsWith('/quotations/');
+}
+
 export function canAccessPath(path, user) {
   if (!user) return false;
   // Checked BEFORE the guards below, not after: the lockdown has to deny paths
@@ -232,7 +253,8 @@ export function canAccessPath(path, user) {
   // unlock the ENTIRE portal (the sales stack, payroll, the HR queues) for her as a side effect of
   // wanting one page. Narrow exemption, deliberate.
   const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog) return false;
+  const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
   return guard.can(user);

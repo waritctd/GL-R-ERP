@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
+import { canAccessPath } from '../../app/permissions.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
@@ -1137,7 +1138,10 @@ export function QuotationEditorPage({ user, showToast }) {
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName ?? '-'}</strong></div>
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span><strong>{projectName ?? '-'}</strong></div>
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span><strong>{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</strong></div>
-                {effectiveTicketId ? (
+                {/* Hidden when the viewer cannot open the deal page — under the release lock
+                    (owner, 2026-09-11) a sales rep reaches /quotations but not /tickets, and a
+                    link straight to the access-denied page is worse than no link. */}
+                {effectiveTicketId && canAccessPath(`/tickets/${effectiveTicketId}`, user) ? (
                   <div>
                     <span className="block text-2xs font-bold uppercase text-text-muted">ดีล</span>
                     <Link to={`/tickets/${effectiveTicketId}`} className="text-sm text-info underline">ดูรายละเอียดดีลนี้</Link>
