@@ -315,7 +315,14 @@ public final class DealQuotationRenderAdapter {
      *
      * <p>Lines 1/2/3 and the validity line are COMPUTED from the same header fields the Thai block
      * uses, so an English document reports the same deposit / lead time / validity the Thai one
-     * would. The bank block is fixed text.
+     * would.
+
+     * <p><b>What this prints</b>, which is deliberately NOT her numbering. With the bank block
+     * configured: 1, 2, (three unnumbered bank lines, straight after the payment remark as in her
+     * samples), 3, 4, 5 — validity and size tolerance share line 4, colour and returns share line 5,
+     * because the block costs three of the eight rows. Without it: the original 1–8, with the
+     * proforma-invoice line at 4. The bank lines themselves come from configuration, not from this
+     * class — see {@code app.quotation.bank-block-line1..3}.
      */
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
@@ -341,15 +348,22 @@ public final class DealQuotationRenderAdapter {
         lines.add("2.A deposit of " + depositPct + "% is required upon order confirmation, "
             + remainderText + ".");
         if (hasBankBlock) {
-            // Her own samples leave these three UNNUMBERED and place them straight after the
-            // payment remark — QN6900902-6 then resumes at 5, skipping 4 entirely. The numbers are
-            // line text here precisely so that irregularity is reproducible.
+            // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
+            // her samples. Numbering then runs on 3, 4, 5 — NOT her 5, 6, 7: her skipped 4 is a
+            // spreadsheet artefact rather than intent, and reproducing it would print a gap a
+            // customer reads as a missing term.
             lines.addAll(bankBlockLines);
             lines.add(englishLeadTimeLine(quotation.items()));
-            lines.add("5.Price validity : " + validityDays + " days from the date of this quotation. "
-                + "Actual tile sizes may vary slightly from those stated, within ISO and TIS tolerances.");
-            lines.add("6.Colours and patterns may vary slightly from the samples, as goods come from "
-                + "different production lots. Goods sold are not returnable or exchangeable.");
+            // ⚠️ Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is not
+            // wrapped but CUT at the border. The first version of these two merged lines ran to 145
+            // and 151 characters and printed "…within ISO and TIS toler" and "…not returnab" — with
+            // every content test green, because the text in the cell was intact. Both are now well
+            // inside the 130 that the pre-existing line 1 proves fits in both PDF engines, and
+            // DealQuotationEnglishFormTest guards the length of every line in both layouts.
+            lines.add("4.Price validity : " + validityDays + " days from the date of this quotation; "
+                + "sizes may vary slightly within ISO and TIS tolerances.");
+            lines.add("5.Colours may vary slightly between production lots. "
+                + "Goods sold are not returnable or exchangeable.");
         } else {
             lines.add(englishLeadTimeLine(quotation.items()));
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
@@ -365,20 +379,14 @@ public final class DealQuotationRenderAdapter {
     }
 
     /**
-     * ⚠️ <b>THE BANK BLOCK IS DELIBERATELY NOT TRANSCRIBED — ask the owner.</b> Both of her English
-     * samples carry an unnumbered three-line bank block (beneficiary / bank + branch / SWIFT) after
-     * remark 3, and it is the one part of this document a customer would actually wire money
-     * against. The spec does not quote those particulars and this repository holds them nowhere, so
-     * inventing a plausible-looking account number, bank branch or SWIFT code would put fabricated
-     * banking details on a customer-facing document — the one failure mode here that is not
-     * recoverable by re-issuing the quotation.
+     * The FALLBACK printed at remark 4 when the bank block is not fully configured.
      *
-     * <p>This line stands in its place and is true as written. When the owner supplies the real
-     * block, replace this single constant with the three lines and widen
-     * {@link #englishRemarkLines} accordingly (it is capped at
-     * {@code QuotationRenderer#REMARK_HEAD_ROWS.length} = 8 rows, so two of the numbered lines
-     * below would need to merge, exactly as her own samples merge theirs). Flagged at the top of
-     * the PR's risks.
+     * <p>History worth keeping: the block was first left out deliberately, because no source in the
+     * repository held the particulars and inventing an account number or SWIFT code would have put
+     * fabricated wire instructions on a customer-facing document. The owner then supplied it
+     * (2026-09-11, "take what's from the example image"), and it now lives in
+     * {@code app.quotation.bank-block-line1..3}. This line is what an English document prints when
+     * that configuration is missing, partial, or blank — true as written, and never half a block.
      */
     private static final String BANK_BLOCK_PLACEHOLDER_LINE =
         "4.Payment by telegraphic transfer. Full bank details are issued with the proforma invoice.";

@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -340,7 +341,6 @@ class DealQuotationEnglishFormTest {
         assertThat(legacy.currencyCode()).isEqualTo("THB");
     }
 
-    // ── fixtures ───────────────────────────────────────────────────────────────────────────
 
 
     @Test
@@ -365,8 +365,10 @@ class DealQuotationEnglishFormTest {
         assertThat(remarks).noneMatch(line -> line.contains("proforma invoice"));
         // And the computed remarks survive the merge rather than being dropped to make room.
         assertThat(remarks.get(5)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
-        assertThat(remarks.get(6)).contains("Price validity : 30 days").contains("ISO and TIS tolerances");
-        assertThat(remarks.get(7)).contains("different production lots").contains("not returnable");
+        // Numbering runs on 3, 4, 5 after the block — no gap at 4 for a customer to read as a
+        // missing term (review F2).
+        assertThat(remarks.get(6)).startsWith("4.Price validity : 30 days").contains("ISO and TIS tolerances");
+        assertThat(remarks.get(7)).startsWith("5.Colours").contains("not returnable or exchangeable");
     }
 
     @Test
@@ -377,7 +379,14 @@ class DealQuotationEnglishFormTest {
                 List.<String>of(),
                 List.of(BANK_BLOCK.get(0)),
                 List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1)),
-                List.of(BANK_BLOCK.get(0), "", BANK_BLOCK.get(2)))) {
+                List.of(BANK_BLOCK.get(0), "", BANK_BLOCK.get(2)),
+                // Whitespace-only is blank too. Review F4: an isBlank→isEmpty refactor stayed green.
+                List.of(BANK_BLOCK.get(0), "   ", BANK_BLOCK.get(2)),
+                // A null line — Arrays.asList, since List.of refuses nulls.
+                Arrays.asList(BANK_BLOCK.get(0), null, BANK_BLOCK.get(2)),
+                // FOUR lines is not three. Review F5: `size() >= 3` stayed green, and the renderer
+                // silently drops a ninth remark row rather than failing.
+                List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2), "extra"))) {
             Sheet sheet = renderEnglishWithBank(partial);
             List<String> remarks = new ArrayList<>();
             for (int r = 23; r <= 30; r++) {
@@ -392,6 +401,25 @@ class DealQuotationEnglishFormTest {
     }
 
     @Test
+    void everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts() throws Exception {
+        // Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is CUT at the
+        // border rather than wrapped. Two merged lines at 145 and 151 characters printed
+        // "…within ISO and TIS toler" and "…not returnab" on the PDF while every content assertion
+        // here stayed green — the text in the cell was intact, it simply did not fit. Measured by
+        // review: the pre-existing 130-character line 1 fits in both LibreOffice and Chromium, and
+        // ~139 does not. Character count is a proxy for rendered width; for Latin text in this font
+        // it tracks the measurement closely, but tighten the cap if a line near it ever clips.
+        for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
+            Sheet sheet = renderEnglishWithBank(block);
+            for (int r = 23; r <= 30; r++) {
+                String line = str(sheet, r, 1);
+                assertThat(line.length()).as("row %d (%s block): %s", r,
+                    block.isEmpty() ? "no" : "with", line).isLessThanOrEqualTo(130);
+            }
+        }
+    }
+
+    @Test
     void thaiDocument_neverCarriesTheBankBlock_evenWhenConfigured() throws Exception {
         // The Thai หมายเหตุ block has no bank lines and must not grow them: its eight lines are the
         // template's own, and the owner's Thai documents carry payment terms without account details.
@@ -401,6 +429,8 @@ class DealQuotationEnglishFormTest {
             assertThat(str(sheet, r, 1)).doesNotContain("003-92-1222-6").doesNotContain("KASITHBK");
         }
     }
+
+    // ── fixtures ───────────────────────────────────────────────────────────────────────────
 
     /** The owner's own bank block, verbatim from QN6900902-6 and QN6900933 (they agree). */
     private static final List<String> BANK_BLOCK = List.of(

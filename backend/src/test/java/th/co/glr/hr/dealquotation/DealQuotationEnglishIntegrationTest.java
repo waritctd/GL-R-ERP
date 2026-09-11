@@ -70,6 +70,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private CustomerRepository customers;
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
+    // Fields rather than setUp locals so a test can build a SECOND service with the bank block
+    // configured — see #theConfiguredBankBlock_reachesTheEnglishDocumentThroughTheService.
+    private NotificationRepository notifications;
+    private ContactRepository contacts;
+    private EmployeeAuthRepository employeeAuth;
 
     private long salesRepId;
     private long salesManagerId;
@@ -82,14 +87,14 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper();
-        NotificationRepository notifications =
+        notifications =
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         customers = new CustomerRepository(jdbc);
-        ContactRepository contacts = new ContactRepository(jdbc);
+        contacts = new ContactRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        EmployeeAuthRepository employeeAuth = new EmployeeAuthRepository(jdbc);
+        employeeAuth = new EmployeeAuthRepository(jdbc);
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), null, employeeAuth);
 
@@ -343,6 +348,38 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         String names = str(renderSheet(approved.id()), 38, 0);
         assertThat(names).contains("(สมชาย ไม่มีชื่ออังกฤษ)");
         assertThat(names).doesNotContain("(..........................)");
+    }
+
+    /**
+     * Review F3 (PR #929): nothing proved the CONFIGURED bank block reaches a document through the
+     * service. Making {@code DealQuotationService} pass {@code List.of()} instead of its own field
+     * left all 171 DealQuotation tests green, because every service in the suite is built with empty
+     * lines. This one is built with the owner's block and renders through {@code renderXlsx}, exactly
+     * as a download does.
+     */
+    @Test
+    void theConfiguredBankBlock_reachesTheEnglishDocumentThroughTheService() throws Exception {
+        List<String> block = List.of(
+            "Please arrange payment to the following bank account. Bank Name : Kasikorn Bank Public Company Limited",
+            "Beneficiary name : G.L.& R. Taps and Tiles Co., Ltd. Beneficiary account number : 003-92-1222-6 Saving Account",
+            "SWIFT code : KASITHBK");
+        DealQuotationService withBank = new DealQuotationService(quotationRepository, tickets, customers,
+            contacts, notifications,
+            new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test"),
+            new QuotationRenderer(), employeeAuth, new EmployeeSignatureRepository(jdbc),
+            "https://portal.test", block.get(0), block.get(1), block.get(2));
+
+        DealQuotationDto created = withBank.create(ticketId,
+            englishRequest(List.of(tileItem("100.00", 10))), salesActor);
+        byte[] xls = withBank.renderXlsx(created.id(), salesActor);
+        var wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
+        Sheet sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+        List<String> remarks = new java.util.ArrayList<>();
+        for (int r = 23; r <= 30; r++) {
+            remarks.add(str(sheet, r, 1));
+        }
+        assertThat(remarks).containsSequence(block);
+        assertThat(remarks).noneMatch(line -> line.contains("proforma invoice"));
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────
