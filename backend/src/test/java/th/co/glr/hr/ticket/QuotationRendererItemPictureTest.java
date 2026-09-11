@@ -71,7 +71,18 @@ class QuotationRendererItemPictureTest {
             double widthPt = anchorWidthPt(wb, sh, a);
             double heightPt = anchorHeightPt(sh, a);
             assertThat(heightPt / widthPt).as("aspect ratio kept").isCloseTo(0.5, within(0.01));
-            assertThat(widthPt).as("fills column B less a small inset").isGreaterThan(0.9 * columnBWidthPt(wb, sh));
+            // BELOW is sized to column B's width UNLESS that would exceed the 60 mm height cap
+            // (QuotationRenderer#BELOW_MAX_HEIGHT_MM). Which one binds depends on the machine's
+            // Thai font: column B is measured in font units, and CI's fonts-thai-tlwg makes it
+            // ~530 pt where licensed Cordia New makes it ~360 pt — so in CI this 2:1 picture hits
+            // the height cap (340 pt wide) and locally it fills the column. Either is correct; a
+            // picture that does neither (shrunk for no reason) is the bug this guards against.
+            double columnPt = columnBWidthPt(wb, sh);
+            double capPt = 60.0 / 25.4 * 72.0;
+            assertThat(widthPt > 0.9 * columnPt || Math.abs(heightPt - capPt) < 1.0)
+                .as("fills column B less a small inset (%.1f of %.1f pt), or is height-capped at 60 mm "
+                    + "(%.1f pt tall)", widthPt, columnPt, heightPt)
+                .isTrue();
             // The rows the picture sits on are real, empty item rows — nothing printed over it.
             for (int r = a.getRow1(); r <= a.getRow2(); r++) {
                 assertThat(text(sh, r, COL_B)).as("row %d under the picture", r).isEmpty();
