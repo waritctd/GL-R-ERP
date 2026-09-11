@@ -169,11 +169,20 @@ public final class DealQuotationRenderAdapter {
      *
      * <p>The price mode only governs TILE rows. A PLAIN row follows its OWN discount (normally
      * absent, so "Net") whatever mode the document is in — that is what lets a ราคาพิเศษ document
-     * still carry an ordinary freight line. An ADJUSTMENT row prints "Net" because its ราคา and
-     * คงเหลือ are literally equal; the discount IS the row, not a modifier on it.
+     * still carry an ordinary freight line.
+     *
+     * <p>An ADJUSTMENT row prints <b>NOTHING</b>. This used to print "Net", on the reasoning that its
+     * ราคา and คงเหลือ are literally equal — a plausible inference that the owner's own document
+     * contradicts. QN6900704-2's ส่วนลดพิเศษ row leaves the ส่วนลด cell EMPTY, exactly as it leaves
+     * หน่วย empty, because neither column means anything for a row that IS the discount rather than a
+     * row carrying one. Spotted by rendering her document back and comparing it against the original;
+     * the document is the authority here, not the inference.
      */
     private static String discountLabel(DealQuotationItemDto item, String priceMode) {
         BigDecimal pct = item.discountPct();
+        if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
+            return "";
+        }
         boolean tile = item.lineType() == null
             || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
         if (tile) {
