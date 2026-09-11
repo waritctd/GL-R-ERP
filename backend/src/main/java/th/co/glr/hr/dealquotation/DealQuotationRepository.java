@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -236,85 +237,182 @@ public class DealQuotationRepository {
         return quotationId;
     }
 
+    /**
+     * The ONE place a {@link NewItem}'s columns become a {@code sales.quotation_item} parameter
+     * set — shared by {@link #insertItems}, {@link #insertItemsAtSeq} and
+     * {@link #updateItemsInPlace} so an insert and an update of the same row can never drift on a
+     * column. Deliberately does NOT set {@code picture_id}/{@code picture_placement} — those are
+     * owned exclusively by the GLA-75 picture endpoints (see {@link #setItemPicture} etc.), which
+     * is what lets {@link #updateItemsInPlace} leave a row's picture alone.
+     */
+    private MapSqlParameterSource itemParams(long quotationId, int seq, NewItem item) {
+        return new MapSqlParameterSource()
+            .addValue("quotationId", quotationId)
+            .addValue("seq", seq)
+            .addValue("brand", item.brand())
+            .addValue("model", item.model())
+            .addValue("color", item.color())
+            .addValue("texture", item.texture())
+            .addValue("size", item.sizeText())
+            // v3: the printed หน่วย is now per-row, not the hardcoded "แผ่น" it used to be —
+            // a PLAIN row carries JOB/Bags/Barrels/ชุด and an ADJUSTMENT row carries none at
+            // all (NULL, which the renderer prints as an EMPTY cell rather than falling back).
+            .addValue("rawUnit", item.unit())
+            // v3: quantity, not piecesFinal. For a TILE row the service sets quantity =
+            // piecesFinal so this is byte-identical to the previous expression; for PLAIN it
+            // is the rep's own จำนวน, and for ADJUSTMENT it is −1 (which is precisely what
+            // makes amount = quantity × netPrice come out negative).
+            .addValue("qty", item.quantity())
+            .addValue("unitPrice", item.unitPrice())
+            .addValue("amount", item.lineAmount())
+            .addValue("salesDiscount", item.unitPrice().subtract(item.netUnitPrice()))
+            .addValue("finalUnitPrice", item.netUnitPrice())
+            .addValue("lineSubtotal", item.lineAmount())
+            .addValue("vat", item.vat())
+            .addValue("lineTotal", item.lineTotal())
+            .addValue("description", item.descriptionLine())
+            .addValue("locationLabel", item.locationLabel())
+            .addValue("catalogPriceId", item.catalogPriceId())
+            .addValue("productCode", item.productCode())
+            .addValue("thicknessMm", item.thicknessMm())
+            .addValue("sqmPerPiece", item.sqmPerPiece())
+            .addValue("quantityMode", item.quantityMode())
+            .addValue("areaSqm", item.areaSqm())
+            .addValue("piecesInput", item.piecesInput())
+            .addValue("wastageMode", item.wastageMode())
+            .addValue("wastageValue", item.wastageValue())
+            .addValue("piecesPerBox", item.piecesPerBox())
+            .addValue("piecesBeforeWastage", item.piecesBeforeWastage())
+            .addValue("piecesAfterWastage", item.piecesAfterWastage())
+            .addValue("boxes", item.boxes())
+            .addValue("discountPct", item.discountPct())
+            .addValue("originCountry", item.originCountry())
+            .addValue("leadTimeMinDays", item.leadTimeMinDays())
+            .addValue("leadTimeMaxDays", item.leadTimeMaxDays())
+            .addValue("itemNotes", item.itemNotes())
+            // ── quotation v3 (V168) ──────────────────────────────────────────────────────────
+            .addValue("lineType", item.lineType())
+            .addValue("specialPriceSqm", item.specialPriceSqm())
+            .addValue("adjustmentPct", item.adjustmentPct())
+            .addValue("adjustmentDeadline", item.adjustmentDeadline());
+    }
+
+    private static final String INSERT_ITEM_SQL = """
+        INSERT INTO sales.quotation_item
+            (quotation_id, seq, brand, model, color, texture, size, raw_unit, qty, unit_price, amount,
+             sales_discount, final_unit_price, line_subtotal, vat, line_total, description,
+             location_label, catalog_price_id, product_code, thickness_mm, sqm_per_piece,
+             quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
+             pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
+             lead_time_min_days, lead_time_max_days, item_notes,
+             line_type, special_price_sqm, adjustment_pct, adjustment_deadline)
+        VALUES
+            (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
+             :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
+             :locationLabel, :catalogPriceId, :productCode, :thicknessMm, :sqmPerPiece,
+             :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
+             :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
+             :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
+             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline)
+        """;
+
+    /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
+     * variant {@code update()} needs because its inserted rows fill the gaps left by whichever
+     * seqs an in-place UPDATE claimed, so they cannot simply be numbered {@code i + 1}. */
+    public record SeqItem(int seq, NewItem item) {}
+
+    /** One row about to be UPDATED in place — {@code itemId} identifies the existing
+     * {@code quotation_item_id}; {@code seq} and {@code item} are its new stored values. */
+    public record ExistingItem(long itemId, int seq, NewItem item) {}
+
     public void insertItems(long quotationId, List<NewItem> items) {
         if (items.isEmpty()) {
             return;
         }
         MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
         for (int i = 0; i < items.size(); i++) {
-            NewItem item = items.get(i);
-            batch[i] = new MapSqlParameterSource()
-                .addValue("quotationId", quotationId)
-                .addValue("seq", i + 1)
-                .addValue("brand", item.brand())
-                .addValue("model", item.model())
-                .addValue("color", item.color())
-                .addValue("texture", item.texture())
-                .addValue("size", item.sizeText())
-                // v3: the printed หน่วย is now per-row, not the hardcoded "แผ่น" it used to be —
-                // a PLAIN row carries JOB/Bags/Barrels/ชุด and an ADJUSTMENT row carries none at
-                // all (NULL, which the renderer prints as an EMPTY cell rather than falling back).
-                .addValue("rawUnit", item.unit())
-                // v3: quantity, not piecesFinal. For a TILE row the service sets quantity =
-                // piecesFinal so this is byte-identical to the previous expression; for PLAIN it
-                // is the rep's own จำนวน, and for ADJUSTMENT it is −1 (which is precisely what
-                // makes amount = quantity × netPrice come out negative).
-                .addValue("qty", item.quantity())
-                .addValue("unitPrice", item.unitPrice())
-                .addValue("amount", item.lineAmount())
-                .addValue("salesDiscount", item.unitPrice().subtract(item.netUnitPrice()))
-                .addValue("finalUnitPrice", item.netUnitPrice())
-                .addValue("lineSubtotal", item.lineAmount())
-                .addValue("vat", item.vat())
-                .addValue("lineTotal", item.lineTotal())
-                .addValue("description", item.descriptionLine())
-                .addValue("locationLabel", item.locationLabel())
-                .addValue("catalogPriceId", item.catalogPriceId())
-                .addValue("productCode", item.productCode())
-                .addValue("thicknessMm", item.thicknessMm())
-                .addValue("sqmPerPiece", item.sqmPerPiece())
-                .addValue("quantityMode", item.quantityMode())
-                .addValue("areaSqm", item.areaSqm())
-                .addValue("piecesInput", item.piecesInput())
-                .addValue("wastageMode", item.wastageMode())
-                .addValue("wastageValue", item.wastageValue())
-                .addValue("piecesPerBox", item.piecesPerBox())
-                .addValue("piecesBeforeWastage", item.piecesBeforeWastage())
-                .addValue("piecesAfterWastage", item.piecesAfterWastage())
-                .addValue("boxes", item.boxes())
-                .addValue("discountPct", item.discountPct())
-                .addValue("originCountry", item.originCountry())
-                .addValue("leadTimeMinDays", item.leadTimeMinDays())
-                .addValue("leadTimeMaxDays", item.leadTimeMaxDays())
-                .addValue("itemNotes", item.itemNotes())
-                // ── quotation v3 (V168) ──────────────────────────────────────────────────────
-                .addValue("lineType", item.lineType())
-                .addValue("specialPriceSqm", item.specialPriceSqm())
-                .addValue("adjustmentPct", item.adjustmentPct())
-                .addValue("adjustmentDeadline", item.adjustmentDeadline());
+            batch[i] = itemParams(quotationId, i + 1, items.get(i));
         }
+        jdbc.batchUpdate(INSERT_ITEM_SQL, batch);
+    }
+
+    /** Inserts new rows at the {@code seq} each {@link SeqItem} carries — used by
+     * {@code DealQuotationService#update} for every input that did not reuse an existing item id
+     * (a brand-new row, or one whose id was null/foreign/stale/a duplicate within the payload). */
+    public void insertItemsAtSeq(long quotationId, List<SeqItem> items) {
+        if (items.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = items.stream()
+            .map(si -> itemParams(quotationId, si.seq(), si.item()))
+            .toArray(MapSqlParameterSource[]::new);
+        jdbc.batchUpdate(INSERT_ITEM_SQL, batch);
+    }
+
+    /** Updates each existing row IN PLACE — every column {@link #insertItems} would set, keyed by
+     * {@code quotation_id AND quotation_item_id} so a foreign {@code itemId} (one belonging to
+     * another quotation) can never modify anything: this WHERE clause is the enforcement, on top
+     * of the caller's own membership check (the decision). Deliberately never touches
+     * {@code picture_id}/{@code picture_placement} — see {@link #itemParams}'s Javadoc — which is
+     * how a picture survives a draft save that reuses the item's id. */
+    public void updateItemsInPlace(long quotationId, List<ExistingItem> items) {
+        if (items.isEmpty()) {
+            return;
+        }
+        MapSqlParameterSource[] batch = items.stream()
+            .map(ei -> itemParams(quotationId, ei.seq(), ei.item()).addValue("itemId", ei.itemId()))
+            .toArray(MapSqlParameterSource[]::new);
         jdbc.batchUpdate("""
-            INSERT INTO sales.quotation_item
-                (quotation_id, seq, brand, model, color, texture, size, raw_unit, qty, unit_price, amount,
-                 sales_discount, final_unit_price, line_subtotal, vat, line_total, description,
-                 location_label, catalog_price_id, product_code, thickness_mm, sqm_per_piece,
-                 quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
-                 pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
-                 lead_time_min_days, lead_time_max_days, item_notes,
-                 line_type, special_price_sqm, adjustment_pct, adjustment_deadline)
-            VALUES
-                (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
-                 :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
-                 :locationLabel, :catalogPriceId, :productCode, :thicknessMm, :sqmPerPiece,
-                 :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
-                 :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
-                 :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
-                 :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline)
+            UPDATE sales.quotation_item
+               SET seq = :seq, brand = :brand, model = :model, color = :color, texture = :texture,
+                   size = :size, raw_unit = :rawUnit, qty = :qty, unit_price = :unitPrice, amount = :amount,
+                   sales_discount = :salesDiscount, final_unit_price = :finalUnitPrice,
+                   line_subtotal = :lineSubtotal, vat = :vat, line_total = :lineTotal,
+                   description = :description, location_label = :locationLabel,
+                   catalog_price_id = :catalogPriceId, product_code = :productCode,
+                   thickness_mm = :thicknessMm, sqm_per_piece = :sqmPerPiece,
+                   quantity_mode = :quantityMode, area_sqm = :areaSqm, pieces_input = :piecesInput,
+                   wastage_mode = :wastageMode, wastage_value = :wastageValue, pieces_per_box = :piecesPerBox,
+                   pieces_before_wastage = :piecesBeforeWastage, pieces_after_wastage = :piecesAfterWastage,
+                   boxes = :boxes, discount_pct = :discountPct, origin_country = :originCountry,
+                   lead_time_min_days = :leadTimeMinDays, lead_time_max_days = :leadTimeMaxDays,
+                   item_notes = :itemNotes,
+                   line_type = :lineType, special_price_sqm = :specialPriceSqm,
+                   adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline
+             WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
 
-    public void deleteItems(long quotationId) {
-        jdbc.update("DELETE FROM sales.quotation_item WHERE quotation_id = :id", Map.of("id", quotationId));
+    /** This quotation's current item ids — {@code DealQuotationService#update} reads these BEFORE
+     * writing anything, to decide which of the request's item ids may be reused (see the class's
+     * stable-item-id contract, GLA-75-picture / #931 follow-up). */
+    public List<Long> findItemIds(long quotationId) {
+        return jdbc.query("SELECT quotation_item_id FROM sales.quotation_item WHERE quotation_id = :id",
+            Map.of("id", quotationId), (rs, rowNum) -> rs.getLong("quotation_item_id"));
+    }
+
+    /**
+     * Deletes this quotation's item rows whose id is NOT in {@code claimedIds} — an empty
+     * {@code claimedIds} deletes every current row (the payload reused none of them), exactly
+     * what the pre-GLA-75-picture full replace always did. Returns the picture ids those deleted
+     * rows carried, so the caller can {@link #deletePicturesIfUnreferenced} them; a picture still
+     * referenced by another row (a parent revision sharing it) is left alone by that call, not by
+     * this one.
+     */
+    public List<Long> deleteUnclaimedItems(long quotationId, Set<Long> claimedIds) {
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("quotationId", quotationId);
+        String scope;
+        if (claimedIds.isEmpty()) {
+            scope = "quotation_id = :quotationId";
+        } else {
+            scope = "quotation_id = :quotationId AND quotation_item_id NOT IN (:claimedIds)";
+            params.addValue("claimedIds", claimedIds);
+        }
+        List<Long> pictureIds = jdbc.query(
+            "SELECT picture_id FROM sales.quotation_item WHERE " + scope + " AND picture_id IS NOT NULL",
+            params, (rs, rowNum) -> rs.getLong("picture_id"));
+        jdbc.update("DELETE FROM sales.quotation_item WHERE " + scope, params);
+        return pictureIds;
     }
 
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller
@@ -847,46 +945,7 @@ public class DealQuotationRepository {
     // item id from another quotation can never be reached through this quotation's URL.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    public record PictureLink(long pictureId, String placement) {}
-
     public record PictureImage(String mimeType, byte[] image) {}
-
-    /** item id → its picture link, for this quotation's items that have one. */
-    public Map<Long, PictureLink> findPictureLinks(long quotationId) {
-        Map<Long, PictureLink> links = new HashMap<>();
-        jdbc.query("""
-            SELECT quotation_item_id, picture_id, picture_placement
-              FROM sales.quotation_item
-             WHERE quotation_id = :id AND picture_id IS NOT NULL
-            """, Map.of("id", quotationId), (ResultSet rs) -> {
-                // A RowCallbackHandler: Spring has ALREADY advanced to this row. An inner
-                // `while (rs.next())` here silently drops the first row — which, for a quotation
-                // with one picture, is every picture.
-                links.put(rs.getLong("quotation_item_id"),
-                    new PictureLink(rs.getLong("picture_id"), rs.getString("picture_placement")));
-            });
-        return links;
-    }
-
-    /** Points this quotation's items, addressed by {@code seq}, at existing picture rows — the
-     * draft-save carry-forward (see {@code DealQuotationService#update}). */
-    public void linkPictures(long quotationId, Map<Integer, PictureLink> bySeq) {
-        if (bySeq.isEmpty()) {
-            return;
-        }
-        MapSqlParameterSource[] batch = bySeq.entrySet().stream()
-            .map(e -> new MapSqlParameterSource()
-                .addValue("quotationId", quotationId)
-                .addValue("seq", e.getKey())
-                .addValue("pictureId", e.getValue().pictureId())
-                .addValue("placement", e.getValue().placement()))
-            .toArray(MapSqlParameterSource[]::new);
-        jdbc.batchUpdate("""
-            UPDATE sales.quotation_item
-               SET picture_id = :pictureId, picture_placement = :placement
-             WHERE quotation_id = :quotationId AND seq = :seq
-            """, batch);
-    }
 
     /** A revision copies its parent's items verbatim and in the same order, so {@code seq} lines
      * the two sets up exactly; the child SHARES the parent's picture rows (immutable). */
@@ -982,7 +1041,8 @@ public class DealQuotationRepository {
               JOIN sales.quotation_item_picture p ON p.picture_id = i.picture_id
              WHERE i.quotation_id = :id
             """, Map.of("id", quotationId), (ResultSet rs) -> {
-                // RowCallbackHandler — one call per row; see #findPictureLinks.
+                // A RowCallbackHandler: Spring has ALREADY advanced to this row. An inner
+                // `while (rs.next())` here would silently drop the first row.
                 images.put(rs.getLong("quotation_item_id"),
                     new PictureImage(rs.getString("mime_type"), rs.getBytes("image")));
             });
