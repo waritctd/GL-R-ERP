@@ -102,6 +102,8 @@ public class DealQuotationService {
     private final EmployeeSignatureRepository signatures;
     private final String appBaseUrl;
 
+    private final List<String> bankBlockLines;
+
     public DealQuotationService(DealQuotationRepository quotations, TicketRepository tickets,
                                 CustomerRepository customers, ContactRepository contacts,
                                 NotificationRepository notifications,
@@ -109,7 +111,21 @@ public class DealQuotationService {
                                 th.co.glr.hr.ticket.QuotationRenderer renderer,
                                 EmployeeAuthRepository employeeAuth,
                                 EmployeeSignatureRepository signatures,
-                                @Value("${app.mail.app-base-url:}") String appBaseUrl) {
+                                @Value("${app.mail.app-base-url:}") String appBaseUrl,
+                                // app.quotation.bank-block-line1..3 — the unnumbered bank block on an
+                                // ENGLISH document, taken verbatim from the owner's own quotations and
+                                // kept in application.yml so a moved account is an operations change
+                                // rather than a rebuild. Defaults are EMPTY here on purpose: the values
+                                // live in one place, and an unset block prints the honest
+                                // proforma-invoice line instead of a half-filled set of wire
+                                // instructions.
+                                @Value("${app.quotation.bank-block-line1:}") String bankBlockLine1,
+                                @Value("${app.quotation.bank-block-line2:}") String bankBlockLine2,
+                                @Value("${app.quotation.bank-block-line3:}") String bankBlockLine3) {
+        this.bankBlockLines = List.of(
+            bankBlockLine1 == null ? "" : bankBlockLine1,
+            bankBlockLine2 == null ? "" : bankBlockLine2,
+            bankBlockLine3 == null ? "" : bankBlockLine3);
         this.quotations = quotations;
         this.tickets = tickets;
         this.customers = customers;
@@ -474,7 +490,8 @@ public class DealQuotationService {
                 signatureMime = signature.get().mimeType();
             }
         }
-        return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime);
+        return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
+            bankBlockLines);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

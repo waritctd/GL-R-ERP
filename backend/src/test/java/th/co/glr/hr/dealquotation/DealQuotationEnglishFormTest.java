@@ -342,6 +342,77 @@ class DealQuotationEnglishFormTest {
 
     // ── fixtures ───────────────────────────────────────────────────────────────────────────
 
+
+    @Test
+    void remarks_carryTheOwnersBankBlockUnnumbered_whenItIsConfigured() throws Exception {
+        Sheet sheet = renderEnglishWithBank(BANK_BLOCK);
+        List<String> remarks = new ArrayList<>();
+        for (int r = 23; r <= 30; r++) {
+            remarks.add(str(sheet, r, 1));
+        }
+        // Still EXACTLY 8. REMARK_HEAD_ROWS has 8 slots and fewer falls back to a legacy 3-line
+        // layout that leaves the template's Thai continuation rows visible on an English page —
+        // so the bank block's three lines are paid for by merging two pairs of remarks, not by
+        // overflowing the box.
+        assertThat(remarks).hasSize(8);
+        assertThat(remarks.get(2)).isEqualTo(BANK_BLOCK.get(0));
+        assertThat(remarks.get(3)).isEqualTo(BANK_BLOCK.get(1));
+        assertThat(remarks.get(4)).isEqualTo(BANK_BLOCK.get(2));
+        // Unnumbered, exactly as hers are.
+        assertThat(remarks.get(2)).doesNotStartWith("4.");
+        assertThat(remarks.get(3)).doesNotStartWith("5.");
+        // The placeholder must be GONE — printing both would offer two different payment routes.
+        assertThat(remarks).noneMatch(line -> line.contains("proforma invoice"));
+        // And the computed remarks survive the merge rather than being dropped to make room.
+        assertThat(remarks.get(5)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
+        assertThat(remarks.get(6)).contains("Price validity : 30 days").contains("ISO and TIS tolerances");
+        assertThat(remarks.get(7)).contains("different production lots").contains("not returnable");
+    }
+
+    @Test
+    void remarks_fallBackToTheProformaLine_whenTheBankBlockIsMissingOrHalfFilled() throws Exception {
+        // Half a set of wire instructions is worse than none: a customer could act on a beneficiary
+        // name with no account number. Anything short of all three lines prints the honest line.
+        for (List<String> partial : List.of(
+                List.<String>of(),
+                List.of(BANK_BLOCK.get(0)),
+                List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1)),
+                List.of(BANK_BLOCK.get(0), "", BANK_BLOCK.get(2)))) {
+            Sheet sheet = renderEnglishWithBank(partial);
+            List<String> remarks = new ArrayList<>();
+            for (int r = 23; r <= 30; r++) {
+                remarks.add(str(sheet, r, 1));
+            }
+            assertThat(remarks).as("size for %s", partial).hasSize(8);
+            assertThat(remarks.get(3)).as("fallback for %s", partial)
+                .startsWith("4.Payment by telegraphic transfer");
+            assertThat(remarks).as("no partial block for %s", partial)
+                .noneMatch(line -> line.contains("003-92-1222-6"));
+        }
+    }
+
+    @Test
+    void thaiDocument_neverCarriesTheBankBlock_evenWhenConfigured() throws Exception {
+        // The Thai หมายเหตุ block has no bank lines and must not grow them: its eight lines are the
+        // template's own, and the owner's Thai documents carry payment terms without account details.
+        Sheet sheet = renderLegacyModel(
+            DealQuotationRenderAdapter.toRenderModel(thaiQuotation(), null, null, BANK_BLOCK));
+        for (int r = 23; r <= 30; r++) {
+            assertThat(str(sheet, r, 1)).doesNotContain("003-92-1222-6").doesNotContain("KASITHBK");
+        }
+    }
+
+    /** The owner's own bank block, verbatim from QN6900902-6 and QN6900933 (they agree). */
+    private static final List<String> BANK_BLOCK = List.of(
+        "Please arrange payment to the following bank account. Bank Name : Kasikorn Bank Public Company Limited",
+        "Beneficiary name : G.L.& R. Taps and Tiles Co., Ltd. Beneficiary account number : 003-92-1222-6 Saving Account",
+        "SWIFT code : KASITHBK");
+
+    private Sheet renderEnglishWithBank(List<String> bankBlock) throws Exception {
+        return renderLegacyModel(
+            DealQuotationRenderAdapter.toRenderModel(englishQuotation(), null, null, bankBlock));
+    }
+
     private Sheet renderEnglish() throws Exception {
         return render(englishQuotation());
     }

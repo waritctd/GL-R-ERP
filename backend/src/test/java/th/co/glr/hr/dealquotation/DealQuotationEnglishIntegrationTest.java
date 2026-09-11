@@ -100,7 +100,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // the XLS the PDF is drawn from, so no soffice/Chromium precondition is introduced.
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), employeeAuth,
-            new EmployeeSignatureRepository(jdbc), "https://portal.test");
+            new EmployeeSignatureRepository(jdbc), "https://portal.test",
+            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
+            // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
+            "", "", "");
 
         // ⚠️ Both employees carry REAL first_name_en/last_name_en — that is the point of the
         // signature assertions below. #createEmployeeWithoutEnglishName covers the fallback.

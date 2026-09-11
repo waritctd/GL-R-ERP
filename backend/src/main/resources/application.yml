@@ -53,6 +53,19 @@ app:
     #   chromium — the same POI sheet drawn as HTML by SheetHtmlRenderer → headless Chromium;
     #              503s loudly when no Chromium can be launched.
     pdf-renderer: ${APP_QUOTATION_PDF_RENDERER:xls}
+    # The unnumbered bank block printed after the payment remark on ENGLISH quotations
+    # (F-SM-008). Taken VERBATIM from the owner's QN6900902-6 and QN6900933, which agree on all
+    # three lines; owner ruling 2026-09-11, "take what's from the example image".
+    #
+    # Here rather than in Java on purpose. These are the particulars a customer wires money
+    # against, so they must be changeable per deployment without a rebuild — a moved account is an
+    # operations event, not a code change. The Java side defaults each to EMPTY: with the block
+    # unset the document prints "Payment by telegraphic transfer. Full bank details are issued
+    # with the proforma invoice." instead, which is true as written rather than wrong or blank.
+    # Never let this degrade to a half-filled block; either all three or none.
+    bank-block-line1: "${APP_QUOTATION_BANK_LINE1:Please arrange payment to the following bank account. Bank Name : Kasikorn Bank Public Company Limited}"
+    bank-block-line2: "${APP_QUOTATION_BANK_LINE2:Beneficiary name : G.L.& R. Taps and Tiles Co., Ltd. Beneficiary account number : 003-92-1222-6 Saving Account}"
+    bank-block-line3: "${APP_QUOTATION_BANK_LINE3:SWIFT code : KASITHBK}"
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174}
   attendance:
