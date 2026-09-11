@@ -51,25 +51,33 @@ public class DealQuotationRepository {
     }
 
     /**
-     * A revision child's number is {@code {base}-{revisionNo}}. Since every number this class
-     * ever produces for revisionNo &gt; 1 was itself built by this exact method, the trailing
+     * A revision child's number is {@code {base}-{revisionNo}} — INCLUDING revision 1 (owner
+     * feedback 2026-09-11: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"). Since
+     * every number this class produces was itself built by {@link #revisionNumber}, the trailing
      * {@code "-" + sourceRevisionNo} suffix on a source number always exactly identifies the base
-     * — so stripping it recovers the ORIGINAL first-revision number regardless of how many times
-     * the chain has already been revised, without needing to walk {@code parent_quotation_id} all
-     * the way to the root.
+     * — so stripping it recovers the ORIGINAL base number regardless of how many times the chain
+     * has already been revised, without needing to walk {@code parent_quotation_id} all the way to
+     * the root.
+     *
+     * <p><b>Legacy rows:</b> a quotation issued BEFORE this change carries a BARE number (no
+     * {@code -1}) at {@code revisionNo == 1} — those rows are never rewritten (no migration; see
+     * the class Javadoc). For such a row, {@code sourceNumber} simply does not end with
+     * {@code "-1"} (the base is always {@code QT-<year>-<4-digit seq>}, so it can never
+     * accidentally collide with a {@code -N} suffix), so the {@code endsWith} check below falls
+     * through and returns it unchanged — exactly the base it already is. This one method handles
+     * both eras with no special-casing of {@code sourceRevisionNo == 1}.
      */
     static String baseNumber(String sourceNumber, int sourceRevisionNo) {
-        if (sourceRevisionNo <= 1) {
-            return sourceNumber;
-        }
         String suffix = "-" + sourceRevisionNo;
         return sourceNumber.endsWith(suffix)
             ? sourceNumber.substring(0, sourceNumber.length() - suffix.length())
             : sourceNumber;
     }
 
+    /** Always {@code {base}-{revisionNo}}, including revision 1 — see {@link #baseNumber}'s
+     * Javadoc for why a bare number never appears for anything minted after 2026-09-11. */
     static String revisionNumber(String baseNumber, int revisionNo) {
-        return revisionNo <= 1 ? baseNumber : baseNumber + "-" + revisionNo;
+        return baseNumber + "-" + revisionNo;
     }
 
     /** Serializes every mutating operation this feature performs against a given deal, against

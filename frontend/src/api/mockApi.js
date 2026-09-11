@@ -4776,19 +4776,25 @@ function nextMockDealQuotationNumber() {
   return `QT-${new Date().getFullYear()}-${String(mockDealQuotationNumberSeq++).padStart(4, '0')}`;
 }
 
-// A revision child's number is `{base}-{revisionNo}` -- mirrors DealQuotationRepository
-// .baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a source number's own
-// `-{sourceRevisionNo}` suffix (a no-op when sourceRevisionNo <= 1) to recover the ORIGINAL
-// first-revision number regardless of how many times the chain has already been revised,
-// without walking parentQuotationId to the root.
+// A revision child's number is `{base}-{revisionNo}` -- INCLUDING revision 1 (owner feedback
+// 2026-09-11: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1") -- mirrors
+// DealQuotationRepository.baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a
+// source number's own `-{sourceRevisionNo}` suffix to recover the ORIGINAL base number regardless
+// of how many times the chain has already been revised, without walking parentQuotationId to the
+// root.
+//
+// Legacy rows: the two seed fixtures below (id 1/2) intentionally keep BARE numbers
+// ('QT-2026-0001'/'QT-2026-0002', no '-1') to stand in for quotations issued before this change --
+// see DealQuotationRepository#baseNumber's Javadoc for why one `endsWith` check (no special-case
+// for sourceRevisionNo === 1) handles both eras: a bare seed number simply never ends with '-1',
+// so it falls through unchanged.
 function dealQuotationBaseNumber(sourceNumber, sourceRevisionNo) {
-  if (sourceRevisionNo <= 1) return sourceNumber;
   const suffix = `-${sourceRevisionNo}`;
   return sourceNumber.endsWith(suffix) ? sourceNumber.slice(0, -suffix.length) : sourceNumber;
 }
 
 function dealQuotationRevisionNumber(baseNumber, revisionNo) {
-  return revisionNo <= 1 ? baseNumber : `${baseNumber}-${revisionNo}`;
+  return `${baseNumber}-${revisionNo}`;
 }
 
 // round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
@@ -11921,7 +11927,10 @@ export const api = {
       const items = buildDealQuotationItems(payload.items, header.priceMode);
       const row = {
         id: mockDealQuotationSeq++,
-        number: nextMockDealQuotationNumber(),
+        // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
+        // too -- "QT-2026-0014-1", not a bare "QT-2026-0014". Mirrors
+        // DealQuotationService#create's own dealQuotationRevisionNumber(nextQuotationCode(), 1).
+        number: dealQuotationRevisionNumber(nextMockDealQuotationNumber(), 1),
         ticketId: ticket.id,
         docStatus: 'DRAFT',
         revisionNo: 1,

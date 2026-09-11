@@ -158,7 +158,13 @@ public class DealQuotationService {
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
-        String number = quotations.nextQuotationCode();
+        // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
+        // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
+        // ("0014") is minted here and immediately formatted as revision 1 of itself
+        // ({@link DealQuotationRepository#revisionNumber}) — "QT-2026-0014-1", not a bare
+        // "QT-2026-0014". The sequence allocation itself (nextQuotationCode) is unchanged: this
+        // only changes how revision 1's number is FORMATTED, never which "0014" a ticket gets.
+        String number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
         long id = quotations.insertDraft(new InsertDraftParams(
             ticketId, number, actor.id(), ticket.createdById(),
             customerSnapshot.name(), customerSnapshot.address(),
@@ -463,6 +469,10 @@ public class DealQuotationService {
         if (quotations.hasOpenRevision(source.id())) {
             throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
         }
+        // Works unchanged for BOTH a post-2026-09-11 parent ("QT-2026-0014-1", revisionNo 1 -> base
+        // "QT-2026-0014") and a legacy pre-change parent ("QT-2026-0014" bare, revisionNo 1 -> base
+        // itself unchanged) -- see DealQuotationRepository#baseNumber's own Javadoc for why one
+        // formula covers both eras with no special-casing here.
         String baseNumber = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
         // M3 (found while testing the fix above): NOT source.revisionNo() + 1 -- see
         // DealQuotationRepository#nextRevisionNo's own Javadoc for the duplicate-key crash that

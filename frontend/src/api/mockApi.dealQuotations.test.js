@@ -81,10 +81,13 @@ describe('mock dealQuotations.update -- item id upsert (mirrors DealQuotationSer
 });
 
 describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
-  it('produces QT-{year}-{4-digit seq}, matching DealQuotationRepository.nextQuotationCode, not QD{BE-year}', async () => {
+  // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"): the
+  // FIRST issued document now carries the revision suffix too.
+  it('produces QT-{year}-{4-digit seq}-1, matching DealQuotationRepository.nextQuotationCode + revisionNumber(_, 1), not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
-    expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}$/);
+    expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}-1$/);
+    expect(quotation.revisionNo).toBe(1);
   });
 });
 
@@ -97,6 +100,10 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     await api.auth.login(salesUser);
     const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     const rootNumber = created.quotation.number;
+    // rootNumber is now "{base}-1" (owner feedback 2026-09-11) -- recover the bare base the same
+    // way DealQuotationRepository#baseNumber does, rather than assuming rootNumber IS the base.
+    expect(rootNumber).toMatch(/-1$/);
+    const baseNumber = rootNumber.slice(0, -'-1'.length);
 
     await api.dealQuotations.submit(created.quotation.id);
     await api.auth.login({ role: 'sales_manager' });
@@ -105,7 +112,7 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 
     await api.auth.login(salesUser);
     const revision2 = await api.dealQuotations.createRevision(created.quotation.id, {});
-    expect(revision2.quotation.number).toBe(`${rootNumber}-2`);
+    expect(revision2.quotation.number).toBe(`${baseNumber}-2`);
     expect(revision2.quotation.revisionNo).toBe(2);
 
     await api.dealQuotations.submit(revision2.quotation.id);
@@ -116,8 +123,30 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     const revision3 = await api.dealQuotations.createRevision(revision2.quotation.id, {});
     // The bug this guards: naively appending onto the SOURCE's own number (rather than
     // recovering the ORIGINAL base first) would produce "{root}-2-3" here.
-    expect(revision3.quotation.number).toBe(`${rootNumber}-3`);
+    expect(revision3.quotation.number).toBe(`${baseNumber}-3`);
     expect(revision3.quotation.revisionNo).toBe(3);
+  });
+
+  // Legacy row: a quotation issued BEFORE this change (owner feedback 2026-09-11) carries a BARE
+  // number at revisionNo 1 -- seed row id 1 ('QT-2026-0001', ticketId 18) stands in for one.
+  // EXISTING ROWS MUST NOT BREAK (CLAUDE.md): its own number must never be rewritten, and revising
+  // it must not collide with the "-1"-suffixed format new quotations now use.
+  it('revising a pre-existing BARE-numbered quotation (issued before 2026-09-11) appends "-2", never rewrites the bare number, and never collides with the new "-1" format', async () => {
+    await api.auth.login(salesUser);
+    const before = await api.dealQuotations.get(1);
+    expect(before.quotation.number).toBe('QT-2026-0001');
+    expect(before.quotation.revisionNo).toBe(1);
+
+    await api.dealQuotations.submit(1);
+    await api.auth.login({ role: 'sales_manager' });
+    const approved = await api.dealQuotations.approve(1, {});
+    // The parent's own number is untouched -- still bare, exactly as issued.
+    expect(approved.quotation.number).toBe('QT-2026-0001');
+
+    await api.auth.login(salesUser);
+    const revision = await api.dealQuotations.createRevision(1, {});
+    expect(revision.quotation.number).toBe('QT-2026-0001-2');
+    expect(revision.quotation.revisionNo).toBe(2);
   });
 });
 

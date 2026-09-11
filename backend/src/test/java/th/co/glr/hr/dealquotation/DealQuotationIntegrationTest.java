@@ -264,7 +264,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revision.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(revision.parentQuotationId()).isEqualTo(parent.id());
         assertThat(revision.revisionNo()).isEqualTo(parent.revisionNo() + 1);
-        assertThat(revision.number()).isEqualTo(parent.number() + "-" + revision.revisionNo());
+        // Owner feedback 2026-09-11: the parent's own number is now "{base}-1" (not bare), so the
+        // child is "{base}-2" -- NOT "{parent.number()}-2" (which would double up to "{base}-1-2").
+        String parentBase = DealQuotationRepository.baseNumber(parent.number(), parent.revisionNo());
+        assertThat(revision.number()).isEqualTo(parentBase + "-" + revision.revisionNo());
 
         // Parent stays APPROVED (live/valid) while the revision is still a draft.
         assertThat(quotationService.get(parent.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -278,9 +281,28 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void firstIssue_carriesTheRevisionSuffixFromTheStart() {
+        // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
+        // the FIRST issued document is now "{base}-1", not a bare "{base}".
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.revisionNo()).isEqualTo(1);
+        assertThat(created.number()).matches("QT-\\d{4}-\\d{4}-1");
+        // The base sequence allocation itself is untouched -- the number minus its "-1" suffix is
+        // still exactly the {@code QT-<year>-<4-digit seq>} shape nextQuotationCode() produces.
+        String base = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
+        assertThat(created.number()).isEqualTo(base + "-1");
+        assertThat(base).matches("QT-\\d{4}-\\d{4}");
+    }
+
+    @Test
     void revisionNumbering_chainsOffTheOriginalBaseNumber_notTheImmediateParent() {
         DealQuotationDto rev1 = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
-        String base = rev1.number();
+        // rev1.number() is now "{base}-1" (owner feedback 2026-09-11) -- recover the bare base the
+        // same way DealQuotationService#createRevision does, rather than assuming rev1.number()
+        // IS the base (it no longer is).
+        String base = DealQuotationRepository.baseNumber(rev1.number(), rev1.revisionNo());
+        assertThat(rev1.number()).isEqualTo(base + "-1");
 
         DealQuotationDto rev2 = quotationService.createRevision(rev1.id(), salesActor);
         assertThat(rev2.number()).isEqualTo(base + "-2");
@@ -288,9 +310,37 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.approve(rev2.id(), new ApproveRequest(null), salesManagerActor);
 
         DealQuotationDto rev3 = quotationService.createRevision(rev2.id(), salesActor);
-        // Must be "{base}-3", never "{base}-2-3".
+        // Must be "{base}-3", never "{base}-1-2-3" or "{base}-2-3".
         assertThat(rev3.number()).isEqualTo(base + "-3");
         assertThat(rev3.revisionNo()).isEqualTo(3);
+    }
+
+    @Test
+    void revisionOfALegacyBareNumberedQuotation_appendsMinus2_neverRewritesTheBareNumber_neverCollides() {
+        // EXISTING ROWS MUST NOT BREAK (CLAUDE.md, owner feedback 2026-09-11): a quotation issued
+        // BEFORE this change carries a BARE number at revisionNo 1 (no "-1"), and that number is
+        // never rewritten by this change -- no migration touches sales.quotation.number. Simulate
+        // that pre-change row by creating one normally (which now mints "{base}-1") and then
+        // stripping the suffix directly in the DB, exactly as a row committed before this deploy
+        // would already read.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String bareLegacyNumber = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
+        jdbc.update("UPDATE sales.quotation SET number = :number WHERE quotation_id = :id",
+            java.util.Map.of("number", bareLegacyNumber, "id", created.id()));
+
+        DealQuotationDto legacy = quotationService.submit(created.id(), salesActor);
+        assertThat(legacy.number()).isEqualTo(bareLegacyNumber);
+        DealQuotationDto approvedLegacy =
+            quotationService.approve(legacy.id(), new ApproveRequest(null), salesManagerActor);
+        // The parent's own (bare) number is untouched by approve -- no rewrite of history.
+        assertThat(approvedLegacy.number()).isEqualTo(bareLegacyNumber);
+
+        DealQuotationDto revision = quotationService.createRevision(approvedLegacy.id(), salesActor);
+        // "{bareNumber}-2", never "{bareNumber}-1-2" and never colliding with a fresh quotation's
+        // own "{base}-1" (a different base entirely, since nextQuotationCode() never repeats).
+        assertThat(revision.number()).isEqualTo(bareLegacyNumber + "-2");
+        assertThat(revision.revisionNo()).isEqualTo(2);
     }
 
     @Test
