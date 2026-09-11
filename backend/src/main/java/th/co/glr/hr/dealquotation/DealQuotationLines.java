@@ -21,6 +21,11 @@ import java.util.Locale;
 public final class DealQuotationLines {
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
         java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
+    // A plain "200x300" / "60x120" face-size pair — two numbers, x/X separator, no unit of its
+    // own — that #sizeLine can confidently split into two per-dimension cm values. Anything else
+    // (a third segment, a non-numeric part, extra text) is left exactly as typed.
+    private static final java.util.regex.Pattern SIZE_TWO_PART =
+        java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)\\s*[xX]\\s*(\\d+(?:\\.\\d+)?)$");
     private DealQuotationLines() {}
 
     /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
@@ -57,17 +62,56 @@ public final class DealQuotationLines {
     }
 
     /**
-     * {@code ขนาด {size}x{thickness} cm. (ขนาดโดยประมาณ)} — {@code "60x120"} + thickness 2 →
-     * {@code "60x120x2 cm."}. layout-spec §2: when thickness is absent there is NO separate ขนาด
-     * row at all — the size already went inline on {@link #descriptionLine} — so this returns
-     * {@code null} (not an empty/dangling string) and the caller must omit the row entirely.
+     * {@code ขนาด {width} cm x {height} cm x {thickness} mm (ขนาดโดยประมาณ)} — owner feedback pass 3
+     * (2026-09-11): thickness is entered in MILLIMETRES, not centimetres, and the old
+     * {@code "60x120x2 cm."} single-unit line silently relabelled it as cm. Her own resolution,
+     * verbatim: <i>"มีหน่วยต่อที้ายทุกตัว 200 cm x 300 cm x 9 mm"</i> — every dimension carries its
+     * own unit, so {@code "200x300"} + thickness 9 now prints
+     * {@code "ขนาด 200 cm x 300 cm x 9 mm (ขนาดโดยประมาณ)"}.
+     *
+     * <p>{@code sizeText} is free text (a rep-typed "200x300"/"60x120" pair, or a catalog
+     * {@code size_raw} that can already read "600x1200 mm"). This only ever unit-suffixes what it
+     * can confidently split into exactly two numeric parts on an {@code x}/{@code X} separator
+     * ({@link #SIZE_TWO_PART}); a size that already carries its own unit ({@link #SIZE_HAS_UNIT})
+     * or that does not match that shape is printed <b>exactly as typed</b> — never a doubled unit,
+     * never a mangled split. The thickness is always suffixed "mm" since that is the unit it is
+     * entered in, regardless of what happened to the face size.
+     *
+     * <p>layout-spec §2: when thickness is absent there is NO separate ขนาด row at all — the size
+     * already went inline on {@link #descriptionLine} — so this returns {@code null} (not an
+     * empty/dangling string) and the caller must omit the row entirely.
      */
     public static String sizeLine(String sizeText, BigDecimal thicknessMm) {
         if (thicknessMm == null) {
             return null;
         }
-        String size = blank(sizeText) ? "" : sizeText.trim();
-        return "ขนาด " + size + "x" + format(thicknessMm) + " cm. (ขนาดโดยประมาณ)";
+        String thicknessPart = format(thicknessMm) + " mm";
+        String facePart = faceSizeWithUnits(sizeText);
+        if (blank(facePart)) {
+            return "ขนาด " + thicknessPart + " (ขนาดโดยประมาณ)";
+        }
+        return "ขนาด " + facePart + " x " + thicknessPart + " (ขนาดโดยประมาณ)";
+    }
+
+    /**
+     * Best-effort {@code "{width} cm x {height} cm"} from a free-text face size. Splits a plain
+     * two-number pair ({@link #SIZE_TWO_PART}) into per-dimension cm; a size that already carries
+     * its own unit, or that this cannot confidently split, comes back exactly as typed so
+     * {@link #sizeLine} never doubles a unit or mangles text it does not understand.
+     */
+    private static String faceSizeWithUnits(String sizeText) {
+        if (blank(sizeText)) {
+            return null;
+        }
+        String trimmed = sizeText.trim();
+        if (SIZE_HAS_UNIT.matcher(trimmed).find()) {
+            return trimmed;
+        }
+        java.util.regex.Matcher m = SIZE_TWO_PART.matcher(trimmed);
+        if (m.matches()) {
+            return m.group(1) + " cm x " + m.group(2) + " cm";
+        }
+        return trimmed;
     }
 
     /**
@@ -79,22 +123,28 @@ public final class DealQuotationLines {
                                          int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
                                          int piecesFinal, Integer piecesPerBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
-            ? "จำนวน " + piecesBeforeWastage + " แผ่น"
-            : "พื้นที่ " + format(areaSqm) + " ตร.ม.ๆละ " + format(piecesPerSqm) + " แผ่น รวม " + piecesBeforeWastage + " แผ่น";
+            ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
+            : "พื้นที่ " + format(areaSqm) + " ตร.ม.ๆละ " + format(piecesPerSqm) + " แผ่น รวม "
+                + format(piecesBeforeWastage) + " แผ่น";
 
+        // Owner feedback pass 3: "ตัด '+ เผื่อ 0%' ออกทั้งหมด" -- a ZERO wastage value prints
+        // NOTHING for this part, in either mode, rather than "+ เผื่อ 0%" / "+ เผื่อ 0 แผ่น".
+        // Printing-only: piecesFinal itself is unaffected, it is computed upstream and simply
+        // echoed below exactly as it always was.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
         String wastagePart = "";
-        if (WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
+        if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + "%";
-        } else if (WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
+        } else if (hasWastage && WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + " แผ่น";
         }
 
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
         String roundingPart = hasBox ? " และปัดลงกล่อง" : "";
 
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + piecesFinal + " แผ่น)";
+        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " แผ่น)";
         if (hasBox) {
-            line += " (บรรจุ " + piecesPerBox + " แผ่น/กล่อง)";
+            line += " (บรรจุ " + format(piecesPerBox) + " แผ่น/กล่อง)";
         }
         return line;
     }
@@ -171,6 +221,18 @@ public final class DealQuotationLines {
             return "";
         }
         DecimalFormat format = new DecimalFormat("#,##0.##", DecimalFormatSymbols.getInstance(Locale.US));
+        return format.format(value);
+    }
+
+    /**
+     * Owner feedback pass 3: "Format ตัวเลขในคำอธิบายขอ comma ด้วย" -- thousands-grouped, no
+     * decimal places (these are always whole piece/box counts), Locale.US so the separator is
+     * "," and the decimal point (never reached here) would be ".". Same discipline as
+     * {@link #format(BigDecimal)}, just for the {@code int} piece counts that line printed
+     * ungrouped via string concatenation before this pass.
+     */
+    private static String format(int value) {
+        DecimalFormat format = new DecimalFormat("#,##0", DecimalFormatSymbols.getInstance(Locale.US));
         return format.format(value);
     }
 }

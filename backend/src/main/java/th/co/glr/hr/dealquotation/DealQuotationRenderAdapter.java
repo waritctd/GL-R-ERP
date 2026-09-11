@@ -237,8 +237,15 @@ public final class DealQuotationRenderAdapter {
     // fixed text (two rows concatenated where the template splits a sentence across a "head" row
     // and an unnumbered continuation row). ─────────────────────────────────────────────────────
 
+    // Owner feedback pass 3 (2026-09-11), verbatim: "ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค
+    // 3-7 วัน". She confirmed the fix is "แค่เปลี่ยนตัวเลขที่มีอยู่" -- just change the numbers
+    // already here, no new origin field or lookup -- so this stays what it always was: the FIXED
+    // fallback printed when NO row on the document carries a lead time (item.leadTimeMinDays()/
+    // leadTimeMaxDays(), set per item -- see #leadTimeLine below, which this constant backstops
+    // rather than replaces). Used to read "...ประเทศอิตาลี...ประมาณ 90 วัน", a single Italy/90-day
+    // default that had nothing to do with either of her two real cases.
     private static final String LINE3_FALLBACK =
-        "3.ขณะนี้โรงงานผู้ผลิตประเทศอิตาลีมีสินค้าในสต็อก ระยะเวลานำเข้าประมาณ 90 วัน";
+        "3.ระยะเวลานำเข้า : จีน ประมาณ 30-45 วัน  ไทย มีในสต็อก ประมาณ 3-7 วัน";
     private static final String LINE4 =
         "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.";
     private static final String LINE5 =
@@ -414,22 +421,25 @@ public final class DealQuotationRenderAdapter {
      * Remark 3 when NO row carries a lead time — typically a document made entirely of PLAIN rows
      * (freight, consumables, mosaic priced per SQM), which have no lead-time fields at all.
      *
-     * <p>⚠️ It names NO COUNTRY and states no duration, deliberately. It used to read "Goods are in
-     * stock at the factory in Italy; shipping time is approximately 90 days" — a Thai-market default
-     * that, on the owner's own Maldives quotation QN6900902-6, sat above a row reading
-     * "Transportation Charges from China to Male Port, Maldives". A customer reads that as the
-     * company not knowing where its own goods come from. Her original instead prints the rep's own
-     * words ("Production leadtime : Approximately 50 days…", "Transportaton time from China to
-     * Maldives is around 40-60 days"), which this document has no field for yet — so the honest
-     * line is one that promises only what is true.
+     * <p>Owner feedback pass 3 (2026-09-11), the English mirror of {@link #LINE3_FALLBACK}: same
+     * verbatim request ("ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค 3-7 วัน"), same "just change
+     * the numbers already here" scope — no origin field, no lookup. This supersedes the line's
+     * PREVIOUS text ("Delivery : lead time will be confirmed at order confirmation."), which had in
+     * turn replaced an even older "Goods are in stock at the factory in Italy; shipping time is
+     * approximately 90 days" that named a country with nothing to do with the shipment (it once sat
+     * above a "Transportation Charges from China to Male Port, Maldives" row on the owner's own
+     * QN6900902-6). Naming China/Thailand here is a deliberate, owner-directed reversal of that
+     * older "name no country" caution — it is what she explicitly asked this fallback to say now.
      *
      * <p>Why not simply drop the line when there is nothing to say: the remark box is exactly
      * {@code QuotationRenderer#REMARK_HEAD_ROWS} = 8 rows and never wraps, and dropping one leaves
      * the no-bank-block layout at 7, which falls through to the older 3-line remark path. A
-     * replacement line keeps 8 in BOTH layouts with no renumbering.
+     * replacement line keeps 8 in BOTH layouts with no renumbering. Length is guarded by
+     * {@code DealQuotationEnglishFormTest#everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts}
+     * (cap 130 chars; this line is well under it).
      */
     private static final String EN_LINE3_FALLBACK =
-        "3.Delivery : lead time will be confirmed at order confirmation.";
+        "3.Delivery : China (import) approximately 30-45 days; Thailand (in stock) approximately 3-7 days.";
 
     /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
      * Kept as its own method rather than parameterising the Thai one: the two differ in every

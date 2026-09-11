@@ -31,16 +31,63 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm. No.BS66R13GP");
     }
 
+    /** Owner feedback pass 3 (2026-09-11), verbatim: "มีหน่วยต่อที้ายทุกตัว 200 cm x 300 cm x 9 mm"
+     * — thickness is entered in MILLIMETRES (not cm as the old single-unit line implied), and every
+     * dimension now carries its own unit. */
+    @Test
+    void sizeLine_withThickness_everyDimensionGetsItsOwnUnit() {
+        assertThat(DealQuotationLines.sizeLine("200x300", new BigDecimal("9")))
+            .isEqualTo("ขนาด 200 cm x 300 cm x 9 mm (ขนาดโดยประมาณ)");
+    }
+
     @Test
     void sizeLine_withThickness_integer() {
         assertThat(DealQuotationLines.sizeLine("60x120", new BigDecimal("2")))
-            .isEqualTo("ขนาด 60x120x2 cm. (ขนาดโดยประมาณ)");
+            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
     }
 
     @Test
     void sizeLine_withThickness_fractional() {
         assertThat(DealQuotationLines.sizeLine("60x60", new BigDecimal("0.9")))
-            .isEqualTo("ขนาด 60x60x0.9 cm. (ขนาดโดยประมาณ)");
+            .isEqualTo("ขนาด 60 cm x 60 cm x 0.9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** An "X" separator, and stray whitespace around it, both split exactly like lowercase "x". */
+    @Test
+    void sizeLine_withThickness_upperCaseXAndSpacesAroundTheSeparator() {
+        assertThat(DealQuotationLines.sizeLine("60X120", new BigDecimal("2")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
+        assertThat(DealQuotationLines.sizeLine("60 x 120", new BigDecimal("2")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A catalog {@code size_raw} that already carries its own unit is left EXACTLY as typed —
+     * never re-split into per-dimension cm (it may not even be cm) and never double-unit-suffixed. */
+    @Test
+    void sizeLine_faceSizeAlreadyHasItsOwnUnit_isPrintedAsTyped_neverDoubleUnit() {
+        assertThat(DealQuotationLines.sizeLine("600x1200 mm", new BigDecimal("9")))
+            .isEqualTo("ขนาด 600x1200 mm x 9 mm (ขนาดโดยประมาณ)");
+        assertThat(DealQuotationLines.sizeLine("60x60 ซม.", new BigDecimal("2")))
+            .isEqualTo("ขนาด 60x60 ซม. x 2 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A face size this cannot confidently split (not a clean two-number x-pair) falls back to
+     * printing it exactly as typed, per the task's explicit instruction not to mangle it. */
+    @Test
+    void sizeLine_unparseableFaceSize_isPrintedAsTyped_notMangled() {
+        assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9")))
+            .isEqualTo("ขนาด รูปทรงอิสระ x 9 mm (ขนาดโดยประมาณ)");
+        assertThat(DealQuotationLines.sizeLine("60x120x5", new BigDecimal("9")))
+            .isEqualTo("ขนาด 60x120x5 x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A blank face size prints only the thickness -- no dangling separator. */
+    @Test
+    void sizeLine_blankFaceSize_printsOnlyTheThickness() {
+        assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9")))
+            .isEqualTo("ขนาด 9 mm (ขนาดโดยประมาณ)");
+        assertThat(DealQuotationLines.sizeLine("  ", new BigDecimal("9")))
+            .isEqualTo("ขนาด 9 mm (ขนาดโดยประมาณ)");
     }
 
     /** layout-spec §2: no thickness → null (not a blank/dangling line) — the size already went
@@ -85,6 +132,74 @@ class DealQuotationLinesTest {
             20, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 22, null);
 
         assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น + เผื่อ 10% = 22 แผ่น)");
+    }
+
+    // ── owner feedback pass 3 (2026-09-11): zero wastage prints nothing, magnitudes get commas ──
+
+    /** "ตัด '+ เผื่อ 0%' ออกทั้งหมด" -- a ZERO percent wastage must print no wastage phrase at all,
+     * not "+ เผื่อ 0%". The rest of the line, piecesFinal included, is byte-identical to what a
+     * PERCENT line with real wastage would print around it -- this is a printing change only, the
+     * quantity math upstream (piecesFinal here still counts as though no wastage were applied) is
+     * untouched by this method. */
+    @Test
+    void calculationLine_zeroPercentWastage_omitsTheWastagePhraseEntirely() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2"),
+            20, WastageCalculator.WASTAGE_MODE_PERCENT, BigDecimal.ZERO, 20, 4);
+
+        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดลงกล่อง = 20 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
+        assertThat(line).doesNotContain("เผื่อ");
+    }
+
+    /** Same zero-omission, PIECES wastage mode: no "+ เผื่อ 0 แผ่น". */
+    @Test
+    void calculationLine_zeroPiecesWastage_omitsTheWastagePhraseEntirely() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            100, WastageCalculator.WASTAGE_MODE_PIECES, BigDecimal.ZERO, 100, 12);
+
+        assertThat(line).isEqualTo("(จำนวน 100 แผ่น และปัดลงกล่อง = 100 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+        assertThat(line).doesNotContain("เผื่อ");
+    }
+
+    /** "Format ตัวเลขในคำอธิบายขอ comma ด้วย" -- pinned against the owner's own export line
+     * ("รวม 4917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5180 แผ่น" must read "4,917" / "5,180"), with a
+     * >999 area and pieces-per-box thrown in so every magnitude in the line is checked. */
+    @Test
+    void calculationLine_largeCounts_getThousandsCommas() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("1200"), new BigDecimal("16.39"),
+            4917, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 1000);
+
+        assertThat(line).isEqualTo(
+            "(พื้นที่ 1,200 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5,180 แผ่น) "
+                + "(บรรจุ 1,000 แผ่น/กล่อง)");
+    }
+
+    /** The owner's own example numbers (area 300, 4917 → 5180) from her report: "(พื้นที่ 300
+     * ตร.ม.ๆละ 16.39 แผ่น รวม 4917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5180 แผ่น)" — her quote is cut off
+     * right after "= 5180 แผ่น)" with no box-count tail shown, so this pins the same "และปัดลงกล่อง"
+     * (piecesPerBox present, matching her line) with the tail the real method always appends
+     * alongside it, rather than guessing at a piecesPerBox value she did not report. */
+    @Test
+    void calculationLine_matchesTheOwnersOwnExportNumbers() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("300"), new BigDecimal("16.39"),
+            4917, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 10);
+
+        assertThat(line).isEqualTo(
+            "(พื้นที่ 300 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5,180 แผ่น) "
+                + "(บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** PIECES quantity mode also gets commas on its own count when it exceeds 999. */
+    @Test
+    void calculationLine_piecesQuantityMode_largeCount_getsThousandsCommas() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null);
+
+        assertThat(line).isEqualTo("(จำนวน 1,500 แผ่น = 1,500 แผ่น)");
     }
 
     @Test
