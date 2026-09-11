@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.common.sheet.FontResolver;
 import th.co.glr.hr.common.sheet.LibreOfficeMetrics;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.ticket.QuotationRenderModel.ItemPicture;
@@ -1273,7 +1274,19 @@ public class QuotationRenderer {
             english ? EN_ORDER_LINE : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น");
 
         // The real PIXEL width of each of the four equal slots, measured ONCE per render.
-        double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
+        //
+        // ⚠️ MUST be LibreOffice's own column-width model (#totalColumnWidthPixelsLibreOffice),
+        // NOT POI's #totalColumnWidthPixels — see that method's own Javadoc for the full
+        // derivation. This IS defect 1: padding to 95% of POI's own (unrelated, hardcoded-
+        // constant) figure targets a number that has no connection to what LibreOffice will
+        // actually print the row at, and on this template the two disagree by roughly a third
+        // (measured: POI 659.5pt vs LibreOffice's own model 979.0pt for this exact A..I range) —
+        // padding to 95% of the SMALLER, wrong number is why the owner's export landed at ~65%
+        // of the real page width instead of 95%: 0.95 × (659.5/979.0) ≈ 0.64, matching the
+        // observed defect almost exactly. #fontPixelToAnchorPixelScale already corrects for
+        // exactly this gap for the signature PICTURE's anchor; it was never applied to the row's
+        // own fill target, which is the actual bug.
+        double totalWidthPx = totalColumnWidthPixelsLibreOffice(sh, 0, 8);
         double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
         double spaceWidthPx = charRunWidthPx(fontMetrics, ' ');
@@ -1364,14 +1377,35 @@ public class QuotationRenderer {
      * Returns {@link SignatureFontMetrics#UNAVAILABLE} if AWT can't construct one at all (never
      * lets a font-metrics failure break the render — matching this class's convention elsewhere,
      * see {@link #anchorApproverSignature}); every caller of an unavailable metrics object falls
-     * back to {@link #textUnits} character-counting via {@link #FALLBACK_AVG_CHAR_WIDTH_PX}. */
+     * back to {@link #textUnits} character-counting via {@link #FALLBACK_AVG_CHAR_WIDTH_PX}.
+     *
+     * <p><strong>Root cause of the signature row not filling {@link #SIGNATURE_ROW_FILL_FRACTION}
+     * of the A4 width</strong> (owner's approved-quotation export, 2026-09-10 — forensics in the
+     * PR body): this used to build {@code new java.awt.Font(poiFont.getFontName(), ...)} directly
+     * from the template's DECLARED family ("Angsana New" / "Cordia New" — see the class Javadoc).
+     * On a host without those licensed fonts (this deployed image among them, #666), that family
+     * name is not one AWT enumerates, so {@code java.awt.Font}'s OWN fallback silently substitutes
+     * its generic logical "Dialog" font — a DIFFERENT substitution than fontconfig's Thai-aware
+     * alias (Angsana New → Kinnari, Cordia New → Garuda/Umpush), which is what LibreOffice
+     * actually lays the row out with (confirmed: the owner's PDF embeds Kinnari-Bold/Garuda, and
+     * {@code fc-match "Angsana New"} on a host with {@code fonts-thai-tlwg} answers Kinnari, while
+     * plain {@code new Font("Angsana New", ...)} on the SAME host falls back to Dialog). Measuring
+     * with the wrong font's glyph advances under-counts how many underscores are needed to reach
+     * {@code slotWidthPx}, so the padded row comes up short once LibreOffice re-lays it out in the
+     * font it actually uses. {@link FontResolver} already solves exactly this question for
+     * {@link LibreOfficeMetrics#charWidthTwips} (verified there to ±1/100 mm against LibreOffice's
+     * own PDF vectors) — reusing its answer here, rather than re-deriving font resolution a second
+     * way, is what makes this fix independent of which Thai font happens to be installed: it
+     * measures with whatever font the HOST will actually render, not a name that may not exist.
+     */
     private SignatureFontMetrics resolveSignatureFontMetrics(Sheet sh, int labelsRow) {
         try {
             Cell probe = getOrKeep(sh, labelsRow, 0);
             Font poiFont = sh.getWorkbook().getFontAt(probe.getCellStyle().getFontIndexAsInt());
+            String resolvedFamily = FontResolver.resolve(poiFont.getFontName()).family();
             int awtStyle = (poiFont.getBold() ? java.awt.Font.BOLD : 0)
                 | (poiFont.getItalic() ? java.awt.Font.ITALIC : 0);
-            java.awt.Font awtFont = new java.awt.Font(poiFont.getFontName(),
+            java.awt.Font awtFont = new java.awt.Font(resolvedFamily,
                 awtStyle == 0 ? java.awt.Font.PLAIN : awtStyle, (int) poiFont.getFontHeightInPoints());
             java.awt.image.BufferedImage probeImg =
                 new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
@@ -1505,9 +1539,34 @@ public class QuotationRenderer {
      * with the bottom edge {@link #SIGNATURE_LIFT_ABOVE_RULE_MM} ABOVE the rule so it rests on the
      * line the way a real signature does. Nothing is ever painted behind the picture — the PNG's
      * own alpha is what keeps the rule visible on both sides of the ink.
+     *
+     * <p><strong>Root cause of the "signature shows on the chromium path but not this one"
+     * defect</strong> (owner's approved-quotation export, 2026-09-10, LibreOffice 26.2.5.2 —
+     * forensics in the PR body): {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} —
+     * what {@link Picture#getImageDimension()} calls — SWALLOWS an image ImageIO has no reader
+     * for (an unsupported or corrupt format) and returns {@code Dimension(0, 0)} rather than
+     * throwing (confirmed by reading its bytecode, and by reproducing end-to-end: the JVM logs
+     * "ImageIO found no images" and no exception ever reaches this class). The OLD code called
+     * {@link #placeSignaturePicture} anyway, whose {@code natural.width <= 0} guard then bailed
+     * out silently — leaving the picture on the PROVISIONAL anchor below, which is deliberately
+     * ZERO-WIDTH ({@code col1==col2}, {@code dx1==dx2}): a shape POI's own object model keeps
+     * without complaint (so a POI-model-only test finds a "picture" and a plausible-looking
+     * anchor — this is exactly why one didn't catch it), but that LibreOffice's PDF export (and,
+     * by the same mechanism, a real Excel/Calc open of the .xls download) simply does not draw.
+     * Nothing logged the failure either: no exception means the {@code catch} below never ran.
+     * {@link #decodableImageSize} probes decodability BEFORE anything touches the workbook, so an
+     * undecodable image never gets a shape created for it at all — falling back to the text-only
+     * name exactly as this method's own contract promises, with a warning that finally says why.
      */
     private void anchorApproverSignature(Sheet sh, int labelsRow, byte[] png, String mime,
                                          double runStartPx, double runEndPx) {
+        java.awt.Dimension natural = decodableImageSize(png);
+        if (natural == null) {
+            log.warn("Approver signature image ({} bytes, mime={}) is not a decodable image "
+                + "(ImageIO has no reader for these bytes) — skipping the picture and keeping the "
+                + "text-only name", png.length, mime);
+            return;
+        }
         try {
             Drawing<?> patriarch = sh.getDrawingPatriarch();
             if (patriarch == null) {
@@ -1529,6 +1588,26 @@ public class QuotationRenderer {
         } catch (RuntimeException e) {
             log.warn("Approver signature image anchor failed; falling back to text-only name: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Whether ImageIO can decode {@code imageBytes} at all — the same check
+     * {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} makes internally, run here
+     * BEFORE any workbook shape exists so a decode failure can be handled by never creating one
+     * (see {@link #anchorApproverSignature}'s Javadoc for why that matters — POI silently keeps a
+     * degenerate shape LibreOffice then silently drops). Returns the decoded natural size, or
+     * {@code null} on anything ImageIO rejects — a missing reader (unsupported/corrupt format,
+     * {@code ImageIO.read} returns {@code null}) or a reader that throws partway through (e.g. a
+     * CMYK JPEG, which some JDKs recognise by header but cannot actually decode).
+     *
+     * <p>Delegates to {@link th.co.glr.hr.common.ImageDecodability}, the shared probe
+     * {@code EmployeeSignatureService#upload} now runs at UPLOAD time so a bad image is rejected
+     * and re-encoded before it is ever stored, rather than silently degrading here months later.
+     * This render-time check stays as defence in depth for signatures stored before that fix
+     * shipped.
+     */
+    private static java.awt.Dimension decodableImageSize(byte[] imageBytes) {
+        return th.co.glr.hr.common.ImageDecodability.size(imageBytes);
     }
 
     // M6: the signature was never scaled — an employee's uploaded image renders at whatever
@@ -1759,6 +1838,43 @@ public class QuotationRenderer {
             total += sh.getColumnWidthInPixels(c);
         }
         return total;
+    }
+
+    /**
+     * The SAME range, in LibreOffice's OWN column-width model (twips, via
+     * {@link LibreOfficeMetrics#charWidthTwips}/{@link LibreOfficeMetrics#columnTwips} — the
+     * mechanism {@link #fontPixelToAnchorPixelScale} already trusts for the signature PICTURE's
+     * anchor) rather than {@link #totalColumnWidthPixels}'s POI-native pixel figure — converted to
+     * 96dpi px so it lands in the SAME unit space {@link #textWidthPx} already measures in.
+     *
+     * <p>This is THE row-width defect, not a refinement of it: {@link #writeSignatureBlock} used
+     * to pad to {@link #SIGNATURE_ROW_FILL_FRACTION} of {@link #totalColumnWidthPixels}'s figure,
+     * which has no relationship to what LibreOffice actually prints the A..I range at. On this
+     * template the two disagree by roughly a third — measured directly (not estimated): POI says
+     * 659.5 pt for A..I, LibreOffice's own model says 979.0 pt, because the WORKBOOK's default
+     * font (index 0, what a raw XLS column-width unit is defined against) is one the host
+     * substitutes to something with a noticeably wider digit than POI's hardcoded constant
+     * assumes. Padding to 95% of the SMALLER, wrong figure is exactly {@code 0.95 × (659.5/979.0)
+     * ≈ 0.64} of the REAL page width — matching the owner's exported PDF (roughly 65%, not 95%)
+     * almost exactly. Reusing {@link #fontPixelToAnchorPixelScale}'s already-verified twips math
+     * here — rather than re-deriving a second way to ask the same question — is what makes the
+     * fix independent of which font the host happens to substitute: it targets whatever
+     * LibreOffice will actually use, not a number POI made up.
+     */
+    private double totalColumnWidthPixelsLibreOffice(Sheet sh, int firstCol, int lastCol) {
+        try {
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            long loTwips = 0;
+            for (int c = firstCol; c <= lastCol; c++) {
+                loTwips += LibreOfficeMetrics.columnTwips(sh.getColumnWidth(c), charWidthTwips);
+            }
+            double loPx = loTwips / (double) LibreOfficeMetrics.TWIPS_PER_INCH * ASSUMED_IMAGE_DPI;
+            return loPx > 0 ? loPx : totalColumnWidthPixels(sh, firstCol, lastCol);
+        } catch (RuntimeException e) {
+            log.debug("LibreOffice column width unavailable for the signature row's fill target; "
+                + "falling back to POI's own (less accurate) figure: {}", e.getMessage());
+            return totalColumnWidthPixels(sh, firstCol, lastCol);
+        }
     }
 
     // ── GLA-75: per-item pictures ─────────────────────────────────────────────────

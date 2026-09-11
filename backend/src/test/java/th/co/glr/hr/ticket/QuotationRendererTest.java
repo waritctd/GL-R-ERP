@@ -10,6 +10,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
+import th.co.glr.hr.common.sheet.FontResolver;
 import th.co.glr.hr.customer.CustomerDto;
 
 class QuotationRendererTest {
@@ -645,7 +647,12 @@ class QuotationRendererTest {
         String[] labels = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
         var poiFont = sheet.getWorkbook().getFontAt(
             sheet.getRow(labelsRow).getCell(0).getCellStyle().getFontIndexAsInt());
-        var awtFont = new java.awt.Font(poiFont.getFontName(), java.awt.Font.PLAIN,
+        // Resolve through FontResolver, exactly like QuotationRenderer#resolveSignatureFontMetrics
+        // now does — measuring with the raw template font NAME ("Angsana New"/"Cordia New") would
+        // silently diverge from the renderer's own (fixed) metrics on a host without those fonts,
+        // since java.awt.Font's own fallback ("Dialog") is not fontconfig's Thai-aware substitute.
+        String resolvedFamily = FontResolver.resolve(poiFont.getFontName()).family();
+        var awtFont = new java.awt.Font(resolvedFamily, java.awt.Font.PLAIN,
             (int) poiFont.getFontHeightInPoints());
         var frc = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
             .createGraphics().getFontRenderContext();
@@ -1047,6 +1054,210 @@ class QuotationRendererTest {
                 }
             }
             return count;
+        }
+    }
+
+    /**
+     * Defect 2 regression (owner's approved-quotation export F-SM-008/QT-2026-0014-2, 2026-09-10):
+     * a genuinely decodable signature must survive as a real, drawn image in the ACTUAL
+     * LibreOffice-rendered PDF — a POI-model-only assertion (as
+     * {@code modelPath_approverSignatureImage_anchorsWithinTheApproverSlot_notOverCustomerSlot}
+     * above already makes) would NOT have caught the bug this guards against: the degenerate
+     * (zero-width) provisional anchor a decode failure used to leave behind is a shape POI's own
+     * object model keeps without complaint, but that LibreOffice's PDF export silently drops —
+     * see {@link QuotationRenderer#anchorApproverSignature}'s Javadoc for the full chain,
+     * confirmed by reading {@code org.apache.poi.ss.util.ImageUtils}'s bytecode and reproducing
+     * end-to-end. The template itself carries exactly two pictures (logo, ISO badge — see
+     * {@code modelPath_approverSignatureImage_survivesTemplatePictures} above); a THIRD real
+     * image XObject in the rendered PDF is the approver's signature actually being drawn.
+     */
+    @Test
+    void modelPath_decodableApproverSignatureImage_isActuallyDrawnInTheRealLibreOfficeRenderedPdf()
+            throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", onePixelPng(), "image/png"));
+
+        byte[] pdf = renderer.toPdf(model);
+
+        assertThat(countImageXObjects(pdf))
+            .as("logo + ISO badge + the approver's signature, actually drawn by LibreOffice "
+                + "(not merely present in POI's in-memory model)")
+            .isGreaterThanOrEqualTo(3);
+    }
+
+    /**
+     * Defect 2 root cause, pinned directly: {@code org.apache.poi.ss.util.ImageUtils
+     * #getImageDimension} (what {@link org.apache.poi.ss.usermodel.Picture#getImageDimension()}
+     * calls) SWALLOWS an image ImageIO has no reader for — an unsupported or corrupt format — and
+     * returns {@code Dimension(0, 0)} rather than throwing. Before the fix,
+     * {@code QuotationRenderer#anchorApproverSignature} still created a picture shape for such
+     * bytes and left it on its PROVISIONAL anchor, which is deliberately ZERO-WIDTH
+     * ({@code col1==col2}, {@code dx1==dx2}: same offset repeated, see the method's own comment).
+     * POI's model keeps a shape like that without complaint (which is exactly why a POI-only test
+     * would not have caught this), but LibreOffice's PDF export — and, by the same mechanism, a
+     * real Excel/Calc open of the .xls download — draws nothing for a zero-area shape. The fix
+     * must never let that shape exist in the first place: for bytes ImageIO cannot decode, the
+     * sheet ends up with exactly the template's own pictures, no phantom third one, degenerate or
+     * not.
+     */
+    @Test
+    void modelPath_undecodableApproverSignatureBytes_neverLeaveADegenerateAnchoredShape() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        byte[] undecodable = "not a real image -- ImageIO has no reader for this"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", undecodable, "image/png"));
+
+        int templatePictureShapes;
+        try (var in = new ClassPathResource("templates/quotation_template.xls").getInputStream();
+             var wbTpl = WorkbookFactory.create(in)) {
+            var tplSheet = wbTpl.getSheet("Update") != null ? wbTpl.getSheet("Update") : wbTpl.getSheetAt(0);
+            var tplPatriarch = ((org.apache.poi.hssf.usermodel.HSSFSheet) tplSheet).getDrawingPatriarch();
+            templatePictureShapes = tplPatriarch == null ? 0 : tplPatriarch.getChildren().size();
+        }
+        assertThat(templatePictureShapes).isGreaterThan(0);
+
+        byte[] xlsx = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var patriarch = ((org.apache.poi.hssf.usermodel.HSSFSheet) sheet).getDrawingPatriarch();
+            int shapes = 0;
+            boolean anyDegenerate = false;
+            for (var shape : patriarch.getChildren()) {
+                if (shape instanceof org.apache.poi.hssf.usermodel.HSSFPicture pic) {
+                    shapes++;
+                    var anc = pic.getClientAnchor();
+                    if (anc.getCol1() == anc.getCol2() && anc.getDx1() == anc.getDx2()) {
+                        anyDegenerate = true;
+                    }
+                }
+            }
+            assertThat(anyDegenerate)
+                .as("no picture shape may ever be left on a zero-width (col1==col2, dx1==dx2) anchor")
+                .isFalse();
+            assertThat(shapes)
+                .as("undecodable bytes must add no picture at all -- only the template's own")
+                .isEqualTo(templatePictureShapes);
+        }
+    }
+
+    private int countImageXObjects(byte[] pdf) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            int count = 0;
+            for (var page : doc.getPages()) {
+                for (var name : page.getResources().getXObjectNames()) {
+                    if (page.getResources().getXObject(name)
+                            instanceof org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        }
+    }
+
+    /**
+     * Defect 1 regression, pinned against the REAL LibreOffice render — reading the XLS cell or
+     * re-measuring with AWT (even AWT pointed at the correctly {@link FontResolver}-resolved
+     * family) is NOT sufficient evidence here: both stayed within a few points of the 95% target
+     * even against the unfixed renderer on this exact container, because the actual bug is not
+     * primarily a font-SUBSTITUTION mismatch, it is that {@code writeSignatureBlock} padded to
+     * 95% of {@code QuotationRenderer#totalColumnWidthPixels} — POI's OWN, unrelated column-pixel
+     * constant — instead of the width LibreOffice ACTUALLY prints the A..I range at. Only reading
+     * real glyph positions out of the real LibreOffice-rendered PDF (soffice --convert-to pdf,
+     * exactly like {@code renderer.toPdf}'s production path) exposes it: on this template POI's
+     * figure (659.5 pt) is roughly a third narrower than LibreOffice's own column-width model
+     * (979.0 pt — see {@code QuotationRenderer#totalColumnWidthPixelsLibreOffice}'s Javadoc for
+     * the derivation), so the unfixed row landed at {@code 0.95 × (659.5/979.0) ≈ 0.64} of the
+     * real page width — measured here at 66.9%, matching the owner's ~65% almost exactly.
+     *
+     * <p>Compares the signature labels row's real rendered horizontal span against the item
+     * table's (both read off the SAME PDF, same left/right reference edges), rather than a fixed
+     * fraction of a computed page width, so this needs no separate "what's the real page width"
+     * derivation of its own. PDFBox's Thai-glyph ToUnicode gaps on a substituted font (this file's
+     * other PDF tests already work around this — see {@code strip}'s own comment) make matching
+     * the Thai label text unreliable, so both reference rows are located by ASCII content the
+     * fonts-without-ToUnicode-mapping problem never touches: the item row's literal "Net"+amount,
+     * and the signature row's long run of literal underscore characters.
+     *
+     * <p>Mutation check: reverting {@code totalColumnWidthPixelsLibreOffice} back to
+     * {@code totalColumnWidthPixels} in {@code writeSignatureBlock} turns this red on this
+     * container (measured 66.9%, below the 0.80 floor below) — verified by running it against the
+     * reverted line.
+     */
+    @Test
+    void signatureRow_fillsTheA4PageWidth_measuredFromRealGlyphPositionsInTheLibreOfficeRenderedPdf()
+            throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories("A", "B", "ราม อิฐรัตน์", null, null));
+
+        byte[] pdf = renderer.toPdf(model);
+        Map<String, double[]> rows = rowSpansByAsciiContent(pdf);
+
+        double[] itemRow = rows.entrySet().stream()
+            .filter(e -> e.getKey().contains("Net") && e.getKey().contains("10.00"))
+            .map(Map.Entry::getValue).findFirst()
+            .orElseThrow(() -> new AssertionError("item row (containing 'Net'/'10.00') not found in rendered PDF"));
+        double[] signatureRow = rows.entrySet().stream()
+            .filter(e -> e.getKey().contains("____________")) // a long underscore run only S1 has
+            .map(Map.Entry::getValue).findFirst()
+            .orElseThrow(() -> new AssertionError("signature labels row (long underscore run) not found in rendered PDF"));
+
+        // Both rows start at column A's left edge (S1 is A:I merged, left-aligned) — use the
+        // WIDER of the two observed left edges as the shared left reference, and the item row's
+        // right edge (the ราคา/เป็นเงิน columns' own content reaches furthest right) as the page
+        // reference; the signature row's own right edge is the thing under test.
+        double leftRef = Math.min(itemRow[0], signatureRow[0]);
+        double tableSpan = itemRow[1] - leftRef;
+        double signatureSpan = signatureRow[1] - leftRef;
+
+        assertThat(signatureSpan / tableSpan)
+            .as("signature row must fill close to 95%% of the item table's own real rendered "
+                + "width (table span %.1f pt, signature span %.1f pt, in the ACTUAL "
+                + "LibreOffice-rendered PDF) -- the owner's production export measured ~65%%",
+                tableSpan, signatureSpan)
+            .isGreaterThan(0.80);
+    }
+
+    /**
+     * Groups every real, positioned glyph LibreOffice drew into rows (by rounded Y), and returns
+     * each row's [minX, maxX] keyed by its own extracted text — used to find a specific row by
+     * stable ASCII content (see the width test above for why Thai text isn't a reliable key here).
+     */
+    private Map<String, double[]> rowSpansByAsciiContent(byte[] pdf) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            var byLine = new java.util.TreeMap<Integer, java.util.List<org.apache.pdfbox.text.TextPosition>>();
+            PDFTextStripper stripper = new PDFTextStripper() {
+                @Override
+                protected void writeString(String text, java.util.List<org.apache.pdfbox.text.TextPosition> positions) {
+                    if (positions.isEmpty()) return;
+                    int y = Math.round(positions.get(0).getY());
+                    byLine.computeIfAbsent(y, k -> new java.util.ArrayList<>()).addAll(positions);
+                }
+            };
+            stripper.setSortByPosition(true);
+            stripper.getText(doc);
+
+            Map<String, double[]> result = new java.util.LinkedHashMap<>();
+            for (var line : byLine.values()) {
+                StringBuilder text = new StringBuilder();
+                double minX = Double.MAX_VALUE;
+                double maxX = -Double.MAX_VALUE;
+                for (var tp : line) {
+                    text.append(tp.getUnicode());
+                    minX = Math.min(minX, tp.getX());
+                    maxX = Math.max(maxX, tp.getX() + tp.getWidth());
+                }
+                result.put(text.toString(), new double[]{minX, maxX});
+            }
+            return result;
         }
     }
 
