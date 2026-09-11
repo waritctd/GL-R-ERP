@@ -391,8 +391,26 @@ public final class DealQuotationRenderAdapter {
     private static final String BANK_BLOCK_PLACEHOLDER_LINE =
         "4.Payment by telegraphic transfer. Full bank details are issued with the proforma invoice.";
 
+    /**
+     * Remark 3 when NO row carries a lead time — typically a document made entirely of PLAIN rows
+     * (freight, consumables, mosaic priced per SQM), which have no lead-time fields at all.
+     *
+     * <p>⚠️ It names NO COUNTRY and states no duration, deliberately. It used to read "Goods are in
+     * stock at the factory in Italy; shipping time is approximately 90 days" — a Thai-market default
+     * that, on the owner's own Maldives quotation QN6900902-6, sat above a row reading
+     * "Transportation Charges from China to Male Port, Maldives". A customer reads that as the
+     * company not knowing where its own goods come from. Her original instead prints the rep's own
+     * words ("Production leadtime : Approximately 50 days…", "Transportaton time from China to
+     * Maldives is around 40-60 days"), which this document has no field for yet — so the honest
+     * line is one that promises only what is true.
+     *
+     * <p>Why not simply drop the line when there is nothing to say: the remark box is exactly
+     * {@code QuotationRenderer#REMARK_HEAD_ROWS} = 8 rows and never wraps, and dropping one leaves
+     * the no-bank-block layout at 7, which falls through to the older 3-line remark path. A
+     * replacement line keeps 8 in BOTH layouts with no renumbering.
+     */
     private static final String EN_LINE3_FALLBACK =
-        "3.Goods are in stock at the factory in Italy; shipping time is approximately 90 days.";
+        "3.Delivery : lead time will be confirmed at order confirmation.";
 
     /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
      * Kept as its own method rather than parameterising the Thai one: the two differ in every

@@ -81,6 +81,11 @@ public class QuotationRenderer {
     // The 8 column headings, in the template's own column order (see #TITLE_ROW's dump):
     // A ลำดับ, B รายละเอียด (BLANK in the Thai template — the English form labels it), C จำนวน,
     // D หน่วย, E ราคา, F..G ส่วนลด (a merged pair), H คงเหลือ, I เป็นเงิน.
+    /** B1 on an English document — see #writeEnglishHeaderLabels for why this exact spelling. */
+    static final String EN_COMPANY_NAME = "G.L.&R. TAPS AND TILES COMPANY LIMITED";
+    /** B2 on an English document — must fit before the badge image; see #writeEnglishHeaderLabels. */
+    static final String EN_COMPANY_ADDRESS =
+        "201 Sukhumvit 63, Sukhumvit Road, North-Klongton, Wattana, Bangkok 10110";
     private static final String EN_COL_ITEMS = "Items";
     private static final String EN_COL_DESCRIPTION = "Description & Conditions";
     private static final String EN_COL_QTY = "Qty";
@@ -814,9 +819,17 @@ public class QuotationRenderer {
      * carry 26-28 of them) and are preserved so the English block sits in the same place.
      */
     private void writeEnglishHeaderLabels(Sheet sh) {
-        setStr(sh, 0, 1, "                          GL & R TAPS AND TILES CO., LTD.");
-        setStr(sh, 1, 1, "                           201 Soi Sukhumvit 63, Sukhumvit Rd., "
-            + "Khlong Tan Nuea, Watthana, Bangkok 10110");
+        // Company name EXACTLY as both of the owner's English samples print it (QN6900902-6,
+        // QN6900933). This used to read "GL & R TAPS AND TILES CO., LTD.", an invented rendering;
+        // the registered account name on her bank block ("G.L.& R. Taps and Tiles Co., Ltd.")
+        // agrees with her form in substance, so there is no legal-name reason to differ from it.
+        setStr(sh, 0, 1, "                          " + EN_COMPANY_NAME);
+        // Her own address wording, which is shorter than the transliteration this replaced and so
+        // FITS before the URS/UKAS badge. The old line ("201 Soi Sukhumvit 63, Sukhumvit Rd.,
+        // Khlong Tan Nuea, Watthana, Bangkok 10110") ran under the badge image and printed as
+        // "…Bangkok 101" — the postcode was clipped on every English quotation. Spelled
+        // "Sukhumvit", the road's standard romanization, where her form has "Sukumvit".
+        setStr(sh, 1, 1, "                           " + EN_COMPANY_ADDRESS);
         setStr(sh, 2, 1, "                            Tel. +662 711 5995    e-mail : info@glr.co.th"
             + "    Line:@glr_tiles");
 
