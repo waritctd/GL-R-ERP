@@ -597,10 +597,15 @@ public class DealQuotationRepository {
              WHERE quotation_id IN (:ids)
              ORDER BY quotation_id, seq
             """, Map.of("ids", ids), (ResultSet rs) -> {
-                while (rs.next()) {
-                    long quotationId = rs.getLong("quotation_id");
-                    byQuotation.computeIfAbsent(quotationId, k -> new ArrayList<>()).add(mapItem(rs));
-                }
+                // A RowCallbackHandler: Spring has ALREADY advanced to this row before calling us.
+                // An inner `while (rs.next())` here used to re-advance past it and consume the
+                // rest of the result set in this one call, so Spring's own outer loop found
+                // nothing left and stopped -- silently dropping the very FIRST row of the combined
+                // (quotation_id, seq) ordering, i.e. the seq-1 item of whichever quotation sorts
+                // first (see #search_returnsEveryItemAcrossMultipleQuotations_... in
+                // DealQuotationIntegrationTest). One call per row, no loop.
+                long quotationId = rs.getLong("quotation_id");
+                byQuotation.computeIfAbsent(quotationId, k -> new ArrayList<>()).add(mapItem(rs));
             });
         return byQuotation;
     }
