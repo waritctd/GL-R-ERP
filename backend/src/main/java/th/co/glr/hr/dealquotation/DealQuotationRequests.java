@@ -3,6 +3,7 @@ package th.co.glr.hr.dealquotation;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -73,17 +74,27 @@ public final class DealQuotationRequests {
         @Size(max = 2000) String description,
         /** PLAIN only — the printed จำนวน. BigDecimal, not int: her documents happen to carry
          * whole numbers (1 JOB, 85 Bags, 22 แผ่น) but a half-day of a service or a part ตร.ม. is a
-         * perfectly ordinary thing to quote, and an int here would silently 500 on it. */
-        @DecimalMax("999999") BigDecimal quantity,
+         * perfectly ordinary thing to quote, and an int here would silently 500 on it.
+         *
+         * <p>{@code @Digits} matches {@code sales.quotation_item.qty}'s NUMERIC(12,2) EXACTLY
+         * (review fix F4). Without it a 3dp quantity is accepted, the amount is computed from the
+         * unrounded value, Postgres stores the 2dp one — and the printed row no longer multiplies
+         * out: จำนวน 1.01 × คงเหลือ X ≠ เป็นเงิน, an arithmetic error the customer can check. */
+        @DecimalMax("999999") @Digits(integer = 10, fraction = 2) BigDecimal quantity,
         /** PLAIN only — the printed หน่วย (JOB, Bags, Barrels, แผ่น, ชุด). Capped at 30 to match
          * sales.quotation_item.raw_unit's LIVE column width (V49), not a guessed round number. */
         @Size(max = 30) String unit,
-        /** SPECIAL_SQM price mode, TILE rows — ราคาพิเศษ in บาท per ตร.ม., INCLUDING VAT. */
-        @DecimalMax("9999999") BigDecimal specialPriceSqm,
+        /** SPECIAL_SQM price mode, TILE rows — ราคาพิเศษ in บาท per ตร.ม., INCLUDING VAT.
+         * {@code @Digits} matches {@code sales.quotation_item.special_price_sqm}'s NUMERIC(12,2)
+         * (review fix F4) — the value is printed VERBATIM on the ราคาพิเศษ sub-line, so a 3dp input
+         * would print one figure and store another. */
+        @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal specialPriceSqm,
         /** DIRECT_NET price mode, TILE rows — the per-piece net price, typed straight in. */
         @DecimalMax("9999999") BigDecimal directNetPrice,
-        /** ADJUSTMENT only — percent of the non-adjustment rows above this one. */
-        @DecimalMin("0") @DecimalMax("100") BigDecimal adjustmentPct,
+        /** ADJUSTMENT only — percent of the non-adjustment rows above this one. {@code @Digits}
+         * matches {@code sales.quotation_item.adjustment_pct}'s NUMERIC(6,3) (review fix F4);
+         * a 4dp percent applied to a seven-figure base would move the stored discount by baht. */
+        @DecimalMin("0") @DecimalMax("100") @Digits(integer = 3, fraction = 3) BigDecimal adjustmentPct,
         /** ADJUSTMENT only — the "สั่งซื้อภายใน" date the composed description prints. */
         LocalDate adjustmentDeadline,
         /** ADJUSTMENT only — a FLAT baht amount, as the alternative to a percent. Positive; the
@@ -135,8 +146,15 @@ public final class DealQuotationRequests {
         @Min(1) @Max(365) Integer validityDays,
         @Size(max = 4000) String customerNotes,
         /**
-         * "NET" (default when null) | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3, owner feedback
-         * pass 3. PER-QUOTATION rather than per-item on purpose: in all nine of the owner's
+         * "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3, owner feedback pass 3.
+         *
+         * <p><b>null means different things on create and update</b> (review fix F1). On CREATE it
+         * means NET — a brand-new document with no mode chosen is a NET document. On UPDATE it
+         * means KEEP THE STORED MODE, because defaulting to NET there silently reprices every
+         * SPECIAL_SQM/DIRECT_NET row the moment a client PUTs without this field. See
+         * {@code DealQuotationService#update}.
+         *
+         * <p>PER-QUOTATION rather than per-item on purpose: in all nine of the owner's
          * documents every tile row in a document uses the same mode, so one selector is the least
          * typing. PLAIN rows always carry a direct price and ignore this, which is what still lets
          * a document mix a ราคาพิเศษ tile with a freight line.

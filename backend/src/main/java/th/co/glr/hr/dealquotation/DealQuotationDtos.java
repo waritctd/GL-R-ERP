@@ -168,6 +168,21 @@ public final class DealQuotationDtos {
         LocalDate adjustmentDeadline,
         /** SPECIAL_SQM rows only — "(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)", the sub-line
          * the owner's documents carry under such a row. Null in every other mode. */
-        String specialPriceLine
+        String specialPriceLine,
+        /**
+         * ADJUSTMENT rows entered as a FLAT baht amount — the positive magnitude, mirroring
+         * {@code ItemInput.adjustmentAmount}. Null on every other row, INCLUDING a percentage
+         * adjustment (which round-trips through {@code adjustmentPct} instead), so exactly one of
+         * the two is ever non-null and the "exactly one of percent / flat" rule is satisfied by
+         * echoing what we returned.
+         *
+         * <p>Added by review fix F2, which is about the GET→PUT round-trip. Relaxing the
+         * unitPrice rejection alone fixes only the percentage case: a flat adjustment stores its
+         * figure in {@code unit_price}/{@code amount} and has NO dedicated column, so before this
+         * field the client had no way to hand the amount back and the PUT 400'd on "must be a
+         * percent or an amount". Derived on read rather than stored — see V168's note on why a
+         * duplicate column would only invite drift.
+         */
+        BigDecimal adjustmentAmount
     ) {}
 }

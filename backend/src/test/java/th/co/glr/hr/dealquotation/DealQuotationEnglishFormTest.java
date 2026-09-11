@@ -471,6 +471,10 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), null, null, 30, 45, null,
             new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
             "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
-            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null);
+            // Trailing args are lineType, quantity, unit, specialPriceSqm, adjustmentPct,
+            // adjustmentDeadline, specialPriceLine, adjustmentAmount. The last one arrived with
+            // #925's F2 fix (a flat adjustment had no DTO field, so a GET→PUT round-trip of one
+            // was a hard 400) and is null on a TILE row.
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 }

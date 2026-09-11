@@ -772,7 +772,11 @@ public class DealQuotationRepository {
                 nullableInt(rs, "boxes"), rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"),
                 storedDescription, null, null,
                 lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
-                adjustmentDeadline, null);
+                adjustmentDeadline, null,
+                // Review fix F2: a FLAT adjustment's amount has no column of its own, so echo it
+                // back off unit_price or a GET→PUT round-trip of the row cannot be saved.
+                DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct,
+                    rs.getBigDecimal("unit_price")));
         }
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),
@@ -812,7 +816,11 @@ public class DealQuotationRepository {
                 wastageMode, wastageValue, piecesFinal, piecesPerBox),
             lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
             adjustmentDeadline,
-            DealQuotationLines.specialPriceLine(specialPriceSqm)
+            DealQuotationLines.specialPriceLine(specialPriceSqm),
+            // Always null on this branch — it is the TILE branch, and only an ADJUSTMENT row can
+            // carry a flat amount. Routed through the same helper anyway so the two branches can
+            // never disagree about the rule.
+            DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
         );
     }
 

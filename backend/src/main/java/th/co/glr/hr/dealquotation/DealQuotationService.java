@@ -231,8 +231,29 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(existing.ticketId());
         requireEditAccess(actor, ticket);
         ContactSnapshot contact = resolveContact(request.contactId(), existing.contactId(), ticket);
-        String priceMode = resolvePriceMode(request.priceMode());
-        String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
+        // ⚠️ v3, review fix F1: a MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's
+        // blank→NET default is correct on CREATE (a brand-new document with no mode chosen IS a NET
+        // document) and catastrophic here. Any client that omits the field — a pre-v3 client, or a
+        // UI that PUTs only the fields it edited — would otherwise silently REPRICE the document:
+        // every SPECIAL_SQM tile row back to its list price, special_price_sqm to NULL, the ราคาพิเศษ
+        // sub-line gone, ส่วนลด flipped พิเศษ→Net, and the subtotal several times larger, with no error.
+        // DIRECT_NET is worse still — its rep-typed net is deliberately not stored as its own column
+        // (it IS final_unit_price), so there is nothing left to fall back to once it is overwritten.
+        // An EXPLICIT mode still wins, which is what lets the rep switch modes on a draft.
+        String priceMode = isBlank(request.priceMode())
+            ? resolvePriceMode(existing.priceMode())
+            : resolvePriceMode(request.priceMode());
+        // v3b, and the SAME reasoning with the same severity: #resolveDocumentLanguage's blank→TH
+        // default is right on create and wrong here. A client that omits the field would flip an
+        // EN/USD document back to Thai — which reinstates 7% VAT on an export quotation, re-labels
+        // every column and every signature slot, and changes the printed total. Silently, and on a
+        // document a customer may already have seen.
+        String documentLanguage = isBlank(request.documentLanguage())
+            ? resolveDocumentLanguage(existing.documentLanguage())
+            : resolveDocumentLanguage(request.documentLanguage());
+        // Currency is NOT given the same treatment, deliberately: #resolveCurrency derives it from
+        // the resolved language and accepts only the matching one, so the stored value can add
+        // nothing. Passing it would merely turn a legitimate language switch into a spurious 400.
         String currency = resolveCurrency(documentLanguage, request.currency());
         requirePriceModeAvailableInLanguage(priceMode, documentLanguage);
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
@@ -638,6 +659,19 @@ public class DealQuotationService {
             }
             items.add(item);
         }
+        // ⚠️ v3, review fix F3 — a NEW rule the owner has not ruled on; flagged in the PR body.
+        // The subtotal can be driven below zero two ways, both reachable from an ordinary payload:
+        // two 60% adjustments (neither compounds, so each takes the full base — 120% together),
+        // and a FLAT adjustmentAmount, whose only bound is @DecimalMax("99999999") and which bears
+        // no relation to the base at all (a flat 1,000,000 on a 1,000-baht document prints a grand
+        // total of −1,069,930). A negative grand total is never a real quotation — it is a document
+        // that says GL&R owes the customer money — so refuse it at write time rather than print it.
+        // Zero is allowed: a 100% discount is at least an intelligible thing to issue.
+        BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
+        if (subtotal.signum() < 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ");
+        }
         return items;
     }
 
@@ -958,9 +992,9 @@ public class DealQuotationService {
      *       the list price.</li>
      *   <li><b>PLAIN</b> — same positive-price rule. A freight or consumables line always carries
      *       a direct price; there is no such thing as a free one here.</li>
-     *   <li><b>ADJUSTMENT</b> — refuses a rep-supplied {@code unitPrice} outright (it is derived,
-     *       and accepting one would let a client dictate the discount), and requires EXACTLY one
-     *       of {@code adjustmentPct} / {@code adjustmentAmount}.</li>
+     *   <li><b>ADJUSTMENT</b> — IGNORES a rep-supplied {@code unitPrice} (it is derived from the
+     *       rows above; see the inline note on why refusing it broke the GET→PUT round-trip), and
+     *       requires EXACTLY one of {@code adjustmentPct} / {@code adjustmentAmount}.</li>
      * </ul>
      *
      * <p><b>Not gated on {@code rowNumber}</b>, unlike {@link #requireItemComplete}. The bean
@@ -976,10 +1010,14 @@ public class DealQuotationService {
                                           Integer rowNumber) {
         String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
         if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
-            if (input.unitPrice() != null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST,
-                    where + "ส่วนลดพิเศษคำนวณจากรายการด้านบน จึงระบุราคาเองไม่ได้");
-            }
+            // ⚠️ v3, review fix F2: a supplied unitPrice on an ADJUSTMENT row is IGNORED, not
+            // refused. It used to 400, which made a GET→PUT round-trip of any document containing
+            // an adjustment IMPOSSIBLE: #toItemDto/#mapItem return unitPrice = the derived amount on
+            // that very row (the ราคา column has to print it), so a UI that loads a draft and hands
+            // the items back on save was rejected for echoing a field we ourselves sent. Ignoring is
+            // safe because #buildAdjustmentItem never reads input.unitPrice() at all — the amount is
+            // derived from adjustmentPct/adjustmentAmount either way, so a supplied price is
+            // redundant rather than dangerous, and the caller still cannot dictate the discount.
             boolean hasPct = input.adjustmentPct() != null;
             boolean hasFlat = input.adjustmentAmount() != null;
             if (hasPct == hasFlat) {
@@ -1118,7 +1156,8 @@ public class DealQuotationService {
             piecesPerSqm, item.piecesBeforeWastage(), item.piecesAfterWastage(), item.piecesFinal(), item.boxes(),
             item.netUnitPrice(), item.lineAmount(), item.descriptionLine(), sizeLine, calculationLine,
             item.lineType(), item.quantity(), item.unit(), item.specialPriceSqm(), item.adjustmentPct(),
-            item.adjustmentDeadline(), DealQuotationLines.specialPriceLine(item.specialPriceSqm()));
+            item.adjustmentDeadline(), DealQuotationLines.specialPriceLine(item.specialPriceSqm()),
+            DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
