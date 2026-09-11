@@ -247,12 +247,12 @@ class DealQuotationRenderAdapterV3Test {
 
     private DealQuotationDto quotation(String priceMode, List<DealQuotationItemDto> items) {
         return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
-            1L, "ผู้พิมพ์", 1L, "พนักงานขาย", "081-000-0000",
-            null, null, null, null, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
             LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
             null, null, null, null, "โครงการทดสอบ",
             "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
-            priceMode,
+            priceMode, WastageCalculator.DOCUMENT_LANGUAGE_TH,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
             false, items, Instant.parse("2026-09-11T00:00:00Z"), null);
     }

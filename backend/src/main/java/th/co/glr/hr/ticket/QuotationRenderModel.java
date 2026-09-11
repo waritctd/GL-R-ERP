@@ -46,8 +46,51 @@ public record QuotationRenderModel(
      * composed line instead of spilling onto a second row). */
     List<String> remarkLines,
     Signatories signatories,
-    boolean signatureLabelsV2
+    boolean signatureLabelsV2,
+    /**
+     * Quotation v3b (2026-09-11): {@code "TH"} (default) prints the Thai <b>F-SM-002 (03)</b> —
+     * everything this renderer has ever produced; {@code "EN"} prints the English
+     * <b>F-SM-008 (01)</b> off the SAME workbook, with English labels, an English footer, a CE
+     * date, USD amounts and NO VAT row.
+     *
+     * <p>⚠️ There is no F-SM-008 template FILE in this repo — {@code templates/} holds only the
+     * Thai {@code quotation_template.xls}, and the renderer works by FILLING it. The English
+     * document is therefore <b>modelled on the owner's PDF samples (QN6900902-6, QN6900933), not
+     * rendered from the real form</b>. Swapping in a genuine F-SM-008.xls later is confined to
+     * {@code QuotationRenderer}'s TEMPLATE constant and its row/column map.
+     *
+     * <p>Nullable for the pre-v3b twelve-argument constructor below, and read through
+     * {@link #isEnglish()} so a null can only ever mean TH in one place.
+     */
+    String documentLanguage,
+    /** {@code "THB"} | {@code "USD"} — printed in the เป็นเงิน/Amount column heading and in the
+     * grand-total label. Null falls back to THB via {@link #currencyCode()}. */
+    String currency
 ) {
+    /** The pre-v3b shape: a Thai/THB document, which is what every caller predating the English
+     * form means. Keeps the legacy wrappers and the existing renderer fixtures unchanged. */
+    public QuotationRenderModel(
+        LocalDate issueDate, String number, String deptCode, String unitCode, String salesLine,
+        String attnLine, String phoneLine, String projectName, List<RenderItem> items,
+        List<String> remarkLines, Signatories signatories, boolean signatureLabelsV2
+    ) {
+        this(issueDate, number, deptCode, unitCode, salesLine, attnLine, phoneLine, projectName,
+            items, remarkLines, signatories, signatureLabelsV2, null, null);
+    }
+
+    /** The ONE place a null {@code documentLanguage} is interpreted. */
+    public boolean isEnglish() {
+        return "EN".equalsIgnoreCase(documentLanguage);
+    }
+
+    /** The currency code the document prints, defaulted from the language when absent. */
+    public String currencyCode() {
+        if (currency != null && !currency.isBlank()) {
+            return currency.trim().toUpperCase(java.util.Locale.ROOT);
+        }
+        return isEnglish() ? "USD" : "THB";
+    }
+
     /**
      * One printed item. Rows emitted: an optional heading row (only when {@code headingLabel} is
      * non-null AND differs from the PREVIOUS item's raw {@code headingLabel} — consecutive items

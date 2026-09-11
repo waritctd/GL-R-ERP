@@ -67,6 +67,48 @@ public class QuotationRenderer {
         "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"
     };
 
+    // ── quotation v3b (2026-09-11): the ENGLISH document, form F-SM-008 (01) ──────────────────
+    //
+    // ⚠️ THERE IS NO F-SM-008 TEMPLATE FILE. templates/ holds exactly one quotation template —
+    // quotation_template.xls, the Thai F-SM-002 (03) — and this class works by FILLING it. The
+    // English document is produced by driving that SAME workbook with English labels, an English
+    // footer and no VAT row: the two forms are both 8 columns with the same shape, so the row/
+    // column map is unchanged and only the text differs. That makes this MODELLED ON the owner's
+    // PDF samples (QN6900902-6, QN6900933), NOT rendered from the real form — do not read it as
+    // byte-fidelity with a file nobody has. Swapping in a genuine F-SM-008.xls later is confined
+    // to #TEMPLATE and the row constants above.
+    private static final String EN_TITLE = "QUOTATION";
+    // The 8 column headings, in the template's own column order (see #TITLE_ROW's dump):
+    // A ลำดับ, B รายละเอียด (BLANK in the Thai template — the English form labels it), C จำนวน,
+    // D หน่วย, E ราคา, F..G ส่วนลด (a merged pair), H คงเหลือ, I เป็นเงิน.
+    private static final String EN_COL_ITEMS = "Items";
+    private static final String EN_COL_DESCRIPTION = "Description & Conditions";
+    private static final String EN_COL_QTY = "Qty";
+    private static final String EN_COL_UNIT = "Unit";
+    private static final String EN_COL_UNIT_PRICE = "Unit price";
+    private static final String EN_COL_DISCOUNT = "Disc.";
+    private static final String EN_COL_NET_PRICE = "Net price";
+    private static final String EN_COL_AMOUNT_PREFIX = "Amount";
+    private static final String EN_LABEL_DEPT = "Dept.";
+    private static final String EN_LABEL_REF = "Ref.";
+    // ⚠️ ASK-THE-OWNER: QN6900902-6 prints "D.Co." here and QN6900933 prints "D.Name" — the same
+    // slot, two labels. "D.Co." is used because it appears on the more recent of the two samples
+    // and is the closer reading of หน่วยงาน (the company/unit the enquiry came through). Flagged
+    // in the PR; changing it is this one constant.
+    private static final String EN_LABEL_UNIT_CODE = "D.Co.";
+    private static final String EN_LABEL_DATE = "Date";
+    private static final String EN_LABEL_ATTN = "Attn :";
+    private static final String EN_REMARKS_LABEL = "Remarks";
+    private static final String EN_GRAND_TOTAL_PREFIX = "Grand Total";
+    private static final String EN_ORDER_LINE = "Confirmed to order at the prices and conditions above";
+    private static final String[] EN_SIG_LABELS = {"Printed by", "Quoted by", "Approved by", "Ordered by"};
+    private static final String EN_BLANK_DATE_PLACEHOLDER = "Date ........./........./.........";
+    // ⚠️ ASK-THE-OWNER: the Thai render BLANKS the F-SM-002 tag ("not customer-facing", a decision
+    // that predates this change and is left exactly as it is). Her English samples DO print
+    // "F-SM-008 (01)", and the spec asks for it, so the English render writes it. The two paths
+    // therefore differ on this cell on purpose. Flagged in the PR.
+    private static final String EN_FORM_TAG = "F-SM-008 (01)";
+
     // Template layout per document-generation-fix.md §A2-A3
     // The template's item zone is 0-based rows 9–20; the first item row (A10) starts the table.
     private static final int ITEM_START_ROW = 9; // 0-based (= row 10 in 1-based)
@@ -284,15 +326,32 @@ public class QuotationRenderer {
             // position it in Excel. LibreOffice's wider substitute font pushes the trailing
             // sara-aa (า) past the print-area right edge (col I), clipping it. Re-anchor
             // with fewer leading spaces so it stays right-aligned but fits within the page.
+            boolean english = model.isEnglish();
+            String currency = model.currencyCode();
+
             Cell titleCell = getOrKeep(sh, 0, 7);
-            if (titleCell.getCellType() == CellType.STRING) {
+            if (english) {
+                setStr(sh, 0, 7, "        " + EN_TITLE);
+            } else if (titleCell.getCellType() == CellType.STRING) {
                 setStr(sh, 0, 7, "        " + titleCell.getStringCellValue().strip());
             }
+            if (english) {
+                // The company block, the right-hand labels and the 8 column headings. Kept in one
+                // method so every English-only overwrite of a TEMPLATE-OWNED cell is in one place
+                // and a reviewer can see the whole list at once. The "***" under the title is
+                // already in the template at I2 and is common to both forms, so nothing writes it.
+                writeEnglishHeaderLabels(sh);
+                writeEnglishColumnTitles(sh, currency);
+            }
 
-            setStr(sh, 3, 1, thaiDate(model.issueDate()));                      // B4 — issue date
-            setStr(sh, DEPT_VALUE_ROW, VALUE_COL, nullSafe(model.deptCode()));   // I3 — ฝ่าย
-            setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง
-            setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน
+            // ⚠️ B4 — the single easiest thing to get wrong on this form. The Thai document prints
+            // "30 กรกฎาคม 2569" (Buddhist era); the English one prints "September 8, 2026" — an
+            // English month NAME and a COMMON-era year. #englishDate and #thaiDate sit next to each
+            // other at the bottom of this class for exactly that reason.
+            setStr(sh, 3, 1, english ? englishDate(model.issueDate()) : thaiDate(model.issueDate()));
+            setStr(sh, DEPT_VALUE_ROW, VALUE_COL, nullSafe(model.deptCode()));   // I3 — ฝ่าย / Dept.
+            setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
+            setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
             // layout-spec §3: SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns
             // sizes for the "net" money figure — a previous version of this fix WIDENED that data
             // column to fit "Sales/{name} T.{phone}", which made คงเหลือ absurdly wide on every
@@ -328,7 +387,18 @@ public class QuotationRenderer {
             BigDecimal subtotal = items.stream()
                 .map(RenderItem::amount).filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal vat = subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+            // v3b: the ENGLISH form has NO VAT row at all — no sample shows one — so the VAT here
+            // is ZERO and the grand total IS the subtotal.
+            //
+            // ⚠️ Scope, stated because a mutation check proved it: this LOCAL is not what removes
+            // the VAT row. Its only consumer on the English path is #sizeMoneyColumns below, which
+            // sizes column I to the biggest figure the page will show — with a 7% VAT folded in
+            // that column comes out over-wide, which is cosmetic, not wrong. #applyEnglishTotals is
+            // what physically clears the subtotal and VAT rows, and THAT is the guard the tests
+            // kill (see DealQuotationEnglishFormTest#totals_*).
+            BigDecimal vat = english
+                ? BigDecimal.ZERO
+                : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
 
             // ① Size the money columns to the actual numbers so nothing ever clips to "###",
             //    whatever the magnitude. Must run before the width scale below is measured.
@@ -351,11 +421,11 @@ public class QuotationRenderer {
             int footerEnd = FOOTER_END + footerShift;
             int delta;
             if (emittedRows <= NATIVE_ITEM_CAPACITY) {
-                renderSinglePage(sh, items, subtotal, alwaysShowSeq, footerShift);
+                renderSinglePage(sh, items, subtotal, alwaysShowSeq, footerShift, english);
                 delta = 0;
             } else if (onePageScale(sh, emittedRows, footerShift) >= MIN_SCALE) {
                 double scale = onePageScale(sh, emittedRows, footerShift);
-                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift);
+                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift, english);
                 // H5: the TEMPLATE carries its own fixed print area (A1:I47, dumped from the raw
                 // file) — layoutFlowing relocates the footer to footerEnd + delta, which for any
                 // delta > 0 sits PAST that stale native range, so the relocated
@@ -367,7 +437,7 @@ public class QuotationRenderer {
                 sh.getWorkbook().setPrintArea(idxOnePage, 0, 8, 0, footerEnd + delta);
                 fitToOnePageAtScale(sh, scale * 100.0);
             } else {
-                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift);
+                delta = layoutFlowing(sh, items, subtotal, alwaysShowSeq, footerShift, english);
                 // The box is closed at the bottom of every PAGE, not under the last item row: a
                 // previous version bordered FOOTER_START + delta - 1 unconditionally, which is
                 // right only when the footer moves to the next page (then that row IS a page
@@ -402,7 +472,12 @@ public class QuotationRenderer {
                 fitToWidthPaginate(sh);
             }
 
-            writeSignatureBlock(sh, model.signatories(), model.signatureLabelsV2(), delta, footerShift);
+            if (english) {
+                applyEnglishTotals(sh, footerShift + delta, subtotal, currency);
+            }
+
+            writeSignatureBlock(sh, model.signatories(), model.signatureLabelsV2(), delta, footerShift,
+                english);
 
             wb.setForceFormulaRecalculation(true);
             wb.write(out);
@@ -474,7 +549,7 @@ public class QuotationRenderer {
      * page bottom — filling the page exactly like the Excel template's "Save as PDF".
      */
     private void renderSinglePage(Sheet sh, List<RenderItem> items, BigDecimal subtotal, boolean alwaysShowSeq,
-                                   int footerShift) {
+                                   int footerShift, boolean englishForm) {
         int emitted = fillItems(sh, items, alwaysShowSeq);
         // Blank the template item-zone rows the items didn't reach: the pre-seeded "2."/"แผ่น"/"Net"
         // placeholder at row 12 and the per-row H/I formulas through row 21 would otherwise show as
@@ -484,7 +559,7 @@ public class QuotationRenderer {
         }
         setNum(sh, SUBTOTAL_ROW + footerShift, 8, subtotal.doubleValue()); // I38; I39/I40 are template formulas
         getOrKeep(sh, SALESPERSON_FORMULA_ROW + footerShift, 0).setBlank(); // lookup → "0" otherwise
-        getOrKeep(sh, FORM_TAG_ROW + footerShift, 8).setBlank();            // F-SM-002 tag, not customer-facing
+        writeFormTag(sh, FORM_TAG_ROW + footerShift, englishForm);
         fitToOnePage(sh);
     }
 
@@ -500,7 +575,7 @@ public class QuotationRenderer {
      * footerShift}, not the raw template constant.
      */
     private int layoutFlowing(Sheet sh, List<RenderItem> items, BigDecimal subtotal, boolean alwaysShowSeq,
-                               int footerShift) {
+                               int footerShift, boolean englishForm) {
         int footerEnd = FOOTER_END + footerShift;
         List<CellRec> footer = captureBlock(sh, FOOTER_START, footerEnd);
         float[] heights = captureHeights(sh, FOOTER_START, footerEnd);
@@ -514,12 +589,19 @@ public class QuotationRenderer {
         applyHeights(sh, heights, FOOTER_START + delta);
         for (int[] m : merges) sh.addMergedRegion(new CellRangeAddress(m[0] + delta, m[1] + delta, m[2], m[3]));
 
-        BigDecimal vat = subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+        // v3b: ZERO on an English document. Like toXls's own copy of this expression, it is NOT
+        // what removes the VAT row — #applyEnglishTotals clears these rows outright a moment later
+        // — so a mutation here is invisible to the tests. It is written anyway so that the value
+        // briefly held in this cell is never a rate the document does not charge, which is what
+        // the next edit to this method would otherwise inherit.
+        BigDecimal vat = englishForm
+            ? BigDecimal.ZERO
+            : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
         setNum(sh, SUBTOTAL_ROW + footerShift + delta, 8, subtotal.doubleValue());
         setNum(sh, VAT_ROW + footerShift + delta, 8, vat.doubleValue());
         setNum(sh, TOTAL_ROW + footerShift + delta, 8, subtotal.add(vat).doubleValue());
         getOrKeep(sh, SALESPERSON_FORMULA_ROW + footerShift + delta, 0).setBlank();
-        getOrKeep(sh, FORM_TAG_ROW + footerShift + delta, 8).setBlank();
+        writeFormTag(sh, FORM_TAG_ROW + footerShift + delta, englishForm);
         return delta;
     }
 
@@ -710,6 +792,125 @@ public class QuotationRenderer {
         clearCell(sh, r, 0);
         setStr(sh, r, 1, text);
         for (int c = 2; c <= 8; c++) clearCell(sh, r, c);
+    }
+
+    // ── v3b: the ENGLISH document (F-SM-008) ──────────────────────────────────────
+
+    /**
+     * Every template-owned LABEL cell the English form replaces, in one place.
+     *
+     * <p>The company block (B1/B2/B3) is a TRANSLITERATION of the template's own Thai block, not
+     * new information: "บริษัท จี แอล แอนด์ อาร์ แทปส์ แอนด์ ไทลส์ จำกัด" and the Sukhumvit 63
+     * address are already in the file, and B3's own "โทรศัพท์ 0-2711-5995" is reproduced here in
+     * international form.
+     *
+     * <p>⚠️ ASK-THE-OWNER, and this is why the template's number wins: her two English samples
+     * carry DIFFERENT company phone lines — QN6900902-6 has "Tel. +662 711 5995", QN6900933 has
+     * "Tel. +662 392 1494-95 Fax +662 715 0738". Rather than pick one sample over the other (or
+     * invent a third), this prints the number the TEMPLATE ITSELF carries, which happens to agree
+     * with QN6900902-6. Flagged in the PR for her to confirm which line is current.
+     *
+     * <p>The leading spaces on B1/B2/B3 are the template's own centring device (the Thai strings
+     * carry 26-28 of them) and are preserved so the English block sits in the same place.
+     */
+    private void writeEnglishHeaderLabels(Sheet sh) {
+        setStr(sh, 0, 1, "                          GL & R TAPS AND TILES CO., LTD.");
+        setStr(sh, 1, 1, "                           201 Soi Sukhumvit 63, Sukhumvit Rd., "
+            + "Khlong Tan Nuea, Watthana, Bangkok 10110");
+        setStr(sh, 2, 1, "                            Tel. +662 711 5995    e-mail : info@glr.co.th"
+            + "    Line:@glr_tiles");
+
+        setStr(sh, DEPT_VALUE_ROW, SALES_LINE_COL, EN_LABEL_DEPT);       // H3  ฝ่าย        -> Dept.
+        setStr(sh, NUMBER_VALUE_ROW, SALES_LINE_COL, EN_LABEL_REF);      // H4  เลขที่อ้างอิง -> Ref.
+        setStr(sh, UNIT_VALUE_ROW, SALES_LINE_COL, EN_LABEL_UNIT_CODE);  // H5  หน่วยงาน    -> D.Co.
+        setStr(sh, 3, 0, EN_LABEL_DATE);                                  // A4  วันที่       -> Date
+        setStr(sh, ATTN_ROW, 0, EN_LABEL_ATTN);                           // A5  เรียน       -> Attn :
+
+        // B23 "หมายเหตุ" — the remark box's own label. Written HERE, before #layoutFlowing captures
+        // and relocates the footer block, so it travels with that block on a multi-page document
+        // exactly like the eight remark lines under it do.
+        setStr(sh, FOOTER_START, LABEL_VALUE_COL, EN_REMARKS_LABEL);
+    }
+
+    /**
+     * The 8 column headings on {@link #TITLE_ROW}. Column B carries NO heading in the Thai template
+     * (its รายละเอียด column is labelled only by the box itself) — the English form labels it
+     * "Description &amp; Conditions", so this WRITES a cell the Thai path leaves empty. F and G are
+     * one merged pair in the template, so the ส่วนลด heading is written at F.
+     *
+     * <p>The เป็นเงิน heading carries the currency: "Amount (USD)".
+     */
+    private void writeEnglishColumnTitles(Sheet sh, String currency) {
+        setStr(sh, TITLE_ROW, 0, EN_COL_ITEMS);                     // A ลำดับ
+        setStr(sh, TITLE_ROW, 1, EN_COL_DESCRIPTION);               // B (blank in the Thai form)
+        setStr(sh, TITLE_ROW, 2, EN_COL_QTY);                       // C จำนวน
+        setStr(sh, TITLE_ROW, 3, EN_COL_UNIT);                      // D หน่วย
+        setStr(sh, TITLE_ROW, 4, EN_COL_UNIT_PRICE);                // E ราคา
+        setStr(sh, TITLE_ROW, 5, EN_COL_DISCOUNT);                  // F:G ส่วนลด (merged pair)
+        setStr(sh, TITLE_ROW, 7, EN_COL_NET_PRICE);                 // H คงเหลือ
+        setStr(sh, TITLE_ROW, 8, EN_COL_AMOUNT_PREFIX + " (" + currency + ")"); // I เป็นเงิน (บาท)
+    }
+
+    /**
+     * The English footer's totals: <b>Grand Total ({currency}) and NOTHING else.</b> The Thai form
+     * prints three rows — รวมเป็นเงิน / ภาษีมูลค่าเพิ่ม 7% / รวมเป็นเงินทั้งสิ้น; her English samples
+     * print ONE, with no subtotal row and <b>no VAT row</b>.
+     *
+     * <p>Runs AFTER {@code renderSinglePage}/{@code layoutFlowing} rather than instead of them, so
+     * the Thai path stays byte-for-byte what it was and this is a clearly-scoped overwrite of three
+     * rows. That ordering also matters for the single-page path specifically: there, I39 and I40
+     * are the TEMPLATE'S OWN FORMULAS (={I38*H39}, ={SUM(I38+I39)}), and clearing I38/H39 without
+     * replacing I40 with a literal would leave the grand total computing off blanked cells. Every
+     * cell below is therefore explicitly written or explicitly cleared.
+     *
+     * <p>The label is written across a merged E..H range: "Grand Total (USD)" is far longer than
+     * "รวมเป็นเงินทั้งสิ้น" and column H alone clips it. E..H is free on this row (the template's own
+     * merge on the VAT row is E..G, one row above, and is cleared here anyway).
+     */
+    private void applyEnglishTotals(Sheet sh, int shift, BigDecimal subtotal, String currency) {
+        int subtotalRow = SUBTOTAL_ROW + shift;
+        int vatRow = VAT_ROW + shift;
+        int totalRow = TOTAL_ROW + shift;
+
+        // No subtotal row: the label (H38) and its value (I38) both go.
+        clearCell(sh, subtotalRow, SALES_LINE_COL);
+        clearCell(sh, subtotalRow, VALUE_COL);
+        // No VAT row: the "ภาษีมูลค่าเพิ่ม" label (E39, merged E:G), the 0.07 rate (H39) and the
+        // computed VAT (I39). All three, or a stray "0.07" prints on an English page.
+        for (int c = 4; c <= VALUE_COL; c++) {
+            clearCell(sh, vatRow, c);
+        }
+
+        // ⚠️ Clear E..H FIRST. The template's own "รวมเป็นเงินทั้งสิ้น" lives at H, and a merged
+        // region does not erase the cells it covers — it only stops Excel DRAWING them. Merging
+        // E..H over the top and writing the English label at E therefore left the Thai string
+        // sitting in H in the emitted file, where SheetHtmlRenderer (the Chromium PDF path, which
+        // walks CELLS) would still find it. Caught by
+        // DealQuotationEnglishFormTest#totals_leaveNoVatTextAnywhereOnTheEnglishSheet.
+        for (int c = 4; c <= SALES_LINE_COL; c++) {
+            clearCell(sh, totalRow, c);
+        }
+        mergeIfAbsent(sh, totalRow, totalRow, 4, SALES_LINE_COL);
+        setRightAligned(sh, totalRow, 4, EN_GRAND_TOTAL_PREFIX + " (" + currency + ")");
+        setNum(sh, totalRow, VALUE_COL, subtotal.doubleValue());
+    }
+
+    /**
+     * The form tag at I48. The Thai path BLANKS it — a pre-existing decision ("F-SM-002 tag, not
+     * customer-facing") this change does not revisit. The English path WRITES "F-SM-008 (01)",
+     * because both of the owner's English samples print it and the spec asks for it by name.
+     *
+     * <p>⚠️ The two paths therefore differ on this one cell ON PURPOSE, and that is flagged in the
+     * PR: if she wants the Thai tag printed as well, that is a one-line change here — but it would
+     * be a visible change to every Thai document, which is exactly what this branch's regression
+     * test forbids.
+     */
+    private void writeFormTag(Sheet sh, int row, boolean englishForm) {
+        if (englishForm) {
+            setStr(sh, row, VALUE_COL, EN_FORM_TAG);
+        } else {
+            getOrKeep(sh, row, VALUE_COL).setBlank();
+        }
     }
 
     // ── header / remarks / signature block ────────────────────────────────────────
@@ -991,10 +1192,12 @@ public class QuotationRenderer {
      * labels and blank names stand untouched, matching QuotationRendererTest's "พนักงานขาย"
      * assertion.
      */
-    private void writeSignatureBlock(Sheet sh, Signatories sig, boolean v2, int delta, int footerShift) {
+    private void writeSignatureBlock(Sheet sh, Signatories sig, boolean v2, int delta, int footerShift,
+                                     boolean english) {
         if (!v2) {
             return;
         }
+        String[] labels = english ? EN_SIG_LABELS : SIG_LABELS;
         int orderLineRow = ORDER_LINE_ROW + footerShift + delta;
         int labelsRow = LABELS_ROW + footerShift + delta;
         int nameRow = SALESPERSON_FORMULA_ROW + footerShift + delta;
@@ -1020,11 +1223,12 @@ public class QuotationRenderer {
         // merge leftward to C:I: still ends flush at the same right edge (right-aligned), just
         // with enough room to actually hold the whole sentence without clipping its own start.
         mergeIfAbsent(sh, orderLineRow, orderLineRow, 2, 8);
-        setRightAligned(sh, orderLineRow, 2, "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น");
+        setRightAligned(sh, orderLineRow, 2,
+            english ? EN_ORDER_LINE : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น");
 
         // The real PIXEL width of each of the four equal slots, measured ONCE per render.
         double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
-        double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / SIG_LABELS.length;
+        double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
         double spaceWidthPx = charRunWidthPx(fontMetrics, ' ');
 
@@ -1062,12 +1266,12 @@ public class QuotationRenderer {
         double runStartPx = 0;
         double runEndPx = 0;
         double cursorPx = 0;
-        for (int i = 0; i < SIG_LABELS.length; i++) {
-            String labelSlot = padLabelSlotPx(fontMetrics, SIG_LABELS[i], slotWidthPx, underscoreWidthPx);
+        for (int i = 0; i < labels.length; i++) {
+            String labelSlot = padLabelSlotPx(fontMetrics, labels[i], slotWidthPx, underscoreWidthPx);
             labelsLine.append(labelSlot);
             double labelSlotPx = textWidthPx(fontMetrics, labelSlot);
             if (i == SIG_APPROVER_INDEX) {
-                runStartPx = cursorPx + textWidthPx(fontMetrics, SIG_LABELS[i]);
+                runStartPx = cursorPx + textWidthPx(fontMetrics, labels[i]);
                 runEndPx = cursorPx + labelSlotPx;
             }
             cursorPx += labelSlotPx;
@@ -1076,7 +1280,8 @@ public class QuotationRenderer {
             String nameText = name != null && !name.isBlank() ? "(" + name.trim() + ")" : BLANK_NAME_PLACEHOLDER;
             namesLine.append(centerInSlotPx(fontMetrics, nameText, slotWidthPx, spaceWidthPx));
 
-            datesLine.append(centerInSlotPx(fontMetrics, signatureDateText(dates[i]), slotWidthPx, spaceWidthPx));
+            datesLine.append(centerInSlotPx(fontMetrics, signatureDateText(dates[i], english),
+                slotWidthPx, spaceWidthPx));
         }
         writeFixedWidthRow(sh, labelsRow, labelsLine.toString());
         writeFixedWidthRow(sh, nameRow, namesLine.toString());
@@ -1096,8 +1301,16 @@ public class QuotationRenderer {
      * signature line the signer would otherwise fill by hand, and the owner's example is unpadded.
      */
     static String signatureDateText(LocalDate date) {
-        if (date == null) return BLANK_DATE_PLACEHOLDER;
-        return "วันที่ " + date.getDayOfMonth() + "/" + date.getMonthValue() + "/" + (date.getYear() + 543);
+        return signatureDateText(date, false);
+    }
+
+    /** v3b: the English slot reads {@code "Date 8/9/2026"} — a <b>CE</b> year, where the Thai one
+     * adds 543 — and its empty placeholder is {@code "Date ..../..../...."} rather than
+     * {@code "วันที่ ..../..../...."}. Same unpadded d/M shape in both. */
+    static String signatureDateText(LocalDate date, boolean english) {
+        if (date == null) return english ? EN_BLANK_DATE_PLACEHOLDER : BLANK_DATE_PLACEHOLDER;
+        String dm = date.getDayOfMonth() + "/" + date.getMonthValue() + "/";
+        return english ? "Date " + dm + date.getYear() : "วันที่ " + dm + (date.getYear() + 543);
     }
 
     /** Resolves the label row's OWN template font (before this render overwrites its value) as an
@@ -1868,6 +2081,19 @@ public class QuotationRenderer {
             }
         }
         sh.addMergedRegion(new CellRangeAddress(firstRow, lastRow, firstCol, lastCol));
+    }
+
+    /**
+     * ⚠️ The English header date: {@code "September 8, 2026"} — an English month NAME and a
+     * <b>COMMON-era</b> year, where {@link #thaiDate} directly below prints
+     * {@code "8 กันยายน 2569"} (Buddhist era, +543). The owner's spec names this as the single
+     * easiest thing to get wrong on the English form, which is why the two live adjacent rather
+     * than one being reused with a locale flag. {@code Locale.US} explicitly, so a JVM running
+     * under a Thai default locale cannot make {@code MMMM} come back in Thai.
+     */
+    private String englishDate(LocalDate d) {
+        if (d == null) return "";
+        return d.format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US));
     }
 
     private String thaiDate(LocalDate d) {

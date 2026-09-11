@@ -7,6 +7,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,7 +70,11 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 public class DealQuotationService {
     private static final Logger log = LoggerFactory.getLogger(DealQuotationService.class);
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
-    private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
+    // v3b: this class's own copy of the 7% rate is GONE. Every VAT decision here now asks
+    // WastageCalculator#vatRateFor(documentLanguage), because the rate is no longer a constant —
+    // an EN/F-SM-008 document has none. Keeping a private 0.07 alongside that would be a second
+    // answer to the same question, which is exactly how "an EN document has no VAT" ends up true
+    // in one place and false in another.
     // v3: a PLAIN row applies its own discount percent the same way WastageCalculator does
     // for a tile (which keeps its own copy of this, being a no-Spring pure class).
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
@@ -128,7 +133,10 @@ public class DealQuotationService {
         quotations.lockTicket(ticketId);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
-        List<NewItem> items = buildItems(request.items(), priceMode);
+        String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
+        String currency = resolveCurrency(documentLanguage, request.currency());
+        requirePriceModeAvailableInLanguage(priceMode, documentLanguage);
+        List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
         String number = quotations.nextQuotationCode();
@@ -140,7 +148,7 @@ public class DealQuotationService {
             ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
-            priceMode, subtotal, null, 1, items));
+            priceMode, documentLanguage, currency, subtotal, null, 1, items));
         return requireQuotation(id);
     }
 
@@ -205,7 +213,12 @@ public class DealQuotationService {
         // DIRECT_NET, and neither means NET. This keeps `POST .../calculate-line`'s request shape
         // unchanged (no new endpoint, no new parameter) and cannot disagree with the saved
         // document, because #buildTileItem reads exactly the same two fields.
-        return toItemDto(0L, 0, buildItem(input, null, inferPriceMode(input), BigDecimal.ZERO));
+        // The preview carries no quotation, so it has no language either — TH, whose 7% is what the
+        // stored per-item vat column has always held. The preview never shows that column and the
+        // saved row is recomputed by #buildItems with the document's REAL language, so this cannot
+        // reach a document.
+        return toItemDto(0L, 0, buildItem(input, null, inferPriceMode(input),
+            WastageCalculator.DOCUMENT_LANGUAGE_TH, BigDecimal.ZERO));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -230,7 +243,20 @@ public class DealQuotationService {
         String priceMode = isBlank(request.priceMode())
             ? resolvePriceMode(existing.priceMode())
             : resolvePriceMode(request.priceMode());
-        List<NewItem> items = buildItems(request.items(), priceMode);
+        // v3b, and the SAME reasoning with the same severity: #resolveDocumentLanguage's blank→TH
+        // default is right on create and wrong here. A client that omits the field would flip an
+        // EN/USD document back to Thai — which reinstates 7% VAT on an export quotation, re-labels
+        // every column and every signature slot, and changes the printed total. Silently, and on a
+        // document a customer may already have seen.
+        String documentLanguage = isBlank(request.documentLanguage())
+            ? resolveDocumentLanguage(existing.documentLanguage())
+            : resolveDocumentLanguage(request.documentLanguage());
+        // Currency is NOT given the same treatment, deliberately: #resolveCurrency derives it from
+        // the resolved language and accepts only the matching one, so the stored value can add
+        // nothing. Passing it would merely turn a legitimate language switch into a spurious 400.
+        String currency = resolveCurrency(documentLanguage, request.currency());
+        requirePriceModeAvailableInLanguage(priceMode, documentLanguage);
+        List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
@@ -243,7 +269,7 @@ public class DealQuotationService {
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
-            priceMode, subtotal);
+            priceMode, documentLanguage, currency, subtotal);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -392,7 +418,9 @@ public class DealQuotationService {
         // naive formula still has once a prior revision attempt was cancelled.
         int nextRevisionNo = quotations.nextRevisionNo(source.ticketId(), baseNumber);
         String newNumber = DealQuotationRepository.revisionNumber(baseNumber, nextRevisionNo);
-        List<NewItem> items = source.items().stream().map(this::toNewItemFromDto).toList();
+        BigDecimal sourceVatRate = WastageCalculator.vatRateFor(source.documentLanguage());
+        List<NewItem> items = source.items().stream()
+            .map(item -> toNewItemFromDto(item, sourceVatRate)).toList();
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
@@ -401,7 +429,13 @@ public class DealQuotationService {
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
-            source.customerNotes(), source.priceMode(), source.subtotalAmount(), source.id(),
+            // v3b: a revision inherits the parent's ภาษาเอกสาร and currency verbatim, like every
+            // other header field here — revising an English quotation must not silently reissue it
+            // in Thai. source.documentLanguage() is never null (the repository normalises a stored
+            // NULL to TH), so resolveDocumentLanguage is not needed on this path.
+            source.customerNotes(), source.priceMode(), source.documentLanguage(),
+            WastageCalculator.defaultCurrencyFor(source.documentLanguage()),
+            source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
             "สร้างใบเสนอราคาฉบับแก้ไข " + newNumber + " จาก " + source.number());
@@ -595,7 +629,7 @@ public class DealQuotationService {
      * the owner has NOT ruled on. ⚠️ Flagged in the PR body for her confirmation; if she wants
      * compounding, the change is to add the adjustment's own (negative) lineAmount to the base.
      */
-    private List<NewItem> buildItems(List<ItemInput> inputs, String priceMode) {
+    private List<NewItem> buildItems(List<ItemInput> inputs, String priceMode, String documentLanguage) {
         if (inputs == null || inputs.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ");
         }
@@ -619,7 +653,7 @@ public class DealQuotationService {
         int seq = 0;
         for (ItemInput input : ordered) {
             seq++;
-            NewItem item = buildItem(input, seq, priceMode, adjustmentBase);
+            NewItem item = buildItem(input, seq, priceMode, documentLanguage, adjustmentBase);
             if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
                 adjustmentBase = adjustmentBase.add(item.lineAmount());
             }
@@ -650,6 +684,61 @@ public class DealQuotationService {
     /** {@code null}/blank reads as NET — today's behaviour, and what every pre-v3 row stores. */
     private String resolvePriceMode(String priceMode) {
         return isBlank(priceMode) ? WastageCalculator.PRICE_MODE_NET : priceMode.trim();
+    }
+
+    /** v3b: {@code null}/blank reads as TH — the Thai F-SM-002, the only document that existed
+     * before V169 and what every pre-V169 row stores. */
+    private String resolveDocumentLanguage(String documentLanguage) {
+        return isBlank(documentLanguage)
+            ? WastageCalculator.DOCUMENT_LANGUAGE_TH : documentLanguage.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * v3b: the currency, defaulted FROM the language (TH→THB, EN→USD) so a rep picks one thing.
+     *
+     * <p>An explicit request that DISAGREES with the language is refused rather than quietly
+     * honoured or quietly overridden. The two forms are single-currency documents — F-SM-002
+     * prints เป็นเงิน (บาท) and a 7% VAT row, F-SM-008 prints Amount (USD) and no VAT row at all —
+     * so a "Thai document in USD" would print baht column headings over dollar figures. The field
+     * stays on the wire (rather than being derived and dropped) precisely so that if the owner
+     * ever rules that an English document may be billed in THB, the relaxation is these three
+     * lines and nothing else.
+     */
+    private String resolveCurrency(String documentLanguage, String requested) {
+        String expected = WastageCalculator.defaultCurrencyFor(documentLanguage);
+        if (isBlank(requested)) {
+            return expected;
+        }
+        String currency = requested.trim().toUpperCase(Locale.ROOT);
+        if (!expected.equals(currency)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "สกุลเงิน " + currency + " ใช้กับเอกสารภาษา " + documentLanguage + " ไม่ได้ (ต้องเป็น " + expected + ")");
+        }
+        return currency;
+    }
+
+    /**
+     * v3b: <b>{@code SPECIAL_SQM} is unavailable on an English document.</b>
+     *
+     * <p>ราคาพิเศษ is a Thai-market concept end to end: the rep quotes บาท per ตร.ม. <i>including
+     * VAT</i>, and {@link WastageCalculator#netPerPieceFromSpecialSqm} recovers the per-piece net
+     * by dividing that figure by 1.07. An English/USD document carries no VAT at all, so the same
+     * arithmetic would be dividing a USD-per-sqm price by a Thai VAT rate that does not apply to
+     * it — a number with no meaning, printed as if it did. The sub-line the mode emits
+     * ("ราคารวมภาษีมูลค่าเพิ่ม") says so in Thai on an otherwise English page, which is the visible
+     * symptom of the same mistake.
+     *
+     * <p>Refused at the SERVICE, on both write paths, rather than hidden in the UI: a hidden
+     * control is not a rule. {@code NET} and {@code DIRECT_NET} are both available in either
+     * language — neither touches VAT.
+     */
+    private void requirePriceModeAvailableInLanguage(String priceMode, String documentLanguage) {
+        if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)
+            && WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ราคาพิเศษ (บาท/ตร.ม. รวมภาษี) ใช้กับเอกสารภาษาอังกฤษไม่ได้ "
+                    + "เนื่องจากเอกสารภาษาอังกฤษไม่มีภาษีมูลค่าเพิ่ม กรุณาเลือกราคาสุทธิต่อแผ่นแทน");
+        }
     }
 
     /** See {@link #calculateLine} — the stateless preview has no quotation to read a mode off. */
@@ -683,21 +772,30 @@ public class DealQuotationService {
      * be strict while calculate-line stays lenient; a bean annotation cannot express that
      * distinction without a validation-groups setup this change does not introduce.
      */
-    private NewItem buildItem(ItemInput input, Integer rowNumber, String priceMode, BigDecimal adjustmentBase) {
+    private NewItem buildItem(ItemInput input, Integer rowNumber, String priceMode,
+                              String documentLanguage, BigDecimal adjustmentBase) {
         String lineType = lineType(input);
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
         requirePriceValidForType(input, lineType, priceMode, rowNumber);
+        // v3b: the stored per-item vat/line_total columns follow the DOCUMENT's language, so an EN
+        // row stores 0.00 VAT rather than a 7% figure nothing on that document ever charges. These
+        // two columns are internal (neither is on DealQuotationItemDto, and the renderer never
+        // reads them), but leaving a 7% VAT on the rows of a no-VAT document is a lie any later
+        // report would read straight out of the table.
+        BigDecimal vatRate = WastageCalculator.vatRateFor(documentLanguage);
         return switch (lineType) {
-            case WastageCalculator.LINE_TYPE_PLAIN -> buildPlainItem(input, rowNumber);
-            case WastageCalculator.LINE_TYPE_ADJUSTMENT -> buildAdjustmentItem(input, rowNumber, adjustmentBase);
-            case WastageCalculator.LINE_TYPE_TILE -> buildTileItem(input, rowNumber, priceMode);
+            case WastageCalculator.LINE_TYPE_PLAIN -> buildPlainItem(input, rowNumber, vatRate);
+            case WastageCalculator.LINE_TYPE_ADJUSTMENT ->
+                buildAdjustmentItem(input, rowNumber, adjustmentBase, vatRate);
+            case WastageCalculator.LINE_TYPE_TILE -> buildTileItem(input, rowNumber, priceMode, vatRate);
             default -> throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ประเภทรายการไม่ถูกต้อง: " + lineType);
         };
     }
 
-    private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode) {
+    private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode,
+                                  BigDecimal vatRate) {
         BigDecimal sqmPerPiece = resolveSqmPerPiece(input);
         if (rowNumber != null) {
             requireItemComplete(rowNumber, input, sqmPerPiece);
@@ -741,7 +839,7 @@ public class DealQuotationService {
             ? result.lineAmount()
             : money2(netUnitPrice.multiply(BigDecimal.valueOf(result.piecesFinal())));
 
-        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        BigDecimal vat = money2(lineAmount.multiply(vatRate));
         BigDecimal lineTotal = lineAmount.add(vat);
         String descriptionLine = DealQuotationLines.descriptionLine(input.model(), input.color(), input.texture(),
             input.productCode(), input.sizeText(), input.thicknessMm());
@@ -769,7 +867,7 @@ public class DealQuotationService {
      * price exactly as {@code WastageCalculator#calculate} does for a tile — the discount is
      * normally absent, which prints "Net".
      */
-    private NewItem buildPlainItem(ItemInput input, Integer rowNumber) {
+    private NewItem buildPlainItem(ItemInput input, Integer rowNumber, BigDecimal vatRate) {
         if (rowNumber != null) {
             List<String> missing = new ArrayList<>();
             if (isBlank(input.description())) missing.add("รายละเอียด");
@@ -785,7 +883,7 @@ public class DealQuotationService {
         BigDecimal netUnitPrice = money2(input.unitPrice().multiply(
             BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP))));
         BigDecimal lineAmount = money2(netUnitPrice.multiply(quantity));
-        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        BigDecimal vat = money2(lineAmount.multiply(vatRate));
         return new NewItem(
             input.locationLabel(), null, null,
             null, null, null, null, null,
@@ -810,7 +908,8 @@ public class DealQuotationService {
      * than being special-cased at print time — {@code amount = quantity × netPrice} with a
      * quantity of −1 IS the negative figure, which is presumably why she writes it that way.
      */
-    private NewItem buildAdjustmentItem(ItemInput input, Integer rowNumber, BigDecimal adjustmentBase) {
+    private NewItem buildAdjustmentItem(ItemInput input, Integer rowNumber, BigDecimal adjustmentBase,
+                                        BigDecimal vatRate) {
         BigDecimal amount;
         String description;
         if (input.adjustmentPct() != null) {
@@ -830,7 +929,7 @@ public class DealQuotationService {
                 "รายการที่ " + rowNumber + ": ส่วนลดพิเศษต้องมากกว่าศูนย์");
         }
         BigDecimal lineAmount = amount.negate();
-        BigDecimal vat = money2(lineAmount.multiply(VAT_RATE));
+        BigDecimal vat = money2(lineAmount.multiply(vatRate));
         return new NewItem(
             input.locationLabel(), null, null,
             null, null, null, null, null,
@@ -847,8 +946,10 @@ public class DealQuotationService {
             null, input.adjustmentPct(), input.adjustmentDeadline());
     }
 
-    private NewItem toNewItemFromDto(DealQuotationItemDto item) {
-        BigDecimal vat = money2(item.lineAmount().multiply(VAT_RATE));
+    /** v3b: {@code vatRate} is the SOURCE document's, so a revision of an English quotation copies
+     * 0.00 VAT rows rather than re-stamping 7% onto them. */
+    private NewItem toNewItemFromDto(DealQuotationItemDto item, BigDecimal vatRate) {
+        BigDecimal vat = money2(item.lineAmount().multiply(vatRate));
         BigDecimal lineTotal = item.lineAmount().add(vat);
         return new NewItem(
             item.locationLabel(), item.catalogPriceId(), item.productCode(),
