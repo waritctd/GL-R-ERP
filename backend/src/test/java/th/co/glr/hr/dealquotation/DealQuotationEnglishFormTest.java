@@ -421,7 +421,7 @@ class DealQuotationEnglishFormTest {
 
     /**
      * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row, so line 3 is
-     * the fallback. That fallback used to read "…production of Italy…" — a country that appears
+     * the fallback. That fallback used to read "3.Goods are in stock at the factory in Italy; …" — a country that appears
      * nowhere on the document. It must name no country, and the box must stay at exactly 8 lines.
      */
     @Test
@@ -455,16 +455,19 @@ class DealQuotationEnglishFormTest {
 
     /**
      * B2 runs into the badge image on the right; the old address clipped at "Bangkok 101". Measured
-     * on the rendered PDF, the shortened line ends before the badge. The cap guards the width: the
-     * old line was 88 characters after its indent, the new one is 73.
+     * on the rendered PDF (2026-09-11, 300 dpi), the shortened line ends ~4 mm before the badge.
+     * The RAW cell is pinned, indent included: the leading spaces clear the logo on the left, so a
+     * longer indent pushes the same text into the badge just as a longer address would. The length
+     * cap is the measured line (27-space indent + 73 characters) — character count stands in for
+     * width, so re-measure on a PDF before ever raising it.
      */
     @Test
     void header_printsTheShortenedAddress_endingWithTheFullPostcode() throws Exception {
         Sheet sheet = renderEnglish();
-        String address = str(sheet, 1, 1).strip();
-        assertThat(address)
+        String raw = str(sheet, 1, 1);
+        assertThat(raw.strip())
             .isEqualTo("201 Sukhumvit 63, Sukhumvit Road, North-Klongton, Wattana, Bangkok 10110");
-        assertThat(address.length()).isLessThanOrEqualTo(75);
+        assertThat(raw.length()).isLessThanOrEqualTo(27 + 73);
     }
 
     @Test
