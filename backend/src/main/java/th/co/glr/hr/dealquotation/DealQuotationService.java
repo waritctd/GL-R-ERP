@@ -6,8 +6,10 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -31,6 +34,8 @@ import th.co.glr.hr.dealquotation.DealQuotationRepository.ContactSnapshot;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.CustomerSnapshot;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.InsertDraftParams;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.NewItem;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureLink;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
@@ -289,8 +294,12 @@ public class DealQuotationService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
+        // GLA-75: the full replace below mints new item ids, so read the pictures off the OLD rows
+        // first and re-point the new rows the client identified by their previous `id`.
+        Map<Long, PictureLink> previousPictures = quotations.findPictureLinks(id);
         quotations.deleteItems(id);
         quotations.insertItems(id, items);
+        carryPicturesForward(id, request.items(), previousPictures);
         return requireQuotation(id);
     }
 
@@ -453,9 +462,99 @@ public class DealQuotationService {
             WastageCalculator.defaultCurrencyFor(source.documentLanguage()),
             source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
+        // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
+        // child's rows point at the parent's (immutable, shared) picture rows, matched by seq.
+        quotations.copyPictureLinks(source.id(), newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
             "สร้างใบเสนอราคาฉบับแก้ไข " + newNumber + " จาก " + source.number());
         return requireQuotation(newId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-75 item pictures (V170) — one picture per item, placement BELOW | BESIDE.
+    //
+    // AUTHZ — the same rule as editing the quotation, by construction: every write goes through
+    // #requireEditablePicture, which calls the SAME #requireEditAccessForQuotation that #update,
+    // #submit and #cancel use (sales on their OWN deal; sales_manager or the live
+    // can_create_quotation grant on any deal — the identical set DealEntryAccess#canEnterDeal
+    // admits, with update's ownership rule on top), and then refuses anything not DRAFT exactly as
+    // #update does (409). The repository re-states DRAFT inside every UPDATE's WHERE clause, so a
+    // submit racing an upload cannot slip a picture onto a PENDING_APPROVAL document. The read is
+    // #requireViewAccess, the rule GET /deal-quotations/{id} uses.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Transactional
+    public DealQuotationDto uploadItemPicture(long id, long itemId, MultipartFile file, String placement,
+                                              UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        requireEditablePicture(actor, quotation, itemId);
+        String resolvedPlacement = QuotationItemPictures.parsePlacement(placement);
+        QuotationItemPictures.ValidatedPicture picture = QuotationItemPictures.validate(file);
+        Long previousPictureId = quotations.findItemPictureId(id, itemId);
+        long pictureId = quotations.insertPicture(picture.mimeType(), picture.bytes(), actor.id());
+        if (quotations.setItemPicture(id, itemId, pictureId, resolvedPlacement) == 0) {
+            // Lost a race with submit/cancel. Clean up explicitly rather than rely on the rollback:
+            // the hand-wired integration suite runs with no transaction proxy at all.
+            quotations.deletePicturesIfUnreferenced(List.of(pictureId));
+            throw notDraftForPicture();
+        }
+        if (previousPictureId != null) {
+            quotations.deletePicturesIfUnreferenced(List.of(previousPictureId));
+        }
+        return requireQuotation(id);
+    }
+
+    @Transactional
+    public DealQuotationDto setItemPicturePlacement(long id, long itemId, String placement, UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        DealQuotationItemDto item = requireEditablePicture(actor, quotation, itemId);
+        String resolvedPlacement = QuotationItemPictures.parsePlacement(placement);
+        if (!item.hasPicture()) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "รายการนี้ยังไม่มีรูปภาพ");
+        }
+        if (quotations.setItemPicturePlacement(id, itemId, resolvedPlacement) == 0) {
+            throw notDraftForPicture();
+        }
+        return requireQuotation(id);
+    }
+
+    /** Idempotent: removing the picture of an item that has none answers the quotation, not 404. */
+    @Transactional
+    public DealQuotationDto removeItemPicture(long id, long itemId, UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        requireEditablePicture(actor, quotation, itemId);
+        Long previousPictureId = quotations.findItemPictureId(id, itemId);
+        if (quotations.clearItemPicture(id, itemId) == 0) {
+            throw notDraftForPicture();
+        }
+        if (previousPictureId != null) {
+            quotations.deletePicturesIfUnreferenced(List.of(previousPictureId));
+        }
+        return requireQuotation(id);
+    }
+
+    public PictureImage getItemPicture(long id, long itemId, UserPrincipal actor) {
+        DealQuotationDto quotation = requireQuotation(id);
+        requireViewAccess(actor, quotation);
+        return quotations.findItemPicture(id, itemId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรูปภาพของรายการนี้"));
+    }
+
+    /** 403 (edit access, as #update) → 409 (not DRAFT, as #update) → 404 (item not on THIS
+     * quotation). Authz first, so a caller without edit rights learns nothing about item ids. */
+    private DealQuotationItemDto requireEditablePicture(UserPrincipal actor, DealQuotationDto quotation, long itemId) {
+        requireEditAccessForQuotation(actor, quotation);
+        if (!QuotationStatus.DRAFT.equals(quotation.docStatus())) {
+            throw notDraftForPicture();
+        }
+        return quotation.items().stream()
+            .filter(item -> item.id() == itemId)
+            .findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในใบเสนอราคา"));
+    }
+
+    private ApiException notDraftForPicture() {
+        return new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขรูปภาพไม่ได้");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -490,8 +589,13 @@ public class DealQuotationService {
                 signatureMime = signature.get().mimeType();
             }
         }
+        // GLA-75: item picture bytes are a separate read, and only when some item has one — the DTO
+        // never carries bytes.
+        Map<Long, PictureImage> itemPictures = quotation.items().stream().anyMatch(DealQuotationItemDto::hasPicture)
+            ? quotations.findPictureImagesForQuotation(quotation.id())
+            : Map.of();
         return DealQuotationRenderAdapter.toRenderModel(quotation, signaturePng, signatureMime,
-            bankBlockLines);
+            bankBlockLines, itemPictures);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -650,20 +754,11 @@ public class DealQuotationService {
         if (inputs == null || inputs.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ");
         }
-        List<ItemInput> ordered = new ArrayList<>();
-        List<ItemInput> adjustments = new ArrayList<>();
-        for (ItemInput input : inputs) {
-            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType(input))) {
-                adjustments.add(input);
-            } else {
-                ordered.add(input);
-            }
-        }
-        if (ordered.isEmpty()) {
+        List<ItemInput> ordered = orderedInputs(inputs);
+        if (ordered.stream().allMatch(input -> WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType(input)))) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ใบเสนอราคาต้องมีรายการสินค้าอย่างน้อยหนึ่งรายการ ก่อนจะใส่ส่วนลดพิเศษได้");
         }
-        ordered.addAll(adjustments);
 
         List<NewItem> items = new ArrayList<>();
         BigDecimal adjustmentBase = BigDecimal.ZERO;
@@ -690,6 +785,48 @@ public class DealQuotationService {
                 "ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ");
         }
         return items;
+    }
+
+    /** The order items are STORED in (seq 1..n): every non-adjustment row in the order sent, then
+     * every adjustment row. The ONE statement of that rule — {@link #buildItems} numbers rows by it
+     * and {@link #carryPicturesForward} maps a sent item to its stored seq by it, so the two can
+     * never disagree about which row a picture belongs to. */
+    private List<ItemInput> orderedInputs(List<ItemInput> inputs) {
+        List<ItemInput> ordered = new ArrayList<>();
+        List<ItemInput> adjustments = new ArrayList<>();
+        for (ItemInput input : inputs) {
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType(input))) {
+                adjustments.add(input);
+            } else {
+                ordered.add(input);
+            }
+        }
+        ordered.addAll(adjustments);
+        return ordered;
+    }
+
+    /**
+     * GLA-75: after a draft save replaced every item row, re-point each new row at the picture its
+     * previous row carried — but only for items the client identified by their previous
+     * {@code id} ({@link ItemInput#id}), and only ids that were THIS quotation's items a moment ago
+     * ({@code previous} was read from this quotation alone), so a foreign or stale id cannot attach
+     * anyone else's picture. Whatever picture no row points at afterwards is deleted.
+     */
+    private void carryPicturesForward(long quotationId, List<ItemInput> inputs, Map<Long, PictureLink> previous) {
+        if (previous.isEmpty()) {
+            return;
+        }
+        List<ItemInput> ordered = orderedInputs(inputs);
+        Map<Integer, PictureLink> bySeq = new HashMap<>();
+        for (int i = 0; i < ordered.size(); i++) {
+            Long previousItemId = ordered.get(i).id();
+            PictureLink link = previousItemId == null ? null : previous.get(previousItemId);
+            if (link != null) {
+                bySeq.put(i + 1, link);
+            }
+        }
+        quotations.linkPictures(quotationId, bySeq);
+        quotations.deletePicturesIfUnreferenced(previous.values().stream().map(PictureLink::pictureId).toList());
     }
 
     /** {@code null}/blank {@code lineType} reads as TILE — every pre-v3 client keeps working

@@ -107,8 +107,42 @@ public record QuotationRenderModel(
         /** "Net" or "{pct}%" — printed verbatim into the ส่วนลด column. */
         String discountLabel,
         BigDecimal netUnitPrice,
-        BigDecimal amount
-    ) {}
+        BigDecimal amount,
+        /** GLA-75: the item's picture, or null (every legacy/PCR item, and every direct-deal item
+         * without one — which renders exactly as it did before pictures existed). */
+        ItemPicture picture
+    ) {
+        /** The pre-GLA-75 shape: no picture. Every legacy wrapper and existing fixture uses it. */
+        public RenderItem(String headingLabel, List<String> descriptionLines, BigDecimal qty, String unit,
+                          BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
+            this(headingLabel, descriptionLines, qty, unit, unitPrice, discountLabel, netUnitPrice, amount, null);
+        }
+    }
+
+    /**
+     * GLA-75 — one item's picture and where it goes (owner, 2026-09-10: "attach image like the
+     * reference photo make sure the sizing appropriate like the reference picture"). Her three
+     * reference documents need two placements, and the renderer sizes each differently:
+     *
+     * <ul>
+     *   <li>{@link #BELOW} — a LARGE picture on its own rows under the item's description lines,
+     *       scaled to the description column's width (aspect kept, height capped) — QN6900902-6's
+     *       mosaic pattern, QN6900782-2's cut drawings;</li>
+     *   <li>{@link #BESIDE} — a SMALL thumbnail at the right of the description cell on the item's
+     *       first rows, about two text rows tall — QN6900971-4's sanitary ware.</li>
+     * </ul>
+     *
+     * {@code mimeType} is {@code image/png} or {@code image/jpeg}, sniffed from the bytes at upload.
+     */
+    public record ItemPicture(byte[] data, String mimeType, String placement) {
+        public static final String BELOW = "BELOW";
+        public static final String BESIDE = "BESIDE";
+
+        /** Anything that is not BESIDE is BELOW — the owner's default placement. */
+        public boolean beside() {
+            return BESIDE.equalsIgnoreCase(placement);
+        }
+    }
 
     /**
      * The signature block. Names are nullable (blank on a DRAFT/PENDING_APPROVAL document — a

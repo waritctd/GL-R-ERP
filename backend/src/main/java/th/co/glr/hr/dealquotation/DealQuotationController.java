@@ -8,7 +8,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
@@ -24,7 +27,9 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.PicturePlacementRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
@@ -164,6 +169,49 @@ public class DealQuotationController {
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + ".pdf\"")
             .contentType(MediaType.APPLICATION_PDF)
             .body(bytes);
+    }
+
+    // ── GLA-75: one picture per item (V170). Writes are DRAFT-only and gated exactly like
+    // PUT /deal-quotations/{id}; the read is gated like GET /deal-quotations/{id}. See
+    // DealQuotationService#uploadItemPicture for the rule. Writes answer {quotation: ...} so the
+    // client re-reads hasPicture/picturePlacement/pictureUrl from one response.
+
+    /** Multipart {@code file} (PNG/JPEG by magic bytes, ≤ 2 MB) and optional {@code placement}
+     * ({@code BELOW} default | {@code BESIDE}). Replaces any existing picture on the item. PUT +
+     * multipart, like {@code EmployeeSignatureController#upload}. */
+    @PutMapping("/deal-quotations/{id}/items/{itemId}/picture")
+    Map<String, DealQuotationDto> uploadItemPicture(@PathVariable long id, @PathVariable long itemId,
+                                                    @RequestParam("file") MultipartFile file,
+                                                    @RequestParam(value = "placement", required = false) String placement,
+                                                    HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.uploadItemPicture(id, itemId, file, placement, user));
+    }
+
+    @PatchMapping("/deal-quotations/{id}/items/{itemId}/picture")
+    Map<String, DealQuotationDto> setItemPicturePlacement(@PathVariable long id, @PathVariable long itemId,
+                                                          @Valid @RequestBody PicturePlacementRequest request,
+                                                          HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.setItemPicturePlacement(id, itemId, request.placement(), user));
+    }
+
+    @DeleteMapping("/deal-quotations/{id}/items/{itemId}/picture")
+    Map<String, DealQuotationDto> removeItemPicture(@PathVariable long id, @PathVariable long itemId,
+                                                    HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.removeItemPicture(id, itemId, user));
+    }
+
+    @GetMapping("/deal-quotations/{id}/items/{itemId}/picture")
+    ResponseEntity<byte[]> itemPicture(@PathVariable long id, @PathVariable long itemId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        PictureImage image = quotations.getItemPicture(id, itemId, user);
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(image.mimeType()))
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .header("X-Content-Type-Options", "nosniff")
+            .body(image.image());
     }
 
     /** Keeps a quotation number ({@code QT-2026-0042} or a revision's {@code QT-2026-0042-2})

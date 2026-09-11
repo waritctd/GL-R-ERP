@@ -99,8 +99,41 @@ public final class DealQuotationRequests {
         LocalDate adjustmentDeadline,
         /** ADJUSTMENT only — a FLAT baht amount, as the alternative to a percent. Positive; the
          * row prints it negative. Exactly one of this and {@code adjustmentPct} must be given. */
-        @DecimalMax("99999999") BigDecimal adjustmentAmount
+        @DecimalMax("99999999") BigDecimal adjustmentAmount,
+
+        /**
+         * GLA-75 (V170): the EXISTING item's id, exactly as {@code DealQuotationItemDto#id} served
+         * it — optional, and meaningful on UPDATE only.
+         *
+         * <p>{@code PUT /api/deal-quotations/{id}} is a FULL REPLACE of the draft's item rows, so
+         * every save mints new item ids. An item's picture is carried onto its replacement row
+         * ONLY when the client sends that row's previous {@code id} back here; an item sent
+         * without it is saved as a new item with no picture. The id is matched against THIS
+         * quotation's own current items only — an id from any other quotation, or a stale one, is
+         * ignored, never an error and never a way to reach someone else's picture. Ignored on
+         * create and by calculate-line.
+         */
+        Long id
     ) {
+        /** The v3 shape — every field except {@link #id}; see the class-level note on the legacy
+         * constructors below. Defaults {@code id} to null (a brand-new item, no picture). */
+        public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
+                         String model, String color, String texture, String sizeText,
+                         BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+                         BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+                         BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+                         BigDecimal discountPct, String originCountry, Integer leadTimeMinDays,
+                         Integer leadTimeMaxDays, String itemNotes, String lineType, String description,
+                         BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+                         BigDecimal directNetPrice, BigDecimal adjustmentPct, LocalDate adjustmentDeadline,
+                         BigDecimal adjustmentAmount) {
+            this(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
+                wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, lineType, description, quantity, unit, specialPriceSqm,
+                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, null);
+        }
+
         /**
          * The pre-v3 22-argument shape, kept so the many existing call sites (and every test that
          * builds a plain tile row) compile unchanged — the SAME device, for the same reason, as
@@ -121,7 +154,7 @@ public final class DealQuotationRequests {
                 thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
                 wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -202,6 +235,12 @@ public final class DealQuotationRequests {
                 creditDays, validityDays, customerNotes, priceMode, null, null, items);
         }
     }
+
+    /** GLA-75: {@code PATCH /api/deal-quotations/{id}/items/{itemId}/picture} — move an existing
+     * picture between the two placements without re-uploading it. */
+    public record PicturePlacementRequest(
+        @NotBlank @Pattern(regexp = "BELOW|BESIDE", message = "ต้องเป็น BELOW หรือ BESIDE") String placement
+    ) {}
 
     public record ApproveRequest(@Size(max = 2000) String note) {}
 
