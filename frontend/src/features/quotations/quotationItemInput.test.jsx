@@ -34,14 +34,14 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
   it('a PLAIN row sends only its four fields and a numeric quantity', () => {
     const input = itemInputFromRow({ lineType: 'PLAIN', description: ' ค่าขนส่ง ', quantity: '1', unit: 'งาน', unitPrice: 3500 }, 'SPECIAL_SQM');
     expect(input).toEqual({
-      lineType: 'PLAIN', locationLabel: null, description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500, discountPct: 0, itemNotes: null,
+      id: null, lineType: 'PLAIN', locationLabel: null, description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500, discountPct: 0, itemNotes: null,
     });
   });
 
   it('a ส่วนลดพิเศษ sends EXACTLY one of percent / amount, and no unitPrice', () => {
     const pct = adjustmentInputFromRow({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentAmount: 999, adjustmentDeadline: '2026-07-31' });
     expect(pct).toEqual({
-      lineType: 'ADJUSTMENT', locationLabel: null, adjustmentPct: 3, adjustmentAmount: null, adjustmentDeadline: '2026-07-31', description: null,
+      id: null, lineType: 'ADJUSTMENT', locationLabel: null, adjustmentPct: 3, adjustmentAmount: null, adjustmentDeadline: '2026-07-31', description: null,
     });
     const flat = adjustmentInputFromRow({ adjustmentKind: 'AMOUNT', adjustmentPct: 3, adjustmentAmount: 500, description: 'ท้ายบิล' });
     expect(flat).toMatchObject({ adjustmentPct: null, adjustmentAmount: 500, description: 'ท้ายบิล' });
