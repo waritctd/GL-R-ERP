@@ -103,7 +103,7 @@ class DealQuotationRenderAdapterV3Test {
     // ── workbook level: the decisions above actually reach the printed cells ────────────────
 
     @Test
-    void adjustmentRow_printsAnEmptyUnitCell_notTheTileDefault() throws Exception {
+    void adjustmentRow_leavesBothTheUnitAndTheDiscountCellsEmpty() throws Exception {
         Sheet sheet = render(WastageCalculator.PRICE_MODE_NET, List.of(adjustment()));
         // Row 9 is the tile; its three description lines occupy rows 9-11, so the adjustment's
         // main row is 12.
@@ -114,6 +114,14 @@ class DealQuotationRenderAdapterV3Test {
         // ⚠️ The whole point: NOT "แผ่น".
         assertThat(sheet.getRow(adjustmentRow).getCell(3).getStringCellValue()).isEmpty();
         assertThat(sheet.getRow(adjustmentRow).getCell(4).getNumericCellValue()).isEqualTo(38198.21);
+        // ส่วนลด is empty for the same reason หน่วย is: neither column means anything for a row that
+        // IS the discount. This printed "Net" until 2026-09-11, on the reasoning that ราคา equals
+        // คงเหลือ here — a plausible inference that the owner's QN6900704-2 contradicts, since its
+        // ส่วนลดพิเศษ row leaves the cell blank. Caught by rendering her document back and comparing.
+        // Column G (index 6) is ส่วนลด — see QuotationRenderer's `setStr(sh, r, 6, …)`. An earlier
+        // version of this assertion read cell 5 and passed whether or not the fix was present,
+        // which the mutation check caught.
+        assertThat(sheet.getRow(adjustmentRow).getCell(6).getStringCellValue()).isEmpty();
         assertThat(sheet.getRow(adjustmentRow).getCell(7).getNumericCellValue()).isEqualTo(38198.21);
         assertThat(sheet.getRow(adjustmentRow).getCell(8).getNumericCellValue()).isEqualTo(-38198.21);
     }
