@@ -419,6 +419,57 @@ class DealQuotationEnglishFormTest {
         }
     }
 
+    /**
+     * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row, so line 3 is
+     * the fallback. That fallback used to read "3.Goods are in stock at the factory in Italy; …" — a country that appears
+     * nowhere on the document. It must name no country, and the box must stay at exactly 8 lines.
+     */
+    @Test
+    void remarks_anAllPlainDocument_printsANeutralDeliveryLine_inBothLayouts() throws Exception {
+        DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
+            plainRow(1, "Supply of Porcelain Tiles"), plainRow(2, "Freight China to Male"))));
+        for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
+            Sheet sheet = renderLegacyModel(
+                DealQuotationRenderAdapter.toRenderModel(allPlain, null, null, block));
+            List<String> remarks = new ArrayList<>();
+            for (int r = 23; r <= 30; r++) {
+                remarks.add(str(sheet, r, 1));
+            }
+            String layout = block.isEmpty() ? "no bank" : "bank";
+            assertThat(remarks).as("8 lines, %s layout", layout).hasSize(8).allMatch(l -> !l.isBlank());
+            assertThat(remarks.get(block.isEmpty() ? 2 : 5)).as("line 3, %s layout", layout)
+                .isEqualTo("3.Delivery : lead time will be confirmed at order confirmation.");
+            assertThat(String.join("\n", remarks)).as("%s layout", layout)
+                .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian");
+            remarks.forEach(l -> assertThat(l.length()).as("%s layout: %s", layout, l)
+                .isLessThanOrEqualTo(130));
+        }
+    }
+
+    /** B1 must be the owner's own spelling from her F-SM-008 form, not the older "&amp; R." one. */
+    @Test
+    void header_printsTheCompanyNameAsTheOwnersFormSpellsIt() throws Exception {
+        Sheet sheet = renderEnglish();
+        assertThat(str(sheet, 0, 1).strip()).isEqualTo("G.L.&R. TAPS AND TILES COMPANY LIMITED");
+    }
+
+    /**
+     * B2 runs into the badge image on the right; the old address clipped at "Bangkok 101". Measured
+     * on the rendered PDF (2026-09-11, 300 dpi), the shortened line ends ~4 mm before the badge.
+     * The RAW cell is pinned, indent included: the leading spaces clear the logo on the left, so a
+     * longer indent pushes the same text into the badge just as a longer address would. The length
+     * cap is the measured line (27-space indent + 73 characters) — character count stands in for
+     * width, so re-measure on a PDF before ever raising it.
+     */
+    @Test
+    void header_printsTheShortenedAddress_endingWithTheFullPostcode() throws Exception {
+        Sheet sheet = renderEnglish();
+        String raw = str(sheet, 1, 1);
+        assertThat(raw.strip())
+            .isEqualTo("201 Sukhumvit 63, Sukhumvit Road, North-Klongton, Wattana, Bangkok 10110");
+        assertThat(raw.length()).isLessThanOrEqualTo(27 + 73);
+    }
+
     @Test
     void thaiDocument_neverCarriesTheBankBlock_evenWhenConfigured() throws Exception {
         // The Thai หมายเหตุ block has no bank lines and must not grow them: its eight lines are the
@@ -513,6 +564,33 @@ class DealQuotationEnglishFormTest {
 
     private DealQuotationDto thaiQuotation() {
         return quotation(WastageCalculator.DOCUMENT_LANGUAGE_TH, "THB");
+    }
+
+    private DealQuotationDto withItems(DealQuotationDto q, List<DealQuotationItemDto> items) {
+        return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
+            q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(),
+            q.salesRepId(), q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(),
+            q.submittedAt(), q.approvedById(), q.approvedByName(), q.approvedByNameEn(), q.approvedAt(),
+            q.approvalNote(), q.quotationDate(), q.customerName(), q.customerAddress(),
+            q.customerTaxId(), q.customerPhone(), q.contactId(), q.contactName(), q.contactPhone(),
+            q.contactEmail(), q.projectName(), q.deptCode(), q.unitCode(), q.offerDate(),
+            q.depositPercent(), q.remainderMode(), q.creditDays(), q.validityDays(),
+            q.validityDate(), q.customerNotes(), q.priceMode(), q.documentLanguage(),
+            q.subtotalAmount(), q.vatAmount(), q.grandTotal(), q.currency(),
+            q.approverHasSignature(), items, q.createdAt(), q.updatedAt());
+    }
+
+    /** A PLAIN row: description, 1 lot at 500.00, and — like every real PLAIN row — no lead time. */
+    private DealQuotationItemDto plainRow(int seq, String description) {
+        return new DealQuotationItemDto((long) seq, seq,
+            null, null, null, null, null, null, null, null,     // location … size text
+            null, null, null, null, null, null, null, null,     // thickness … pieces per box
+            new BigDecimal("500.00"), null, null,               // unit price, discount, origin
+            null, null, null,                                   // lead time min/max, notes
+            null, 0, 0, 0, null,                                // pieces per sqm … boxes (TILE only)
+            new BigDecimal("500.00"), new BigDecimal("500.00"), // net, line amount
+            description, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "lot", null, null, null, null, null);
     }
 
     /** The three employee names blanked in English, to exercise the Thai fallback. */
