@@ -188,8 +188,11 @@ export const WASTAGE_PERCENT_PRESETS = [0, 5, 10];
 export const ORIGIN_COUNTRY_OPTIONS = [
   { code: 'อิตาลี', label: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90 },
   { code: 'สเปน', label: 'สเปน', leadTimeMinDays: 75, leadTimeMaxDays: 90 },
-  { code: 'จีน', label: 'จีน', leadTimeMinDays: 60, leadTimeMaxDays: 75 },
-  { code: 'ไทย-สต็อก', label: 'ไทย-สต็อก', leadTimeMinDays: 30, leadTimeMaxDays: 45 },
+  // Owner testing feedback 2026-09-11, verbatim: "ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค
+  // 3-7 วัน" -- and "แค่เปลี่ยนตัวเลขที่มีอยู่", i.e. these two defaults, not new logic.
+  // อิตาลี/สเปน were not mentioned and keep 75-90.
+  { code: 'จีน', label: 'จีน', leadTimeMinDays: 30, leadTimeMaxDays: 45 },
+  { code: 'ไทย-สต็อก', label: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7 },
   { code: 'อื่นๆ', label: 'อื่นๆ', leadTimeMinDays: null, leadTimeMaxDays: null },
 ];
 

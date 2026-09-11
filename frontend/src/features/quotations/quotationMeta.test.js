@@ -289,8 +289,8 @@ describe('remainderModeLabel / defaultLeadTimeForOrigin', () => {
   it('gives each origin country its documented default lead-time range', () => {
     expect(defaultLeadTimeForOrigin('อิตาลี')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
     expect(defaultLeadTimeForOrigin('สเปน')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
-    expect(defaultLeadTimeForOrigin('จีน')).toEqual({ leadTimeMinDays: 60, leadTimeMaxDays: 75 });
-    expect(defaultLeadTimeForOrigin('ไทย-สต็อก')).toEqual({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
+    expect(defaultLeadTimeForOrigin('จีน')).toEqual({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
+    expect(defaultLeadTimeForOrigin('ไทย-สต็อก')).toEqual({ leadTimeMinDays: 3, leadTimeMaxDays: 7 });
     expect(defaultLeadTimeForOrigin('อื่นๆ')).toEqual({ leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 
