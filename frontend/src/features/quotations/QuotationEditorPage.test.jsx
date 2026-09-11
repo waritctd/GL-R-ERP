@@ -595,8 +595,10 @@ describe('QuotationEditorPage inline deal creation', () => {
     await waitFor(() => expect(screen.getAllByText(testCustomer.name).length).toBeGreaterThan(0)); // the chip that replaces the search input
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
 
-    const projectSelect = await screen.findByLabelText(/^โครงการ/);
-    fireEvent.change(projectSelect, { target: { value: String(testProject.id) } });
+    // โครงการ is a type-ahead combobox (owner testing feedback, 2026-09-11), not a <select> --
+    // open it and pick the option, same "role=option" listbox shape as ลูกค้า above.
+    fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(testProject.name) }));
   }
 
   // #M4 (owner ruling 2026-09-10): "ALL info about the tile has to be completed" -- reuses the

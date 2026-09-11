@@ -1306,6 +1306,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     effect) and changeable from here. */}
                 <QuotationContactPicker
                   customerId={contactCustomerId}
+                  customerName={customerName}
                   value={contact}
                   onChange={(next) => { setContact(next); setDirty(true); }}
                   onResolve={setContact}
