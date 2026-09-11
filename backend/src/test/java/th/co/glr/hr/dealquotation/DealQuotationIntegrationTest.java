@@ -118,7 +118,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             quotationRenderer.setPdfRenderer(QuotationRenderer.PDF_RENDERER_CHROMIUM);
         }
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts, notifications,
-            approvalMailer, quotationRenderer, employeeAuth, signatureRepository, "https://portal.test");
+            approvalMailer, quotationRenderer, employeeAuth, signatureRepository, "https://portal.test",
+            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
+            // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
+            "", "", "");
 
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 

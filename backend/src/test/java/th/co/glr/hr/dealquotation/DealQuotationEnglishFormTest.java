@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -340,7 +341,107 @@ class DealQuotationEnglishFormTest {
         assertThat(legacy.currencyCode()).isEqualTo("THB");
     }
 
+
+
+    @Test
+    void remarks_carryTheOwnersBankBlockUnnumbered_whenItIsConfigured() throws Exception {
+        Sheet sheet = renderEnglishWithBank(BANK_BLOCK);
+        List<String> remarks = new ArrayList<>();
+        for (int r = 23; r <= 30; r++) {
+            remarks.add(str(sheet, r, 1));
+        }
+        // Still EXACTLY 8. REMARK_HEAD_ROWS has 8 slots and fewer falls back to a legacy 3-line
+        // layout that leaves the template's Thai continuation rows visible on an English page —
+        // so the bank block's three lines are paid for by merging two pairs of remarks, not by
+        // overflowing the box.
+        assertThat(remarks).hasSize(8);
+        assertThat(remarks.get(2)).isEqualTo(BANK_BLOCK.get(0));
+        assertThat(remarks.get(3)).isEqualTo(BANK_BLOCK.get(1));
+        assertThat(remarks.get(4)).isEqualTo(BANK_BLOCK.get(2));
+        // Unnumbered, exactly as hers are.
+        assertThat(remarks.get(2)).doesNotStartWith("4.");
+        assertThat(remarks.get(3)).doesNotStartWith("5.");
+        // The placeholder must be GONE — printing both would offer two different payment routes.
+        assertThat(remarks).noneMatch(line -> line.contains("proforma invoice"));
+        // And the computed remarks survive the merge rather than being dropped to make room.
+        assertThat(remarks.get(5)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
+        // Numbering runs on 3, 4, 5 after the block — no gap at 4 for a customer to read as a
+        // missing term (review F2).
+        assertThat(remarks.get(6)).startsWith("4.Price validity : 30 days").contains("ISO and TIS tolerances");
+        assertThat(remarks.get(7)).startsWith("5.Colours").contains("not returnable or exchangeable");
+    }
+
+    @Test
+    void remarks_fallBackToTheProformaLine_whenTheBankBlockIsMissingOrHalfFilled() throws Exception {
+        // Half a set of wire instructions is worse than none: a customer could act on a beneficiary
+        // name with no account number. Anything short of all three lines prints the honest line.
+        for (List<String> partial : List.of(
+                List.<String>of(),
+                List.of(BANK_BLOCK.get(0)),
+                List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1)),
+                List.of(BANK_BLOCK.get(0), "", BANK_BLOCK.get(2)),
+                // Whitespace-only is blank too. Review F4: an isBlank→isEmpty refactor stayed green.
+                List.of(BANK_BLOCK.get(0), "   ", BANK_BLOCK.get(2)),
+                // A null line — Arrays.asList, since List.of refuses nulls.
+                Arrays.asList(BANK_BLOCK.get(0), null, BANK_BLOCK.get(2)),
+                // FOUR lines is not three. Review F5: `size() >= 3` stayed green, and the renderer
+                // silently drops a ninth remark row rather than failing.
+                List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2), "extra"))) {
+            Sheet sheet = renderEnglishWithBank(partial);
+            List<String> remarks = new ArrayList<>();
+            for (int r = 23; r <= 30; r++) {
+                remarks.add(str(sheet, r, 1));
+            }
+            assertThat(remarks).as("size for %s", partial).hasSize(8);
+            assertThat(remarks.get(3)).as("fallback for %s", partial)
+                .startsWith("4.Payment by telegraphic transfer");
+            assertThat(remarks).as("no partial block for %s", partial)
+                .noneMatch(line -> line.contains("003-92-1222-6"));
+        }
+    }
+
+    @Test
+    void everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts() throws Exception {
+        // Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is CUT at the
+        // border rather than wrapped. Two merged lines at 145 and 151 characters printed
+        // "…within ISO and TIS toler" and "…not returnab" on the PDF while every content assertion
+        // here stayed green — the text in the cell was intact, it simply did not fit. Measured by
+        // review: the pre-existing 130-character line 1 fits in both LibreOffice and Chromium, and
+        // ~139 does not. Character count is a proxy for rendered width; for Latin text in this font
+        // it tracks the measurement closely, but tighten the cap if a line near it ever clips.
+        for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
+            Sheet sheet = renderEnglishWithBank(block);
+            for (int r = 23; r <= 30; r++) {
+                String line = str(sheet, r, 1);
+                assertThat(line.length()).as("row %d (%s block): %s", r,
+                    block.isEmpty() ? "no" : "with", line).isLessThanOrEqualTo(130);
+            }
+        }
+    }
+
+    @Test
+    void thaiDocument_neverCarriesTheBankBlock_evenWhenConfigured() throws Exception {
+        // The Thai หมายเหตุ block has no bank lines and must not grow them: its eight lines are the
+        // template's own, and the owner's Thai documents carry payment terms without account details.
+        Sheet sheet = renderLegacyModel(
+            DealQuotationRenderAdapter.toRenderModel(thaiQuotation(), null, null, BANK_BLOCK));
+        for (int r = 23; r <= 30; r++) {
+            assertThat(str(sheet, r, 1)).doesNotContain("003-92-1222-6").doesNotContain("KASITHBK");
+        }
+    }
+
     // ── fixtures ───────────────────────────────────────────────────────────────────────────
+
+    /** The owner's own bank block, verbatim from QN6900902-6 and QN6900933 (they agree). */
+    private static final List<String> BANK_BLOCK = List.of(
+        "Please arrange payment to the following bank account. Bank Name : Kasikorn Bank Public Company Limited",
+        "Beneficiary name : G.L.& R. Taps and Tiles Co., Ltd. Beneficiary account number : 003-92-1222-6 Saving Account",
+        "SWIFT code : KASITHBK");
+
+    private Sheet renderEnglishWithBank(List<String> bankBlock) throws Exception {
+        return renderLegacyModel(
+            DealQuotationRenderAdapter.toRenderModel(englishQuotation(), null, null, bankBlock));
+    }
 
     private Sheet renderEnglish() throws Exception {
         return render(englishQuotation());
