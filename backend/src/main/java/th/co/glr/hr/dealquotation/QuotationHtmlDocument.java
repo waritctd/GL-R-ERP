@@ -40,19 +40,32 @@ public final class QuotationHtmlDocument {
 
     public static SheetHtmlRenderer.Rendered rendered(byte[] xlsBytes, QuotationRenderModel model) {
         byte[] signature = model != null && model.signatories() != null ? model.signatories().approverSignaturePng() : null;
+        java.util.List<byte[]> itemPictures = new java.util.ArrayList<>();
+        if (model != null && model.items() != null) {
+            for (QuotationRenderModel.RenderItem item : model.items()) {
+                if (item.picture() != null && item.picture().data() != null) {
+                    itemPictures.add(item.picture().data());
+                }
+            }
+        }
         try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xlsBytes))) {
             Sheet sheet = wb.getSheet(SHEET);
             if (sheet == null) sheet = wb.getSheetAt(0);
-            return SheetHtmlRenderer.render(wb, sheet, pic -> classify(pic, signature));
+            return SheetHtmlRenderer.render(wb, sheet, pic -> classify(pic, signature, itemPictures));
         } catch (IOException e) {
             throw new RuntimeException("Quotation HTML render failed: " + e.getMessage(), e);
         }
     }
 
     // The template embeds exactly two pictures — the GL&R wordmark (a JPEG) and the URS/UKAS badge
-    // pair (a PNG); the only other picture the XLS path ever adds is the approver's signature.
-    private static String classify(SheetPlan.Picture pic, byte[] signature) {
+    // pair (a PNG); the XLS path adds the approver's signature and (GLA-75) each item's picture.
+    // Item pictures are matched by content BEFORE the mime fallback, or a JPEG product photo would
+    // be tagged "logo".
+    private static String classify(SheetPlan.Picture pic, byte[] signature, java.util.List<byte[]> itemPictures) {
         if (signature != null && Arrays.equals(signature, pic.data())) return "sig-image";
+        for (byte[] itemPicture : itemPictures) {
+            if (Arrays.equals(itemPicture, pic.data())) return "item-image";
+        }
         return pic.mimeType() != null && pic.mimeType().contains("jpeg") ? "logo" : "badge";
     }
 }

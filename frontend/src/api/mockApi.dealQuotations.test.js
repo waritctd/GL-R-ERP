@@ -8,6 +8,22 @@ import { api } from './mockApi.js';
 
 const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js)
 
+// One complete tile row. UpsertDealQuotationRequest.items is `@NotEmpty`, so the real service 400s
+// an empty list — and since quotation v3 the mock does too (buildDealQuotationItems). These fixtures
+// used to create with `items: []`, which only ever worked because the mock was MORE permissive than
+// the service; they now send the smallest body the service would actually accept.
+const ONE_ITEM = {
+  model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+  quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+};
+
+describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => {
+  it('refuses to create a quotation with no items (400), rather than storing an empty document', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, { items: [] })).rejects.toMatchObject({ status: 400 });
+  });
+});
+
 describe('mock dealQuotations.update -- #M7 direct assignment, null clears', () => {
   it('an explicit null in the request CLEARS the field, not "keep the old value"', async () => {
     await api.auth.login(salesUser);
@@ -31,7 +47,7 @@ describe('mock dealQuotations.update -- #M7 direct assignment, null clears', () 
   it('a field present in the request still overwrites, same as before', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await api.dealQuotations.update(1, {
-      deptCode: 'P099', unitCode: 'D099', items: [],
+      deptCode: 'P099', unitCode: 'D099', items: [ONE_ITEM],
     });
     expect(quotation.deptCode).toBe('P099');
     expect(quotation.unitCode).toBe('D099');
@@ -41,7 +57,7 @@ describe('mock dealQuotations.update -- #M7 direct assignment, null clears', () 
 describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
   it('produces QT-{year}-{4-digit seq}, matching DealQuotationRepository.nextQuotationCode, not QD{BE-year}', async () => {
     await api.auth.login(salesUser);
-    const { quotation } = await api.dealQuotations.create(18, { items: [] });
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}$/);
   });
 });
@@ -53,7 +69,7 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 
   it('a revision child is "{base}-{revisionNo}", and a grandchild strips the parent\'s own suffix rather than stacking it', async () => {
     await api.auth.login(salesUser);
-    const created = await api.dealQuotations.create(18, { items: [] });
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     const rootNumber = created.quotation.number;
 
     await api.dealQuotations.submit(created.quotation.id);
@@ -100,7 +116,7 @@ describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
 
   it('a canCreateQuotation-granted employee may create on a deal they do not own', async () => {
     await api.auth.login(grantedEmployee);
-    const { quotation } = await api.dealQuotations.create(18, { items: [] });
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     expect(quotation.ticketId).toBe(18);
   });
 
@@ -113,7 +129,7 @@ describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
   // list access -- the same deal (18) the granted employee reaches above.
   it('a plain employee with NO grant cannot create on a deal they do not own either', async () => {
     await api.auth.login({ email: 'warehouse.manager@glr.co.th', password: 'demo1234' });
-    await expect(api.dealQuotations.create(18, { items: [] })).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
+    await expect(api.dealQuotations.create(18, { items: [ONE_ITEM] })).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
   });
 
   it('the grant does NOT let that employee approve -- approve stays role-only', async () => {
@@ -139,5 +155,151 @@ describe('mock dealQuotations.approve -- #M3 Bangkok local quotationDate', () =>
     const { quotation } = await api.dealQuotations.approve(2, {});
 
     expect(quotation.quotationDate).toBe('2026-01-02');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Owner feedback pass 1, 2026-09-10 — F5 (สถานะ tabs) and F2 (ผู้สั่งซื้อ).
+// ⚠️ AUTHZ CAVEAT: mock authz is NOT authoritative (CLAUDE.md "Mock API contract"). What these
+// tests pin is that list() and counts() read the SAME scoped set as each other — a mock-internal
+// consistency property — never that the scope itself matches DealQuotationService's.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => {
+  // MED-3: the envelope. DealQuotationController#counts returns the DTO BARE, unlike every
+  // wrapping neighbour; the mock wrapped it, hrApi's comment claimed the wrapper, and the page read
+  // `r?.counts ?? r` so no one of the three could ever be caught disagreeing. Pinned here.
+  it('counts() returns the BARE DealQuotationCountsDto -- no { counts: ... } envelope', async () => {
+    await api.auth.login(salesUser);
+    const res = await api.dealQuotations.counts();
+    expect(res.counts).toBeUndefined();
+    expect(Object.keys(res).sort())
+      .toEqual(['all', 'approved', 'cancelled', 'needsRework', 'pendingApproval']);
+    Object.values(res).forEach((n) => expect(typeof n).toBe('number'));
+  });
+
+  it('counts() reports the same five totals the corresponding list() filters return', async () => {
+    await api.auth.login(salesUser);
+    const counts = await api.dealQuotations.counts();
+
+    const all = await api.dealQuotations.list();
+    const pending = await api.dealQuotations.list({ status: 'PENDING_APPROVAL' });
+    const cancelled = await api.dealQuotations.list({ status: 'CANCELLED' });
+    const approved = await api.dealQuotations.list({ status: 'APPROVED' });
+    const rework = await api.dealQuotations.list({ needsRework: true });
+
+    // The failure this guards: a count computed over a LOOSER set than the list it labels, so a
+    // tab promises rows the list then refuses to show.
+    expect(counts.all).toBe(all.items.length);
+    expect(counts.pendingApproval).toBe(pending.items.length);
+    expect(counts.cancelled).toBe(cancelled.items.length);
+    expect(counts.approved).toBe(approved.items.length);
+    expect(counts.needsRework).toBe(rework.items.length);
+  });
+
+  it('needsRework=true selects a rejected DRAFT, and stops selecting it once resubmitted', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const id = created.quotation.id;
+    await api.dealQuotations.submit(id);
+
+    // Not yet: PENDING_APPROVAL is not แก้.
+    let rework = await api.dealQuotations.list({ needsRework: true });
+    expect(rework.items.some((q) => q.id === id)).toBe(false);
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(id, { reason: 'ราคาสูงเกินไป' });
+
+    await api.auth.login(salesUser);
+    rework = await api.dealQuotations.list({ needsRework: true });
+    expect(rework.items.some((q) => q.id === id)).toBe(true);
+
+    // "cleared on the next submit" -- so the row leaves แก้ the moment it goes back for approval.
+    await api.dealQuotations.submit(id);
+    rework = await api.dealQuotations.list({ needsRework: true });
+    expect(rework.items.some((q) => q.id === id)).toBe(false);
+  });
+
+  it('needsRework=true also selects a DRAFT revision in progress (the owner\'s second sense of แก้)', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(created.quotation.id, {});
+
+    await api.auth.login(salesUser);
+    const revision = await api.dealQuotations.createRevision(created.quotation.id, {});
+    expect(revision.quotation.approvalNote).toBeNull(); // NOT the sent-back sense
+
+    const { items } = await api.dealQuotations.list({ needsRework: true });
+    expect(items.some((q) => q.id === revision.quotation.id)).toBe(true);
+    // ...and the APPROVED parent is not dragged in with it.
+    expect(items.some((q) => q.id === created.quotation.id)).toBe(false);
+  });
+
+  // MED-5: the mock's predicate used Boolean(approvalNote); the SQL is `approval_note IS NOT NULL`,
+  // which is TRUE for the empty string. A DRAFT carrying approvalNote '' therefore belonged in แก้
+  // on the real backend and was missing from it here -- a divergence in the direction where the
+  // mock shows FEWER rows than production, so nobody would ever have noticed from the UI.
+  it('counts() refuses a caller list() refuses, rather than leaking totals', async () => {
+    await api.auth.login({ email: 'warehouse.manager@glr.co.th', password: 'demo1234' });
+    await expect(api.dealQuotations.counts()).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
+  });
+});
+
+describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owner feedback F2', () => {
+  it('defaults contactId to the deal\'s own contact and FREEZES name/phone/email onto the row', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+
+    expect(quotation.contactId).toBe(6); // ticket 18's own contact
+    expect(quotation.contactName).toBe('ณัฐพงศ์ ศรีวิไล');
+    expect(quotation.contactPhone).toBe('086-222-3333');
+    expect(quotation.contactEmail).toBe('nattapong@fashionisland.co.th');
+  });
+
+  it('an explicit contactId on the request wins over the deal\'s default', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { contactId: 7, items: [ONE_ITEM] });
+    expect(quotation.contactId).toBe(7);
+    expect(quotation.contactName).toBe('พิมพ์ใจ บุญมาก');
+  });
+
+  // Wrong-way-round: a contact belonging to a DIFFERENT customer must be refused, not silently
+  // snapshotted onto this customer's document.
+  it('refuses a contact that does not belong to the deal\'s customer', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, { contactId: 1, items: [ONE_ITEM] }))
+      .rejects.toThrow('ผู้สั่งซื้อไม่ได้อยู่ในสังกัดลูกค้ารายนี้');
+  });
+
+  it('refuses an unknown contactId with the same Thai message the UI shows', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, { contactId: 99999, items: [ONE_ITEM] }))
+      .rejects.toThrow('กรุณาระบุผู้สั่งซื้อ');
+  });
+
+  it('update() re-snapshots when the rep changes ผู้สั่งซื้อ', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const { quotation } = await api.dealQuotations.update(created.quotation.id, { contactId: 7, items: [ONE_ITEM] });
+    expect(quotation.contactId).toBe(7);
+    expect(quotation.contactName).toBe('พิมพ์ใจ บุญมาก');
+  });
+});
+
+describe('mock catalog.prices originCountryCode -- owner feedback F1', () => {
+  it('derives it from the factory, so the item editor can autofill ประเทศต้นทาง', async () => {
+    await api.auth.login(salesUser);
+    const { items } = await api.catalog.prices('Trilogy');
+    expect(items.length).toBeGreaterThan(0);
+    // Panaria SpA is factory 1, country IT (mockPriceImportFactories) -- one source of truth.
+    expect(items[0].originCountryCode).toBe('IT');
+  });
+
+  it('reports TH for a domestic factory, not the importers\' default', async () => {
+    await api.auth.login(salesUser);
+    const { items } = await api.catalog.prices('Elegance');
+    expect(items.every((row) => row.originCountryCode === 'TH')).toBe(true);
   });
 });

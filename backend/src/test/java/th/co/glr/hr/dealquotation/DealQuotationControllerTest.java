@@ -97,10 +97,11 @@ class DealQuotationControllerTest {
     private DealQuotationDto quotation(long id, String number) {
         return new DealQuotationDto(
             id, number, 1L, "DRAFT", 1, null,
-            6L, "Sales", 6L, "Sales", "081-234-5678",
-            null, null, null, null, null,
-            LocalDate.now(), "Customer", null, null, null, null, "Project",
+            6L, "Sales", null, 6L, "Sales", null, "081-234-5678",
+            null, null, null, null, null, null,
+            LocalDate.now(), "Customer", null, null, null, null, null, null, null, "Project",
             null, null, null, null, null, null, null, null, null,
+            "NET", "TH",
             java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO, "THB",
             false, List.of(), null, null);
     }

@@ -226,6 +226,12 @@ const SERVER_ONLY = {
     + '"ERP Documentation/" document the same call. The plaintext is shown exactly once, which is why there is no '
     + 'UI. Covered by AttendanceControllerTest. LIVE, not dead.',
 
+  // ── Built backend-first, UI pending ───────────────────────────────────────
+  'PUT /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+  'PATCH /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+  'DELETE /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+  'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+
   // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
   // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
   // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the
@@ -250,6 +256,10 @@ const SERVER_ONLY = {
   // policyDocumentAvailable/downloadPolicyDocument to a screen for the first time since the PDF was
   // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
   // the leave page links; this endpoint is the server-side archive of record, not that reader.
+  // GET /api/deal-quotations/counts and PUT /api/customers/{} stood here until this branch:
+  // both shipped on feat/quotation-feedback-1-backend a day ahead of the UI, and the
+  // ใบเสนอราคา tabs (F5) and the deal card's เลขที่ผู้เสียภาษี / โทร. fields (F7) now call
+  // them, so the stale-entry test below is what required deleting them here.
 
   // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
   // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or

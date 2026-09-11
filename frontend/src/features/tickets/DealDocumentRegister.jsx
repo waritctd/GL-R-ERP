@@ -11,6 +11,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
+import { canViewDealQuotation } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 
@@ -123,6 +124,28 @@ export function DealDocumentRegister({
     (q.data ?? []).map((doc) => ({ ...doc, pricingRequestId: eligiblePricingRequests[idx]?.id }))
   )), [customerQuotationQueries, eligiblePricingRequests]);
 
+  // ── Quotation v2 direct quotations: COUNTED here, listed by DealDirectQuotationPanel ──────────
+  // The เอกสาร tab contradicted itself (owner review V3, 2026-09-10): this block printed
+  // "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" directly above a panel listing five of them. The two are
+  // different row families — this register rolls up the PricingRequest CHAIN plus the legacy
+  // ticket-native rows, while `origin = 'DEAL_DIRECT'` rows belong to DealDirectQuotationPanel —
+  // but a reader has no way to know that, so the sentence simply read as false.
+  //
+  // Only the COUNT is taken, deliberately: the direct rows already render in full (with their own
+  // downloads) in the panel immediately below in the same tab, so listing them again here would
+  // duplicate every row rather than fix the contradiction. The empty state is therefore suppressed
+  // whenever ANY of the three families has rows, and replaced by a pointer to where they are.
+  //
+  // `Number(ticketId)` is required, not cosmetic: `ticketId` arrives here as the raw useParams()
+  // STRING, and DealDirectQuotationPanel keys the very same query with the numeric id. Passing the
+  // string would open a SECOND cache entry and fire a second request for data already on screen.
+  const directQuotationsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((r) => r.items ?? []),
+    enabled: Boolean(ticketId) && canViewQuotations && canViewDealQuotation(user),
+  });
+  const directQuotationCount = (directQuotationsQuery.data ?? []).length;
+
   const depositNoticesQuery = useQuery({
     queryKey: queryKeys.depositNotices(ticketId),
     queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
@@ -197,7 +220,16 @@ export function DealDocumentRegister({
             // fetch of their own) and must never wait on an unrelated query.
             <Skeleton height={40} />
           ) : (customerQuotationRows.length === 0 && legacyQuotations.length === 0) ? (
-            <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับดีลนี้</p>
+            // See the directQuotationsQuery comment above: this branch may only claim the deal has
+            // no ใบเสนอราคา when the DIRECT rows are absent too, otherwise it contradicts the panel
+            // rendered right beneath it in this same tab.
+            directQuotationCount > 0 ? (
+              <p className="text-xs text-text-muted">
+                {`ใบเสนอราคาของดีลนี้ ${directQuotationCount} ฉบับ แสดงอยู่ในแผง “ใบเสนอราคา” ด้านล่าง`}
+              </p>
+            ) : (
+              <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับดีลนี้</p>
+            )
           ) : (
             <div className="flex flex-col gap-1.5">
               {customerQuotationRows.map((q) => {

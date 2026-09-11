@@ -649,3 +649,62 @@ describe('activity log access (admin capability)', () => {
     });
   });
 });
+
+// Quotation release (owner, 2026-09-11): under the lock, the quotation pages — and nothing else
+// from the sales stack — open for the people who create/approve quotations.
+describe('quotation release through the self-service lockdown', () => {
+  const user = (role, extra = {}) => ({ id: 60, employeeId: 60, role, ...extra });
+  const QUOTATION_PATHS = ['/quotations', '/quotations/new', '/quotations/new?ticket=6', '/quotations/12'];
+  const OTHER_SALES_PATHS = ['/tickets', '/tickets/6', '/customers', '/catalog', '/pricing-requests',
+    '/deposits', '/fulfilment', '/commissions', '/ceo-settings', '/quotations-archive'];
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function locked() {
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+    vi.resetModules();
+    return import('./permissions.js');
+  }
+
+  it('opens the quotation pages to sales, sales_manager and a can-create grantee', async () => {
+    const { canAccessPath: can } = await locked();
+    for (const u of [user('sales'), user('sales_manager'), user('qc', { canCreateQuotation: true })]) {
+      for (const path of QUOTATION_PATHS) {
+        expect(can(path, u), `${u.role} ${path}`).toBe(true);
+      }
+    }
+  });
+
+  // Wrong-way-round: the exemption must not leak the rest of the sales stack to the same people.
+  it('keeps every other sales page locked for that audience', async () => {
+    const { canAccessPath: can } = await locked();
+    for (const u of [user('sales'), user('sales_manager'), user('qc', { canCreateQuotation: true })]) {
+      for (const path of OTHER_SALES_PATHS) {
+        expect(can(path, u), `${u.role} ${path}`).toBe(false);
+      }
+    }
+  });
+
+  it('keeps the quotation pages locked for roles that do not create quotations', async () => {
+    const { canAccessPath: can } = await locked();
+    for (const role of ['import', 'account', 'employee', 'warehouse', 'qc']) {
+      for (const path of QUOTATION_PATHS) {
+        expect(can(path, user(role)), `${role} ${path}`).toBe(false);
+      }
+    }
+    expect(can('/quotations', user('employee', { manager: true }))).toBe(false);
+  });
+
+  it('reports the audience through isQuotationReleaseUser', async () => {
+    const { isQuotationReleaseUser } = await locked();
+    expect(isQuotationReleaseUser(user('sales'))).toBe(true);
+    expect(isQuotationReleaseUser(user('sales_manager'))).toBe(true);
+    expect(isQuotationReleaseUser(user('qc', { canCreateQuotation: true }))).toBe(true);
+    expect(isQuotationReleaseUser(user('import'))).toBe(false);
+    expect(isQuotationReleaseUser(user('account'))).toBe(false);
+    expect(isQuotationReleaseUser(null)).toBe(false);
+  });
+});

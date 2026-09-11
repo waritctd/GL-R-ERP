@@ -5,6 +5,8 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
+import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
+import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 
 // ช่องทางรับงาน (owner ask 2026-09-10): the same four codes th.co.glr.hr.ticket.EntryChannel
 // stores, in the order the spec lists them. Deliberately includes UNSPECIFIED as a pickable
@@ -17,15 +19,13 @@ function emptyNewCustomer() {
   return { name: '', taxId: '', address: '', phone: '' };
 }
 
-function emptyNewContact() {
-  return { firstName: '', lastName: '', phone: '' };
-}
-
 /**
  * "ลูกค้าและโครงการ" -- the inline deal-creation card at the top of QuotationEditorPage when a
  * sales rep opens `/quotations/new` with no `?ticket=` (owner ask 2026-09-10,
  * `inline-deal-spec.md`). Lets the rep pick or create a customer, then a project under it, then
- * (optionally) a contact, and pick the entry channel -- everything TicketService.create needs
+ * the ผู้สั่งซื้อ (REQUIRED since owner feedback F2, 2026-09-10 -- rendered by the shared
+ * QuotationContactPicker, which the editor also uses on the paths where this card is absent), and
+ * pick the entry channel -- everything TicketService.create needs
  * that isn't already implied by the quotation items themselves. The parent owns the selected
  * values (`value`/`onChange`, the same controlled-field contract QuotationItemRow.jsx uses for
  * its own patch-upward pattern); this component owns only its own transient search/create UI
@@ -49,6 +49,10 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const [newCustomer, setNewCustomer] = useState(emptyNewCustomer());
   const [savingCustomer, setSavingCustomer] = useState(false);
 
+  // F7 (2026-09-10) + owner 2026-09-11: the SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่
+  // are edited through the shared CustomerDetailsFields (see its own doc) — the editor renders the
+  // same component on the paths where this card is absent.
+
   // ── โครงการ / ผู้ติดต่อ, loaded once a customer is selected ─────────────────────────────────
   const [projectOptions, setProjectOptions] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
@@ -56,33 +60,20 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const [newProjectName, setNewProjectName] = useState('');
   const [savingProject, setSavingProject] = useState(false);
 
-  const [contactOptions, setContactOptions] = useState([]);
-  const [showNewContact, setShowNewContact] = useState(false);
-  const [newContact, setNewContact] = useState(emptyNewContact());
-  const [savingContact, setSavingContact] = useState(false);
-
+  // ผู้สั่งซื้อ itself now lives in QuotationContactPicker (owner feedback F2, 2026-09-10) --
+  // including its own contact fetch -- because the editor needs the same control on the
+  // `?ticket=` and existing-DRAFT paths, where this card is not rendered at all.
   useEffect(() => {
     if (!customer) {
       setProjectOptions([]);
-      setContactOptions([]);
       return undefined;
     }
     let cancelled = false;
     setProjectsLoading(true);
-    Promise.all([api.customers.projects(customer.id), api.customers.contacts(customer.id)])
-      .then(([pr, cr]) => {
-        if (cancelled) return;
-        setProjectOptions(pr.projects ?? []);
-        setContactOptions(cr.contacts ?? []);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setProjectOptions([]);
-        setContactOptions([]);
-      })
-      .finally(() => {
-        if (!cancelled) setProjectsLoading(false);
-      });
+    api.customers.projects(customer.id)
+      .then((pr) => { if (!cancelled) setProjectOptions(pr.projects ?? []); })
+      .catch(() => { if (!cancelled) setProjectOptions([]); })
+      .finally(() => { if (!cancelled) setProjectsLoading(false); });
     return () => { cancelled = true; };
   }, [customer]);
 
@@ -154,30 +145,6 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     }
   }
 
-  function selectContact(next) {
-    onChange({ contact: next });
-  }
-
-  async function handleCreateContact() {
-    if (!customer || !newContact.firstName.trim()) return;
-    setSavingContact(true);
-    try {
-      const res = await api.customers.createContact(customer.id, {
-        firstName: newContact.firstName.trim(),
-        lastName: newContact.lastName.trim() || null,
-        phone: newContact.phone.trim() || null,
-      });
-      setContactOptions((prev) => [...prev, res.contact]);
-      selectContact(res.contact);
-      setNewContact(emptyNewContact());
-      setShowNewContact(false);
-    } catch (error) {
-      showToast?.('error', error.message || 'เพิ่มผู้ติดต่อใหม่ไม่สำเร็จ');
-    } finally {
-      setSavingContact(false);
-    }
-  }
-
   return (
     <Panel title="ลูกค้าและโครงการ">
       <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
@@ -215,15 +182,29 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
             )}
           </FormField>
           {!customer && customerOpen ? (
-            <ul className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-surface shadow-[var(--shadow-lg-heavy)]">
-              {customerLoading ? <li className="px-3 py-2 text-xs text-text-muted">กำลังค้นหา…</li> : null}
+            // `list-none pl-0`: this renders as a real bulleted list without it — measured
+            // list-style-type `disc` with a 40 px padding-inline-start, so every suggestion sat
+            // behind a bullet and indented off the popup's left edge. The `role="listbox"` /
+            // `role="option"` pair is the other half: a suggestion popup announced as a plain list
+            // gives a screen-reader user no way to know these are choices for the field above.
+            <ul
+              id="customer-typeahead-list"
+              role="listbox"
+              aria-label="ผลการค้นหาลูกค้า"
+              className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
+            >
+              {customerLoading ? <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังค้นหา…</li> : null}
               {!customerLoading && customerResults.length === 0 ? (
-                <li className="px-3 py-2 text-xs text-text-muted">ไม่พบข้อมูล</li>
+                <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบข้อมูล</li>
               ) : null}
               {customerResults.map((c) => (
-                <li key={c.id}>
+                // The OPTION is the button, not the <li>: a listbox child must be an option, and
+                // putting the role on the wrapper would nest an interactive control inside one.
+                <li key={c.id} role="presentation">
                   <button
                     type="button"
+                    role="option"
+                    aria-selected={false}
                     className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); selectCustomer(c); }}
                   >
@@ -271,6 +252,16 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
           </select>
         </FormField>
       </div>
+
+      {customer ? (
+        // Present, prefilled and editable the moment a customer is selected — deliberately NOT
+        // behind an "แก้ไข" affordance, because the point is that the rep sees what the document is
+        // about to print, and a repeat customer arrives already filled. Saved on blur; none is
+        // required.
+        <div className="mt-3">
+          <CustomerDetailsFields customer={customer} onChange={(next) => onChange({ customer: next })} showToast={showToast} />
+        </div>
+      ) : null}
 
       {showNewCustomer && !customer ? (
         <div className="mt-3 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
@@ -323,24 +314,13 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
       ) : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
-        <FormField label="ผู้ติดต่อ (ไม่บังคับ)" htmlFor="deal-contact">
-          <select
-            id="deal-contact"
-            disabled={!customer}
-            value={contact?.id ?? ''}
-            onChange={(e) => {
-              if (e.target.value === '__new__') { setShowNewContact(true); return; }
-              const found = contactOptions.find((c) => String(c.id) === e.target.value) ?? null;
-              selectContact(found);
-            }}
-          >
-            <option value="">{customer ? '- ไม่ระบุ -' : 'เลือกลูกค้าก่อน'}</option>
-            {contactOptions.map((c) => (
-              <option key={c.id} value={c.id}>{`${c.firstName} ${c.lastName ?? ''}`.trim()}</option>
-            ))}
-            {customer ? <option value="__new__">+ เพิ่มผู้ติดต่อใหม่</option> : null}
-          </select>
-        </FormField>
+        <QuotationContactPicker
+          customerId={customer?.id ?? null}
+          value={contact}
+          onChange={(next) => onChange({ contact: next })}
+          error={errors?.contact}
+          showToast={showToast}
+        />
 
         <div>
           <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
@@ -350,7 +330,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                 key={code}
                 type="button"
                 aria-pressed={entryChannel === code}
-                className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${entryChannel === code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${entryChannel === code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
                 onClick={() => onChange({ entryChannel: code })}
               >
                 {entryChannelLabel(code).label}
@@ -360,33 +340,6 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
         </div>
       </div>
 
-      {showNewContact && customer ? (
-        <div className="mt-3 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
-          <p className="m-0 text-xs font-bold text-info">เพิ่มผู้ติดต่อใหม่</p>
-          <div className="grid grid-cols-3 gap-2 mobile:grid-cols-1">
-            <label className="m-0">
-              <span className="text-2xs">ชื่อ *</span>
-              <input value={newContact.firstName} onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))} />
-            </label>
-            <label className="m-0">
-              <span className="text-2xs">นามสกุล</span>
-              <input value={newContact.lastName} onChange={(e) => setNewContact((p) => ({ ...p, lastName: e.target.value }))} />
-            </label>
-            <label className="m-0">
-              <span className="text-2xs">โทรศัพท์</span>
-              <input value={newContact.phone} onChange={(e) => setNewContact((p) => ({ ...p, phone: e.target.value }))} />
-            </label>
-          </div>
-          <div className="mt-1 flex gap-2">
-            <Button variant="primary" size="sm" loading={savingContact} disabled={!newContact.firstName.trim() || savingContact} onClick={handleCreateContact}>
-              เพิ่มผู้ติดต่อ
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowNewContact(false); setNewContact(emptyNewContact()); }}>
-              ยกเลิก
-            </Button>
-          </div>
-        </div>
-      ) : null}
     </Panel>
   );
 }

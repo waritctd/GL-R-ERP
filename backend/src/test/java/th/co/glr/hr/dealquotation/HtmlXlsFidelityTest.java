@@ -1140,7 +1140,10 @@ class HtmlXlsFidelityTest {
             "Sales/สมชาย ใจดี T.081-234-5678",
             "คุณลูกค้า   /   Test Customer Co., Ltd.   เลขที่ผู้เสียภาษี : 0105542000000",
             "โทร. 02-000-0000", "Showroom V2 Project", items, remarks,
-            new Signatories("จินตนา", "จุฑาทิพ", "ผึ้ง", signaturePng(), "image/png"), true);
+            // Owner feedback pass 1: slot 4 carries the ผู้สั่งซื้อ name (F2) and the dates row is
+            // filled for the three staff slots (F4) — both engines must print them identically.
+            new Signatories("จินตนา", "จุฑาทิพ", "ผึ้ง", "สมหญิง ใจดี", signaturePng(), "image/png",
+                LocalDate.of(2026, 7, 14), LocalDate.of(2026, 7, 15), LocalDate.of(2026, 7, 16)), true);
     }
 
     /** A hand-drawn squiggle, 300x120 px — no straight run long enough to read as a rule. */

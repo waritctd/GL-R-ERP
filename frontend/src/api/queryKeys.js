@@ -120,6 +120,11 @@ export const queryKeys = {
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
+  // One customer MASTER row by id (quotation editor, owner 2026-09-11). There is no GET
+  // /api/customers/{id}, so this is resolved through the name search and matched on id — see
+  // QuotationEditorPage. Under the ['customers'] prefix so CustomerDetailsFields' post-save
+  // invalidation refreshes it too.
+  customerRecord: (id) => ['customers', 'record', id ?? ''],
   fxRates: () => ['fxRates'],
   priceCalcConfigs: () => ['priceCalcConfigs'],
   // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
@@ -147,7 +152,11 @@ export const queryKeys = {
   // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). A sibling key space to
   // pricingRequests'/customerQuotations' above, never sharing an entry with them.
   dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
-  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? ''],
+  // `needsRework` is part of the key, not just `status` — the "แก้" tab (owner feedback F5,
+  // 2026-09-10) is a DIFFERENT server-side filter at the same empty `status`, so keying on status
+  // alone would serve ทั้งหมด's cached rows to แก้ and vice versa.
+  dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? '', filters.needsRework ? 'rework' : ''],
+  dealQuotationCounts: () => ['dealQuotations', 'counts'],
   dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
   employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.

@@ -75,7 +75,8 @@ Qty/unit/price/discount/net/amount go on row 1. Discount column prints `Net` whe
 2. `2.บริษัทฯ ขอรับมัดจำ {deposit}% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ{ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า | เครดิต N วัน}`
 3. `3.กำหนดส่งมอบสินค้า : ` + groups of consecutive item numbers sharing (min,max): `รายการที่ 1-2 ระยะเวลานำเข้า 75-90 วัน  รายการที่ 3 ระยะเวลานำเข้า 30-45 วัน`
 4–6, 8 fixed (template text as today). 7. `7.กำหนดยืนยันราคา {validityDays} วัน นับจากวันที่ในใบเสนอราคา`.
-Header: B4 date = approved date (drafts: today), I4 = number, H5 = `ฝ่าย {deptCode}` / unit code where the
+Header: B4 date = the date the rep CREATED the quotation, for every status (owner feedback F8,
+2026-09-10 — it used to be the approved date, drafts today), I4 = number, H5 = `ฝ่าย {deptCode}` / unit code where the
 template has them (inspect the template cells; if there is no หน่วยงาน cell, put `ฝ่าย P003  หน่วยงาน D002` on H5),
 H6 = `Sales/{repName} T.{repPhone}`.
 Signature block labels → `ผู้พิมพ์ / ผู้ตรวจ / ผู้อนุมัติ / ผู้สั่งซื้อ`; names in brackets under each:
@@ -99,7 +100,8 @@ last approved document stays valid until replaced). Editing is DRAFT-only (WHERE
 ## API (all under `/api`, JSON envelopes `{quotation: …}` / `{items: […]}` like CustomerQuotationController)
 - `POST /tickets/{ticketId}/deal-quotations` body = UpsertDealQuotationRequest → 201 `{quotation}`
 - `GET  /tickets/{ticketId}/deal-quotations` → `{items}` (all revisions, newest first)
-- `GET  /deal-quotations?status=PENDING_APPROVAL|…` → `{items}` (approver queue; sales sees own)
+- `GET  /deal-quotations?status=PENDING_APPROVAL|…&needsRework=true` → `{items}` (approver queue; sales sees own)
+- `GET  /deal-quotations/counts` → `{all, pendingApproval, needsRework, cancelled, approved}` (same scope)
 - `GET  /deal-quotations/{id}` → `{quotation}`
 - `PUT  /deal-quotations/{id}` body = UpsertDealQuotationRequest (FULL replace of items) → `{quotation}`
 - `POST /deal-quotations/calculate-line` body = one item input → `{item}` (stateless preview, same calc)
@@ -108,15 +110,16 @@ last approved document stays valid until replaced). Editing is DRAFT-only (WHERE
 - `GET  /deal-quotations/{id}/file?format=pdf|xlsx`
 - `PUT  /employees/{id}/signature` multipart `file` (png/jpeg ≤ 1 MB); `GET …/signature` (bytes);
   `DELETE …/signature`
-UpsertDealQuotationRequest: `{ deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
+UpsertDealQuotationRequest: `{ contactId?, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
 validityDays, customerNotes, items: [ItemInput] }`; ItemInput: `{ locationLabel, catalogPriceId, productCode,
 brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
 wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
 leadTimeMaxDays, itemNotes }`.
 DealQuotationDto: `{ id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById,
 createdByName, salesRepId, salesRepName, salesRepPhone, submittedAt, approvedById, approvedByName,
-approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone,
-contactName, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
+approvedAt, approvalNote, quotationDate (= the CREATED date, Bangkok — same rule as the printed
+B4 header, F8), customerName, customerAddress, customerTaxId, customerPhone,
+contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays,
 validityDays, validityDate, customerNotes, subtotalAmount, vatAmount, grandTotal, currency,
 approverHasSignature, items: [ItemDto], createdAt, updatedAt }`
 ItemDto = ItemInput fields + `{ id, seq, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
@@ -151,6 +154,107 @@ from `calculate-line` (debounced 300 ms). Terms card: วันที่รั�
 Actions by state/role: บันทึกร่าง, ส่งขออนุมัติ, ดาวน์โหลด PDF/Excel, อนุมัติ / ไม่อนุมัติ(เหตุผล),
 สร้างฉบับแก้ไข, ยกเลิกร่าง. hrApi + routes + mockApi mirror (mock STUBS the calc — does not reimplement it)
 + contract tests + unit tests for the pages.
+
+## Owner feedback pass 1 — backend (2026-09-10 evening, after the demo)
+
+Owner's words in quotes; F1 has no backend part (the editor groups items by `locationLabel`
+client-side and sends the same flat array). Migration `V167__deal_quotation_contact_snapshot.sql`
+(develop's max was V166).
+
+**F2 "change from ผู้ติดต่อ -> ผู้สั่งซื้อ make mandatory and use that name to auto fill in the
+name for signature in the quotation pdf"** — `sales.quotation` gains a FROZEN snapshot
+`contact_id` (soft reference, no FK — the snapshot must outlive the contact row), `contact_name`,
+`contact_phone`, `contact_email`, written by `DealQuotationService#resolveContact` at create/update
+and copied verbatim onto a revision; V167 backfills existing `DEAL_DIRECT` rows from their ticket's
+contact. The repository's read-time `LEFT JOIN customers.contact` is GONE — `contactName` is now the
+snapshot only, so an approved, emailed document keeps the name it was approved with.
+`UpsertDealQuotationRequest.contactId` is optional: precedence is the request's id, else the draft's
+own contact (update), else the ticket's contact; none → 400 `กรุณาระบุผู้สั่งซื้อ`, and so is a contact
+that does not exist or belongs to another customer (same wording; nothing leaks). `submit` re-checks
+the stored row (a pre-V167 row with no snapshot cannot reach an approver). DTO gains `contactId`,
+`contactPhone`, `contactEmail`. Renderer: `Signatories.orderedBy` prints `(ชื่อ นามสกุล)` under
+ผู้สั่งซื้อ (slot 4) instead of the dotted placeholder.
+
+**F4 "also autofill in the dates"** — `Signatories` gains `printedOn` / `checkedOn` / `approvedOn`
+(nullable `LocalDate`); the dates row prints `วันที่ d/M/BBBB` (unpadded, Buddhist year —
+`วันที่ 10/9/2569`, `QuotationRenderer#signatureDateText`) under ผู้พิมพ์ = created, พนักงานขาย =
+submitted, ผู้จัดการฝ่ายขาย = approved, each only once it exists; ผู้สั่งซื้อ's slot is always
+dotted. The five-argument `Signatories` constructor is the pre-feedback shape (no name, no dates)
+and is what the legacy/PCR wrappers still use — their output is unchanged.
+
+**F3 "the attached photo is the ceo signature so when he อนุมัติ auto paste it in the pdf"** — no
+mechanism change (slot 3 = the approver, whoever they are); pinned by two real-DB tests in
+`DealQuotationIntegrationTest` (`approvedByCeo…` / `approvedBySalesManager…`): a real PNG uploaded
+through `EmployeeSignatureService`, approve as each role, the rendered XLS carries a picture
+anchored in the signature rows, the name row carries the approver, a draft on the same deal does
+not carry the image, and the PDF has one XObject more than the template's own two. Uploading the
+owner's real PNG for demo employee 5 / prod employee 136 is still an action item, not code.
+
+**F6 (found verifying F3 on the demo, amended twice the same evening) — the signature was
+detached from its rule, then drawn over the label words.** Originally anchored
+`labelsRow-2..labelsRow` with `dy2 = 0` (bottom on the TOP edge of the labels row), left edge at
+"slot centre minus half of a 30 mm guess". The first fix put the bottom on the rule and centred it
+on the whole ผู้จัดการฝ่ายขาย quarter — which drew the ink across the words themselves. The owner's
+final wording: *"still make the line visible but put the signature on top of the line in the middle
+and not too high up."* `QuotationRenderer#placeSignaturePicture` now sets all four anchor corners
+from the image's real scaled size and the measured geometry of the labels string's own
+**underscore run** — the blank stretch AFTER the label text, computed in `writeSignatureBlock` from
+the same AWT metrics that lay the string out, never from a hardcoded millimetre figure:
+
+- centred on the RUN's centre, so it can never overlap the label;
+- width capped at `SIGNATURE_RUN_WIDTH_FRACTION` (60%) of the run and 8 mm tall, aspect preserved,
+  so the rule stays visible on both sides of the ink (nothing is ever painted behind the picture —
+  the PNG's own alpha does the rest);
+- bottom edge `SIGNATURE_STRADDLE_MM` (1.5 mm) BELOW the rule, so the strokes cross the line.
+
+One correction was needed to make that land: **text is positioned by FONT advances, an anchor by
+COLUMN widths, and LibreOffice does not size a column the way POI's `getColumnWidthInPixels` does**
+— it scales the XLS 1/256-character unit by the default font's widest digit
+(`LibreOfficeMetrics#columnTwips`), ~3% narrower on this template. Uncorrected, the picture landed
+~5 mm left of the run it was computed from. `QuotationRenderer#fontPixelToAnchorPixelScale` converts
+between the two spaces. Measured on a rendered PDF at 110 dpi: centre 136.6 mm against a run centred
+at 137.6 mm (−1.0 mm), width 15.9 mm = 55% of the run, bottom 1.6–2.1 mm below the rule.
+`QuotationRendererTest#…straddlesTheRuleCentredOnTheUnderscoreRun` pins all of it from the rendered
+anchor for a wide, a tall (height-capped) and a 2000×400 source. Both PDF engines read the same
+anchor (`SheetHtmlRenderer#anchorY` uses the same 1/256-row units), so the fidelity gate covers the
+HTML side by construction.
+
+**F7 "for the customer information you also have to have a field for เลขที่ผู้เสียภาษี and โทร."** —
+the columns and the printed lines already existed; there was no way to CORRECT them. New
+`PUT /api/customers/{id}` `{name?, taxId?, address?, branch?, phone?}`, PATCH semantics (a field the
+body omits is left alone; a field it sends is written, blank included, so a wrong value can be
+cleared — `name`/`branch` are NOT NULL, so a blank for those is a 400). **Stated authz change:**
+gated by `DealEntryAccess.requireCanEnterDeal`, exactly the gate `POST /api/customers` uses and no
+wider — sales / sales_manager / a live `canCreateQuotation` grant write; import, account, employee,
+hr, warehouse and an ungranted qc get 403. Real-DB evidence in
+`DealEntryAccessIntegrationTest` (denials written wrong-way-round: 403 AND the row re-read to prove
+it did not move), plus decision-level coverage in `CustomerControllerTest`.
+
+**Correcting a customer never rewrites an issued document.** `sales.quotation` freezes
+`customer_name` / `customer_tax_id` / `customer_address` / `customer_phone` at create/update time
+(`DealQuotationRepository`), and the renderer prints those frozen columns — so an edit through this
+endpoint changes what the NEXT quotation captures, and leaves every already-issued ใบเสนอราคา
+byte-identical. The corollary the UI must honour: the values used at save time are the ones on
+screen, since the snapshot is taken then.
+
+**F8 "for วันที่ at the top of the page it should be the date it was created by the sale"** — the
+header date was the approved date once approved, else today; it is now `issued_at` (Bangkok) for
+every status, in `DealQuotationRenderAdapter#toRenderModel` (printed B4) and
+`DealQuotationRepository#mapQuotation` (`quotationDate` in the DTO) so the UI and the document can
+never disagree. `offerDate` (remark 1, วันที่รับจำนวน) is a different, rep-editable date and is
+untouched. Pinned in `DealQuotationIntegrationTest` on the only case that can tell the two rules
+apart: a document created on one day (backdated in the DB) and approved on another.
+
+**F5 "for สถานะ make it ทั้งหมด , รออนุมัติ, แก้, ยกเลิก"** — `GET /api/deal-quotations` gains
+`needsRework=true`: DRAFT rows with a non-null `approval_note` (sent back) OR a non-null
+`parent_quotation_id` (revision in progress), in SQL (`DealQuotationRepository.NEEDS_REWORK_PREDICATE`),
+composed with `status` (AND), owner-scoped for `sales` exactly like the status filter. New
+`GET /api/deal-quotations/counts` → `{all, pendingApproval, needsRework, cancelled, approved}` for
+the caller's own scope in ONE statement (`COUNT(*) FILTER`), sharing the one scope decision
+(`DealQuotationService#listOwnerScope`) and the one rework predicate with the list, so a tab's count
+can never disagree with the rows it lists. `all` counts every status (SUPERSEDED included), matching
+an unfiltered list. Real-DB tests are wrong-way-round first (rep B never sees rep A's rework rows or
+counts; a plain DRAFT is not "rework"); the owner scope was mutation-checked (see the PR body).
 
 ## PDF renderer — two engines, one sheet (2026-09-10)
 The direct-deal quotation's PDF can be printed by either of two engines, selected by

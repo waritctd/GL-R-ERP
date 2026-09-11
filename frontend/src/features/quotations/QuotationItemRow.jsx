@@ -5,7 +5,9 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formatMoney } from '../../utils/format.js';
 import {
-  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, WASTAGE_PERCENT_PRESETS, defaultLeadTimeForOrigin,
+  LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
+  ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
+  defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
 } from './quotationMeta.js';
 
 /**
@@ -15,6 +17,12 @@ import {
  * QuotationEditorPage.jsx's `updateItem`; this component only renders what it is given and
  * reports plain field patches upward).
  *
+ * ตำแหน่งติดตั้ง is NOT a field here any more (owner feedback F1, 2026-09-10): it belongs to the
+ * GROUP this row sits in, is typed once in that group's header, and is stamped onto every item at
+ * save time by QuotationEditorPage. This row instead carries the two controls that move a row
+ * between groups -- "ย้ายไปตำแหน่ง…" and "ทำซ้ำรายการ" -- both of which are no-ops the parent
+ * performs; this component never owns the item list.
+ *
  * `errors` (optional, defaults to `{}`) is `validateQuotationItem(item)`'s own return value
  * (quotationMeta.js), computed by the parent and passed down already gated on whether this row
  * should show its inline hints yet -- QuotationEditorPage only passes a non-empty object once the
@@ -22,7 +30,18 @@ import {
  * decides that itself. `error={errors.field}` on a FormField renders the red hint + wires
  * aria-invalid; `required` marks the label with `*`, matching the rest of the app.
  */
-export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange, onRemove }) {
+export function QuotationItemRow({
+  item, index, readOnly, errors = {}, onChange, onRemove,
+  groupId = null, locationGroups = [], recentPicks = [], onMove, onDuplicate, onCatalogPicked,
+  // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
+  // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
+  priceMode = 'NET', currency = 'THB',
+  // Extension point for per-item PICTURES (GLA-75 — being built on another branch, not merged).
+  // A render prop rather than an upload control here, so that branch can slot its uploader and
+  // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
+  // Unused today, which renders nothing.
+  renderMedia = null,
+}) {
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
@@ -75,6 +94,22 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
     // used to leak that purchase price into the quotation as if it were what to charge the
     // customer (bug, caught in review) -- omitted from the patch entirely so unitPrice is left
     // exactly as the rep already had it.
+    //
+    // ประเทศต้นทาง + its default lead-time range are filled from the catalog row's own
+    // `originCountryCode` (owner feedback F1, 2026-09-10, "autofill as much as you can and if
+    // there is anything you can auto calculate fill it") -- ProductPriceDto exposes it as
+    // price_catalog.factories.country joined via product_prices.factory_id. Only when the code
+    // maps to one of the four ประเทศต้นทาง options this app offers -- originCountryFromCode
+    // returns '' otherwise.
+    //
+    // ⚠️ The rep's OWN choice wins (review finding LOW-6). Autofill means "fill a field the rep
+    // has not answered", never "correct" one they have: a rep who deliberately picked ไทย-สต็อก
+    // for an Italian collection they are quoting out of local stock had that silently reverted to
+    // อิตาลี -- along with the lead time -- by the next catalog pick on the same row. So this
+    // reads `item.originCountry` FIRST and only falls back to the catalog. It also means the
+    // lead-time default below never fires on a row that already had an origin, since
+    // originCountry is then === item.originCountry.
+    const originCountry = item.originCountry || originCountryFromCode(cat.originCountryCode) || '';
     patch({
       catalogPriceId: cat.priceId ?? null,
       productCode: cat.productCode ?? null,
@@ -86,7 +121,10 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
       thicknessMm: cat.thicknessMm ?? item.thicknessMm ?? null,
       sqmPerPiece: cat.sqmPerPiece ?? item.sqmPerPiece ?? null,
       piecesPerBox: cat.pcsPerBox ?? item.piecesPerBox ?? null,
+      originCountry,
+      ...(originCountry && originCountry !== item.originCountry ? defaultLeadTimeForOrigin(originCountry) : {}),
     });
+    onCatalogPicked?.(cat);
     setCatalogResults([]);
     setCatalogOpen(false);
   }
@@ -96,34 +134,104 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
     patch({ originCountry: value, ...defaults });
   }
 
+  // Groups this row could be moved INTO — every group but its own. Rendered only when there is
+  // somewhere to go, so a single-location quotation carries no dead control.
+  const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
+
   return (
     <li className="grid gap-3 rounded-md border border-border p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <span className="mt-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-subtle text-2xs font-extrabold text-text-muted">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-subtle text-2xs font-extrabold text-text-muted">
           {index + 1}
         </span>
         {!readOnly ? (
-          <Button variant="icon" size="sm" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
-            <Icon name="close" size={16} />
-          </Button>
+          // `min-w-0 flex-1` so this column can be squeezed at all; without it the two selects
+          // below push the whole row past the viewport on a phone (see their comment).
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-1.5">
+            {moveTargets.length ? (
+              <>
+                <label htmlFor={`move-${index}`} className="sr-only">ย้ายไปตำแหน่ง</label>
+                {/* A select whose value is always '' — it issues an ACTION, it does not hold
+                    state. The row's current group is already shown by the group header it sits
+                    under, so re-stating it as a selected option would just be noise.
+
+                    ── Why `w-full min-w-0` below `sm:` and a `max-w` above it ──
+                    A <select>'s intrinsic width is its LONGEST OPTION, and these options carry
+                    user-typed ตำแหน่งติดตั้ง labels ("ไปยัง ชั้น 1 พื้นห้องนั่งเล่น"), so it is
+                    unbounded by construction. `min-w-[9.5rem]` set a FLOOR and never a ceiling —
+                    measured, `#dup-N` reached a 318 px min-content, which fixed the group
+                    <section>'s min-content at 414 px and blew #main-content out to scrollWidth 451
+                    at a 390 px viewport, clipping ฿1,524,369.36 off the right edge. The automatic
+                    minimum size of a flex item is its min-content, so the ancestors could not
+                    absorb it either — hence `min-w-0` here AND on the two wrappers above. Below
+                    `sm:` the two selects stack full-width (a phone has no room for them side by
+                    side anyway); from `sm:` up they return to their intrinsic width between a
+                    9.5rem floor and a 13rem ceiling, so a long label truncates in the closed
+                    control instead of widening the page. */}
+                <select
+                  id={`move-${index}`}
+                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                  value=""
+                  onChange={(e) => { if (e.target.value) onMove?.(e.target.value); }}
+                >
+                  <option value="">ย้ายไปตำแหน่ง…</option>
+                  {moveTargets.map((group) => (
+                    <option key={group.groupId} value={group.groupId}>{group.label || UNLABELLED_LOCATION_TEXT}</option>
+                  ))}
+                </select>
+
+                <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
+                <select
+                  id={`dup-${index}`}
+                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                  value=""
+                  onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
+                >
+                  <option value="">ทำซ้ำรายการ…</option>
+                  <option value={groupId}>ในตำแหน่งนี้</option>
+                  {moveTargets.map((group) => (
+                    <option key={group.groupId} value={group.groupId}>ไปยัง {group.label || UNLABELLED_LOCATION_TEXT}</option>
+                  ))}
+                </select>
+              </>
+            ) : (
+              // One location only: there is nowhere to move to and only one place to copy into,
+              // so the duplicate degrades to a plain button rather than a one-option dropdown.
+              <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
+            )}
+            <Button variant="icon" size="sm" className="mobile:min-h-[44px] mobile:w-11" onClick={onRemove} title="ลบรายการ" aria-label="ลบรายการ">
+              <Icon name="close" size={16} />
+            </Button>
+          </div>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
-        {/* Optional by owner ruling 2026-09-10 — a blank label prints no heading row on the
-            document (the backend groups only non-blank labels), so a rep who does not need
-            it types nothing. */}
-        <FormField label="ตำแหน่งติดตั้ง (ไม่บังคับ)" htmlFor={`loc-${index}`} hint="เช่น ชั้น 1 - โซน A · เว้นว่างได้">
-          <input
-            id={`loc-${index}`}
-            list="quotation-location-labels"
-            disabled={readOnly}
-            value={item.locationLabel ?? ''}
-            onChange={(e) => patch({ locationLabel: e.target.value })}
-          />
-        </FormField>
+      {/* "ใช้ล่าสุด" — the rep's own last catalog picks, one click each (owner ask 2026-09-10,
+          "as little typing as possible"). Same pickCatalog path as the typeahead, so a chip and a
+          search result fill exactly the same fields; the chips are per-browser and best-effort
+          (see quotationPrefs.js) and simply do not render when there are none. Only offered on an
+          untouched row: once a row names a product, replacing it wholesale from a chip is far more
+          likely to be a misclick than an intent. */}
+      {!readOnly && recentPicks.length > 0 && !item.model ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ใช้ล่าสุด</span>
+          {recentPicks.map((cat) => (
+            <button
+              key={cat.priceId ?? `${cat.productCode}-${cat.collection}`}
+              type="button"
+              title={`${cat.factoryName ?? cat.factory ?? '-'} · ${cat.color ?? '-'} · ${cat.sizeRaw ?? cat.size ?? '-'}`}
+              className="inline-flex min-h-7 max-w-[16rem] items-center gap-1 truncate rounded-full border border-border bg-surface-subtle px-2.5 text-2xs font-bold text-text-muted hover:border-primary hover:text-primary"
+              onClick={() => pickCatalog(cat)}
+            >
+              <Icon name="clock" size={11} />
+              <span className="truncate">{cat.collection ?? cat.productName ?? cat.productCode}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-        <div className="relative">
+      <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1">
+        <div className="relative col-span-full">
           <FormField label="รุ่น / ค้นหาแคตตาล็อก" htmlFor={`model-${index}`} required error={errors.model}>
             <input
               id={`model-${index}`}
@@ -136,11 +244,21 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
             />
           </FormField>
           {catalogOpen && catalogResults.length > 0 ? (
-            <ul className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-md border border-border bg-surface shadow-[var(--shadow-lg-heavy)]">
+            // `list-none pl-0` + listbox/option roles, for the same two reasons as the customer
+            // typeahead in DealCustomerCard: without them this popup renders as a bulleted,
+            // 40 px-indented <ul>, and announces as a list of text rather than a set of choices.
+            <ul
+              id={`catalog-typeahead-${index}`}
+              role="listbox"
+              aria-label="ผลการค้นหาแคตตาล็อก"
+              className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
+            >
               {catalogResults.map((cat) => (
-                <li key={cat.priceId ?? `${cat.productCode}-${cat.collection}`}>
+                <li key={cat.priceId ?? `${cat.productCode}-${cat.collection}`} role="presentation">
                   <button
                     type="button"
+                    role="option"
+                    aria-selected={false}
                     className="block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover"
                     onMouseDown={(e) => { e.preventDefault(); pickCatalog(cat); }}
                   >
@@ -219,7 +337,7 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
                   type="button"
                   disabled={readOnly}
                   aria-pressed={item.quantityMode === opt.code}
-                  className={`min-h-[38px] px-3 text-xs font-bold ${item.quantityMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
+                  className={`min-h-[38px] mobile:min-h-[44px] px-3 text-xs font-bold ${item.quantityMode === opt.code ? 'bg-primary text-surface' : 'bg-surface text-icon-muted'}`}
                   onClick={() => patch({ quantityMode: opt.code })}
                 >
                   {opt.label}
@@ -248,7 +366,7 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
                 type="button"
                 disabled={readOnly}
                 aria-pressed={item.wastageMode === 'PERCENT' && !wastageCustomOpen && Number(item.wastageValue) === pct}
-                className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${
+                className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${
                   item.wastageMode === 'PERCENT' && !wastageCustomOpen && Number(item.wastageValue) === pct
                     ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
                 }`}
@@ -261,7 +379,7 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
               type="button"
               disabled={readOnly}
               aria-pressed={item.wastageMode === 'PIECES'}
-              className={`min-h-[38px] rounded-md border px-3 text-xs font-bold ${
+              className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${
                 item.wastageMode === 'PIECES' ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'
               }`}
               onClick={() => { setWastageCustomOpen(false); patch({ wastageMode: 'PIECES', wastageValue: item.wastageMode === 'PIECES' ? item.wastageValue : 0 }); }}
@@ -284,7 +402,7 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
                 type="button"
                 disabled={readOnly}
                 aria-pressed={wastageCustomOpen || !WASTAGE_PERCENT_PRESETS.includes(Number(item.wastageValue))}
-                className="min-h-[38px] rounded-md border border-border bg-surface px-3 text-xs font-bold text-text-muted"
+                className="min-h-[38px] mobile:min-h-[44px] rounded-md border border-border bg-surface px-3 text-xs font-bold text-text-muted"
                 onClick={() => setWastageCustomOpen(true)}
               >
                 กำหนดเอง
@@ -295,20 +413,62 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
       </div>
 
       <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
-        <FormField label="ราคา/หน่วย" htmlFor={`price-${index}`} required error={errors.unitPrice}>
+        {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
+            "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
+            nine documents shares one mode. Each mode asks for exactly what the rep has in hand:
+              NET          ราคา/หน่วย + ส่วนลด %           (unchanged)
+              SPECIAL_SQM  ราคาตั้ง/แผ่น + ราคาพิเศษ บาท/ตร.ม. รวม VAT → net per piece shown live
+              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")
+            The derived net in SPECIAL_SQM is the SERVER's (calculate-line's netUnitPrice), never
+            a JS copy of WastageCalculator#netPerPieceFromSpecialSqm: its rounding order (the 2dp
+            reciprocal first) is exactly what a copy would get subtly wrong. */}
+        {priceMode === 'DIRECT_NET' ? (
+          <FormField label="ราคาสุทธิ/แผ่น" htmlFor={`direct-net-${index}`} required error={errors.directNetPrice}>
+            <input
+              id={`direct-net-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.directNetPrice ?? ''}
+              onChange={(e) => patch({ directNetPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+          </FormField>
+        ) : null}
+        <FormField
+          label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
+          htmlFor={`price-${index}`}
+          required={priceMode !== 'DIRECT_NET'}
+          hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+          error={errors.unitPrice}
+        >
           <input
             id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
             value={item.unitPrice ?? ''}
             onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </FormField>
-        <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
-          <input
-            id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
-            value={item.discountPct ?? 0}
-            onChange={(e) => patch({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
-          />
-        </FormField>
+        {priceMode === 'NET' ? (
+          <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
+            <input
+              id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.discountPct ?? 0}
+              onChange={(e) => patch({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
+            />
+          </FormField>
+        ) : null}
+        {priceMode === 'SPECIAL_SQM' ? (
+          <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+            <input
+              id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.specialPriceSqm ?? ''}
+              onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+            <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+              {item.calcPending
+                ? 'กำลังคำนวณราคาสุทธิ...'
+                : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
+                  ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+                  : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
+            </span>
+          </FormField>
+        ) : null}
         <FormField label="ประเทศต้นทาง" htmlFor={`origin-${index}`}>
           <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
             <option value="">-</option>
@@ -341,18 +501,80 @@ export function QuotationItemRow({ item, index, readOnly, errors = {}, onChange,
         <input id={`notes-${index}`} disabled={readOnly} value={item.itemNotes ?? ''} onChange={(e) => patch({ itemNotes: e.target.value })} />
       </FormField>
 
+      {renderMedia ? renderMedia(item, index) : null}
+
       {/* Live calculation line -- from calculate-line, debounced by the parent. */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">
         <p className="m-0 min-w-0 flex-1 text-xs text-text-muted">
           {item.calcPending ? 'กำลังคำนวณ...' : (item.calculationLine || 'กรอกจำนวนและเผื่อเพื่อคำนวณ')}
         </p>
-        <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(item.lineAmount)}</span>
+        <span className="tabular-nums text-md font-extrabold text-text">{formatQuotationMoney(item.lineAmount, currency)}</span>
       </div>
     </li>
   );
 }
 
-export function itemInputFromRow(item) {
+/**
+ * The wire `ItemInput` for any editor row. `priceMode` is the QUOTATION's, and it decides which of
+ * a tile row's two mode-specific prices travel — the row itself keeps BOTH in state, so flipping
+ * the mode and back restores what the rep typed.
+ *
+ * ⚠️ Sending only the current mode's price is load-bearing, not tidiness: `POST calculate-line` has
+ * no quotation to read a mode from, so DealQuotationService#inferPriceMode infers it FROM THE ROW —
+ * a present specialPriceSqm means SPECIAL_SQM, a present directNetPrice means DIRECT_NET. A stale
+ * ราคาพิเศษ left on a row in NET mode would make the live preview price it as ราคาพิเศษ.
+ */
+export function itemInputFromRow(item, priceMode = 'NET') {
+  const type = lineTypeOf(item);
+  if (type === LINE_TYPE_PLAIN) {
+    return {
+      lineType: LINE_TYPE_PLAIN,
+      locationLabel: item.locationLabel || null,
+      description: item.description?.trim() || null,
+      quantity: item.quantity === '' || item.quantity == null ? null : Number(item.quantity),
+      unit: item.unit || null,
+      unitPrice: item.unitPrice === '' || item.unitPrice == null ? null : Number(item.unitPrice),
+      discountPct: item.discountPct === '' || item.discountPct == null ? 0 : Number(item.discountPct),
+      itemNotes: item.itemNotes || null,
+    };
+  }
+  if (type === LINE_TYPE_ADJUSTMENT) return adjustmentInputFromRow(item);
+  const directNet = item.directNetPrice === '' || item.directNetPrice == null ? null : Number(item.directNetPrice);
+  const unitPrice = item.unitPrice === '' || item.unitPrice == null ? null : item.unitPrice;
+  return {
+    ...tileInputFromRow(item),
+    lineType: LINE_TYPE_TILE,
+    // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
+    // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
+    // which is the honest reading of "the rep only has a net price".
+    unitPrice: priceMode === 'DIRECT_NET' && unitPrice == null ? directNet : unitPrice,
+    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
+    // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
+    discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
+    specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
+      ? Number(item.specialPriceSqm) : null,
+    directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
+  };
+}
+
+/** A ส่วนลดพิเศษ row's ItemInput — EXACTLY one of adjustmentPct / adjustmentAmount, per
+ * DealQuotationService#requirePriceValidForType. No unitPrice: the server derives it (and would
+ * ignore one anyway — review fix F2). No locationLabel: the row sorts last and prints no heading. */
+export function adjustmentInputFromRow(adjustment) {
+  const flat = adjustment.adjustmentKind === 'AMOUNT';
+  const number = (value) => (value === '' || value == null ? null : Number(value));
+  return {
+    lineType: LINE_TYPE_ADJUSTMENT,
+    locationLabel: null,
+    adjustmentPct: flat ? null : number(adjustment.adjustmentPct),
+    adjustmentAmount: flat ? number(adjustment.adjustmentAmount) : null,
+    adjustmentDeadline: adjustment.adjustmentDeadline || null,
+    // Honoured by the server for a FLAT adjustment only; a percentage one derives its own.
+    description: flat ? (adjustment.description?.trim() || null) : null,
+  };
+}
+
+function tileInputFromRow(item) {
   return {
     locationLabel: item.locationLabel || null,
     catalogPriceId: item.catalogPriceId ?? null,
@@ -379,18 +601,100 @@ export function itemInputFromRow(item) {
   };
 }
 
-export function emptyQuotationItem() {
+/** The editor's own per-row key, distinct from the server `id` a saved row also carries (a row
+ * that has never been saved has no server id at all). Exported so QuotationEditorPage's
+ * "ทำซ้ำรายการ" can mint one for the copy without duplicating the fallback — and, incidentally,
+ * so `crypto`/`Date`/`Math.random` stay out of a component body, where the react-hooks purity rule
+ * (correctly) refuses to distinguish an event handler from render. */
+export function newItemClientId() {
+  return crypto.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`;
+}
+
+/** `groupId` is the ตำแหน่งติดตั้ง group the new row belongs to (owner feedback F1) -- a
+ * CLIENT-ONLY field. `itemInputFromRow` above picks the wire fields explicitly, so it is dropped
+ * on the way out; the group's label is what travels, as this item's `locationLabel`.
+ *
+ * `defaults` seeds ประเทศต้นทาง (and its lead-time range) from the rep's own last quotation --
+ * see quotationPrefs.js. Always overridable, and absent when nothing is stored. */
+export function emptyQuotationItem(groupId = null, defaults = null) {
+  const originCountry = defaults?.originCountry ?? '';
   return {
-    clientId: crypto.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`,
+    clientId: newItemClientId(),
+    groupId,
+    lineType: LINE_TYPE_TILE,
+    specialPriceSqm: '', directNetPrice: '',
     locationLabel: '', catalogPriceId: null, productCode: '',
     brand: '', model: '', color: '', texture: '', sizeText: '', thicknessMm: null, sqmPerPiece: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
     unitPrice: '', discountPct: 0,
-    originCountry: '', leadTimeMinDays: null, leadTimeMaxDays: null,
+    originCountry, ...defaultLeadTimeForOrigin(originCountry),
     itemNotes: '',
     piecesPerSqm: null, piecesBeforeWastage: null, piecesAfterWastage: null, piecesFinal: null, boxes: null,
     netUnitPrice: null, lineAmount: null, descriptionLine: '', sizeLine: '', calculationLine: '',
+    specialPriceLine: null,
     calcPending: false,
+  };
+}
+
+/** A blank PLAIN row (freight, consumables, cut service, sanitary ware) — v3 S2. Same client-only
+ * `clientId`/`groupId` contract as emptyQuotationItem; it lives in a ตำแหน่งติดตั้ง group like a
+ * tile does, because a freight line can belong to a floor as easily as to none. */
+export function emptyPlainItem(groupId = null) {
+  return {
+    clientId: newItemClientId(),
+    groupId,
+    lineType: LINE_TYPE_PLAIN,
+    locationLabel: '',
+    description: '', quantity: '', unit: '', unitPrice: '', discountPct: 0, itemNotes: '',
+    netUnitPrice: null, lineAmount: null, calcPending: false,
+  };
+}
+
+/** A blank ส่วนลดพิเศษ row — v3 S3. Percent by default (her QN6900704-2 is a percent); the
+ * deadline is prefilled with `defaultDeadline` (the caller passes the quotation's ยืนราคา end date)
+ * so the normal case is "type 3, done". */
+export function emptyAdjustment(defaultDeadline = '') {
+  return {
+    clientId: newItemClientId(),
+    lineType: LINE_TYPE_ADJUSTMENT,
+    adjustmentKind: 'PERCENT',
+    adjustmentPct: '', adjustmentAmount: '', adjustmentDeadline: defaultDeadline || '', description: '',
+  };
+}
+
+/**
+ * A server `DealQuotationItemDto` → an editor row. The inverse of itemInputFromRow, and the half of
+ * the GET→PUT round-trip that has to reconstruct what the DTO does not carry verbatim:
+ *   - DIRECT_NET has no column of its own — the typed net IS final_unit_price — so `directNetPrice`
+ *     is recovered from `netUnitPrice`, or a PUT of an untouched draft would 400 "ราคาสุทธิ".
+ *   - A PLAIN row's rep-typed text comes back as `descriptionLine`.
+ *   - An ADJUSTMENT's kind follows which of adjustmentPct / adjustmentAmount is non-null (the DTO
+ *     guarantees exactly one — review fix F2).
+ */
+export function rowFromServerItem(item, priceMode = 'NET') {
+  const base = { ...item, clientId: item.id ?? newItemClientId(), calcPending: false };
+  const type = lineTypeOf(item);
+  if (type === LINE_TYPE_PLAIN) {
+    return {
+      ...base, lineType: LINE_TYPE_PLAIN, description: item.descriptionLine ?? '',
+      quantity: item.quantity ?? '', unit: item.unit ?? '', unitPrice: item.unitPrice ?? '',
+      discountPct: item.discountPct ?? 0,
+    };
+  }
+  if (type === LINE_TYPE_ADJUSTMENT) {
+    const flat = item.adjustmentPct == null && item.adjustmentAmount != null;
+    return {
+      ...base, lineType: LINE_TYPE_ADJUSTMENT,
+      adjustmentKind: flat ? 'AMOUNT' : 'PERCENT',
+      adjustmentPct: item.adjustmentPct ?? '', adjustmentAmount: item.adjustmentAmount ?? '',
+      adjustmentDeadline: item.adjustmentDeadline ?? '',
+      description: flat ? (item.descriptionLine ?? '') : '',
+    };
+  }
+  return {
+    ...base, lineType: LINE_TYPE_TILE,
+    specialPriceSqm: item.specialPriceSqm ?? '',
+    directNetPrice: priceMode === 'DIRECT_NET' ? (item.netUnitPrice ?? '') : '',
   };
 }

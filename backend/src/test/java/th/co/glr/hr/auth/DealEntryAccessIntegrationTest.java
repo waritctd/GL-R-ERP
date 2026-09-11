@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -194,6 +195,83 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         // them; only plain employee is denied there.
         customerMvc.perform(get("/api/customers").session(session(employeeUserId, "employee")))
             .andExpect(status().isForbidden());
+    }
+
+    // ── update customer (owner feedback F7, 2026-09-10) ───────────────────────────────────
+
+    /**
+     * {@code PUT /api/customers/{id}} is a NEW write endpoint on the customer master, gated by
+     * {@link DealEntryAccess#requireCanEnterDeal} — exactly the gate {@code POST /api/customers}
+     * uses, no wider. CLAUDE.md requires real-DB evidence for any authz change: these run the REAL
+     * controller over the REAL {@code CustomerRepository} on REAL Postgres, and every denial case
+     * is written wrong-way-round — it asks whether a caller who should NOT be able to rewrite
+     * another company's tax id can, asserts 403, AND re-reads the row to prove the value did not
+     * move (a 403 that had already written would still be a real bug).
+     */
+    @Test
+    void rolesOutsideTheDealEntryGate_cannotUpdateACustomer_andTheRowIsUnchanged() throws Exception {
+        long id = seedCustomerForUpdate();
+        for (long actorId : List.of(importUserId, accountUserId, employeeUserId, qcUserId)) {
+            String role = actorId == importUserId ? "import"
+                : actorId == accountUserId ? "account"
+                : actorId == employeeUserId ? "employee" : "qc";
+            customerMvc.perform(put("/api/customers/{id}", id).session(session(actorId, role))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"taxId\":\"HACKED-" + role + "\",\"phone\":\"09-HACKED\"}"))
+                .andExpect(status().isForbidden());
+            assertThat(taxIdOf(id)).as("%s must not have rewritten the row", role).isEqualTo(SEED_TAX_ID);
+            assertThat(phoneOf(id)).isEqualTo(SEED_PHONE);
+        }
+    }
+
+    @Test
+    void salesSalesManagerAndAGrantedQc_canUpdateACustomer() throws Exception {
+        long id = seedCustomerForUpdate();
+        // sales: the ordinary rep on the deal card.
+        customerMvc.perform(put("/api/customers/{id}", id).session(session(employeeUserId, "sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"taxId\":\"0105542000001\"}"))
+            .andExpect(status().isOk());
+        assertThat(taxIdOf(id)).isEqualTo("0105542000001");
+
+        customerMvc.perform(put("/api/customers/{id}", id).session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-555-0000\"}"))
+            .andExpect(status().isOk());
+        assertThat(phoneOf(id)).isEqualTo("02-555-0000");
+        assertThat(taxIdOf(id)).as("a body carrying only phone must not blank the tax id")
+            .isEqualTo("0105542000001");
+
+        grantQuotationCapability(qcUserId);
+        customerMvc.perform(put("/api/customers/{id}", id).session(session(qcUserId, "qc"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"taxId\":\"0105542000002\"}"))
+            .andExpect(status().isOk());
+        assertThat(taxIdOf(id)).isEqualTo("0105542000002");
+    }
+
+    /** A missing customer is a 404, not a silent 200 — and never a row created by the update. */
+    @Test
+    void updatingACustomerThatDoesNotExistIs404() throws Exception {
+        customerMvc.perform(put("/api/customers/{id}", 999_999_999L).session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-1\"}"))
+            .andExpect(status().isNotFound());
+    }
+
+    private static final String SEED_TAX_ID = "F7-SEED-TAXID";
+    private static final String SEED_PHONE  = "02-000-0001";
+
+    private long seedCustomerForUpdate() {
+        return new CustomerRepository(jdbc)
+            .create("บริษัท แก้ไขข้อมูลลูกค้า จำกัด", SEED_TAX_ID, "1 ถนนทดสอบ", "สำนักงานใหญ่", SEED_PHONE)
+            .id();
+    }
+
+    private String taxIdOf(long id) {
+        return jdbc.queryForObject("SELECT tax_id FROM customers.customer WHERE customer_id = :id",
+            Map.of("id", id), String.class);
+    }
+
+    private String phoneOf(long id) {
+        return jdbc.queryForObject("SELECT phone FROM customers.customer WHERE customer_id = :id",
+            Map.of("id", id), String.class);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────

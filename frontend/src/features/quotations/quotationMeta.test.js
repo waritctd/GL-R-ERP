@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as meta from './quotationMeta.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -403,5 +404,357 @@ describe('quotationItemMissingSummary', () => {
   it('renders "รายการที่ N: ขาด field1, field2" in row-layout order, 1-indexed', () => {
     const errors = validateQuotationItem(completeItem({ color: '', thicknessMm: null }));
     expect(quotationItemMissingSummary(errors, 1)).toBe('รายการที่ 2: ขาด สี, ความหนา');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Owner feedback pass 1, 2026-09-10 — F1 grouping + origin mapping, F5 tab metadata.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('originCountryFromCode (F1 catalog autofill)', () => {
+  it('maps the four codes this app has ประเทศต้นทาง options for', () => {
+    expect(meta.originCountryFromCode('IT')).toBe('อิตาลี');
+    expect(meta.originCountryFromCode('ES')).toBe('สเปน');
+    expect(meta.originCountryFromCode('CN')).toBe('จีน');
+    expect(meta.originCountryFromCode('TH')).toBe('ไทย-สต็อก');
+  });
+
+  it('is case- and whitespace-insensitive about the ISO code', () => {
+    expect(meta.originCountryFromCode(' it ')).toBe('อิตาลี');
+  });
+
+  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in
+  // while telling the customer nothing.
+  it('returns "" for an unmapped, empty or absent code', () => {
+    expect(meta.originCountryFromCode('PT')).toBe('');
+    expect(meta.originCountryFromCode('')).toBe('');
+    expect(meta.originCountryFromCode(null)).toBe('');
+    expect(meta.originCountryFromCode(undefined)).toBe('');
+  });
+
+  it('every mapped value is a real ORIGIN_COUNTRY_OPTIONS code with a lead-time range', () => {
+    for (const code of ['IT', 'ES', 'CN', 'TH']) {
+      const label = meta.originCountryFromCode(code);
+      const option = meta.ORIGIN_COUNTRY_OPTIONS.find((o) => o.code === label);
+      expect(option, `${code} -> ${label}`).toBeDefined();
+      expect(option.leadTimeMinDays).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── MED-5: the แก้ predicate must match the SQL, not JS truthiness ──────────────────────────────
+describe('isDealQuotationNeedingRework — mirrors NEEDS_REWORK_PREDICATE', () => {
+  const draft = (over = {}) => ({ docStatus: 'DRAFT', approvalNote: null, parentQuotationId: null, ...over });
+
+  it('an EMPTY-STRING approvalNote counts as present, exactly as `IS NOT NULL` does', () => {
+    // The whole finding: `Boolean('')` is false, `'' IS NOT NULL` is TRUE. The mock used the
+    // former, so this row was in the แก้ tab on the real backend and missing from it in the mock —
+    // fewer rows than production, which is the direction nobody notices from the UI.
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: '' }))).toBe(true);
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: 'ราคาสูงเกินไป' }))).toBe(true);
+  });
+
+  it('null / undefined / absent approvalNote with no parent is NOT rework', () => {
+    expect(meta.isDealQuotationNeedingRework(draft())).toBe(false);
+    expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: undefined }))).toBe(false);
+  });
+
+  it('a DRAFT revision in progress counts, via parentQuotationId (the second sense of แก้)', () => {
+    expect(meta.isDealQuotationNeedingRework(draft({ parentQuotationId: 7 }))).toBe(true);
+  });
+
+  it('DRAFT is part of the definition — an APPROVED/SUPERSEDED row with a note is never rework', () => {
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'APPROVED', approvalNote: '', parentQuotationId: null })).toBe(false);
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'SUPERSEDED', approvalNote: 'x', parentQuotationId: 3 })).toBe(false);
+    expect(meta.isDealQuotationNeedingRework({ docStatus: 'PENDING_APPROVAL', approvalNote: 'x', parentQuotationId: null })).toBe(false);
+  });
+});
+
+describe('locationGroupsFromItems (F1)', () => {
+  const item = (locationLabel, model) => ({ locationLabel, model });
+
+  it('starts a new group at every change of label, and tags each item with its group', () => {
+    const { groups, items } = meta.locationGroupsFromItems([
+      item('ชั้น 1', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C'),
+    ]);
+
+    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2']);
+    expect(items.map((it) => it.groupId)).toEqual([groups[0].groupId, groups[0].groupId, groups[1].groupId]);
+  });
+
+  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder
+  // items the rep arranged deliberately, and the document does not do that either.
+  it('does not merge non-adjacent runs of the same label', () => {
+    const { groups } = meta.locationGroupsFromItems([item('ชั้น 1', 'A'), item('ชั้น 2', 'B'), item('ชั้น 1', 'C')]);
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.label)).toEqual(['ชั้น 1', 'ชั้น 2', 'ชั้น 1']);
+  });
+
+  it('treats null / undefined / "" as one and the same blank label', () => {
+    const { groups } = meta.locationGroupsFromItems([item(null, 'A'), item(undefined, 'B'), item('', 'C')]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe('');
+  });
+
+  it('always yields at least one group, so a brand-new quotation has somewhere to add an item', () => {
+    expect(meta.locationGroupsFromItems([]).groups).toHaveLength(1);
+    expect(meta.locationGroupsFromItems(undefined).groups).toHaveLength(1);
+  });
+
+  it('mints distinct group ids across calls', () => {
+    const a = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
+    const b = meta.locationGroupsFromItems([item('x', 'A')]).groups[0].groupId;
+    expect(a).not.toBe(b);
+    expect(meta.newLocationGroupId()).not.toBe(meta.newLocationGroupId());
+  });
+
+  it('preserves item order exactly, so the saved document order is the loaded one', () => {
+    const input = [item('ชั้น 2', 'A'), item('ชั้น 1', 'B'), item('ชั้น 2', 'C')];
+    const { items } = meta.locationGroupsFromItems(input);
+    expect(items.map((it) => it.model)).toEqual(['A', 'B', 'C']);
+  });
+});
+
+describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
+  it('is exactly the five tabs the owner asked for, in order', () => {
+    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.label))
+      .toEqual(['ทั้งหมด', 'รออนุมัติ', 'แก้', 'ยกเลิก', 'อนุมัติแล้ว']);
+  });
+
+  it('drives แก้ off needsRework, not a docStatus', () => {
+    const rework = meta.dealQuotationStatusTab('NEEDS_REWORK');
+    expect(rework.params).toEqual({ needsRework: true });
+    expect(rework.params.status).toBeUndefined();
+  });
+
+  it('sends no params at all for ทั้งหมด', () => {
+    expect(meta.dealQuotationStatusTab('all').params).toEqual({});
+  });
+
+  it('returns null for an unknown key so the caller can fall back to the role default', () => {
+    expect(meta.dealQuotationStatusTab('SUPERSEDED')).toBeNull();
+    expect(meta.dealQuotationStatusTab(null)).toBeNull();
+  });
+
+  it('sends approvers to รออนุมัติ and everyone else to ทั้งหมด', () => {
+    expect(meta.defaultDealQuotationStatusTab({ role: 'sales_manager' })).toBe('PENDING_APPROVAL');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'ceo' })).toBe('PENDING_APPROVAL');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'sales' })).toBe('all');
+    expect(meta.defaultDealQuotationStatusTab({ role: 'import' })).toBe('all');
+    expect(meta.defaultDealQuotationStatusTab(null)).toBe('all');
+  });
+
+  it('every tab names a countKey the counts DTO carries', () => {
+    expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.countKey))
+      .toEqual(['all', 'pendingApproval', 'needsRework', 'cancelled', 'approved']);
+  });
+});
+
+// ── Quotation v3 / v3b (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
+describe('v3/v3b document settings', () => {
+  it('offers all three tile price modes on a Thai document', () => {
+    expect(meta.availablePriceModes('TH').map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
+  });
+
+  it('does NOT offer SPECIAL_SQM on an English document (the server 400s it)', () => {
+    expect(meta.availablePriceModes('EN').map((o) => o.code)).toEqual(['NET', 'DIRECT_NET']);
+  });
+
+  it('moves a SPECIAL_SQM document to DIRECT_NET on English, and reports that it moved', () => {
+    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'EN')).toEqual({ priceMode: 'DIRECT_NET', moved: true });
+    expect(meta.priceModeForLanguage('NET', 'EN')).toEqual({ priceMode: 'NET', moved: false });
+    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'TH')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
+  });
+
+  it('derives the currency and the VAT rate from the language alone', () => {
+    expect(meta.currencyForLanguage('TH')).toBe('THB');
+    expect(meta.currencyForLanguage('EN')).toBe('USD');
+    expect(meta.vatRateForLanguage('TH')).toBe(0.07);
+    expect(meta.vatRateForLanguage('EN')).toBe(0);
+  });
+
+  it('formats USD with $, and puts a negative sign BEFORE the symbol', () => {
+    expect(meta.formatQuotationMoney(1234.5, 'USD')).toBe('$1,234.50');
+    expect(meta.formatQuotationMoney(-38198.21, 'THB')).toBe('-฿38,198.21');
+    expect(meta.formatQuotationMoney(null, 'THB')).toBe('-');
+  });
+});
+
+describe('v3 row labels and derivations', () => {
+  it('prints an EMPTY ส่วนลด cell for a ส่วนลดพิเศษ row, whatever it carries', () => {
+    expect(meta.documentDiscountLabel({ lineType: 'ADJUSTMENT', discountPct: 5 }, 'NET')).toBe('');
+  });
+
+  it('prints พิเศษ for a SPECIAL_SQM tile, and Special on English', () => {
+    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'TH')).toBe('พิเศษ');
+    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'EN')).toBe('Special');
+  });
+
+  it('prints Net for a DIRECT_NET tile whose net equals its list price, พิเศษ when it differs', () => {
+    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 500, netUnitPrice: 500 }, 'DIRECT_NET')).toBe('Net');
+    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 600, netUnitPrice: 500 }, 'DIRECT_NET')).toBe('พิเศษ');
+  });
+
+  it('prints N% or Net for a PLAIN row from its own discount', () => {
+    expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 0 }, 'SPECIAL_SQM')).toBe('Net');
+    expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 5 }, 'NET')).toBe('5%');
+  });
+
+  it('composes the ส่วนลดพิเศษ preview with a zero-padded BE date, as the owner\'s QN6900704-2 prints it', () => {
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' }))
+      .toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '' }))
+      .toBe('ส่วนลดพิเศษ 3%');
+  });
+
+  it('keeps the rep\'s own wording on a FLAT adjustment, and never prints a percent there', () => {
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', description: 'ส่วนลดท้ายบิล', adjustmentPct: 9 }))
+      .toBe('ส่วนลดท้ายบิล');
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', adjustmentPct: 9 })).toBe('ส่วนลดพิเศษ');
+  });
+
+  it('estimates a percentage adjustment as base × pct, rounded to satang — labelled an estimate by the caller', () => {
+    // The owner's QN6900704-2: 1,273,273.56 × 3% = 38,198.21 (the printed figure).
+    expect(meta.estimateAdjustmentAmount({ adjustmentKind: 'PERCENT', adjustmentPct: 3 }, 1273273.56)).toBe(38198.21);
+    expect(meta.estimateAdjustmentAmount({ adjustmentKind: 'AMOUNT', adjustmentAmount: 500 }, 0)).toBe(500);
+    expect(meta.estimateAdjustmentAmount({ adjustmentKind: 'PERCENT', adjustmentPct: '' }, 1000)).toBeNull();
+  });
+});
+
+describe('v3 row validation', () => {
+  const tile = {
+    model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
+    piecesPerBox: 3, sqmPerPiece: 0.36, unitPrice: 850, quantityMode: 'AREA', areaSqm: 20,
+  };
+
+  it('SPECIAL_SQM needs the ราคาพิเศษ — and still the list price, which the server requires on every tile row', () => {
+    expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: '' }, 'SPECIAL_SQM')).toEqual({ specialPriceSqm: 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)' });
+    expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350 }, 'SPECIAL_SQM')).toEqual({});
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', specialPriceSqm: 1350 }, 'SPECIAL_SQM').unitPrice).toBeTruthy();
+  });
+
+  it('refuses a ราคาพิเศษ with more than 2 decimals (the column is NUMERIC(12,2))', () => {
+    expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350.125 }, 'SPECIAL_SQM').specialPriceSqm).toBe('ทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
+  });
+
+  it('DIRECT_NET needs the net per piece and lets the list price stay blank', () => {
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: '' }, 'DIRECT_NET')).toEqual({ directNetPrice: 'กรุณาระบุราคาสุทธิ/แผ่น' });
+    expect(meta.validateQuotationItem({ ...tile, unitPrice: '', directNetPrice: 500 }, 'DIRECT_NET')).toEqual({});
+  });
+
+  it('a PLAIN row needs description, quantity, unit and a positive price — and nothing tile-shaped', () => {
+    expect(meta.validateQuotationItem({ lineType: 'PLAIN' })).toEqual({
+      description: 'กรุณาระบุรายละเอียด', quantity: 'กรุณาระบุจำนวน', unit: 'กรุณาเลือกหน่วย', unitPrice: 'กรุณาระบุราคา/หน่วย',
+    });
+    expect(meta.validateQuotationItem({ lineType: 'PLAIN', description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500 })).toEqual({});
+    expect(meta.validatePlainItem({ description: 'x', quantity: 1.005, unit: 'JOB', unitPrice: 1 }).quantity).toBeTruthy();
+  });
+
+  it('a ส่วนลดพิเศษ needs a positive percent (≤ 100, ≤ 3dp) or a positive amount', () => {
+    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: '' })).toEqual({ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' });
+    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 101 }).adjustmentPct).toBe('ส่วนลดต้องไม่เกิน 100%');
+    expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 3 })).toEqual({});
+    expect(meta.validateAdjustment({ adjustmentKind: 'AMOUNT', adjustmentAmount: 0 })).toEqual({ adjustmentAmount: 'กรุณาระบุจำนวนเงินส่วนลด' });
+  });
+});
+
+// ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ─────────────────────────────────────────
+describe('buildQuotationChecklist', () => {
+  const customer = { id: 5, name: 'บริษัท ก จำกัด', address: '1 ถนนสุขุมวิท', taxId: '0105551234567', phone: '02-000-0000' };
+  const contact = { id: 6, firstName: 'ธนพล', phone: '081-234-5678', email: 'a@b.co' };
+  const complete = {
+    customer, projectName: 'โครงการ A', contact, items: [{ lineType: 'TILE' }], itemErrorsByRow: [{}],
+  };
+  const blocking = (entries) => entries.filter((e) => e.blocking).map((e) => e.check);
+  const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
+
+  it('pins the blocking set to what the backend already refuses — nothing the owner has not ruled on', () => {
+    expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
+      ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+    );
+    // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
+      .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
+  });
+
+  it('is empty for a complete quotation', () => {
+    expect(meta.buildQuotationChecklist(complete)).toEqual([]);
+  });
+
+  it('BLOCKS on a missing ผู้สั่งซื้อ, with the backend\'s own wording, and targets the picker', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, contact: null });
+    expect(blocking(entries)).toEqual(['contact']);
+    expect(entries[0]).toMatchObject({ message: 'กรุณาระบุผู้สั่งซื้อ', targetId: 'quotation-contact' });
+  });
+
+  it('does NOT block on a missing ที่อยู่ — it is a warning that targets the address field', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, customer: { ...customer, address: '' } });
+    expect(blocking(entries)).toEqual([]);
+    expect(entries).toEqual([{ check: 'customerAddress', message: 'ยังไม่ได้กรอกที่อยู่ลูกค้า', targetId: 'deal-customer-address', blocking: false }]);
+  });
+
+  it('does NOT block on a missing เลขที่ผู้เสียภาษี (F7: a customer without one stays quotable), nor on any phone/email', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete,
+      customer: { ...customer, taxId: null, phone: '  ' },
+      contact: { ...contact, phone: null, email: '' },
+    });
+    expect(blocking(entries)).toEqual([]);
+    expect(warnings(entries)).toEqual(['customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail']);
+  });
+
+  it('raises nothing for a value that is merely UNKNOWN yet (undefined), only for a known-empty one', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, customer: { id: 5, name: 'x' }, contact: { id: 6, firstName: 'y' }, projectName: undefined,
+    });
+    expect(entries).toEqual([]);
+  });
+
+  it('on the inline path BLOCKS on ลูกค้า and โครงการ, targeting their controls', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, hasProject: false, contactFieldId: 'deal-contact' });
+    expect(entries.slice(0, 2)).toEqual([
+      { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true },
+      { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true },
+    ]);
+  });
+
+  it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
+    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false }]);
+  });
+
+  it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
+    const tileErrors = meta.validateQuotationItem({ model: 'x', color: 'y', texture: 'z', sizeText: '60x60' });
+    const entries = meta.buildQuotationChecklist({
+      ...complete,
+      items: [{ lineType: 'TILE' }, { lineType: 'PLAIN' }],
+      itemErrorsByRow: [tileErrors, { unit: 'กรุณาเลือกหน่วย' }],
+      adjustments: [{ lineType: 'ADJUSTMENT', adjustmentKind: 'PERCENT' }],
+      adjustmentErrorsByRow: [{ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' }],
+    });
+    expect(entries.map((e) => [e.blocking, e.targetId, e.message])).toEqual([
+      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, ตร.ม./แผ่น, แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
+      [true, 'plain-unit-1', 'รายการที่ 2: ขาด หน่วย'],
+      [true, 'adj-pct-2', 'รายการที่ 3: ขาด เปอร์เซ็นต์ส่วนลด'],
+    ]);
+  });
+
+  it('BLOCKS a quotation with no product rows, and says why when only a ส่วนลดพิเศษ is left', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, items: [], itemErrorsByRow: [] }).map((e) => e.message))
+      .toEqual(['ต้องมีรายการสินค้าอย่างน้อย 1 รายการ']);
+    expect(meta.buildQuotationChecklist({ ...complete, items: [], adjustments: [{}] }).map((e) => e.message))
+      .toEqual(['ส่วนลดพิเศษต้องมีรายการสินค้าอย่างน้อย 1 รายการอยู่ด้านบน']);
+  });
+
+  it('BLOCKS the English + ราคาพิเศษ pairing the server 400s', () => {
+    expect(blocking(meta.buildQuotationChecklist({ ...complete, priceModeLanguageConflict: true }))).toEqual(['priceModeLanguage']);
+  });
+});
+
+describe('joinPresent', () => {
+  it('joins only the present parts, so a missing one leaves no dangling separator', () => {
+    expect(meta.joinPresent(['คุณธนพล', null, 'a@b.co'])).toBe('คุณธนพล · a@b.co');
+    expect(meta.joinPresent(['คุณธนพล', '', '  '])).toBe('คุณธนพล');
+    expect(meta.joinPresent([null, undefined])).toBe('');
   });
 });

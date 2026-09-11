@@ -59,12 +59,19 @@ RUN apt-get update && \
 # runtime for five platforms and Maven Central has no per-platform artifact — see backend/pom.xml),
 # and the Debian chromium package ~250 MB on top of libreoffice-calc's ~150 MB.
 #
-# ⚠️ FIRST DEPLOY OF THIS IMAGE NEEDS A SMOKE RENDER. This Dockerfile has not been built on the
-# authoring Mac (its Docker registry pulls are blocked by broken host IPv6). Before switching
+# ⚠️ FIRST DEPLOY OF THIS IMAGE NEEDS A SMOKE RENDER. Before switching
 # APP_QUOTATION_PDF_RENDERER=chromium on, download one direct-deal quotation PDF on the deployed
 # image and read the logs: a launch failure surfaces as 503 "ระบบสร้าง PDF ไม่พร้อมใช้งาน" and a
 # "Headless Chromium is not available" warning; the default `xls` engine is unaffected either way.
-ENV CHROMIUM_PATH=/usr/bin/chromium
+#
+# The path below is VERIFIED against the built image, not assumed — the first build of this file
+# (v2026-09-10.1) shipped CHROMIUM_PATH=/usr/bin/chromium while this base image's chromium package
+# installs the binary as /usr/bin/chromium-browser. Nothing failed at build time; the engine would
+# simply have been unavailable at runtime, because PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD keeps a bundled
+# browser out of the image. ChromiumPdfPrinter now also tries the known package paths and warns
+# when this variable points at nothing, so the same mistake cannot be silent again. Re-check with:
+#   docker run --rm --entrypoint sh <image> -c 'command -v chromium || command -v chromium-browser'
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV XDG_CONFIG_HOME=/tmp/.config
 ENV XDG_CACHE_HOME=/tmp/.cache

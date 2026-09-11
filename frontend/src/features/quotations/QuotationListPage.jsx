@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
@@ -11,7 +11,11 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
-import { canApproveDealQuotation, canCreateDealQuotationStandalone, dealQuotationStatusLabel } from './quotationMeta.js';
+import {
+  canApproveDealQuotation, canCreateDealQuotationStandalone, DEAL_QUOTATION_STATUS_TABS,
+  dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
+  isDealQuotationReadOnlyViewer,
+} from './quotationMeta.js';
 
 // DataTable's `gridClassName` becomes the desktop `<tr>`'s own class (alongside the shared
 // `.table-head`/`.data-row` base rules in styles.css, which set `display:grid` with no
@@ -21,25 +25,75 @@ import { canApproveDealQuotation, canCreateDealQuotationStandalone, dealQuotatio
 // is retiring (CLAUDE.md: "Do not add new page-specific CSS files"). A Tailwind arbitrary-value
 // utility expresses the same `grid-template-columns` without one: เลขที่ / ลูกค้า·โครงการ /
 // พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
-const LIST_TABLE_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)]';
+//
+// ── Column floors: FIXED, identical in every row ──────────────────────────────────────────────
+// Six `minmax(0, …)` tracks used to be the whole story, and `minmax(0, …)` lets the grid shrink a
+// column BELOW its own text. The cells are `white-space: nowrap` with `overflow: clip`
+// (styles.css's `.data-row > td`), so that loss never appears as overflow — it appears as SILENTLY
+// truncated content. Measured at a 721px viewport (655px row, 559px of content budget after 36px
+// padding and 60px of gaps): เลขที่ lost 28px, ลูกค้า/โครงการ 29px, พนักงานขาย 13px and วันที่ 14px,
+// and `QT-2026-0005-2` rendered `QT-2026-000…` — the `-N` suffix is the ONLY thing distinguishing a
+// revision from the document it replaces, so of everything on this row it is the worst to lose.
+//
+// The floors are FIXED lengths, never `min-content`: the head row and each data row are SEPARATE
+// grid containers, so `min-content` sizes every row from ITS OWN content and the columns then
+// stagger row to row (QuotationDocumentView.jsx shipped that by mistake and a review measured 23px
+// of drift — read that file's ITEM_GRID comment, this is the same fix).
+//
+// Sized from each column's widest realistic value, measured in the live cell typography and
+// rounded up. Money and dates are sized against the FALLBACK font, not Sarabun: Sarabun arrives
+// from Google Fonts with `display=swap`, so during the swap window — and permanently on the on-prem
+// deployment if that host cannot reach fonts.googleapis.com — `system-ui` renders instead and every
+// figure is ~14% wider.
+//
+//   เลขที่   6.875rem/110px  `QT-2026-9999-99` = 108.4px in the monospace stack (a system stack, so
+//                            no swap risk). Cannot wrap: breaking a document number mid-token would
+//                            be worse than the truncation this replaces.
+//   ยอดรวม  8.25rem/132px   `฿99,999,999.99` = 114px in Sarabun but 130.5px in the fallback. The
+//                            same floor QuotationDocumentView.jsx uses for เป็นเงิน, deliberately —
+//                            a grand total is at least as large as any line total on it.
+//   สถานะ   4.75rem/76px    the widest badge label, อนุมัติแล้ว, plus the badge's own padding.
+//   วันที่   6.5rem/104px    ALL TWELVE months measured, not one. `เม.ย.` is the widest — four glyph
+//                            clusters, not three — at 100.13px in the fallback, so the 98px this was
+//                            first set to CLIPPED every April date on a host without Sarabun. `พ.ค.`
+//                            96.74 and `ต.ค.` 96.16 had under 2px to spare. Never size a Thai date
+//                            column from one sample month. The cell renders a bare string, so it
+//                            truncates rather than wraps — see the note on พนักงานขาย below for why
+//                            it is deliberately NOT wrapped in a <span>.
+//   พนักงานขาย —            NO floor, deliberately. It wraps, and the longest real surname
+//                            (`วงศ์ประเสริฐ`, 82.5px) exceeds any floor this budget can afford, so a
+//                            floor could never prevent a mid-word break — its only actual effect
+//                            was taking 64px from the absorber. Both free-text columns now share
+//                            what the four floored columns leave, by their `fr` weights.
+//
+// ลูกค้า / โครงการ and พนักงานขาย keep `minmax(0, …)`: they are the two columns of free text, both
+// wrap, and so they are the two that can give up width without losing anything.
+//
+// ⚠️ This string must stay ONE unbroken literal. Splitting it across a `+` concatenation — a
+// natural-looking edit — leaves Tailwind's scanner unable to see the arbitrary value, so the rule is
+// never emitted, `grid-template-columns` goes unset, and the row collapses to a single implicit
+// track (measured: 63.5px tall becomes 242px, cells stacked). Lint, the unit suite and `npm run
+// build` ALL stay green, and the dev server keeps working from its cache, so nothing catches it
+// except reading `dist/assets/*.css`. The guard test asserts this file's own source text for that
+// reason.
+//
+// ⚠️ At a browser root font-size above about 18.6px the floors (30rem total) exceed the 559px the
+// row has at a 721px viewport. The wrapping <section> is `overflow-x-auto`, so that degrades to a
+// horizontal scrollbar rather than losing anything — but it is a state the old all-`minmax(0,…)`
+// grid could not reach.
+const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]';
 
+// The tab set itself is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js) — owner feedback F5,
+// 2026-09-10 replaced the old six status chips (ทั้งหมด/รออนุมัติ/ร่าง/อนุมัติแล้ว/ถูกแทนที่/
+// ยกเลิก) with the five the owner asked for. ร่าง and ถูกแทนที่ are deliberately GONE as tabs: a
+// plain untouched draft is the rep's own working copy and never needed a queue of its own, and a
+// superseded document is history. Both statuses still render their own badge on a row reached any
+// other way, so nothing became unreachable — dealQuotationStatusLabel still knows all five.
+//
 // Approvers (sales_manager/ceo) lead with the "รออนุมัติ" queue -- that is the work waiting on
 // THEM. sales/import/account have no approval queue of their own, so they land on "ทั้งหมด".
 // #L7: canApproveDealQuotation (quotationMeta.js) instead of a page-local role set -- same
 // role-only gate, single source of truth with the editor's own อนุมัติ/ไม่อนุมัติ button gate.
-
-const STATUS_FILTERS = [
-  { key: 'ALL', label: 'ทั้งหมด', status: undefined },
-  { key: 'PENDING_APPROVAL', status: 'PENDING_APPROVAL' },
-  { key: 'DRAFT', status: 'DRAFT' },
-  { key: 'APPROVED', status: 'APPROVED' },
-  { key: 'SUPERSEDED', status: 'SUPERSEDED' },
-  { key: 'CANCELLED', status: 'CANCELLED' },
-];
-
-function statusFilterLabel(filter) {
-  return filter.label ?? dealQuotationStatusLabel(filter.status).label;
-}
 
 const COLUMNS = [
   {
@@ -57,18 +111,29 @@ const COLUMNS = [
     key: 'customer',
     header: 'ลูกค้า / โครงการ',
     searchAccessor: (row) => `${row.customerName ?? ''} ${row.projectName ?? ''}`,
+    // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
+    // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
+    // its wrap escape hatch only reaches `> strong`, `> small` and `> span`. A <div> child
+    // therefore inherits the nowrap and this column cannot absorb any squeeze at all, which is
+    // what made it lose 29px at 721px. `flex flex-col` still stacks the two lines: a Tailwind
+    // utility beats the escape hatch's `display: block` on layer order (styles.css is
+    // `layer(legacy)`), so only the wrapping changes.
     render: (row) => (
-      <div className="flex flex-col">
+      <span className="flex flex-col">
         <span className="font-bold">{row.customerName ?? '-'}</span>
         {row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
-      </div>
+      </span>
     ),
   },
   {
     key: 'salesRepName',
     header: 'พนักงานขาย',
     searchAccessor: (row) => row.salesRepName,
-    render: (row) => row.salesRepName ?? '-',
+    // Wrapped in a <span> for the same reason as ลูกค้า above: a bare string leaves the cell with
+    // no child element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai
+    // name is truncated rather than broken across two lines. `ภิญญาดา วงศ์ประเสริฐ` needs 147.8px
+    // on one line and this column is floored at 64px, so wrapping is what keeps it whole.
+    render: (row) => <span>{row.salesRepName ?? '-'}</span>,
   },
   {
     key: 'grandTotal',
@@ -127,20 +192,60 @@ function QuotationCard({ row }) {
 export function QuotationListPage({ user }) {
   const queryClient = useQueryClient();
   const isApprover = canApproveDealQuotation(user);
-  const [filterKey, setFilterKey] = useState(isApprover ? 'PENDING_APPROVAL' : 'ALL');
-  const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
+
+  // The active tab lives in the URL (owner feedback F5: "driven by the URL (`?status=`)"), not in
+  // component state -- so a tab is linkable, survives a refresh and a back button, and an approver
+  // can paste "the รออนุมัติ queue" to a colleague and have them see the same thing. An ABSENT
+  // param means "this role's default tab"; an unrecognised one falls back to the same, rather than
+  // rendering an empty list for a typo'd or retired key.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedKey = searchParams.get('status');
+  const activeTab = dealQuotationStatusTab(requestedKey)
+    ?? dealQuotationStatusTab(defaultDealQuotationStatusTab(user))
+    ?? DEAL_QUOTATION_STATUS_TABS[0];
+
+  function selectTab(key) {
+    // ALWAYS writes the key, ทั้งหมด included. Clearing the param instead would mean "the role
+    // default" — so an approver clicking ทั้งหมด would silently bounce straight back to รออนุมัติ,
+    // making that tab unreachable for exactly the role that has a default other than it.
+    // `replace` so clicking through five tabs does not bury the page the rep arrived from under
+    // five history entries.
+    setSearchParams({ status: key }, { replace: true });
+  }
 
   const listQuery = useQuery({
-    queryKey: queryKeys.dealQuotationsList({ status: filter.status }),
-    queryFn: () => api.dealQuotations.list({ status: filter.status }).then((r) => r.items ?? []),
+    queryKey: queryKeys.dealQuotationsList(activeTab.params),
+    queryFn: () => api.dealQuotations.list(activeTab.params).then((r) => r.items ?? []),
   });
   const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
+
+  // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
+  // are advisory chrome: a failed or in-flight counts call renders the tabs with NO number rather
+  // than blocking the list or showing a zero that would read as "nothing here".
+  const countsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationCounts(),
+    // The BARE DealQuotationCountsDto — DealQuotationController#counts returns the record with no
+    // envelope. This used to read `r?.counts ?? r`, which meant a real disagreement between the
+    // controller, hrApi's comment and the mock could never surface as a failure (review finding
+    // MED-3); the tolerance is gone so the contract test and the mock shape test are the ones that
+    // have to be right.
+    queryFn: () => api.dealQuotations.counts().then((r) => r ?? null),
+  });
+  const counts = countsQuery.data ?? null;
 
   return (
     <PageStack>
       <PageHeader
         title="ใบเสนอราคา"
-        subtitle={isApprover ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด' : 'ใบเสนอราคาของคุณ'}
+        // "ของคุณ" is only true for the rep whose own rows these are. import/account are
+        // read-only viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the
+        // possessive was simply wrong for them — a third branch rather than a reworded second one,
+        // because the approver line is right as it stands.
+        subtitle={isApprover
+          ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด'
+          : isDealQuotationReadOnlyViewer(user)
+            ? 'ใบเสนอราคาทั้งหมด (ดูอย่างเดียว)'
+            : 'ใบเสนอราคาของคุณ'}
         actions={(
           <>
             {canCreateDealQuotationStandalone(user) ? (
@@ -166,37 +271,49 @@ export function QuotationListPage({ user }) {
         )}
       />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+      {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list,
+          and arrow-key semantics plus aria-selected is what a screen reader needs to say so. The
+          panel they control is the table below. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3" role="tablist" aria-label="สถานะใบเสนอราคา">
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
-        {STATUS_FILTERS.map((option) => {
-          const active = filterKey === option.key;
-          const label = statusFilterLabel(option);
+        {DEAL_QUOTATION_STATUS_TABS.map((tab) => {
+          const active = activeTab.key === tab.key;
+          const count = counts?.[tab.countKey];
           return (
             <button
-              key={option.key}
+              key={tab.key}
               type="button"
-              aria-pressed={active}
-              className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+              role="tab"
+              aria-selected={active}
+              aria-controls="quotation-list-panel"
+              className={`inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
                 active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
               }`}
-              onClick={() => setFilterKey(option.key)}
+              onClick={() => selectTab(tab.key)}
             >
-              {label}
+              {tab.label}
+              {Number.isFinite(count) ? (
+                <span className={`tabular-nums rounded-full px-1.5 text-2xs ${active ? 'bg-primary/15' : 'bg-surface-subtle text-text-muted'}`}>
+                  {count}
+                </span>
+              ) : null}
             </button>
           );
         })}
       </div>
+      <div id="quotation-list-panel" role="tabpanel">
 
-      <DataTable
-        columns={COLUMNS}
-        rows={rows}
-        getRowKey={(row) => row.id}
-        gridClassName={LIST_TABLE_GRID}
-        mobileCard={(row) => <QuotationCard row={row} />}
-        searchable
-        loading={listQuery.isLoading}
-        emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
-      />
+        <DataTable
+          columns={COLUMNS}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName={LIST_TABLE_GRID}
+          mobileCard={(row) => <QuotationCard row={row} />}
+          searchable
+          loading={listQuery.isLoading}
+          emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
+        />
+      </div>
     </PageStack>
   );
 }

@@ -4,10 +4,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.LocalDate;
@@ -182,6 +184,71 @@ class CustomerControllerTest {
                 .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"ACME\"}"))
             .andExpect(status().is2xxSuccessful());
         verify(customers).create(eq("ACME"), any(), any(), eq("สำนักงานใหญ่"), any());
+    }
+
+    // ── update customer (F7): the SAME DealEntryAccess gate as create ─────
+    /**
+     * Owner feedback F7 (2026-09-10): the deal card can now correct a selected customer's
+     * เลขที่ผู้เสียภาษี / โทร. in place. Unit-level decision coverage only — the real-DB enforcement
+     * evidence CLAUDE.md requires is {@code DealEntryAccessIntegrationTest}'s update cases, which
+     * run the real controller/repository against real Postgres.
+     */
+    @Test
+    void updateCustomerIsForbiddenForEveryRoleOutsideTheDealEntryGate() throws Exception {
+        for (String role : List.of("import", "account", "employee", "hr", "warehouse", "qc")) {
+            mvc.perform(put("/api/customers/1").session(session(role))
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"taxId\":\"0105542000000\"}"))
+                .andExpect(status().isForbidden());
+        }
+        verify(customers, never()).update(anyLong(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void updateCustomerIsAllowedForSalesSalesManagerAndAGrantedQc() throws Exception {
+        when(customers.update(anyLong(), any(), any(), any(), any(), any()))
+            .thenReturn(java.util.Optional.of(new CustomerDto(1L, "ACME", "0105542000000", null, "สำนักงานใหญ่", "02-1")));
+        for (String role : List.of("sales", "sales_manager")) {
+            mvc.perform(put("/api/customers/1").session(session(role))
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"taxId\":\"0105542000000\"}"))
+                .andExpect(status().isOk());
+        }
+        when(employeeAuth.canCreateQuotation(1L)).thenReturn(true);
+        mvc.perform(put("/api/customers/1").session(session("qc"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"taxId\":\"0105542000000\"}"))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void updateCustomerAppliesOnlyTheFieldsTheBodyCarries() throws Exception {
+        when(customers.update(anyLong(), any(), any(), any(), any(), any()))
+            .thenReturn(java.util.Optional.of(new CustomerDto(7L, "ACME", "0105542000000", null, "สำนักงานใหญ่", "02-1")));
+        mvc.perform(put("/api/customers/7").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"taxId\":\"0105542000000\",\"phone\":\"02-1\"}"))
+            .andExpect(status().isOk());
+        // name/address/branch untouched => null, so the repository's COALESCE leaves them alone.
+        verify(customers).update(7L, null, "0105542000000", null, null, "02-1");
+    }
+
+    @Test
+    void updateCustomerRejectsABlankNameOrBranch_andAMissingCustomerIs404() throws Exception {
+        mvc.perform(put("/api/customers/1").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"   \"}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/customers/1").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"branch\":\"\"}"))
+            .andExpect(status().isBadRequest());
+        when(customers.update(anyLong(), any(), any(), any(), any(), any())).thenReturn(java.util.Optional.empty());
+        mvc.perform(put("/api/customers/999").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-1\"}"))
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void anonymousCallerIsUnauthorizedOnUpdate() throws Exception {
+        mvc.perform(put("/api/customers/1")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-1\"}"))
+            .andExpect(status().isUnauthorized());
     }
 
     // ── create contact / project: sales only ──────────────────────────────

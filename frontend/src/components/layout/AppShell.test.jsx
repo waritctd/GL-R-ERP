@@ -426,7 +426,8 @@ describe('AppShell navigation under the release lockdown', () => {
     await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
     await screen.findByText('เนื้อหา');
 
-    expect(screen.queryByText('งานขาย')).toBeNull();
+    // Quotation release (owner, 2026-09-11): ใบเสนอราคา is the ONE sales item that survives.
+    expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
     expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
     expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
@@ -444,9 +445,19 @@ describe('AppShell navigation under the release lockdown', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.queryByText('คิวขอราคา')).toBeNull();
     expect(screen.queryByText('งานนำเข้า')).toBeNull();
+    // import/account may READ quotations server-side but are not the quotation audience.
+    expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
 
     await renderLockedShell({ role: 'account', employeeId: 43, name: 'บัญชี ทดสอบ', email: 'account@test.local' });
     expect(screen.queryByText('งานการเงิน')).toBeNull();
+  });
+
+  it('gives a can-create grantee ใบเสนอราคา even when their role is outside sales', async () => {
+    await renderLockedShell({ role: 'qc', employeeId: 144, canCreateQuotation: true, name: 'คิวซี ทดสอบ', email: 'qc@test.local' });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
+    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
   });
 
   // A division manager loses the 'ทีมของฉัน' group but keeps the routes it
