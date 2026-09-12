@@ -31,70 +31,114 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm. No.BS66R13GP");
     }
 
-    /** Owner feedback pass 3 (2026-09-11), verbatim: "มีหน่วยต่อที้ายทุกตัว 200 cm x 300 cm x 9 mm"
-     * — thickness is entered in MILLIMETRES (not cm as the old single-unit line implied), and every
-     * dimension now carries its own unit. */
+    // ── owner ruling 2026-09-12, verbatim: "normalize it in the database so its the same in
+    // unit. make the size cm and the thickness mm" ──────────────────────────────────────────────
+    //
+    // Storage stays millimetres; sizeLine does the ONE presentation conversion, from the
+    // CATALOGUE's own width_mm/height_mm (unambiguous, never inferred) -- never from the rep's
+    // free-text sizeText, which the branch's own commit history shows mixes cm and mm typed sizes
+    // in the very same column (see the regression test below).
+
     @Test
-    void sizeLine_withThickness_everyDimensionGetsItsOwnUnit() {
-        assertThat(DealQuotationLines.sizeLine("200x300", new BigDecimal("9")))
-            .isEqualTo("ขนาด 200 cm x 300 cm x 9 mm (ขนาดโดยประมาณ)");
+    void sizeLine_catalogueDimensions_printedInCentimetres_thicknessInMillimetres() {
+        assertThat(DealQuotationLines.sizeLine("irrelevant typed text", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("1200")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** Trailing ".0" must never appear -- "60 cm", never "60.0 cm" -- even though width_mm/
+     * height_mm/thicknessMm are BigDecimal and could easily carry a trailing zero. */
+    @Test
+    void sizeLine_catalogueDimensions_noTrailingPointZero() {
+        assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9.00"),
+            new BigDecimal("600.00"), new BigDecimal("1200.00")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
     @Test
-    void sizeLine_withThickness_integer() {
-        assertThat(DealQuotationLines.sizeLine("60x120", new BigDecimal("2")))
-            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
+    void sizeLine_catalogueDimensions_fractionalCentimetres() {
+        // 605mm / 10 = 60.5cm -- a real fraction must still print cleanly.
+        assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("0.9"),
+            new BigDecimal("605"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60.5 cm x 60 cm x 0.9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /**
+     * THE regression this task exists to fix, pinned exactly as specified: a catalogue tile whose
+     * stored dimensions are 200 x 300 MILLIMETRES must print "20 cm x 30 cm", NOT "200 cm x 300
+     * cm" -- the bug the previous ("owner feedback pass 3") version of this method had, because it
+     * built the face size by splitting the REP'S TYPED "200x300" and unit-suffixing both halves
+     * "cm" unconditionally, silently assuming the rep meant centimetres when the catalogue's own
+     * geometry says this tile is actually 200mm x 300mm (20cm x 30cm).
+     *
+     * <p>Mutation-checked: reverting {@link DealQuotationLines#sizeLine} to build the face size
+     * from {@code sizeText} again (splitting "200x300" on "x" and printing "200 cm x 300 cm")
+     * turns this test red; restoring the catalogue-dimensions-first version turns it green again
+     * -- verified by hand during implementation (see the PR body for the before/after run).
+     */
+    @Test
+    void sizeLine_REGRESSION_catalogue200x300mm_prints20cmX30cm_notTheRepsTypedCentimetres() {
+        assertThat(DealQuotationLines.sizeLine("200x300", new BigDecimal("9"),
+            new BigDecimal("200"), new BigDecimal("300")))
+            .isEqualTo("ขนาด 20 cm x 30 cm x 9 mm (ขนาดโดยประมาณ)")
+            .as("must never read the rep's typed \"200x300\" as centimetres when the catalogue "
+                + "says the tile is 200mm x 300mm")
+            .doesNotContain("200 cm").doesNotContain("300 cm");
+    }
+
+    // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
+
+    @Test
+    void sizeLine_noCatalogueDimensions_printsTheRepsTypedTextVerbatim_unconverted() {
+        // No splitting, no unit-guessing -- this is exactly the shape the deleted heuristic got
+        // wrong (a typed "200x300" is NOT reliably centimetres; see the regression test above).
+        assertThat(DealQuotationLines.sizeLine("200x300", new BigDecimal("9"), null, null))
+            .isEqualTo("ขนาด 200x300 x 9 mm (ขนาดโดยประมาณ)");
     }
 
     @Test
-    void sizeLine_withThickness_fractional() {
-        assertThat(DealQuotationLines.sizeLine("60x60", new BigDecimal("0.9")))
-            .isEqualTo("ขนาด 60 cm x 60 cm x 0.9 mm (ขนาดโดยประมาณ)");
-    }
-
-    /** An "X" separator, and stray whitespace around it, both split exactly like lowercase "x". */
-    @Test
-    void sizeLine_withThickness_upperCaseXAndSpacesAroundTheSeparator() {
-        assertThat(DealQuotationLines.sizeLine("60X120", new BigDecimal("2")))
-            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
-        assertThat(DealQuotationLines.sizeLine("60 x 120", new BigDecimal("2")))
-            .isEqualTo("ขนาด 60 cm x 120 cm x 2 mm (ขนาดโดยประมาณ)");
-    }
-
-    /** A catalog {@code size_raw} that already carries its own unit is left EXACTLY as typed —
-     * never re-split into per-dimension cm (it may not even be cm) and never double-unit-suffixed. */
-    @Test
-    void sizeLine_faceSizeAlreadyHasItsOwnUnit_isPrintedAsTyped_neverDoubleUnit() {
-        assertThat(DealQuotationLines.sizeLine("600x1200 mm", new BigDecimal("9")))
+    void sizeLine_noCatalogueDimensions_alreadyUnitedTextStillPrintedVerbatim() {
+        assertThat(DealQuotationLines.sizeLine("600x1200 mm", new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด 600x1200 mm x 9 mm (ขนาดโดยประมาณ)");
-        assertThat(DealQuotationLines.sizeLine("60x60 ซม.", new BigDecimal("2")))
+        assertThat(DealQuotationLines.sizeLine("60x60 ซม.", new BigDecimal("2"), null, null))
             .isEqualTo("ขนาด 60x60 ซม. x 2 mm (ขนาดโดยประมาณ)");
     }
 
-    /** A face size this cannot confidently split (not a clean two-number x-pair) falls back to
-     * printing it exactly as typed, per the task's explicit instruction not to mangle it. */
     @Test
-    void sizeLine_unparseableFaceSize_isPrintedAsTyped_notMangled() {
-        assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9")))
+    void sizeLine_noCatalogueDimensions_unparseableFaceSize_isPrintedAsTyped_notMangled() {
+        assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด รูปทรงอิสระ x 9 mm (ขนาดโดยประมาณ)");
-        assertThat(DealQuotationLines.sizeLine("60x120x5", new BigDecimal("9")))
+        assertThat(DealQuotationLines.sizeLine("60x120x5", new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด 60x120x5 x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** A blank face size prints only the thickness -- no dangling separator. */
+    /** Only ONE catalogue dimension present (e.g. a corrupt row) is treated the same as neither --
+     * a half-known geometry is not enough to print a face size from, so this falls back too. */
     @Test
-    void sizeLine_blankFaceSize_printsOnlyTheThickness() {
-        assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9")))
+    void sizeLine_onlyOneCatalogueDimension_fallsBackToTypedText() {
+        assertThat(DealQuotationLines.sizeLine("60x120", new BigDecimal("9"),
+            new BigDecimal("600"), null))
+            .isEqualTo("ขนาด 60x120 x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A blank face size, with no catalogue dimensions either, prints only the thickness -- no
+     * dangling separator. */
+    @Test
+    void sizeLine_blankFaceSize_noCatalogueDimensions_printsOnlyTheThickness() {
+        assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด 9 mm (ขนาดโดยประมาณ)");
-        assertThat(DealQuotationLines.sizeLine("  ", new BigDecimal("9")))
+        assertThat(DealQuotationLines.sizeLine("  ", new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด 9 mm (ขนาดโดยประมาณ)");
     }
 
     /** layout-spec §2: no thickness → null (not a blank/dangling line) — the size already went
-     * inline on {@link DealQuotationLines#descriptionLine} instead, so there is no separate row. */
+     * inline on {@link DealQuotationLines#descriptionLine} instead, so there is no separate row.
+     * Holds regardless of whether catalogue dimensions are available. */
     @Test
     void sizeLine_noThickness_returnsNull_noSeparateRow() {
-        assertThat(DealQuotationLines.sizeLine("60x60", null)).isNull();
+        assertThat(DealQuotationLines.sizeLine("60x60", null, null, null)).isNull();
+        assertThat(DealQuotationLines.sizeLine("60x60", null, new BigDecimal("600"), new BigDecimal("600")))
+            .isNull();
     }
 
     @Test

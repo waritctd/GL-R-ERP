@@ -94,7 +94,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
         NotificationEmailService approvalMailer =
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
-        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc), tickets, customers, contacts,
+        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)), tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), new EmployeeAuthRepository(jdbc),
             new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
             // app.quotation.bank-block-line1..3 (#929) — empty: the bank block is not under test here.

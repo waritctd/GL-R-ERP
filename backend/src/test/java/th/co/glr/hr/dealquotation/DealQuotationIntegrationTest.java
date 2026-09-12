@@ -106,7 +106,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), null, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
 
-        quotationRepository = new DealQuotationRepository(jdbc);
+        quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         mailer = new CapturingMailer();
         NotificationEmailService approvalMailer =
             new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");

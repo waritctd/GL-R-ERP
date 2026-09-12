@@ -55,6 +55,36 @@ public class ImportProfile {
     @JsonProperty("size_unit")
     public String sizeUnit;
 
+    /**
+     * REQUIRED — "mm", "cm", or "none", declaring how to interpret an AMBIGUOUS (bare, no
+     * explicit unit letter attached) numeric thickness value for this profile's source — whether
+     * that number comes from a dedicated thickness column or a bare third value in the size
+     * string. Same discipline as {@link #sizeUnit}, and for the identical reason: {@code
+     * ImportEngine} used to assume a bare third size value ({@code "598X598X18"}) was ALWAYS
+     * already millimetres. That is true for Bode but false for the Chinese "2026 GENERAL EXPORT"
+     * list, which writes it in CENTIMETRES ({@code "60X120X1.0"} = a 9 mm tile — its own worksheet
+     * tab is named "2CM" for the 20 mm slabs); nothing about the two shapes lets code tell them
+     * apart without a declared unit, so there is no default and no magnitude-based fallback here
+     * either.
+     *
+     * <p>A value that already carries its own explicit unit letter — {@code "9MM"}, the truncated
+     * {@code "9M"}/{@code "9,4M"} forms, or Padana's own {@code "8MM"}-style {@code Spessore}
+     * column text — is self-describing millimetres and is read as-is regardless of this setting;
+     * this field only governs the ambiguous bare-number case.
+     *
+     * <p>{@code "none"} is a legitimate declared value, not a placeholder for "not yet
+     * configured": it means this factory's source genuinely carries no reliable thickness data at
+     * all. Confirmed by scanning every cell of three real price lists — Bode (one stray token in
+     * the whole sheet), Vives (zero across 13,851 description cells), Equipe (zero across 4,248) —
+     * for which the owner is sending separate thickness files. A {@code "none"} profile always
+     * imports {@code thickness_mm = NULL}; that is the correct, recorded absence, never a
+     * quarantine and never a guess. This is a statement about how to INTERPRET a thickness value
+     * when one exists, not an assertion that one must exist — {@code ImportEngine} never requires
+     * a non-null thickness to import a row.
+     */
+    @JsonProperty("thickness_unit")
+    public String thicknessUnit;
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class SheetConfig {
         public String name;

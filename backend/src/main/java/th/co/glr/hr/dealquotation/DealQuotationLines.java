@@ -21,11 +21,6 @@ import java.util.Locale;
 public final class DealQuotationLines {
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
         java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
-    // A plain "200x300" / "60x120" face-size pair — two numbers, x/X separator, no unit of its
-    // own — that #sizeLine can confidently split into two per-dimension cm values. Anything else
-    // (a third segment, a non-numeric part, extra text) is left exactly as typed.
-    private static final java.util.regex.Pattern SIZE_TWO_PART =
-        java.util.regex.Pattern.compile("^(\\d+(?:\\.\\d+)?)\\s*[xX]\\s*(\\d+(?:\\.\\d+)?)$");
     private DealQuotationLines() {}
 
     /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
@@ -62,31 +57,55 @@ public final class DealQuotationLines {
     }
 
     /**
-     * {@code ขนาด {width} cm x {height} cm x {thickness} mm (ขนาดโดยประมาณ)} — owner feedback pass 3
-     * (2026-09-11): thickness is entered in MILLIMETRES, not centimetres, and the old
-     * {@code "60x120x2 cm."} single-unit line silently relabelled it as cm. Her own resolution,
-     * verbatim: <i>"มีหน่วยต่อที้ายทุกตัว 200 cm x 300 cm x 9 mm"</i> — every dimension carries its
-     * own unit, so {@code "200x300"} + thickness 9 now prints
-     * {@code "ขนาด 200 cm x 300 cm x 9 mm (ขนาดโดยประมาณ)"}.
+     * {@code ขนาด {width} cm x {height} cm x {thickness} mm (ขนาดโดยประมาณ)} — owner ruling
+     * 2026-09-12, verbatim: <i>"normalize it in the database so its the same in unit. make the
+     * size cm and the thickness mm"</i>. STORAGE stays MILLIMETRES (the columns are literally
+     * named {@code width_mm}/{@code height_mm}/{@code thickness_mm} — writing centimetres into a
+     * {@code _mm} column would manufacture exactly the 10x-error class this branch exists to
+     * remove); PRESENTATION is normalized here, in ONE place: face size divided by 10 into
+     * centimetres, thickness left in millimetres.
      *
-     * <p>{@code sizeText} is free text (a rep-typed "200x300"/"60x120" pair, or a catalog
-     * {@code size_raw} that can already read "600x1200 mm"). This only ever unit-suffixes what it
-     * can confidently split into exactly two numeric parts on an {@code x}/{@code X} separator
-     * ({@link #SIZE_TWO_PART}); a size that already carries its own unit ({@link #SIZE_HAS_UNIT})
-     * or that does not match that shape is printed <b>exactly as typed</b> — never a doubled unit,
-     * never a mangled split. The thickness is always suffixed "mm" since that is the unit it is
-     * entered in, regardless of what happened to the face size.
+     * <p><b>Correction to the previous ("owner feedback pass 3") version of this method.</b> That
+     * pass built the face size by splitting the REP'S FREE-TEXT {@code sizeText} on "x" and
+     * unit-suffixing both halves "cm" unconditionally, e.g. {@code sizeLine("200x300", 9, ...)}
+     * printed {@code "ขนาด 200 cm x 300 cm x 9 mm"}. That is wrong whenever the rep typed
+     * millimetres — confirmed against the owner's own price-list documents, which mix cm-typed and
+     * mm-typed sizes in the very same free-text column. The real product behind a typed "200x300"
+     * is a 20 cm x 30 cm tile, so the old line was off by 10x on both dimensions — the identical
+     * defect, one layer up, from the "200x300 read as centimetres" regression fixed in {@code
+     * DealQuotationService#resolveSqmPerPiece} (200mm x 300mm is 0.06 sqm/piece, not 6.0).
+     *
+     * <p>The fix: derive the face size from the CATALOGUE's own {@code width_mm}/{@code height_mm}
+     * — {@code catalogWidthMm}/{@code catalogHeightMm} here, unambiguous millimetres, never
+     * inferred from text — resolved the SAME way {@code DealQuotationService#resolveSqmPerPiece}
+     * already resolves {@code sqmPerPiece}: via {@code CatalogRepository#findSqmBasis}/{@code
+     * #findSqmBases}. Divide by 10 for centimetres; {@link #format(BigDecimal)}'s {@code "#,##0.##"}
+     * pattern already drops a trailing ".0" (60 cm, never 60.0 cm).
+     *
+     * <p><b>FALLBACK</b> — no catalogue dimensions available (no catalog link on the row, or the
+     * linked row has neither dimension populated): print {@code sizeText} EXACTLY AS TYPED, unit
+     * and all, un-split, un-converted. There is no way to tell which unit free text is in from the
+     * text alone, so a size the rep recognises beats a confidently mangled one. Only the thickness
+     * is ever unit-suffixed in this branch — thickness is always entered in millimetres regardless
+     * of source, which is the one thing this method is never unsure about.
      *
      * <p>layout-spec §2: when thickness is absent there is NO separate ขนาด row at all — the size
      * already went inline on {@link #descriptionLine} — so this returns {@code null} (not an
      * empty/dangling string) and the caller must omit the row entirely.
      */
-    public static String sizeLine(String sizeText, BigDecimal thicknessMm) {
+    public static String sizeLine(String sizeText, BigDecimal thicknessMm,
+                                  BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
         if (thicknessMm == null) {
             return null;
         }
         String thicknessPart = format(thicknessMm) + " mm";
-        String facePart = faceSizeWithUnits(sizeText);
+        String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
+        if (facePart == null && !blank(sizeText)) {
+            // FALLBACK: no catalogue geometry -- print exactly what the rep typed. Never split it
+            // on "x", never unit-suffix it, never treat SIZE_HAS_UNIT as license to reformat it --
+            // see this method's Javadoc for why guessing here was the bug.
+            facePart = sizeText.trim();
+        }
         if (blank(facePart)) {
             return "ขนาด " + thicknessPart + " (ขนาดโดยประมาณ)";
         }
@@ -94,24 +113,19 @@ public final class DealQuotationLines {
     }
 
     /**
-     * Best-effort {@code "{width} cm x {height} cm"} from a free-text face size. Splits a plain
-     * two-number pair ({@link #SIZE_TWO_PART}) into per-dimension cm; a size that already carries
-     * its own unit, or that this cannot confidently split, comes back exactly as typed so
-     * {@link #sizeLine} never doubles a unit or mangles text it does not understand.
+     * {@code "{width} cm x {height} cm"} from the catalogue's OWN {@code width_mm}/{@code
+     * height_mm} — always millimetres, never inferred from free text — divided by 10 into
+     * centimetres via {@link BigDecimal#movePointLeft}, which is an exact decimal shift (no
+     * division rounding to worry about).
+     *
+     * @return {@code null} when either dimension is missing or non-positive, so {@link #sizeLine}
+     *     falls back to the rep's typed text rather than printing a bogus "0 cm x 0 cm".
      */
-    private static String faceSizeWithUnits(String sizeText) {
-        if (blank(sizeText)) {
+    private static String faceSizeFromCatalogMm(BigDecimal widthMm, BigDecimal heightMm) {
+        if (widthMm == null || heightMm == null || widthMm.signum() <= 0 || heightMm.signum() <= 0) {
             return null;
         }
-        String trimmed = sizeText.trim();
-        if (SIZE_HAS_UNIT.matcher(trimmed).find()) {
-            return trimmed;
-        }
-        java.util.regex.Matcher m = SIZE_TWO_PART.matcher(trimmed);
-        if (m.matches()) {
-            return m.group(1) + " cm x " + m.group(2) + " cm";
-        }
-        return trimmed;
+        return format(widthMm.movePointLeft(1)) + " cm x " + format(heightMm.movePointLeft(1)) + " cm";
     }
 
     /**

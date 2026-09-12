@@ -99,7 +99,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), null, employeeAuth);
 
-        quotationRepository = new DealQuotationRepository(jdbc);
+        quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         NotificationEmailService approvalMailer = new NotificationEmailService(
             new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
         // The default (LibreOffice) PDF engine deliberately: this test never renders a PDF, only

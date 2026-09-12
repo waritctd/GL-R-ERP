@@ -20,6 +20,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.catalog.CatalogRepository;
+import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
@@ -34,13 +36,20 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
  *
  * <p>Persistence and mapping only — no permission checks, no arithmetic (see {@link
  * WastageCalculator}), no status-machine rules; see {@link DealQuotationService} for all of that.
+ * The one exception is {@link CatalogRepository}: {@link #mapItemColumns} calls its {@link
+ * CatalogRepository#findSqmBases} to resolve a stored tile row's catalogue width_mm/height_mm for
+ * {@code DealQuotationLines#sizeLine} (owner ruling 2026-09-12) — a batched LOOKUP, not arithmetic
+ * or a business rule, and the same "follow the established catalogue-basis path" this file's
+ * caller ({@code DealQuotationService#resolveSqmPerPiece}) already uses for the identical field.
  */
 @Repository
 public class DealQuotationRepository {
     private final NamedParameterJdbcTemplate jdbc;
+    private final CatalogRepository catalog;
 
-    public DealQuotationRepository(NamedParameterJdbcTemplate jdbc) {
+    public DealQuotationRepository(NamedParameterJdbcTemplate jdbc, CatalogRepository catalog) {
         this.jdbc = jdbc;
+        this.catalog = catalog;
     }
 
     /** Same sequence, same format as {@code CustomerQuotationRepository.nextQuotationCode()} —
@@ -158,7 +167,22 @@ public class DealQuotationRepository {
         String descriptionLine,
         // ── quotation v3 ──────────────────────────────────────────────────────────────────────
         String lineType, BigDecimal quantity, String unit,
-        BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline
+        BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
+        // ── owner ruling 2026-09-12 ("normalize it in the database so its the same in unit. make
+        // the size cm and the thickness mm") ───────────────────────────────────────────────────
+        // The catalogue's OWN width_mm/height_mm for this row's catalogPriceId -- null for a
+        // PLAIN/ADJUSTMENT row, or a TILE row with no catalog link/basis. Carried through from the
+        // SAME CatalogSqmBasis lookup DealQuotationService#resolveSqmPerPiece already performs
+        // (see DealQuotationService#buildTileItem), so DealQuotationLines#sizeLine can print the
+        // face size in CENTIMETRES from unambiguous millimetres instead of guessing the unit of
+        // the rep's free-text sizeText. NOT a persisted column -- sales.quotation_item has no
+        // width_mm/height_mm of its own, and neither #insertDraft nor #updateItemsInPlace/
+        // #insertItemsAtSeq ever reference these two fields -- they exist purely to reach
+        // DealQuotationService#toItemDto's stateless preview without a second catalog round trip
+        // for the same catalogPriceId. A STORED item's sizeLine is instead recomputed at READ time
+        // by this class's own #mapItemColumns, which looks the same basis up fresh (batched, see
+        // CatalogRepository#findSqmBases) since these two fields never reach the database.
+        BigDecimal catalogWidthMm, BigDecimal catalogHeightMm
     ) {}
 
     /** The ผู้สั่งซื้อ snapshot written onto {@code sales.quotation} (V167) — see {@link
@@ -639,12 +663,17 @@ public class DealQuotationRepository {
     }
 
     /**
-     * Batches {@link #findByTicket}/{@link #search}'s per-row hydration into exactly TWO queries
-     * total, regardless of how many ids are requested — one for the quotation rows, one for every
-     * one of their items. The previous version called {@link #findById} per id, and that method
-     * itself issues two queries (header + items), so a list of N quotations cost 2N round trips
-     * (N+1 twice over). Order is preserved to match the callers' own {@code ORDER BY
-     * quotation_id DESC}.
+     * Batches {@link #findByTicket}/{@link #search}'s per-row hydration into a small, FIXED number
+     * of queries regardless of how many ids are requested — never one per quotation. The previous
+     * version called {@link #findById} per id, and that method itself issues two queries (header +
+     * items), so a list of N quotations cost 2N round trips (N+1 twice over).
+     *
+     * <p>Was "exactly TWO queries total" before owner ruling 2026-09-12 added a batched catalogue
+     * lookup for {@code DealQuotationLines#sizeLine}'s width_mm/height_mm (see {@link
+     * #findItemsForQuotations}'s own comment) — that adds at most two more (a distinct-{@code
+     * catalog_price_id} query, then {@link CatalogRepository#findSqmBases}'s own chunked queries,
+     * negligible at realistic item counts), so FOUR total now, still independent of {@code
+     * ids.size()}. Order is preserved to match the callers' own {@code ORDER BY quotation_id DESC}.
      */
     private List<DealQuotationDto> hydrate(List<Long> ids) {
         if (ids.isEmpty()) {
@@ -670,7 +699,22 @@ public class DealQuotationRepository {
         return result;
     }
 
+    /** The distinct {@code catalog_price_id}s a set of quotation items reference, batch-resolved
+     * to their catalogue basis in ONE round trip via {@link CatalogRepository#findSqmBases} —
+     * fetched BEFORE the main row query below so {@link #mapItemColumns} can look each row's up by
+     * id instead of querying per row (see that method's caller for why: the same N+1 shape {@link
+     * CatalogRepository#findPricingKeys}'s own Javadoc already documents avoiding elsewhere). */
+    private Map<Long, CatalogSqmBasis> findCatalogBasesFor(String whereClause, Map<String, ?> params) {
+        List<Long> priceIds = jdbc.query(
+            "SELECT DISTINCT catalog_price_id FROM sales.quotation_item WHERE " + whereClause
+                + " AND catalog_price_id IS NOT NULL",
+            params, (rs, rowNum) -> rs.getLong("catalog_price_id"));
+        return catalog.findSqmBases(priceIds);
+    }
+
     private List<DealQuotationItemDto> findItems(long quotationId) {
+        Map<Long, CatalogSqmBasis> basisByPriceId =
+            findCatalogBasesFor("quotation_id = :id", Map.of("id", quotationId));
         return jdbc.query("""
             SELECT quotation_id, quotation_item_id, seq, location_label, catalog_price_id, product_code,
                    brand, model, color, texture, size, thickness_mm, sqm_per_piece,
@@ -683,12 +727,14 @@ public class DealQuotationRepository {
               FROM sales.quotation_item
              WHERE quotation_id = :id
              ORDER BY seq
-            """, Map.of("id", quotationId), (rs, rowNum) -> mapItem(rs));
+            """, Map.of("id", quotationId), (rs, rowNum) -> mapItem(rs, basisByPriceId));
     }
 
     /** Same row shape as {@link #findItems}, batched across every id in one query — see
      * {@link #hydrate}. */
     private Map<Long, List<DealQuotationItemDto>> findItemsForQuotations(List<Long> ids) {
+        Map<Long, CatalogSqmBasis> basisByPriceId =
+            findCatalogBasesFor("quotation_id IN (:ids)", Map.of("ids", ids));
         Map<Long, List<DealQuotationItemDto>> byQuotation = new LinkedHashMap<>();
         jdbc.query("""
             SELECT quotation_id, quotation_item_id, seq, location_label, catalog_price_id, product_code,
@@ -711,7 +757,7 @@ public class DealQuotationRepository {
                 // first (see #search_returnsEveryItemAcrossMultipleQuotations_... in
                 // DealQuotationIntegrationTest). One call per row, no loop.
                 long quotationId = rs.getLong("quotation_id");
-                byQuotation.computeIfAbsent(quotationId, k -> new ArrayList<>()).add(mapItem(rs));
+                byQuotation.computeIfAbsent(quotationId, k -> new ArrayList<>()).add(mapItem(rs, basisByPriceId));
             });
         return byQuotation;
     }
@@ -832,13 +878,14 @@ public class DealQuotationRepository {
     /** GLA-75: the stored row, plus its picture link (V170) — only the placement is read here;
      * the bytes are served separately by {@link #findItemPicture}. An item without a picture
      * keeps the legacy constructor's {@code hasPicture=false} shape exactly. */
-    private DealQuotationItemDto mapItem(ResultSet rs) throws SQLException {
-        DealQuotationItemDto item = mapItemColumns(rs);
+    private DealQuotationItemDto mapItem(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId) throws SQLException {
+        DealQuotationItemDto item = mapItemColumns(rs, basisByPriceId);
         String placement = rs.getString("picture_placement");
         return placement == null ? item : item.withPicture(rs.getLong("quotation_id"), placement);
     }
 
-    private DealQuotationItemDto mapItemColumns(ResultSet rs) throws SQLException {
+    private DealQuotationItemDto mapItemColumns(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId)
+            throws SQLException {
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
@@ -858,6 +905,13 @@ public class DealQuotationRepository {
         String productCode = rs.getString("product_code");
         String sizeText = rs.getString("size");
         BigDecimal thicknessMm = rs.getBigDecimal("thickness_mm");
+        Long catalogPriceId = nullableLong(rs, "catalog_price_id");
+        // The catalogue's own width_mm/height_mm for this row's catalogPriceId, batch-resolved by
+        // the caller (see #findItems/#findItemsForQuotations) — used ONLY to print DealQuotation
+        // Lines#sizeLine in centimetres below; never persisted, never used for any arithmetic.
+        CatalogSqmBasis catalogBasis = catalogPriceId != null ? basisByPriceId.get(catalogPriceId) : null;
+        BigDecimal catalogWidthMm = catalogBasis != null ? catalogBasis.widthMm() : null;
+        BigDecimal catalogHeightMm = catalogBasis != null ? catalogBasis.heightMm() : null;
 
         // ── quotation v3 (V168) ──────────────────────────────────────────────────────────────
         // NULL line_type reads as TILE: every pre-V168 row, and every row written by a build that
@@ -884,7 +938,7 @@ public class DealQuotationRepository {
             // and there is no size line or calculation line to print at all.
             return new DealQuotationItemDto(
                 rs.getLong("quotation_item_id"), rs.getInt("seq"), rs.getString("location_label"),
-                nullableLong(rs, "catalog_price_id"), productCode, rs.getString("brand"), model, color,
+                catalogPriceId, productCode, rs.getString("brand"), model, color,
                 texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm,
                 nullableInt(rs, "pieces_input"), wastageMode, wastageValue, piecesPerBox,
                 rs.getBigDecimal("unit_price"), rs.getBigDecimal("discount_pct"),
@@ -904,7 +958,7 @@ public class DealQuotationRepository {
             rs.getLong("quotation_item_id"),
             rs.getInt("seq"),
             rs.getString("location_label"),
-            nullableLong(rs, "catalog_price_id"),
+            catalogPriceId,
             productCode,
             rs.getString("brand"),
             model,
@@ -933,7 +987,7 @@ public class DealQuotationRepository {
             rs.getBigDecimal("final_unit_price"),
             rs.getBigDecimal("amount"),
             DealQuotationLines.descriptionLine(model, color, texture, productCode, sizeText, thicknessMm),
-            DealQuotationLines.sizeLine(sizeText, thicknessMm),
+            DealQuotationLines.sizeLine(sizeText, thicknessMm, catalogWidthMm, catalogHeightMm),
             DealQuotationLines.calculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
                 wastageMode, wastageValue, piecesFinal, piecesPerBox),
             lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,

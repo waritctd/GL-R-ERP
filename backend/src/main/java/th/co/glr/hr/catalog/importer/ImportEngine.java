@@ -68,6 +68,10 @@ public class ImportEngine {
     /** No default, no magnitude fallback — see {@link ImportProfile#sizeUnit}. */
     private static final Set<String> VALID_SIZE_UNITS = Set.of("mm", "cm");
 
+    /** No default, no magnitude fallback — see {@link ImportProfile#thicknessUnit}. "none" is a
+     * legitimate declared value (no thickness data in this source), not a placeholder. */
+    private static final Set<String> VALID_THICKNESS_UNITS = Set.of("mm", "cm", "none");
+
     private static final BigDecimal SQ_MM_PER_SQM = new BigDecimal("1000000");
     private static final BigDecimal MM_PER_M      = BigDecimal.valueOf(1000);
 
@@ -98,6 +102,17 @@ public class ImportEngine {
                 + (prof.sizeUnit == null ? "ไม่ได้ระบุ" : "\"" + prof.sizeUnit + "\"") + ")");
             return new ImportResult(rows, errors, quarantined);
         }
+        // Same discipline, same failure shape, as sizeUnit above — see ImportProfile#thicknessUnit.
+        // "none" IS a valid declared value (Bode/Vives/Equipe genuinely carry no thickness data);
+        // only a MISSING or UNRECOGNISED declaration fails the import.
+        String thicknessUnit = normalizeThicknessUnit(prof.thicknessUnit);
+        if (thicknessUnit == null) {
+            errors.add("โปรไฟล์นำเข้าของ factory id=" + factoryId + " ไม่ได้ระบุหน่วยความหนา (thickness_unit) "
+                + "ที่ถูกต้อง — ต้องระบุ \"mm\", \"cm\" หรือ \"none\" (ไม่มีข้อมูลความหนา) "
+                + "อย่างชัดเจนในโปรไฟล์ก่อนนำเข้า ระบบจะไม่เดาหน่วยจากตัวเลขความหนาอีกต่อไป (พบค่า: "
+                + (prof.thicknessUnit == null ? "ไม่ได้ระบุ" : "\"" + prof.thicknessUnit + "\"") + ")");
+            return new ImportResult(rows, errors, quarantined);
+        }
 
         try (Workbook wb = WorkbookFactory.create(in)) {
             FormulaEvaluator evaluator = wb.getCreationHelper().createFormulaEvaluator();
@@ -108,7 +123,7 @@ public class ImportEngine {
                     errors.add("[" + sh.name + "] ไม่พบชีตในไฟล์");
                     continue;
                 }
-                processSheet(sheet, sh, prof, factoryId, sizeUnit, evaluator, rows, errors, quarantined);
+                processSheet(sheet, sh, prof, factoryId, sizeUnit, thicknessUnit, evaluator, rows, errors, quarantined);
             }
         } catch (Exception e) {
             errors.add("เปิดไฟล์ไม่ได้: " + e.getMessage()
@@ -123,11 +138,17 @@ public class ImportEngine {
         return VALID_SIZE_UNITS.contains(u) ? u : null;
     }
 
+    private static String normalizeThicknessUnit(String raw) {
+        if (raw == null) return null;
+        String u = raw.strip().toLowerCase(Locale.ROOT);
+        return VALID_THICKNESS_UNITS.contains(u) ? u : null;
+    }
+
     // ── sheet processing ──────────────────────────────────────────────────────
 
     private void processSheet(
         Sheet sheet, ImportProfile.SheetConfig sh, ImportProfile prof,
-        long factoryId, String sizeUnit, FormulaEvaluator evaluator,
+        long factoryId, String sizeUnit, String thicknessUnit, FormulaEvaluator evaluator,
         List<PriceRow> rows, List<String> errors, List<ImportResult.QuarantinedRow> quarantined
     ) {
         String sheetName = sh.name;
@@ -167,7 +188,7 @@ public class ImportEngine {
             applyFillDown(rec, fillDownTargets, lastSeen);
 
             String rowErr = processRow(
-                rec, rule, priceColIdx, prof, factoryId, sizeUnit, sheetName, r + 1, rows, quarantined
+                rec, rule, priceColIdx, prof, factoryId, sizeUnit, thicknessUnit, sheetName, r + 1, rows, quarantined
             );
             if (rowErr != null) errors.add("[" + sheetName + "] r" + (r + 1) + ": " + rowErr);
         }
@@ -182,6 +203,7 @@ public class ImportEngine {
         ImportProfile prof,
         long factoryId,
         String sizeUnit,
+        String thicknessUnit,
         String sheetName, int sourceRow,
         List<PriceRow> out,
         List<ImportResult.QuarantinedRow> quarantined
@@ -230,7 +252,7 @@ public class ImportEngine {
         if (sizeRaw == null && prof.sizeFrom != null) {
             sizeRaw = stringify(rec.get(prof.sizeFrom));
         }
-        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat, sizeUnit);
+        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat, sizeUnit, thicknessUnit);
 
         // ── product_code ──────────────────────────────────────────────────────
         String code = blankToNull(stringify(rec.get("product_code")));
@@ -317,8 +339,13 @@ public class ImportEngine {
             sqmProvenance = "unavailable";
         }
 
-        BigDecimal thickness = dims[2] != null ? dims[2]
-            : toDecimal(rec.get("thickness_mm"), fmt);
+        // Owner ruling (Padana, 2026-09-12, verbatim "ใช้คอลัมน์ Spessore"): a dedicated thickness
+        // COLUMN wins over a size-string-embedded token when a row carries both — see
+        // #resolveThicknessFromColumn's own Javadoc for the measured data behind this. Every other
+        // profile in production uses exactly one of the two sources, so this ordering changes
+        // nothing for them.
+        BigDecimal thicknessFromColumn = resolveThicknessFromColumn(rec.get("thickness_mm"), fmt, thicknessUnit);
+        BigDecimal thickness = thicknessFromColumn != null ? thicknessFromColumn : dims[2];
 
         // ── attributes (barcode, …) ───────────────────────────────────────────
         Map<String, String> attributes = null;
@@ -346,7 +373,8 @@ public class ImportEngine {
                 toDecimal(rec.get("kg_per_box"), fmt),
                 priceVariants, attributes,
                 sheetName, sourceRow,
-                sizeUnit, sqmProvenance, sqmPerLinearM, quarantineReason
+                sizeUnit, sqmProvenance, sqmPerLinearM, quarantineReason,
+                thicknessUnit
             ));
             if (quarantineReason != null) {
                 quarantined.add(new ImportResult.QuarantinedRow(sheetName, sourceRow, c, quarantineReason));
@@ -513,32 +541,56 @@ public class ImportEngine {
      *
      * <p><b>{@code sizeUnit} is REQUIRED and never guessed</b> — see {@link ImportProfile#sizeUnit}.
      * Width and height are converted to millimetres from the DECLARED unit only; there is no
-     * magnitude-based fallback of any kind. Thickness — whether parsed from an explicit "9MM"-style
-     * suffix or a bare third {@code WxHxT} value — is always ALREADY millimetres and is never
-     * unit-converted (per the owner's own catalogues).
+     * magnitude-based fallback of any kind.
+     *
+     * <p><b>Thickness has TWO shapes, only one of which needs {@code thicknessUnit}:</b>
+     * <ul>
+     *   <li>an explicit "9MM"-style suffix (or the truncated single-M forms Excel's column
+     *       clipping produces, "9M"/"9,4M") is SELF-DESCRIBING — the owner confirmed a bare
+     *       trailing "M" here is always a clipped "MM", never metres — and is read as millimetres
+     *       regardless of {@code thicknessUnit};</li>
+     *   <li>a bare, un-suffixed third {@code WxHxT} value ({@code "598X598X18"}) is AMBIGUOUS: Bode
+     *       writes it already in millimetres, but the Chinese "2026 GENERAL EXPORT" list writes it
+     *       in CENTIMETRES ({@code "60X120X1.0"} = a 9 mm tile — confirmed by that workbook's own
+     *       "2CM" tab name for the 20 mm slabs). There is nothing in the two shapes that lets code
+     *       tell them apart, so this bare form is converted from the DECLARED {@code
+     *       thicknessUnit} — same discipline as width/height and {@code sizeUnit}, never guessed.
+     * </ul>
+     * {@code thicknessUnit = "none"} (a legitimate declared value, see {@link
+     * ImportProfile#thicknessUnit}) suppresses ALL thickness extraction from this string, both
+     * shapes — a source with no reliable thickness data gets {@code null}, not a stray number
+     * mistaken for one.
      *
      * <p>Cleaning, in order:
      * <ol>
      *   <li>apostrophe-decimal style (Vives: {@code 15'8X31'6} → 15.8×31.6);</li>
      *   <li>strip trailing free-text tokens carrying no digit at all ("MOD", "CORBEL NAVAL",
-     *       "S/AD", …);</li>
+     *       "S/AD", …) — BEFORE the suffix check below, so a product-code suffix like "MOD" can
+     *       never be misread as a clipped millimetre marker (a naive un-anchored scan for "digits
+     *       then M" would read the "M" of "MOD" in "60x120 MOD" as a thickness token and pull "120"
+     *       out as if it were one; stripping first removes "MOD" entirely, and {@link
+     *       #THICKNESS_SUFFIX} is anchored to the end of the string in any case);</li>
      *   <li>extract an explicit millimetre thickness suffix — "9MM", "12MM", and the truncated
-     *       single-M forms Excel's column clipping produces ("9M", "9,4M") — the owner confirmed a
-     *       bare trailing "M" here is always a clipped "MM", never metres;</li>
+     *       single-M forms;</li>
      *   <li>split the remainder on {@code x}/{@code X}/{@code ×} into 2 or 3 clean numeric tokens
      *       (European decimal commas supported: {@code 36,1x57,6}); a bare 3rd token, when no
-     *       explicit suffix was found, is thickness ({@code 598X598X18}, {@code 20 x 20 x 9});</li>
+     *       explicit suffix was found, is thickness, converted per {@code thicknessUnit};</li>
      *   <li>if that split is not clean (e.g. embedded free text: {@code "120X50  h.15"}), fall back
      *       to scanning for up to three numeric runs anywhere in the string, unchanged from the
      *       engine's long-standing behaviour for messy cells — just without the magnitude guess.</li>
      * </ol>
      */
-    static BigDecimal[] parseSize(String raw, String style, String sizeUnit) {
+    static BigDecimal[] parseSize(String raw, String style, String sizeUnit, String thicknessUnit) {
         if (raw == null || raw.isBlank()) return new BigDecimal[]{null, null, null};
         if (sizeUnit == null || !VALID_SIZE_UNITS.contains(sizeUnit)) {
             throw new IllegalArgumentException(
                 "parseSize requires a declared sizeUnit of \"mm\" or \"cm\", got: " + sizeUnit);
         }
+        if (thicknessUnit == null || !VALID_THICKNESS_UNITS.contains(thicknessUnit)) {
+            throw new IllegalArgumentException(
+                "parseSize requires a declared thicknessUnit of \"mm\", \"cm\" or \"none\", got: " + thicknessUnit);
+        }
+        boolean noThickness = "none".equals(thicknessUnit);
         String s = raw.strip();
         if ("apostrophe_decimal".equals(style)) {
             s = APOSTROPHE_DECIMAL.matcher(s).replaceAll("$1.$2");
@@ -546,6 +598,11 @@ public class ImportEngine {
 
         s = stripTrailingNonNumericTokens(s);
 
+        // Detected/stripped regardless of thicknessUnit -- including "none" -- because the STRIP
+        // is what keeps width/height parsing clean (a suffix left glued on would otherwise corrupt
+        // the x/X split, or merge into an adjacent number once scanNumbers() drops whitespace).
+        // "none" only suppresses ASSIGNING the extracted value to thickness below; the stripping
+        // itself is unconditional.
         BigDecimal thicknessFromSuffix = null;
         Matcher tm = THICKNESS_SUFFIX.matcher(s);
         if (tm.find()) {
@@ -575,12 +632,18 @@ public class ImportEngine {
         BigDecimal w = nums.size() > 0 ? toMm(nums.get(0), sizeUnit) : null;
         BigDecimal h = nums.size() > 1 ? toMm(nums.get(1), sizeUnit) : null;
         BigDecimal t;
-        if (thicknessFromSuffix != null) {
+        if (noThickness) {
+            // "none" (Bode/Vives/Equipe): a genuinely thickness-less source. Even a bare 3rd
+            // numeric token (Bode's own one-off "598X598X18" anomaly) is dropped here, never
+            // treated as thickness -- see ImportProfile#thicknessUnit's Javadoc.
+            t = null;
+        } else if (thicknessFromSuffix != null) {
             t = thicknessFromSuffix.setScale(2, RoundingMode.HALF_UP);
         } else if (nums.size() > 2) {
-            // Bare 3-number form ("598X598X18", "20 x 20 x 9") — 3rd value is thickness, per the
-            // owner ALREADY in millimetres. Never converted.
-            t = nums.get(2).setScale(2, RoundingMode.HALF_UP);
+            // Bare 3-number form ("598X598X18", "60X120X1.0") -- 3rd value is thickness, but its
+            // UNIT is ambiguous (see this method's own Javadoc) -- converted from the DECLARED
+            // thicknessUnit, never assumed millimetres.
+            t = toThicknessMm(nums.get(2), thicknessUnit);
         } else {
             t = null;
         }
@@ -599,6 +662,47 @@ public class ImportEngine {
     private static BigDecimal toMm(BigDecimal value, String sizeUnit) {
         BigDecimal mm = "cm".equals(sizeUnit) ? value.multiply(BigDecimal.TEN) : value;
         return mm.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Converts a bare (un-suffixed) thickness value already known to be in {@code thicknessUnit}
+     * to millimetres. Never guesses; never called for {@code thicknessUnit = "none"} (callers
+     * short-circuit first) or for a self-describing suffixed/"MM"-tagged value, which is already
+     * millimetres regardless of the declared unit. */
+    private static BigDecimal toThicknessMm(BigDecimal value, String thicknessUnit) {
+        BigDecimal mm = "cm".equals(thicknessUnit) ? value.multiply(BigDecimal.TEN) : value;
+        return mm.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * A dedicated thickness COLUMN's raw cell value, resolved to millimetres — {@code null} when
+     * the cell is blank/unparseable or {@code thicknessUnit} is {@code "none"}.
+     *
+     * <p>Owner ruling (Padana, 2026-09-12, verbatim <i>"ใช้คอลัมน์ Spessore"</i>): when a row
+     * carries BOTH a dedicated thickness column and a size-embedded thickness token, THE COLUMN
+     * WINS — see {@code #processRow}'s caller, which only falls back to the size-embedded value
+     * ({@code dims[2]}) when this returns {@code null}. Measured on the real Padana file (9,076
+     * rows): 2,954 rows carry both (2,882 agree, 72 disagree — nominal vs actual, e.g. an embedded
+     * "9MM" against a column "8,3MM"), 3,687 rows have ONLY the column, and ZERO rows have ONLY the
+     * embedded token — the column strictly dominates on coverage, so preferring it loses no data.
+     *
+     * <p>Self-describing first, exactly like the size string: a value already carrying an explicit
+     * unit letter (Padana's own {@code "8MM"}/{@code "9MM"} column text, matched by the SAME
+     * {@link #THICKNESS_SUFFIX} pattern used on the size string) is read directly as millimetres,
+     * regardless of {@code thicknessUnit}. A bare numeric column value (REFIN/CITY/CDE's plain
+     * {@code "9"} — already labelled "(mm)" in their own header text — or Panaria's unlabelled
+     * {@code "SPESSORE"}) is converted from the DECLARED {@code thicknessUnit}, never guessed.
+     */
+    private static BigDecimal resolveThicknessFromColumn(Object raw, String fmt, String thicknessUnit) {
+        if ("none".equals(thicknessUnit)) return null;
+        String s = stringify(raw);
+        if (s == null || s.isBlank()) return null;
+        Matcher tm = THICKNESS_SUFFIX.matcher(s.strip());
+        if (tm.find()) {
+            BigDecimal n = parseNum(tm.group(1));
+            return n == null ? null : n.setScale(2, RoundingMode.HALF_UP);
+        }
+        BigDecimal n = toDecimal(s, fmt);
+        return n == null ? null : toThicknessMm(n, thicknessUnit);
     }
 
     /** Comma-as-decimal aware; {@code null} (not an exception) on anything not a plain number. */

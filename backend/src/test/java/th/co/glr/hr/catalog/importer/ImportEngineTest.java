@@ -102,11 +102,11 @@ class ImportEngineTest {
             // Same string, two declared units, two DIFFERENT (both correct) results — the
             // magnitude-based "< 300 => cm" guess this replaces would have picked ONE answer for
             // both and been wrong for whichever profile disagreed with it.
-            BigDecimal[] asCm = ImportEngine.parseSize("150x600", null, "cm");
+            BigDecimal[] asCm = ImportEngine.parseSize("150x600", null, "cm", "mm");
             assertThat(asCm[0]).isEqualByComparingTo("1500.00");
             assertThat(asCm[1]).isEqualByComparingTo("6000.00");
 
-            BigDecimal[] asMm = ImportEngine.parseSize("150x600", null, "mm");
+            BigDecimal[] asMm = ImportEngine.parseSize("150x600", null, "mm", "mm");
             assertThat(asMm[0]).isEqualByComparingTo("150.00");
             assertThat(asMm[1]).isEqualByComparingTo("600.00");
         }
@@ -118,7 +118,7 @@ class ImportEngineTest {
             // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong).
             // Reinstating that guess in ImportEngine#toMm must turn this test red — verified by
             // hand during implementation (see PR body), then reverted.
-            BigDecimal[] r = ImportEngine.parseSize("150x600", null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize("150x600", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("150.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
         }
@@ -128,8 +128,8 @@ class ImportEngineTest {
         void sameTileFromTwoDeclaredUnitsConverges() {
             // A 60x120 cm tile (Padana-style, declared cm) and a 600x1200 mm tile (LEA-style,
             // declared mm) are the SAME physical tile and must store identical width_mm/height_mm.
-            BigDecimal[] fromCmProfile = ImportEngine.parseSize("60x120", null, "cm");
-            BigDecimal[] fromMmProfile = ImportEngine.parseSize("600x1200", null, "mm");
+            BigDecimal[] fromCmProfile = ImportEngine.parseSize("60x120", null, "cm", "mm");
+            BigDecimal[] fromMmProfile = ImportEngine.parseSize("600x1200", null, "mm", "mm");
 
             assertThat(fromCmProfile[0]).isEqualByComparingTo(fromMmProfile[0]);
             assertThat(fromCmProfile[1]).isEqualByComparingTo(fromMmProfile[1]);
@@ -142,9 +142,18 @@ class ImportEngineTest {
 
         @Test @DisplayName("missing/invalid declared unit is refused, not defaulted")
         void missingUnitIsRefused() {
-            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, null))
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, null, "mm"))
                 .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, "inches"))
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, "inches", "mm"))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test @DisplayName("missing/invalid declared THICKNESS unit is also refused, not defaulted "
+            + "-- \"none\" is a valid declared value, an omitted/unrecognised one is not")
+        void missingThicknessUnitIsRefused() {
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, "mm", null))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, "mm", "inches"))
                 .isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -152,53 +161,94 @@ class ImportEngineTest {
 
         @Test @DisplayName("uppercase X separator")
         void upperX() {
-            BigDecimal[] r = ImportEngine.parseSize("120X120", null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize("120X120", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("120.00");
             assertThat(r[1]).isEqualByComparingTo("120.00");
         }
 
         @Test @DisplayName("leading space is ignored")
         void leadingSpace() {
-            BigDecimal[] r = ImportEngine.parseSize(" 150x600", null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize(" 150x600", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("150.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
         }
 
-        @Test @DisplayName("3-number bare form WxHxT — 3rd value is thickness, already mm, "
-            + "never converted")
+        @Test @DisplayName("3-number bare form WxHxT (Bode's shape) — 3rd value is thickness, "
+            + "an mm-declared thicknessUnit leaves it unconverted")
         void threeDimensionsBareForm() {
-            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("598.00");
             assertThat(r[1]).isEqualByComparingTo("598.00");
             assertThat(r[2]).isEqualByComparingTo("18.00");
         }
 
-        @Test @DisplayName("3-number bare form with spaces: '20 x 20 x 9'")
+        @Test @DisplayName("3-number bare form with spaces: '20 x 20 x 9', mm-declared thickness")
         void threeDimensionsWithSpaces() {
-            BigDecimal[] r = ImportEngine.parseSize("20 x 20 x 9", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("20 x 20 x 9", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("200.00"); // 20 cm -> 200 mm
             assertThat(r[1]).isEqualByComparingTo("200.00");
-            assertThat(r[2]).isEqualByComparingTo("9.00");   // bare thickness, never converted
+            assertThat(r[2]).isEqualByComparingTo("9.00");   // mm-declared: bare thickness unconverted
+        }
+
+        // ── bare 3rd-value thickness is AMBIGUOUS: the Chinese "2026 GENERAL EXPORT" list ───────
+
+        @Test @DisplayName("REGRESSION: Chinese '2026 GENERAL EXPORT' list writes the bare 3rd "
+            + "value in CENTIMETRES ('60X120X1.0' = a 9mm tile, per that workbook's own '2CM' tab "
+            + "name for the 20mm slabs) — a cm-declared thicknessUnit must convert it, not read it "
+            + "as millimetres the way Bode's identical-looking shape is read")
+        void bareThirdValue_cmDeclaredThicknessUnit_isConverted() {
+            BigDecimal[] r = ImportEngine.parseSize("60X120X1.0", null, "cm", "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("1200.00");
+            assertThat(r[2]).isEqualByComparingTo("10.00"); // 1.0 cm -> 10 mm, NOT 1.0 mm
+        }
+
+        @Test @DisplayName("the '2CM' tab's own worked example: '60X60X2.0' -> 20mm thickness")
+        void bareThirdValue_cmDeclaredThicknessUnit_20mmSlab() {
+            BigDecimal[] r = ImportEngine.parseSize("60X60X2.0", null, "cm", "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
+            assertThat(r[2]).isEqualByComparingTo("20.00"); // 2.0 cm -> 20 mm
+        }
+
+        @Test @DisplayName("thicknessUnit=\"none\" (Bode/Vives/Equipe: genuinely no thickness "
+            + "data) suppresses ALL thickness extraction -- even Bode's own one-off bare-3rd-value "
+            + "anomaly ('598X598X18') comes back with thickness NULL, not a guessed 18")
+        void noneThicknessUnit_suppressesAllThicknessExtraction() {
+            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null, "mm", "none");
+            assertThat(r[0]).isEqualByComparingTo("598.00");
+            assertThat(r[1]).isEqualByComparingTo("598.00");
+            assertThat(r[2]).isNull();
+        }
+
+        @Test @DisplayName("thicknessUnit=\"none\" also suppresses an explicit MM-suffixed token, "
+            + "not just the bare 3rd-value form -- a \"none\" profile never derives a thickness "
+            + "from this string by any shape")
+        void noneThicknessUnit_suppressesExplicitSuffixToo() {
+            BigDecimal[] r = ImportEngine.parseSize("60x120 9MM", null, "cm", "none");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("1200.00");
+            assertThat(r[2]).isNull();
         }
 
         @Test @DisplayName("apostrophe decimal (Vives, declared cm per the profile's own notes): "
             + "15'8X31'6 -> 158x316 mm")
         void apostropheDecimalVives() {
-            BigDecimal[] r = ImportEngine.parseSize("15'8X31'6", "apostrophe_decimal", "cm");
+            BigDecimal[] r = ImportEngine.parseSize("15'8X31'6", "apostrophe_decimal", "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("158.00");
             assertThat(r[1]).isEqualByComparingTo("316.00");
         }
 
         @Test @DisplayName("apostrophe decimal, second form: 9'2X59'3")
         void apostropheDecimalSecondForm() {
-            BigDecimal[] r = ImportEngine.parseSize("9'2X59'3", "apostrophe_decimal", "cm");
+            BigDecimal[] r = ImportEngine.parseSize("9'2X59'3", "apostrophe_decimal", "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("92.00");  // 9.2 cm -> 92 mm
             assertThat(r[1]).isEqualByComparingTo("593.00"); // 59.3 cm -> 593 mm
         }
 
         @Test @DisplayName("null/blank returns all nulls")
         void blank() {
-            BigDecimal[] r = ImportEngine.parseSize(null, null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize(null, null, "mm", "mm");
             assertThat(r).containsExactly(null, null, null);
         }
 
@@ -206,14 +256,14 @@ class ImportEngineTest {
 
         @Test @DisplayName("European decimal comma: 36,1x57,6")
         void europeanDecimalComma() {
-            BigDecimal[] r = ImportEngine.parseSize("36,1x57,6", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("36,1x57,6", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("361.00"); // 36.1 cm -> 361 mm
             assertThat(r[1]).isEqualByComparingTo("576.00"); // 57.6 cm -> 576 mm
         }
 
         @Test @DisplayName("European decimal comma with spaces around separator: 2,5 x 10")
         void europeanDecimalCommaWithSpaces() {
-            BigDecimal[] r = ImportEngine.parseSize("2,5 x 10", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("2,5 x 10", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("25.00"); // 2.5 cm -> 25 mm
             assertThat(r[1]).isEqualByComparingTo("100.00"); // 10 cm -> 100 mm
         }
@@ -222,7 +272,7 @@ class ImportEngineTest {
 
         @Test @DisplayName("thickness embedded with explicit MM suffix: '60x120 9MM' (874 real rows)")
         void thicknessEmbeddedMM_60x120() {
-            BigDecimal[] r = ImportEngine.parseSize("60x120 9MM", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("60x120 9MM", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("600.00");
             assertThat(r[1]).isEqualByComparingTo("1200.00");
             assertThat(r[2]).isEqualByComparingTo("9.00"); // never converted, already mm
@@ -230,7 +280,7 @@ class ImportEngineTest {
 
         @Test @DisplayName("thickness embedded with explicit MM suffix: '60x60 9MM' (867 real rows)")
         void thicknessEmbeddedMM_60x60() {
-            BigDecimal[] r = ImportEngine.parseSize("60x60 9MM", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("60x60 9MM", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("600.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
             assertThat(r[2]).isEqualByComparingTo("9.00");
@@ -238,7 +288,7 @@ class ImportEngineTest {
 
         @Test @DisplayName("thickness embedded with explicit MM suffix: '20x20 12MM'")
         void thicknessEmbeddedMM_20x20() {
-            BigDecimal[] r = ImportEngine.parseSize("20x20 12MM", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("20x20 12MM", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("200.00");
             assertThat(r[1]).isEqualByComparingTo("200.00");
             assertThat(r[2]).isEqualByComparingTo("12.00");
@@ -247,7 +297,7 @@ class ImportEngineTest {
         @Test @DisplayName("TRUNCATED thickness token '9M' is a clipped '9MM', never metres "
             + "(245 real rows: '120x120 9M')")
         void truncatedThicknessTokenSingleM() {
-            BigDecimal[] r = ImportEngine.parseSize("120x120 9M", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("120x120 9M", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("1200.00");
             assertThat(r[1]).isEqualByComparingTo("1200.00");
             assertThat(r[2]).isEqualByComparingTo("9.00"); // 9 mm, NOT 9 metres
@@ -255,7 +305,7 @@ class ImportEngineTest {
 
         @Test @DisplayName("TRUNCATED decimal thickness token: '60x60 9,4M' is a clipped '9,4MM'")
         void truncatedThicknessTokenWithDecimalComma() {
-            BigDecimal[] r = ImportEngine.parseSize("60x60 9,4M", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("60x60 9,4M", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("600.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
             assertThat(r[2]).isEqualByComparingTo("9.40");
@@ -265,21 +315,21 @@ class ImportEngineTest {
 
         @Test @DisplayName("trailing junk token 'MOD' is stripped")
         void trailingJunkMod() {
-            BigDecimal[] r = ImportEngine.parseSize("60X120 MOD", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("60X120 MOD", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("600.00");
             assertThat(r[1]).isEqualByComparingTo("1200.00");
         }
 
         @Test @DisplayName("trailing junk tokens 'CORBEL NAVAL' (two words) are stripped")
         void trailingJunkTwoWords() {
-            BigDecimal[] r = ImportEngine.parseSize("20X20 CORBEL NAVAL", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("20X20 CORBEL NAVAL", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("200.00");
             assertThat(r[1]).isEqualByComparingTo("200.00");
         }
 
         @Test @DisplayName("trailing junk token 'S/AD' is stripped")
         void trailingJunkSlashAd() {
-            BigDecimal[] r = ImportEngine.parseSize("30X60 S/AD", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("30X60 S/AD", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("300.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
         }
@@ -289,7 +339,7 @@ class ImportEngineTest {
         @Test @DisplayName("embedded free text mid-string ('120X50  h.15') falls back to numeric "
             + "scanning rather than throwing or dropping the row")
         void embeddedFreeTextFallsBackToScanning() {
-            BigDecimal[] r = ImportEngine.parseSize("120X50  h.15", null, "cm");
+            BigDecimal[] r = ImportEngine.parseSize("120X50  h.15", null, "cm", "mm");
             assertThat(r[0]).isEqualByComparingTo("1200.00");
             assertThat(r[1]).isEqualByComparingTo("500.00");
             assertThat(r[2]).isEqualByComparingTo("15.00");
@@ -299,7 +349,7 @@ class ImportEngineTest {
 
         @Test @DisplayName("zero-padded CDE-style size: '080x600'")
         void zeroPadded() {
-            BigDecimal[] r = ImportEngine.parseSize("080x600", null, "mm");
+            BigDecimal[] r = ImportEngine.parseSize("080x600", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("80.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
         }
@@ -380,10 +430,12 @@ class ImportEngineTest {
             p.columns = columns;
             p.defaults = defaults != null ? defaults : Map.of();
             p.sheets = List.of(sheetConf(sheet, headerRow));
-            // sizeUnit is REQUIRED (ImportEngine#parse fails the whole import otherwise) — these
-            // fixtures don't exercise real-factory unit facts, so "mm" is an arbitrary but valid
-            // default; tests that care about the actual conversion override it explicitly.
+            // sizeUnit/thicknessUnit are REQUIRED (ImportEngine#parse fails the whole import
+            // otherwise) — these fixtures don't exercise real-factory unit facts, so "mm" is an
+            // arbitrary but valid default; tests that care about the actual conversion override it
+            // explicitly.
             p.sizeUnit = "mm";
+            p.thicknessUnit = "mm";
             return p;
         }
 
@@ -582,6 +634,7 @@ class ImportEngineTest {
             };
             ImportProfile prof = new ImportProfile();
             prof.sizeUnit = "cm"; // column is literally "SIZE (cm)"
+            prof.thicknessUnit = "mm";
             prof.columns = Map.of(
                 "collection",   "COLLECTION",
                 "product_name", "ITEM",
@@ -662,6 +715,7 @@ class ImportEngineTest {
             };
             ImportProfile prof = new ImportProfile();
             prof.sizeUnit = "cm"; // column is literally "SIZE (cm)"
+            prof.thicknessUnit = "mm";
             prof.columns = Map.of(
                 "collection",   "COLLECTION",
                 "product_name", "ITEM",
@@ -972,6 +1026,141 @@ class ImportEngineTest {
             assertThat(row.sqmPerPiece()).isNull();
             // The profile height (shorter side, 70mm) IS captured, correctly labelled.
             assertThat(row.sqmPerLinearM()).isEqualByComparingTo(new BigDecimal("0.070000"));
+        }
+
+        // ── declared thickness_unit is required (no magnitude guess, ever) ───────
+
+        @Test @DisplayName("a profile with no declared thickness_unit fails the WHOLE import "
+            + "loudly, naming the profile — no rows, no guessing (thickness twin of the "
+            + "size_unit test above)")
+        void missingThicknessUnitFailsTheWholeImportLoudly() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"A-01", "60x120", 20.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.thicknessUnit = null; // the defect under test
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 42L);
+            assertThat(r.rows()).isEmpty();
+            assertThat(r.quarantined()).isEmpty();
+            assertThat(r.errors()).hasSize(1);
+            assertThat(r.errors().get(0))
+                .as("must name the profile (by factory id) and must not guess a unit")
+                .contains("thickness_unit")
+                .contains("42");
+        }
+
+        @Test @DisplayName("an unrecognised thickness_unit value also fails loudly, not silently "
+            + "defaulted")
+        void invalidThicknessUnitValueFailsTheWholeImportLoudly() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"A-01", "60x120", 20.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.thicknessUnit = "inches"; // not "mm", "cm" or "none"
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.rows()).isEmpty();
+            assertThat(r.errors()).hasSize(1);
+        }
+
+        // ── thickness_unit="none": a genuinely thickness-less source imports fine ────
+
+        @Test @DisplayName("thickness_unit=\"none\" (Bode/Vives/Equipe's real shape) imports "
+            + "normally with thickness_mm NULL -- a legitimate recorded absence, NOT a "
+            + "quarantine and NOT a reason to block the row")
+        void noneThicknessUnitImportsWithNullThickness_notBlocked() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"BD-1", "600x600", 23.5,  "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "USD"), "Sheet", 1);
+            prof.sizeUnit = "mm";
+            prof.thicknessUnit = "none";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.quarantined()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.thicknessMm()).isNull();
+            assertThat(row.thicknessUnitDeclared()).isEqualTo("none");
+            // Row still imports and prices normally -- "none" is about interpretation, not a
+            // precondition that a thickness must exist.
+            assertThat(row.sqmProvenance()).isEqualTo("computed_from_dimensions");
+        }
+
+        // ── Padana: a dedicated thickness COLUMN wins over a size-embedded token ─────
+
+        @Test @DisplayName("Padana — dedicated Spessore COLUMN wins over the size-embedded "
+            + "thickness token when a row carries both (owner ruling, verbatim \"ใช้คอลัมน์ "
+            + "Spessore\")")
+        void padana_thicknessColumnWinsOverSizeEmbeddedToken() throws Exception {
+            Object[][] data = {
+                {"Articolo", "Formato",      "Spessore", "Prezzo", "Unità"},
+                {"P-01",     "60x120 9MM",   "8MM",       43.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Articolo",
+                "size_raw",     "Formato",
+                "thickness_mm", "Spessore",
+                "price",        "Prezzo",
+                "unit",         "Unità"
+            ), Map.of("currency", "EUR"), "Sheet1", 1);
+            prof.sizeUnit = "cm";
+            prof.thicknessUnit = "mm"; // arbitrary but required -- both sources are self-describing here
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet1", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            // The column says 8mm, the size string embeds 9mm -- the COLUMN must win.
+            assertThat(r.rows().get(0).thicknessMm()).isEqualByComparingTo("8.00");
+        }
+
+        @Test @DisplayName("Padana — the naive-parser trap: a size cell reading '60x120 MOD' must "
+            + "NEVER let the 'M' of 'MOD' be misread as a thickness token (a naive /(\\d+)\\s*M/ "
+            + "scan would pull '120' out as if it meant 120mm) -- the Spessore column's 9 is the "
+            + "only thickness that may ever be produced here")
+        void padana_modSuffixNeverMisreadAsThicknessToken() throws Exception {
+            Object[][] data = {
+                {"Articolo", "Formato",     "Spessore", "Prezzo", "Unità"},
+                {"P-02",     "60x120 MOD",  "9MM",       43.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Articolo",
+                "size_raw",     "Formato",
+                "thickness_mm", "Spessore",
+                "price",        "Prezzo",
+                "unit",         "Unità"
+            ), Map.of("currency", "EUR"), "Sheet1", 1);
+            prof.sizeUnit = "cm";
+            prof.thicknessUnit = "mm";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet1", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.thicknessMm()).as("must be the column's 9, never a naive-parse 120")
+                .isEqualByComparingTo("9.00");
+            assertThat(row.widthMm()).isEqualByComparingTo("600.00");
+            assertThat(row.heightMm()).isEqualByComparingTo("1200.00");
         }
     }
 }

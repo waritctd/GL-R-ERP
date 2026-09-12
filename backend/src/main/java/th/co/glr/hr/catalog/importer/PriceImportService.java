@@ -136,14 +136,16 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row, import_session_id,
-                size_unit_declared, sqm_provenance, sqm_per_linear_m, import_error
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, import_error,
+                thickness_unit_declared
             ) VALUES (
                 :fid, :vid, :code, :grade, :col, :name,
                 :color, :surf, :sizeRaw, :w, :h, :t,
                 :price, :cur, :unit, :sqmPc,
                 :pcs, :sqmBox, :kg,
                 CAST(:variants AS jsonb), CAST(:attrs AS jsonb), :sheet, :row, :sid,
-                :sizeUnit, :sqmProv, :sqmLinM, :qerr
+                :sizeUnit, :sqmProv, :sqmLinM, :qerr,
+                :thicknessUnit
             )
             """;
 
@@ -181,6 +183,7 @@ public class PriceImportService {
             // duplicate-code row is — never dropped silently. Non-quarantined rows insert NULL here,
             // same as before; validate() may still flag them for other reasons (e.g. duplicates).
             p.addValue("qerr",     r.quarantineReason());
+            p.addValue("thicknessUnit", r.thicknessUnitDeclared());
             return p;
         }).toArray(MapSqlParameterSource[]::new);
 
@@ -361,7 +364,7 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row,
-                size_unit_declared, sqm_provenance, sqm_per_linear_m
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
             )
             SELECT
                 factory_id, version_id, product_code, grade, collection, product_name,
@@ -369,7 +372,7 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row,
-                size_unit_declared, sqm_provenance, sqm_per_linear_m
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
               FROM price_catalog.product_price_staging
              WHERE version_id = :vid
                AND import_error IS NULL
@@ -389,7 +392,8 @@ public class PriceImportService {
                    attributes   = EXCLUDED.attributes,
                    size_unit_declared = EXCLUDED.size_unit_declared,
                    sqm_provenance     = EXCLUDED.sqm_provenance,
-                   sqm_per_linear_m   = EXCLUDED.sqm_per_linear_m
+                   sqm_per_linear_m   = EXCLUDED.sqm_per_linear_m,
+                   thickness_unit_declared = EXCLUDED.thickness_unit_declared
             """,
             Map.of("vid", versionId)
         );
@@ -404,7 +408,7 @@ public class PriceImportService {
                     price, currency, price_unit, sqm_per_piece,
                     pcs_per_box, sqm_per_box, kg_per_box,
                     price_variants, attributes, source_sheet, source_row,
-                    size_unit_declared, sqm_provenance, sqm_per_linear_m
+                    size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
                 )
                 SELECT
                     p.factory_id, :vid, p.product_code, p.grade, p.collection, p.product_name,
@@ -412,7 +416,7 @@ public class PriceImportService {
                     p.price, p.currency, p.price_unit, p.sqm_per_piece,
                     p.pcs_per_box, p.sqm_per_box, p.kg_per_box,
                     p.price_variants, p.attributes, p.source_sheet, p.source_row,
-                    p.size_unit_declared, p.sqm_provenance, p.sqm_per_linear_m
+                    p.size_unit_declared, p.sqm_provenance, p.sqm_per_linear_m, p.thickness_unit_declared
                   FROM price_catalog.product_prices p
                  WHERE p.version_id = :prevVid
                    AND NOT EXISTS (

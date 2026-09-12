@@ -48,5 +48,9 @@ public record PriceRow(
     // Non-null ⇒ this row is QUARANTINED: staged with import_error set to this text (both the
     // box-derived and dimension-derived m²/piece figures, plus the tolerance), excluded from
     // commit, but visible to the operator — never dropped silently.
-    String quarantineReason
+    String quarantineReason,
+    // The declared thickness unit ("mm"/"cm"/"none") the profile stated for THIS row — never
+    // guessed, see ImportProfile#thicknessUnit. "none" records a genuine, owner-confirmed absence
+    // of thickness data in the source (Bode/Vives/Equipe), not a missing declaration.
+    String thicknessUnitDeclared
 ) {}

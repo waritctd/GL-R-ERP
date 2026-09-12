@@ -239,4 +239,50 @@ public class CatalogRepository {
         );
         return rows.stream().findFirst();
     }
+
+    /**
+     * Batched twin of {@link #findSqmBasis} — same SELECT shape, one round trip for every distinct
+     * {@code priceId} instead of one call per row. Added for {@code DealQuotationRepository}'s
+     * item-mapping path (owner ruling 2026-09-12, "normalize it in the database so its the same in
+     * unit. make the size cm and the thickness mm"): a loaded quotation can carry a few dozen tile
+     * rows, and {@code DealQuotationLines#sizeLine} needs each row's {@code width_mm}/{@code
+     * height_mm} to print the face size in centimetres — looking that up ONE ROW AT A TIME while
+     * mapping the result set would reintroduce the exact N+1 shape {@link #findPricingKeys}'s own
+     * Javadoc already documents fixing for {@code LandedCostCalculator}.
+     *
+     * <p>Same non-{@code ACTIVE}-filtered semantics as {@link #findSqmBasis} — deliberately: a
+     * stored quotation item may point at a price row whose version has since gone non-ACTIVE, and
+     * the catalogue's geometry for that EXACT row is still the right one to print.
+     *
+     * @return a map with one entry per DISTINCT id in {@code priceIds} that exists in {@code
+     *         price_catalog.product_prices} — an id that does not exist there (deleted row) simply
+     *         has no entry, same as {@link #findSqmBasis}'s {@code Optional.empty()}.
+     */
+    public Map<Long, CatalogSqmBasis> findSqmBases(Collection<Long> priceIds) {
+        if (priceIds == null || priceIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(priceIds));
+        Map<Long, CatalogSqmBasis> result = new HashMap<>();
+        for (int start = 0; start < distinctIds.size(); start += PRICE_ID_CHUNK_SIZE) {
+            List<Long> chunk = distinctIds.subList(start, Math.min(start + PRICE_ID_CHUNK_SIZE, distinctIds.size()));
+            jdbc.query(
+                """
+                SELECT price_id, sqm_per_piece, price_unit, width_mm, height_mm
+                  FROM price_catalog.product_prices
+                 WHERE price_id IN (:priceIds)
+                """,
+                new MapSqlParameterSource().addValue("priceIds", chunk),
+                rs -> {
+                    result.put(rs.getLong("price_id"), new CatalogSqmBasis(
+                        rs.getBigDecimal("sqm_per_piece"),
+                        rs.getString("price_unit"),
+                        rs.getBigDecimal("width_mm"),
+                        rs.getBigDecimal("height_mm")
+                    ));
+                }
+            );
+        }
+        return result;
+    }
 }
