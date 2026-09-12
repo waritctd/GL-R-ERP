@@ -437,10 +437,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             null, priceMode, language, currency, items);
     }
 
-    /** 60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1 (box rounding a no-op), 30-45 day lead time. */
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
+     * see DealQuotationService#resolveSqmPerPiece's Javadoc), piecesPerBox 1 (box rounding a
+     * no-op), 30-45 day lead time. */
     private ItemInput tileItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), null,
+            new BigDecimal("10"), new BigDecimal("0.36"),
             WastageCalculator.QUANTITY_MODE_PIECES, null, pieces, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal(unitPrice), BigDecimal.ZERO, "Italy", 30, 45, null);
     }

@@ -473,8 +473,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void incompleteItem_missingSizeText_isBadRequestNamingTheRowAndField() {
-        // Blanking sizeText ALSO removes the only way sqmPerPiece can be derived, so the message
-        // names both -- correct, not a double-count: the row genuinely lacks both pieces of data.
+        // ⚠️ 2026-09-12: sizeText no longer has anything to do with ตร.ม./แผ่น -- the deleted
+        // size-string heuristic used to make blanking sizeText ALSO remove the only way
+        // sqmPerPiece could be derived, so this test used to name both. #sampleItem now supplies
+        // sqmPerPiece EXPLICITLY (see its own comment), so blanking sizeText here is a standalone
+        // "ขนาด" completeness gap, unrelated to ตร.ม./แผ่น.
         ItemInput missingSize = itemMissing(i -> i.withSizeText(null));
         assertThatThrownBy(() -> quotationService.create(ticketId, upsertRequest(List.of(missingSize)), salesActor))
             .isInstanceOf(ApiException.class)
@@ -508,9 +511,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void incompleteItem_unparseableSizeAndNoExplicitSqmPerPiece_isBadRequestForSqmPerPiece() {
-        // sizeText present but not a "WxH" shape the parser recognises -- sqmPerPiece cannot be
-        // derived and was never typed explicitly either, so completeness must still catch it.
-        ItemInput unparseableSize = itemMissing(i -> i.withSizeText("ตามภาพ"));
+        // ⚠️ 2026-09-12: retargeted -- there is no longer a size-string parser to fail against
+        // (DealQuotationService#resolveSqmPerPiece never reads sizeText; see its own Javadoc), so
+        // "unparseable size" cannot be this test's mechanism any more. The real current rule this
+        // test must exercise is resolution step 4: no item-supplied sqmPerPiece AND no catalog
+        // link (so no catalogue basis either) => resolves to null => "ตร.ม./แผ่น" missing. sizeText
+        // itself is irrelevant to that rule now; "ตามภาพ" is kept only as a realistic free-text
+        // value a rep might actually type.
+        ItemInput unparseableSize = itemMissing(i -> i.withSizeText("ตามภาพ").withSqmPerPiece(null));
         assertThatThrownBy(() -> quotationService.create(ticketId, upsertRequest(List.of(unparseableSize)), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -634,6 +642,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withTexture(String v) { texture = v; return this; }
         ItemInputBuilder withSizeText(String v) { sizeText = v; return this; }
         ItemInputBuilder withThicknessMm(BigDecimal v) { thicknessMm = v; return this; }
+        ItemInputBuilder withSqmPerPiece(BigDecimal v) { sqmPerPiece = v; return this; }
         ItemInputBuilder withPiecesPerBox(Integer v) { piecesPerBox = v; return this; }
         ItemInputBuilder withUnitPrice(BigDecimal v) { unitPrice = v; return this; }
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
@@ -1390,7 +1399,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void signatureUpload_byAnotherPlainEmployee_isForbidden() {
+    void signatureUpload_byAnotherPlainEmployee_isForbidden() throws Exception {
         MockMultipartFile file = pngFile();
         assertThatThrownBy(() -> signatureService.upload(salesManagerId, file, employeeActor))
             .isInstanceOf(ApiException.class)
@@ -1398,7 +1407,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void signatureUpload_selfCeoOrAdmin_allowed_andMagicBytesValidated() {
+    void signatureUpload_selfCeoOrAdmin_allowed_andMagicBytesValidated() throws Exception {
         MockMultipartFile file = pngFile();
         // Self.
         signatureService.upload(salesManagerId, file, salesManagerActor);
@@ -1408,25 +1417,38 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         signatureService.upload(salesRepId, file, ceoActor);
         assertThat(signatureService.get(salesRepId, ceoActor).mimeType()).isEqualTo("image/png");
 
-        // Declared PNG content-type but NOT real PNG magic bytes -- rejected.
+        // Declared PNG content-type but NOT real PNG magic bytes -- rejected at the container sniff.
         MockMultipartFile fake = new MockMultipartFile("file", "sig.png", "image/png", "not a real png".getBytes());
         assertThatThrownBy(() -> signatureService.upload(salesRepId, fake, salesRepActor()))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+
+        // Real PNG MAGIC BYTES, but no genuine decodable image stream -- passes the container
+        // sniff and is THEN rejected by ImageDecodability.decode (EmployeeSignatureService#upload).
+        // This is what "andMagicBytesValidated" pins: magic bytes alone are not sufficient any
+        // more, the file must actually decode.
+        MockMultipartFile undecodable = undecodablePngBytesFile();
+        assertThatThrownBy(() -> signatureService.upload(salesRepId, undecodable, salesRepActor()))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ไม่สามารถอ่านไฟล์รูปภาพนี้ได้");
     }
 
     /** Wrong-way-round: an employee id with no {@code hr.employee} row is 404 on all three verbs —
      * the real-backend write sweep found DELETE answering 204 against id 999999. The 403 gate
      * still comes first, so a caller without the capability learns nothing about which ids exist. */
     @Test
-    void signature_unknownEmployee_isNotFoundOnEveryVerb_andStillForbiddenWithoutTheCapability() {
+    void signature_unknownEmployee_isNotFoundOnEveryVerb_andStillForbiddenWithoutTheCapability() throws Exception {
         long unknown = 999_999L;
         assertThat(jdbc.queryForObject("SELECT count(*) FROM hr.employee WHERE employee_id = :id",
             java.util.Map.of("id", unknown), Integer.class)).as("fixture: id must not exist").isZero();
 
+        // Built outside the Runnable lambdas below -- pngFile() throws a checked Exception (it
+        // genuinely encodes a PNG via ImageIO now) and Runnable#run() cannot declare one.
+        MockMultipartFile file = pngFile();
         assertNotFound(() -> signatureService.delete(unknown, ceoActor), "ไม่พบพนักงาน");
         assertNotFound(() -> signatureService.get(unknown, ceoActor), "ไม่พบพนักงาน");
-        assertNotFound(() -> signatureService.upload(unknown, pngFile(), ceoActor), "ไม่พบพนักงาน");
+        assertNotFound(() -> signatureService.upload(unknown, file, ceoActor), "ไม่พบพนักงาน");
 
         assertForbidden(() -> signatureService.delete(unknown, employeeActor));
         assertForbidden(() -> signatureService.get(unknown, salesManagerActor));
@@ -1434,7 +1456,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** DELETE stays idempotent for an employee that EXISTS: no signature stored is 204, not 404. */
     @Test
-    void signatureDelete_existingEmployeeWithoutSignature_isIdempotent() {
+    void signatureDelete_existingEmployeeWithoutSignature_isIdempotent() throws Exception {
         signatureService.delete(salesRepId, ceoActor); // nothing stored yet — must not throw
         signatureService.upload(salesRepId, pngFile(), ceoActor);
         signatureService.delete(salesRepId, ceoActor);
@@ -1490,6 +1512,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // Item completeness rule (inline-deal-spec.md, owner ruling 2026-09-10): thicknessMm and
         // piecesPerBox are now REQUIRED on create/update -- this fixture predates that rule and
         // used to leave both null (sqmPerPiece was already covered, derived from "60x60").
+        // ⚠️ 2026-09-12: that derivation is GONE (owner ruling "2) ไม่มีค่อยคำนวนเอง" --
+        // DealQuotationService#resolveSqmPerPiece no longer parses sizeText at all, see its own
+        // Javadoc), so this fixture now supplies sqmPerPiece EXPLICITLY (60x60cm = 0.36 sqm/piece)
+        // rather than relying on the deleted size-string heuristic.
         // piecesPerBox=1 (not e.g. 4) deliberately -- box rounding is a no-op at box size 1
         // (ceil(n/1)*1 == n for every n), so every dollar-amount assertion across this large
         // file that was written against the OLD (no-box-rounding) piecesFinal keeps passing
@@ -1497,13 +1523,34 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // ItemInput (see e.g. #incompleteItem_missingPiecesPerBox_isBadRequestNamingTheRowAndField's
         // ItemInputBuilder).
         return new ItemInput(locationLabel, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), null,
+            new BigDecimal("10"), new BigDecimal("0.36"),
             WastageCalculator.QUANTITY_MODE_PIECES, null, pieces, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
     }
 
-    private MockMultipartFile pngFile() {
-        // Real PNG magic bytes (89 50 4E 47 0D 0A 1A 0A) + a little padding.
+    /** A REAL, decodable PNG — {@code EmployeeSignatureService#upload} now runs {@code
+     * ImageDecodability.decode} and re-encodes to canonical 8-bit ARGB, so magic bytes alone
+     * (this helper's old behaviour) are no longer enough; see {@link #undecodablePngBytesFile()}
+     * for the deliberately-broken counterpart that still proves that rejection. Alpha is
+     * meaningful here (not incidental) -- a signature sits over a rule, and alpha preservation
+     * through the re-encode is deliberate. Same construction as {@code
+     * QuotationRendererTest#realPng}. */
+    private MockMultipartFile pngFile() throws Exception {
+        var image = new java.awt.image.BufferedImage(4, 4, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        var g = image.createGraphics();
+        g.setColor(new java.awt.Color(0, 0, 0, 128)); // half-transparent -- exercises alpha, not just RGB.
+        g.fillRect(0, 0, 4, 4);
+        g.dispose();
+        var out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", out);
+        return new MockMultipartFile("file", "sig.png", "image/png", out.toByteArray());
+    }
+
+    /** Real PNG MAGIC BYTES (89 50 4E 47 0D 0A 1A 0A) but no genuine IHDR/IDAT/IEND stream --
+     * passes the container sniff, then fails {@code ImageDecodability.decode}. This is the
+     * regression {@code signatureUpload_selfCeoOrAdmin_allowed_andMagicBytesValidated}'s
+     * {@code andMagicBytesValidated} name refers to. */
+    private MockMultipartFile undecodablePngBytesFile() {
         byte[] bytes = new byte[]{
             (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x00
         };

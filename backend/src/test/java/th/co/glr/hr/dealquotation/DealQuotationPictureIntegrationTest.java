@@ -558,9 +558,11 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items);
     }
 
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
+     * see DealQuotationService#resolveSqmPerPiece's Javadoc). */
     private static ItemInput sampleItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), null, WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
+            new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
             WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก",
             30, 45, null);
     }
