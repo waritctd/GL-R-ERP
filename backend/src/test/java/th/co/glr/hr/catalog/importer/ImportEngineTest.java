@@ -95,56 +95,213 @@ class ImportEngineTest {
     @Nested @DisplayName("parseSize")
     class ParseSizeTests {
 
-        @Test @DisplayName("mm format (>=300) kept as-is")
-        void mmFormat() {
-            BigDecimal[] r = ImportEngine.parseSize("600x1200", null);
-            assertThat(r[0]).isEqualByComparingTo("600.00");   // 600 mm
-            assertThat(r[1]).isEqualByComparingTo("1200.00");  // 1200 mm
-            assertThat(r[2]).isNull();
+        // ── the defect this whole change exists to remove ───────────────────────
+
+        @Test @DisplayName("no magnitude guess: declared unit alone decides the conversion")
+        void declaredUnitAloneDecidesConversion() {
+            // Same string, two declared units, two DIFFERENT (both correct) results — the
+            // magnitude-based "< 300 => cm" guess this replaces would have picked ONE answer for
+            // both and been wrong for whichever profile disagreed with it.
+            BigDecimal[] asCm = ImportEngine.parseSize("150x600", null, "cm");
+            assertThat(asCm[0]).isEqualByComparingTo("1500.00");
+            assertThat(asCm[1]).isEqualByComparingTo("6000.00");
+
+            BigDecimal[] asMm = ImportEngine.parseSize("150x600", null, "mm");
+            assertThat(asMm[0]).isEqualByComparingTo("150.00");
+            assertThat(asMm[1]).isEqualByComparingTo("600.00");
         }
 
-        @Test @DisplayName("cm format (<300) multiplied by 10 → mm")
-        void cmFormat() {
-            BigDecimal[] r = ImportEngine.parseSize("60x120", null);
-            assertThat(r[0]).isEqualByComparingTo("600.00");   // 60 cm → 600 mm
-            assertThat(r[1]).isEqualByComparingTo("1200.00");  // 120 cm → 1200 mm
+        @Test
+        @DisplayName("REGRESSION (mutation-checked): CDE '150x600' under an mm-declared profile "
+            + "must be 150x600 mm, never guessed as 1500x6000 mm")
+        void mmDeclaredIsNeverGuessedAsCentimetres() {
+            // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong).
+            // Reinstating that guess in ImportEngine#toMm must turn this test red — verified by
+            // hand during implementation (see PR body), then reverted.
+            BigDecimal[] r = ImportEngine.parseSize("150x600", null, "mm");
+            assertThat(r[0]).isEqualByComparingTo("150.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
+        }
+
+        @Test @DisplayName("normalize-on-write: same physical tile from two declared units stores "
+            + "byte-identical mm dimensions")
+        void sameTileFromTwoDeclaredUnitsConverges() {
+            // A 60x120 cm tile (Padana-style, declared cm) and a 600x1200 mm tile (LEA-style,
+            // declared mm) are the SAME physical tile and must store identical width_mm/height_mm.
+            BigDecimal[] fromCmProfile = ImportEngine.parseSize("60x120", null, "cm");
+            BigDecimal[] fromMmProfile = ImportEngine.parseSize("600x1200", null, "mm");
+
+            assertThat(fromCmProfile[0]).isEqualByComparingTo(fromMmProfile[0]);
+            assertThat(fromCmProfile[1]).isEqualByComparingTo(fromMmProfile[1]);
+            // "byte-identical", not just numerically equal: same scale, same text.
+            assertThat(fromCmProfile[0].toPlainString()).isEqualTo(fromMmProfile[0].toPlainString())
+                .isEqualTo("600.00");
+            assertThat(fromCmProfile[1].toPlainString()).isEqualTo(fromMmProfile[1].toPlainString())
+                .isEqualTo("1200.00");
+        }
+
+        @Test @DisplayName("missing/invalid declared unit is refused, not defaulted")
+        void missingUnitIsRefused() {
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, null))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ImportEngine.parseSize("60x120", null, "inches"))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        // ── basic mechanics, now with a declared unit instead of a guess ─────────
+
+        @Test @DisplayName("uppercase X separator")
+        void upperX() {
+            BigDecimal[] r = ImportEngine.parseSize("120X120", null, "mm");
+            assertThat(r[0]).isEqualByComparingTo("120.00");
+            assertThat(r[1]).isEqualByComparingTo("120.00");
         }
 
         @Test @DisplayName("leading space is ignored")
         void leadingSpace() {
-            BigDecimal[] r = ImportEngine.parseSize(" 150x600", null);
-            assertThat(r[0]).isEqualByComparingTo("1500.00"); // 150 cm (<300) → ×10 = 1500 mm
-            assertThat(r[1]).isEqualByComparingTo("600.00");  // 600 mm (≥300) → stays 600 mm
+            BigDecimal[] r = ImportEngine.parseSize(" 150x600", null, "mm");
+            assertThat(r[0]).isEqualByComparingTo("150.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
         }
 
-        @Test @DisplayName("uppercase X separator")
-        void upperX() {
-            BigDecimal[] r = ImportEngine.parseSize("120X120", null);
-            assertThat(r[0]).isEqualByComparingTo("1200.00");
-            assertThat(r[1]).isEqualByComparingTo("1200.00");
-        }
-
-        @Test @DisplayName("3D: WxHxT — 3rd value is thickness in mm")
-        void threeDimensions() {
-            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null);
-            assertThat(r[0]).isEqualByComparingTo("598.00"); // 598 mm (≥300) → stays 598 mm
+        @Test @DisplayName("3-number bare form WxHxT — 3rd value is thickness, already mm, "
+            + "never converted")
+        void threeDimensionsBareForm() {
+            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null, "mm");
+            assertThat(r[0]).isEqualByComparingTo("598.00");
             assertThat(r[1]).isEqualByComparingTo("598.00");
-            assertThat(r[2]).isEqualByComparingTo("18");     // thickness as-is
+            assertThat(r[2]).isEqualByComparingTo("18.00");
         }
 
-        @Test @DisplayName("apostrophe decimal (Vives): 15'8X31'6 → 158×316 mm")
+        @Test @DisplayName("3-number bare form with spaces: '20 x 20 x 9'")
+        void threeDimensionsWithSpaces() {
+            BigDecimal[] r = ImportEngine.parseSize("20 x 20 x 9", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("200.00"); // 20 cm -> 200 mm
+            assertThat(r[1]).isEqualByComparingTo("200.00");
+            assertThat(r[2]).isEqualByComparingTo("9.00");   // bare thickness, never converted
+        }
+
+        @Test @DisplayName("apostrophe decimal (Vives, declared cm per the profile's own notes): "
+            + "15'8X31'6 -> 158x316 mm")
         void apostropheDecimalVives() {
-            BigDecimal[] r = ImportEngine.parseSize("15'8X31'6", "apostrophe_decimal");
-            // 15.8 cm < 300 → ×10 = 158 mm
+            BigDecimal[] r = ImportEngine.parseSize("15'8X31'6", "apostrophe_decimal", "cm");
             assertThat(r[0]).isEqualByComparingTo("158.00");
-            // 31.6 cm < 300 → ×10 = 316 mm
             assertThat(r[1]).isEqualByComparingTo("316.00");
+        }
+
+        @Test @DisplayName("apostrophe decimal, second form: 9'2X59'3")
+        void apostropheDecimalSecondForm() {
+            BigDecimal[] r = ImportEngine.parseSize("9'2X59'3", "apostrophe_decimal", "cm");
+            assertThat(r[0]).isEqualByComparingTo("92.00");  // 9.2 cm -> 92 mm
+            assertThat(r[1]).isEqualByComparingTo("593.00"); // 59.3 cm -> 593 mm
         }
 
         @Test @DisplayName("null/blank returns all nulls")
         void blank() {
-            BigDecimal[] r = ImportEngine.parseSize(null, null);
+            BigDecimal[] r = ImportEngine.parseSize(null, null, "mm");
             assertThat(r).containsExactly(null, null, null);
+        }
+
+        // ── European decimal commas ──────────────────────────────────────────────
+
+        @Test @DisplayName("European decimal comma: 36,1x57,6")
+        void europeanDecimalComma() {
+            BigDecimal[] r = ImportEngine.parseSize("36,1x57,6", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("361.00"); // 36.1 cm -> 361 mm
+            assertThat(r[1]).isEqualByComparingTo("576.00"); // 57.6 cm -> 576 mm
+        }
+
+        @Test @DisplayName("European decimal comma with spaces around separator: 2,5 x 10")
+        void europeanDecimalCommaWithSpaces() {
+            BigDecimal[] r = ImportEngine.parseSize("2,5 x 10", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("25.00"); // 2.5 cm -> 25 mm
+            assertThat(r[1]).isEqualByComparingTo("100.00"); // 10 cm -> 100 mm
+        }
+
+        // ── thickness glued onto the size string (real production shapes) ───────
+
+        @Test @DisplayName("thickness embedded with explicit MM suffix: '60x120 9MM' (874 real rows)")
+        void thicknessEmbeddedMM_60x120() {
+            BigDecimal[] r = ImportEngine.parseSize("60x120 9MM", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("1200.00");
+            assertThat(r[2]).isEqualByComparingTo("9.00"); // never converted, already mm
+        }
+
+        @Test @DisplayName("thickness embedded with explicit MM suffix: '60x60 9MM' (867 real rows)")
+        void thicknessEmbeddedMM_60x60() {
+            BigDecimal[] r = ImportEngine.parseSize("60x60 9MM", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
+            assertThat(r[2]).isEqualByComparingTo("9.00");
+        }
+
+        @Test @DisplayName("thickness embedded with explicit MM suffix: '20x20 12MM'")
+        void thicknessEmbeddedMM_20x20() {
+            BigDecimal[] r = ImportEngine.parseSize("20x20 12MM", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("200.00");
+            assertThat(r[1]).isEqualByComparingTo("200.00");
+            assertThat(r[2]).isEqualByComparingTo("12.00");
+        }
+
+        @Test @DisplayName("TRUNCATED thickness token '9M' is a clipped '9MM', never metres "
+            + "(245 real rows: '120x120 9M')")
+        void truncatedThicknessTokenSingleM() {
+            BigDecimal[] r = ImportEngine.parseSize("120x120 9M", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("1200.00");
+            assertThat(r[1]).isEqualByComparingTo("1200.00");
+            assertThat(r[2]).isEqualByComparingTo("9.00"); // 9 mm, NOT 9 metres
+        }
+
+        @Test @DisplayName("TRUNCATED decimal thickness token: '60x60 9,4M' is a clipped '9,4MM'")
+        void truncatedThicknessTokenWithDecimalComma() {
+            BigDecimal[] r = ImportEngine.parseSize("60x60 9,4M", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
+            assertThat(r[2]).isEqualByComparingTo("9.40");
+        }
+
+        // ── trailing free-text junk ───────────────────────────────────────────────
+
+        @Test @DisplayName("trailing junk token 'MOD' is stripped")
+        void trailingJunkMod() {
+            BigDecimal[] r = ImportEngine.parseSize("60X120 MOD", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("600.00");
+            assertThat(r[1]).isEqualByComparingTo("1200.00");
+        }
+
+        @Test @DisplayName("trailing junk tokens 'CORBEL NAVAL' (two words) are stripped")
+        void trailingJunkTwoWords() {
+            BigDecimal[] r = ImportEngine.parseSize("20X20 CORBEL NAVAL", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("200.00");
+            assertThat(r[1]).isEqualByComparingTo("200.00");
+        }
+
+        @Test @DisplayName("trailing junk token 'S/AD' is stripped")
+        void trailingJunkSlashAd() {
+            BigDecimal[] r = ImportEngine.parseSize("30X60 S/AD", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("300.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
+        }
+
+        // ── messy fallback (embedded free text mid-string) ───────────────────────
+
+        @Test @DisplayName("embedded free text mid-string ('120X50  h.15') falls back to numeric "
+            + "scanning rather than throwing or dropping the row")
+        void embeddedFreeTextFallsBackToScanning() {
+            BigDecimal[] r = ImportEngine.parseSize("120X50  h.15", null, "cm");
+            assertThat(r[0]).isEqualByComparingTo("1200.00");
+            assertThat(r[1]).isEqualByComparingTo("500.00");
+            assertThat(r[2]).isEqualByComparingTo("15.00");
+        }
+
+        // ── zero-padded (CDE) ─────────────────────────────────────────────────────
+
+        @Test @DisplayName("zero-padded CDE-style size: '080x600'")
+        void zeroPadded() {
+            BigDecimal[] r = ImportEngine.parseSize("080x600", null, "mm");
+            assertThat(r[0]).isEqualByComparingTo("80.00");
+            assertThat(r[1]).isEqualByComparingTo("600.00");
         }
     }
 
@@ -223,6 +380,10 @@ class ImportEngineTest {
             p.columns = columns;
             p.defaults = defaults != null ? defaults : Map.of();
             p.sheets = List.of(sheetConf(sheet, headerRow));
+            // sizeUnit is REQUIRED (ImportEngine#parse fails the whole import otherwise) — these
+            // fixtures don't exercise real-factory unit facts, so "mm" is an arbitrary but valid
+            // default; tests that care about the actual conversion override it explicitly.
+            p.sizeUnit = "mm";
             return p;
         }
 
@@ -250,10 +411,12 @@ class ImportEngineTest {
                 "sqm_per_box",  "MQ/SC",
                 "pcs_per_box",  "PZ/SC"
             ), Map.of("currency", "EUR"), "Sheet1", 1);
+            prof.sizeUnit = "cm"; // Padana's real declared unit (60x120 cm reconciles with 1.44/2 sqm-per-box)
 
             ImportResult r = engine.parse(makeWorkbook("Sheet1", data), prof, 1L);
             assertThat(r.errors()).isEmpty();
             assertThat(r.rows()).hasSize(2);
+            assertThat(r.rows().get(0).sqmProvenance()).isEqualTo("box_reconciled");
             assertThat(r.rows().get(0).grade()).isEqualTo("A01");
             assertThat(r.rows().get(0).price()).isEqualByComparingTo("43.0000");
             assertThat(r.rows().get(1).grade()).isEqualTo("A02");
@@ -304,6 +467,7 @@ class ImportEngineTest {
                 "size_raw",     "FORMATO"
             ), Map.of("currency", "EUR"), "Hoja1", 1);
             prof.sizeFormat = "apostrophe_decimal";
+            prof.sizeUnit = "cm"; // Vives' apostrophe-decimal sizes are centimetres (profile's own notes)
             ImportProfile.PriceColumnRule rule = new ImportProfile.PriceColumnRule();
             rule.type = "first_non_empty";
             rule.map  = Map.of("PREPIEZA", "per_piece", "PREMETRO", "per_sqm");
@@ -417,6 +581,7 @@ class ImportEngineTest {
                 {"",               "",                     "",             "LUCIDO",    4175.5,       "pcs"},
             };
             ImportProfile prof = new ImportProfile();
+            prof.sizeUnit = "cm"; // column is literally "SIZE (cm)"
             prof.columns = Map.of(
                 "collection",   "COLLECTION",
                 "product_name", "ITEM",
@@ -496,6 +661,7 @@ class ImportEngineTest {
                 {"",           "Wall Tile", "30x60",     "MQ", 38.0}, // fill-down
             };
             ImportProfile prof = new ImportProfile();
+            prof.sizeUnit = "cm"; // column is literally "SIZE (cm)"
             prof.columns = Map.of(
                 "collection",   "COLLECTION",
                 "product_name", "ITEM",
@@ -579,12 +745,19 @@ class ImportEngineTest {
                 "pcs_per_box",  "Pcs/Box"
             ), Map.of("currency", "EUR"), "Collections", 1);
             prof.allowMissingCode = false;
+            // 60x60 cm = 0.36 m^2/piece, which is exactly what the box figures below reconcile to
+            // — declaring "mm" here would make 60x60 MM (0.0036 m^2) disagree by ~100x and
+            // quarantine the row instead, which is the point of the reconciliation feature this
+            // test now also exercises.
+            prof.sizeUnit = "cm";
 
             ImportResult r = engine.parse(makeWorkbook("Collections", data), prof, 1L);
             assertThat(r.rows()).hasSize(1);
-            // 1.44 / 4 = 0.36
+            // 1.44 / 4 = 0.36, and it agrees with 60cm x 60cm -> box-reconciled, not quarantined.
             assertThat(r.rows().get(0).sqmPerPiece())
                 .isEqualByComparingTo(new BigDecimal("0.360000"));
+            assertThat(r.rows().get(0).sqmProvenance()).isEqualTo("box_reconciled");
+            assertThat(r.rows().get(0).quarantineReason()).isNull();
         }
 
         // ── blank rows skipped ────────────────────────────────────────────────
@@ -626,6 +799,179 @@ class ImportEngineTest {
             assertThat(r.rows()).isEmpty();
             assertThat(r.errors()).hasSize(1);
             assertThat(r.errors().get(0)).contains("ไม่มีราคา");
+        }
+
+        // ── declared size_unit is required (no magnitude guess, ever) ───────────
+
+        @Test @DisplayName("a profile with no declared size_unit fails the WHOLE import loudly, "
+            + "naming the profile — no rows, no guessing")
+        void missingSizeUnitFailsTheWholeImportLoudly() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"A-01", "60x120", 20.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.sizeUnit = null; // the defect under test
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 42L);
+            assertThat(r.rows()).isEmpty();
+            assertThat(r.quarantined()).isEmpty();
+            assertThat(r.errors()).hasSize(1);
+            assertThat(r.errors().get(0))
+                .as("must name the profile (by factory id) and must not guess a unit")
+                .contains("size_unit")
+                .contains("42");
+        }
+
+        @Test @DisplayName("an unrecognised size_unit value also fails loudly, not silently defaulted")
+        void invalidSizeUnitValueFailsTheWholeImportLoudly() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"A-01", "60x120", 20.0,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.sizeUnit = "inches"; // not "mm" or "cm"
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.rows()).isEmpty();
+            assertThat(r.errors()).hasSize(1);
+        }
+
+        // ── reconciliation: agree / disagree / unavailable ───────────────────────
+
+        @Test @DisplayName("reconciliation DISAGREE quarantines the row (staged, excluded from "
+            + "commit) rather than importing a wrong figure silently — CDE-shaped defect")
+        void reconciliationDisagreementQuarantinesTheRow() throws Exception {
+            Object[][] data = {
+                // Declared mm. Box figures say 0.36 m^2/piece (60cm x 60cm); the size string
+                // says "60x60" which under mm is 60mm x 60mm = 0.0036 m^2/piece -- ~100x apart.
+                {"Code", "Size",  "Price", "Um", "m²/Box", "Pcs/Box"},
+                {"CDE-1", "60x60", 18.0,   "MQ", 1.44,     4.0},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um",
+                "sqm_per_box",  "m²/Box",
+                "pcs_per_box",  "Pcs/Box"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.sizeUnit = "mm";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 7L);
+
+            // Quarantined, not dropped: it IS staged (so the operator can see and fix it), just
+            // excluded from commit and reported.
+            assertThat(r.rows()).hasSize(1);
+            assertThat(r.errors()).isEmpty();
+            PriceRow row = r.rows().get(0);
+            assertThat(row.sqmProvenance()).isEqualTo("mismatch_quarantined");
+            assertThat(row.sqmPerPiece()).isNull();
+            assertThat(row.quarantineReason()).isNotNull()
+                .as("reason must carry BOTH figures, not just say 'mismatch'")
+                .contains("0.0036").contains("0.36");
+
+            assertThat(r.quarantined()).hasSize(1);
+            ImportResult.QuarantinedRow q = r.quarantined().get(0);
+            assertThat(q.sourceSheet()).isEqualTo("Sheet");
+            assertThat(q.productCode()).isEqualTo("CDE-1");
+            assertThat(q.reason()).isEqualTo(row.quarantineReason());
+        }
+
+        @Test @DisplayName("reconciliation AGREE within tolerance imports normally")
+        void reconciliationAgreementImportsNormally() throws Exception {
+            Object[][] data = {
+                // 60cm x 60cm = 0.36 exactly; box figure rounds to 0.3564 (~1% off) — within the
+                // 2% tolerance.
+                {"Code", "Size",  "Price", "Um", "m²/Box", "Pcs/Box"},
+                {"P-1", "60x60", 18.0,     "MQ", 1.4256,   4.0},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um",
+                "sqm_per_box",  "m²/Box",
+                "pcs_per_box",  "Pcs/Box"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.sizeUnit = "cm";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.quarantined()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.sqmProvenance()).isEqualTo("box_reconciled");
+            assertThat(row.quarantineReason()).isNull();
+            assertThat(row.sqmPerPiece()).isEqualByComparingTo(new BigDecimal("0.3564"));
+        }
+
+        @Test @DisplayName("no box columns at all (Bode's shape) -> import on the declared unit, "
+            + "marked unreconciled rather than agreeing/disagreeing with nothing")
+        void noBoxColumnsImportsUnreconciled() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",  "Price", "Um"},
+                {"BD-1", "600x600", 23.5,  "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um"
+            ), Map.of("currency", "USD"), "Sheet", 1);
+            prof.sizeUnit = "mm";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.quarantined()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.sqmProvenance()).isEqualTo("computed_from_dimensions");
+            assertThat(row.sqmPerPiece()).isEqualByComparingTo(new BigDecimal("0.360000"));
+        }
+
+        // ── per_linear_m is classified, never quarantined as an area mismatch ────
+
+        @Test @DisplayName("per_linear_m rows are NEVER quarantined by the area check, even when "
+            + "the box 'sqm' figure (really linear metres) wildly disagrees with width x height")
+        void perLinearMIsNeverQuarantinedAsAnAreaMismatch() throws Exception {
+            Object[][] data = {
+                // A 7x60 cm trim: box column holds LINEAR METRES per box (per V153's own finding),
+                // not m^2 -- comparing 0.750 "linear metres/piece" against width*height=0.042 m^2
+                // would be a ~18x "mismatch" if it were ever compared as area. It must not be.
+                {"Code", "Size", "Price", "Um", "m²/Box", "Pcs/Box"},
+                {"TRIM-1", "7x60", 15.0,  "ML", 15.0,      20.0},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code",
+                "size_raw",     "Size",
+                "price",        "Price",
+                "unit",         "Um",
+                "sqm_per_box",  "m²/Box",
+                "pcs_per_box",  "Pcs/Box"
+            ), Map.of("currency", "EUR"), "Sheet", 1);
+            prof.sizeUnit = "cm";
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.quarantined()).as("per_linear_m must never be quarantined as an area mismatch").isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.priceUnit()).isEqualTo("per_linear_m");
+            assertThat(row.sqmProvenance()).isEqualTo("linear_metre_not_area");
+            assertThat(row.quarantineReason()).isNull();
+            // sqmPerPiece must stay null -- 15.0/20.0 = 0.750 linear metres/piece is NOT an area,
+            // and nothing may write it where downstream code reads an area.
+            assertThat(row.sqmPerPiece()).isNull();
+            // The profile height (shorter side, 70mm) IS captured, correctly labelled.
+            assertThat(row.sqmPerLinearM()).isEqualByComparingTo(new BigDecimal("0.070000"));
         }
     }
 }

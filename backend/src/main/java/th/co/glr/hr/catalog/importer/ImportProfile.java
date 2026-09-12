@@ -41,6 +41,20 @@ public class ImportProfile {
     @JsonProperty("size_format")
     public String sizeFormat;
 
+    /**
+     * REQUIRED — "mm" or "cm", declaring the unit the source price list writes its size column
+     * in. There is deliberately NO default and no magnitude-based fallback: {@code ImportEngine}
+     * used to guess ("values &lt; 300 are cm") and got it wrong the size it most needed to be
+     * right — the unit is a property of the DOCUMENT (a factory's price list and its retail
+     * catalogue can disagree), never something inferrable from the brand or the numbers
+     * themselves. {@code ImportEngine#parse} refuses to import a profile missing this field
+     * rather than guess. See CLAUDE.md / the 2026-09 catalogue-accuracy work for the reconciled
+     * facts this was set from (Padana=cm, LEA=mm, CDE=mm, Bode=mm — each verified against
+     * m²/box ÷ pcs/box, not inferred).
+     */
+    @JsonProperty("size_unit")
+    public String sizeUnit;
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class SheetConfig {
         public String name;

@@ -70,7 +70,8 @@ public class PriceImportService {
         return new UploadReport(
             versionId, sessionId,
             result.rows().size(), result.errors().size(),
-            result.errors()
+            result.errors(),
+            result.quarantinedCount(), result.quarantined()
         );
     }
 
@@ -134,13 +135,15 @@ public class PriceImportService {
                 color, surface, size_raw, width_mm, height_mm, thickness_mm,
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
-                price_variants, attributes, source_sheet, source_row, import_session_id
+                price_variants, attributes, source_sheet, source_row, import_session_id,
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, import_error
             ) VALUES (
                 :fid, :vid, :code, :grade, :col, :name,
                 :color, :surf, :sizeRaw, :w, :h, :t,
                 :price, :cur, :unit, :sqmPc,
                 :pcs, :sqmBox, :kg,
-                CAST(:variants AS jsonb), CAST(:attrs AS jsonb), :sheet, :row, :sid
+                CAST(:variants AS jsonb), CAST(:attrs AS jsonb), :sheet, :row, :sid,
+                :sizeUnit, :sqmProv, :sqmLinM, :qerr
             )
             """;
 
@@ -170,6 +173,14 @@ public class PriceImportService {
             p.addValue("sheet",   r.sourceSheet());
             p.addValue("row",     r.sourceRow());
             p.addValue("sid",     sessionId);
+            p.addValue("sizeUnit", r.sizeUnitDeclared());
+            p.addValue("sqmProv",  r.sqmProvenance());
+            p.addValue("sqmLinM",  r.sqmPerLinearM());
+            // Quarantined rows (reconciliation mismatch) are staged WITH import_error already set,
+            // so they are excluded from commit and visible in the staging report exactly like a
+            // duplicate-code row is — never dropped silently. Non-quarantined rows insert NULL here,
+            // same as before; validate() may still flag them for other reasons (e.g. duplicates).
+            p.addValue("qerr",     r.quarantineReason());
             return p;
         }).toArray(MapSqlParameterSource[]::new);
 
@@ -349,14 +360,16 @@ public class PriceImportService {
                 color, surface, size_raw, width_mm, height_mm, thickness_mm,
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
-                price_variants, attributes, source_sheet, source_row
+                price_variants, attributes, source_sheet, source_row,
+                size_unit_declared, sqm_provenance, sqm_per_linear_m
             )
             SELECT
                 factory_id, version_id, product_code, grade, collection, product_name,
                 color, surface, size_raw, width_mm, height_mm, thickness_mm,
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
-                price_variants, attributes, source_sheet, source_row
+                price_variants, attributes, source_sheet, source_row,
+                size_unit_declared, sqm_provenance, sqm_per_linear_m
               FROM price_catalog.product_price_staging
              WHERE version_id = :vid
                AND import_error IS NULL
@@ -373,7 +386,10 @@ public class PriceImportService {
                    sqm_per_box  = EXCLUDED.sqm_per_box,
                    kg_per_box   = EXCLUDED.kg_per_box,
                    price_variants = EXCLUDED.price_variants,
-                   attributes   = EXCLUDED.attributes
+                   attributes   = EXCLUDED.attributes,
+                   size_unit_declared = EXCLUDED.size_unit_declared,
+                   sqm_provenance     = EXCLUDED.sqm_provenance,
+                   sqm_per_linear_m   = EXCLUDED.sqm_per_linear_m
             """,
             Map.of("vid", versionId)
         );
@@ -387,14 +403,16 @@ public class PriceImportService {
                     color, surface, size_raw, width_mm, height_mm, thickness_mm,
                     price, currency, price_unit, sqm_per_piece,
                     pcs_per_box, sqm_per_box, kg_per_box,
-                    price_variants, attributes, source_sheet, source_row
+                    price_variants, attributes, source_sheet, source_row,
+                    size_unit_declared, sqm_provenance, sqm_per_linear_m
                 )
                 SELECT
                     p.factory_id, :vid, p.product_code, p.grade, p.collection, p.product_name,
                     p.color, p.surface, p.size_raw, p.width_mm, p.height_mm, p.thickness_mm,
                     p.price, p.currency, p.price_unit, p.sqm_per_piece,
                     p.pcs_per_box, p.sqm_per_box, p.kg_per_box,
-                    p.price_variants, p.attributes, p.source_sheet, p.source_row
+                    p.price_variants, p.attributes, p.source_sheet, p.source_row,
+                    p.size_unit_declared, p.sqm_provenance, p.sqm_per_linear_m
                   FROM price_catalog.product_prices p
                  WHERE p.version_id = :prevVid
                    AND NOT EXISTS (
@@ -584,7 +602,13 @@ public class PriceImportService {
         UUID sessionId,
         int parsedRows,
         int errorCount,
-        List<String> errors
+        List<String> errors,
+        // Reconciliation mismatches (item 6, catalogue accuracy 2026-09): these rows ARE staged
+        // (parsedRows includes them) but excluded from commit until reviewed — see
+        // ImportResult#quarantined's javadoc. Distinct from errorCount/errors above, which are
+        // rows dropped entirely before staging.
+        int quarantinedCount,
+        List<ImportResult.QuarantinedRow> quarantined
     ) {}
 
     // ── C5: create factory ────────────────────────────────────────────────────
@@ -776,14 +800,22 @@ public class PriceImportService {
 
         List<String> errors = new ArrayList<>(result.errors());
         int skipped = result.rows().size() - cr.committed();
-        if (skipped > 0) errors.add(skipped + " แถวถูกข้ามเพราะรหัสซ้ำ");
+        // "Skipped" now conflates two DIFFERENT reasons a staged row's import_error got set: a
+        // duplicate code within the file (validate()) and a reconciliation mismatch quarantined at
+        // parse time (bulkInsertStaging) — say so rather than blaming duplicates for both, and
+        // point at the quarantine list below for the reconciliation half specifically.
+        if (skipped > 0) {
+            errors.add(skipped + " แถวถูกข้ามเพราะไม่ผ่านการตรวจสอบ (รหัสซ้ำในไฟล์ หรือขนาดกับข้อมูลกล่องไม่ตรงกัน — ดูรายการ quarantined)");
+        }
 
         return new UploadCommitResult(versionId, result.rows().size(), cr.committed(),
-            cr.retained(), result.errors().size() + skipped, errors);
+            cr.retained(), result.errors().size() + skipped, errors,
+            result.quarantinedCount(), result.quarantined());
     }
 
     public record UploadCommitResult(
-        long versionId, int parsedRows, int committedRows, int retainedRows, int errorCount, List<String> errors
+        long versionId, int parsedRows, int committedRows, int retainedRows, int errorCount, List<String> errors,
+        int quarantinedCount, List<ImportResult.QuarantinedRow> quarantined
     ) {}
 
     // ── C5: product CRUD ──────────────────────────────────────────────────────

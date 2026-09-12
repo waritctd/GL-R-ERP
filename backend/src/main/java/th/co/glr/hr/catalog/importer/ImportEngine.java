@@ -53,11 +53,51 @@ public class ImportEngine {
     private static final Pattern APOSTROPHE_DECIMAL =
         Pattern.compile("(\\d)'(\\d)");
 
+    /**
+     * Trailing thickness token WITH an explicit unit letter — "9MM", "12MM", and the truncated
+     * single-M forms Excel column clipping produces ("9M", "9,4M"). The owner confirmed a bare
+     * trailing "M" here is always a clipped "MM", never metres — this is a millimetre thickness
+     * suffix, full stop. Comma decimal supported ("9,4M" = 9.4 mm).
+     */
+    private static final Pattern THICKNESS_SUFFIX =
+        Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*[Mm][Mm]?$");
+
+    /** The only legitimate dimension separators across all ten source price lists. */
+    private static final Pattern SEPARATOR = Pattern.compile("\\s*[×xX]\\s*");
+
+    /** No default, no magnitude fallback — see {@link ImportProfile#sizeUnit}. */
+    private static final Set<String> VALID_SIZE_UNITS = Set.of("mm", "cm");
+
+    private static final BigDecimal SQ_MM_PER_SQM = new BigDecimal("1000000");
+    private static final BigDecimal MM_PER_M      = BigDecimal.valueOf(1000);
+
+    /**
+     * Reconciliation tolerance for m²/box ÷ pcs/box vs parsed width×height, both expressed per
+     * piece. 2% — chosen from the four price lists this was measured against (Padana 98.6%
+     * agreement, LEA 85.3%, CDE 97.9%, plus DealQuotationService's catalogue-wide 8.6% disagreement
+     * figure, up to 14x on trims): 2% comfortably absorbs box-figure rounding (pcs/box and m²/box
+     * are typically given to 2-4 significant figures, and nominal tile sizes vs as-manufactured
+     * sizes drift by a percent or two) while remaining an order of magnitude below any real
+     * disagreement this exists to catch — a wrong declared unit is never a 2% error, it is ~10x or
+     * ~100x.
+     */
+    private static final BigDecimal SQM_TOLERANCE = new BigDecimal("0.02");
+
     // ── public API ────────────────────────────────────────────────────────────
 
     public ImportResult parse(InputStream in, ImportProfile prof, long factoryId) {
         List<PriceRow> rows   = new ArrayList<>();
         List<String>   errors = new ArrayList<>();
+        List<ImportResult.QuarantinedRow> quarantined = new ArrayList<>();
+
+        String sizeUnit = normalizeSizeUnit(prof.sizeUnit);
+        if (sizeUnit == null) {
+            errors.add("โปรไฟล์นำเข้าของ factory id=" + factoryId + " ไม่ได้ระบุหน่วยขนาด (size_unit) "
+                + "ที่ถูกต้อง — ต้องระบุ \"mm\" หรือ \"cm\" อย่างชัดเจนในโปรไฟล์ก่อนนำเข้า "
+                + "ระบบจะไม่เดาหน่วยจากตัวเลขขนาดอีกต่อไป (พบค่า: "
+                + (prof.sizeUnit == null ? "ไม่ได้ระบุ" : "\"" + prof.sizeUnit + "\"") + ")");
+            return new ImportResult(rows, errors, quarantined);
+        }
 
         try (Workbook wb = WorkbookFactory.create(in)) {
             FormulaEvaluator evaluator = wb.getCreationHelper().createFormulaEvaluator();
@@ -68,21 +108,27 @@ public class ImportEngine {
                     errors.add("[" + sh.name + "] ไม่พบชีตในไฟล์");
                     continue;
                 }
-                processSheet(sheet, sh, prof, factoryId, evaluator, rows, errors);
+                processSheet(sheet, sh, prof, factoryId, sizeUnit, evaluator, rows, errors, quarantined);
             }
         } catch (Exception e) {
             errors.add("เปิดไฟล์ไม่ได้: " + e.getMessage()
                 + " (ถ้าเป็นไฟล์ Padana ให้ re-save ด้วย LibreOffice ก่อน)");
         }
-        return new ImportResult(rows, errors);
+        return new ImportResult(rows, errors, quarantined);
+    }
+
+    private static String normalizeSizeUnit(String raw) {
+        if (raw == null) return null;
+        String u = raw.strip().toLowerCase(Locale.ROOT);
+        return VALID_SIZE_UNITS.contains(u) ? u : null;
     }
 
     // ── sheet processing ──────────────────────────────────────────────────────
 
     private void processSheet(
         Sheet sheet, ImportProfile.SheetConfig sh, ImportProfile prof,
-        long factoryId, FormulaEvaluator evaluator,
-        List<PriceRow> rows, List<String> errors
+        long factoryId, String sizeUnit, FormulaEvaluator evaluator,
+        List<PriceRow> rows, List<String> errors, List<ImportResult.QuarantinedRow> quarantined
     ) {
         String sheetName = sh.name;
         int headerRowIdx = sh.headerRow - 1; // convert 1-based → 0-based
@@ -121,7 +167,7 @@ public class ImportEngine {
             applyFillDown(rec, fillDownTargets, lastSeen);
 
             String rowErr = processRow(
-                rec, rule, priceColIdx, prof, factoryId, sheetName, r + 1, rows
+                rec, rule, priceColIdx, prof, factoryId, sizeUnit, sheetName, r + 1, rows, quarantined
             );
             if (rowErr != null) errors.add("[" + sheetName + "] r" + (r + 1) + ": " + rowErr);
         }
@@ -135,8 +181,10 @@ public class ImportEngine {
         Map<String, Integer> priceColIdx,
         ImportProfile prof,
         long factoryId,
+        String sizeUnit,
         String sheetName, int sourceRow,
-        List<PriceRow> out
+        List<PriceRow> out,
+        List<ImportResult.QuarantinedRow> quarantined
     ) {
         String fmt = prof.numberFormat;
 
@@ -182,7 +230,7 @@ public class ImportEngine {
         if (sizeRaw == null && prof.sizeFrom != null) {
             sizeRaw = stringify(rec.get(prof.sizeFrom));
         }
-        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat);
+        BigDecimal[] dims = parseSize(sizeRaw, prof.sizeFormat, sizeUnit);
 
         // ── product_code ──────────────────────────────────────────────────────
         String code = blankToNull(stringify(rec.get("product_code")));
@@ -207,12 +255,66 @@ public class ImportEngine {
         if (cur != null) cur = cur.strip().toUpperCase();
         if (cur != null && cur.length() > 3) cur = cur.substring(0, 3);
 
-        // ── box data ──────────────────────────────────────────────────────────
-        BigDecimal pcs = toDecimal(rec.get("pcs_per_box"), fmt);
-        BigDecimal sqm = toDecimal(rec.get("sqm_per_box"), fmt);
-        BigDecimal sqmPerPiece = null;
-        if (pcs != null && sqm != null && pcs.compareTo(BigDecimal.ZERO) > 0) {
-            sqmPerPiece = sqm.divide(pcs, 6, RoundingMode.HALF_UP);
+        // ── box data + reconciliation ────────────────────────────────────────────
+        // Owner ruling (catalogue accuracy, 2026-09): reconcile m²/box ÷ pcs/box against the
+        // parsed WIDTH×HEIGHT wherever both exist, so a wrong declared unit or a corrupt cell is
+        // CAUGHT here, at import, rather than silently priced downstream. per_linear_m rows are
+        // excluded from this comparison entirely — their "sqm_per_box" column holds LINEAR METRES,
+        // not area (V153's own finding on ~1,500+ real rows), so comparing it to width×height would
+        // be comparing two different physical quantities, not a real disagreement.
+        BigDecimal pcs    = toDecimal(rec.get("pcs_per_box"), fmt);
+        BigDecimal sqmBox = toDecimal(rec.get("sqm_per_box"), fmt);
+        BigDecimal sqmFromBox = (pcs != null && sqmBox != null && pcs.compareTo(BigDecimal.ZERO) > 0)
+            ? sqmBox.divide(pcs, 6, RoundingMode.HALF_UP)
+            : null;
+
+        BigDecimal areaFromDims = (dims[0] != null && dims[1] != null
+                && dims[0].compareTo(BigDecimal.ZERO) > 0 && dims[1].compareTo(BigDecimal.ZERO) > 0)
+            ? dims[0].multiply(dims[1]).divide(SQ_MM_PER_SQM, 6, RoundingMode.HALF_UP)
+            : null;
+
+        BigDecimal sqmPerPiece   = null;
+        BigDecimal sqmPerLinearM = null;
+        String     sqmProvenance;
+        String     quarantineReason = null;
+
+        if ("per_linear_m".equals(unit)) {
+            sqmProvenance = "linear_metre_not_area";
+            if (dims[0] != null && dims[1] != null
+                    && dims[0].compareTo(BigDecimal.ZERO) > 0 && dims[1].compareTo(BigDecimal.ZERO) > 0) {
+                // Profile height = the SHORTER parsed dimension (V153's own derivation, mirrored
+                // here so a freshly-imported per_linear_m row is priceable immediately instead of
+                // only after a one-off SQL backfill).
+                sqmPerLinearM = dims[0].min(dims[1]).divide(MM_PER_M, 6, RoundingMode.HALF_UP);
+            }
+            // sqmPerPiece deliberately stays null — see PriceRow#sqmProvenance's javadoc. Never
+            // written from sqmFromBox for this unit: that figure is linear metres, not area, and
+            // nothing downstream may be able to read it back as one.
+        } else if (sqmFromBox != null && areaFromDims != null) {
+            BigDecimal diffPct = sqmFromBox.subtract(areaFromDims).abs()
+                .divide(areaFromDims, 6, RoundingMode.HALF_UP);
+            if (diffPct.compareTo(SQM_TOLERANCE) <= 0) {
+                sqmPerPiece   = sqmFromBox;
+                sqmProvenance = "box_reconciled";
+            } else {
+                sqmProvenance = "mismatch_quarantined";
+                quarantineReason = String.format(Locale.ROOT,
+                    "ขนาดกับข้อมูลกล่องไม่ตรงกัน: จากขนาด %s ตร.ม./ชิ้น, จากกล่อง (m²/box ÷ pcs/box) %s "
+                        + "ตร.ม./ชิ้น (ต่างกัน %.1f%% เกินเกณฑ์ %.0f%%)",
+                    areaFromDims.toPlainString(), sqmFromBox.toPlainString(),
+                    diffPct.movePointRight(2), SQM_TOLERANCE.movePointRight(2));
+            }
+        } else if (sqmFromBox != null) {
+            // No parsed dimensions to check the box figure against — accept it, but do not claim
+            // it was reconciled.
+            sqmPerPiece   = sqmFromBox;
+            sqmProvenance = "box_only_no_dims";
+        } else if (areaFromDims != null) {
+            // Bode's shape: no box columns at all — import on the declared unit, unreconciled.
+            sqmPerPiece   = areaFromDims;
+            sqmProvenance = "computed_from_dimensions";
+        } else {
+            sqmProvenance = "unavailable";
         }
 
         BigDecimal thickness = dims[2] != null ? dims[2]
@@ -225,7 +327,9 @@ public class ImportEngine {
             attributes = Map.of("barcode", barcode);
         }
 
-        // emit one row per code (Bode split)
+        // emit one row per code (Bode split) — quarantined rows are STILL emitted (and therefore
+        // still staged) so the operator sees them with a reason, rather than a row disappearing
+        // the way a hard "ไม่มีราคา"-style error does.
         for (String c : codes) {
             out.add(new PriceRow(
                 factoryId,
@@ -238,11 +342,15 @@ public class ImportEngine {
                 blankToNull(sizeRaw),
                 dims[0], dims[1], thickness,
                 price, cur != null ? cur : "EUR", unit,
-                sqmPerPiece, pcs, sqm,
+                sqmPerPiece, pcs, sqmBox,
                 toDecimal(rec.get("kg_per_box"), fmt),
                 priceVariants, attributes,
-                sheetName, sourceRow
+                sheetName, sourceRow,
+                sizeUnit, sqmProvenance, sqmPerLinearM, quarantineReason
             ));
+            if (quarantineReason != null) {
+                quarantined.add(new ImportResult.QuarantinedRow(sheetName, sourceRow, c, quarantineReason));
+            }
         }
         return null;
     }
@@ -400,25 +508,82 @@ public class ImportEngine {
         }
     }
 
-    static BigDecimal[] parseSize(String raw, String style) {
+    /**
+     * Parses a free-text size cell into {@code [widthMm, heightMm, thicknessMm]}.
+     *
+     * <p><b>{@code sizeUnit} is REQUIRED and never guessed</b> — see {@link ImportProfile#sizeUnit}.
+     * Width and height are converted to millimetres from the DECLARED unit only; there is no
+     * magnitude-based fallback of any kind. Thickness — whether parsed from an explicit "9MM"-style
+     * suffix or a bare third {@code WxHxT} value — is always ALREADY millimetres and is never
+     * unit-converted (per the owner's own catalogues).
+     *
+     * <p>Cleaning, in order:
+     * <ol>
+     *   <li>apostrophe-decimal style (Vives: {@code 15'8X31'6} → 15.8×31.6);</li>
+     *   <li>strip trailing free-text tokens carrying no digit at all ("MOD", "CORBEL NAVAL",
+     *       "S/AD", …);</li>
+     *   <li>extract an explicit millimetre thickness suffix — "9MM", "12MM", and the truncated
+     *       single-M forms Excel's column clipping produces ("9M", "9,4M") — the owner confirmed a
+     *       bare trailing "M" here is always a clipped "MM", never metres;</li>
+     *   <li>split the remainder on {@code x}/{@code X}/{@code ×} into 2 or 3 clean numeric tokens
+     *       (European decimal commas supported: {@code 36,1x57,6}); a bare 3rd token, when no
+     *       explicit suffix was found, is thickness ({@code 598X598X18}, {@code 20 x 20 x 9});</li>
+     *   <li>if that split is not clean (e.g. embedded free text: {@code "120X50  h.15"}), fall back
+     *       to scanning for up to three numeric runs anywhere in the string, unchanged from the
+     *       engine's long-standing behaviour for messy cells — just without the magnitude guess.</li>
+     * </ol>
+     */
+    static BigDecimal[] parseSize(String raw, String style, String sizeUnit) {
         if (raw == null || raw.isBlank()) return new BigDecimal[]{null, null, null};
+        if (sizeUnit == null || !VALID_SIZE_UNITS.contains(sizeUnit)) {
+            throw new IllegalArgumentException(
+                "parseSize requires a declared sizeUnit of \"mm\" or \"cm\", got: " + sizeUnit);
+        }
         String s = raw.strip();
         if ("apostrophe_decimal".equals(style)) {
             s = APOSTROPHE_DECIMAL.matcher(s).replaceAll("$1.$2");
         }
-        Matcher m = NUM_PATTERN.matcher(s.replace(" ", ""));
-        List<Double> vals = new ArrayList<>();
-        while (m.find() && vals.size() < 3) {
-            try { vals.add(Double.parseDouble(m.group().replace(",", "."))); }
-            catch (NumberFormatException ignored) {}
-        }
-        if (vals.isEmpty()) return new BigDecimal[]{null, null, null};
 
-        // values < 300 are cm → convert to mm
-        BigDecimal w = vals.size() > 0 ? toMm(vals.get(0)) : null;
-        BigDecimal h = vals.size() > 1 ? toMm(vals.get(1)) : null;
-        // 3rd dimension = thickness, already in mm
-        BigDecimal t = vals.size() > 2 ? BigDecimal.valueOf(vals.get(2)) : null;
+        s = stripTrailingNonNumericTokens(s);
+
+        BigDecimal thicknessFromSuffix = null;
+        Matcher tm = THICKNESS_SUFFIX.matcher(s);
+        if (tm.find()) {
+            thicknessFromSuffix = parseNum(tm.group(1));
+            s = s.substring(0, tm.start()).strip();
+        }
+
+        List<BigDecimal> nums = null;
+        String[] tokens = s.isBlank() ? new String[0] : SEPARATOR.split(s);
+        if (tokens.length == 2 || tokens.length == 3) {
+            List<BigDecimal> clean = new ArrayList<>(tokens.length);
+            boolean ok = true;
+            for (String t : tokens) {
+                BigDecimal n = parseNum(t.strip());
+                if (n == null) { ok = false; break; }
+                clean.add(n);
+            }
+            if (ok) nums = clean;
+        }
+        if (nums == null) {
+            // Messier cell (embedded free text, unexpected token count, …) — same scanning
+            // fallback the engine has always used, minus the magnitude guess.
+            nums = scanNumbers(s);
+        }
+        if (nums.isEmpty()) return new BigDecimal[]{null, null, null};
+
+        BigDecimal w = nums.size() > 0 ? toMm(nums.get(0), sizeUnit) : null;
+        BigDecimal h = nums.size() > 1 ? toMm(nums.get(1), sizeUnit) : null;
+        BigDecimal t;
+        if (thicknessFromSuffix != null) {
+            t = thicknessFromSuffix.setScale(2, RoundingMode.HALF_UP);
+        } else if (nums.size() > 2) {
+            // Bare 3-number form ("598X598X18", "20 x 20 x 9") — 3rd value is thickness, per the
+            // owner ALREADY in millimetres. Never converted.
+            t = nums.get(2).setScale(2, RoundingMode.HALF_UP);
+        } else {
+            t = null;
+        }
         return new BigDecimal[]{w, h, t};
     }
 
@@ -430,8 +595,54 @@ public class ImportEngine {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private static BigDecimal toMm(double x) {
-        return BigDecimal.valueOf(x < 300 ? x * 10 : x).setScale(2, RoundingMode.HALF_UP);
+    /** Converts a value already known to be in {@code sizeUnit} to millimetres. Never guesses. */
+    private static BigDecimal toMm(BigDecimal value, String sizeUnit) {
+        BigDecimal mm = "cm".equals(sizeUnit) ? value.multiply(BigDecimal.TEN) : value;
+        return mm.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** Comma-as-decimal aware; {@code null} (not an exception) on anything not a plain number. */
+    private static BigDecimal parseNum(String tok) {
+        if (tok == null || tok.isBlank()) return null;
+        try {
+            return new BigDecimal(tok.strip().replace(",", "."));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** Legacy scan: up to 3 numeric runs anywhere in the string, in order. */
+    private static List<BigDecimal> scanNumbers(String s) {
+        List<BigDecimal> vals = new ArrayList<>();
+        Matcher m = NUM_PATTERN.matcher(s.replace(" ", ""));
+        while (m.find() && vals.size() < 3) {
+            BigDecimal n = parseNum(m.group());
+            if (n != null) vals.add(n);
+        }
+        return vals;
+    }
+
+    /**
+     * Strips trailing whitespace-separated tokens that carry no digit at all — real trailing junk
+     * observed in the owner's price lists ("MOD", "CORBEL NAVAL", "S/AD"). Stops at the first
+     * (rightmost) token that DOES contain a digit, so a numeric thickness/size token is never
+     * touched.
+     */
+    private static String stripTrailingNonNumericTokens(String s) {
+        String trimmed = s.strip();
+        if (trimmed.isEmpty()) return trimmed;
+        String[] words = trimmed.split("\\s+");
+        int end = words.length;
+        while (end > 0 && !containsDigit(words[end - 1])) end--;
+        if (end == words.length) return trimmed;
+        return String.join(" ", Arrays.copyOfRange(words, 0, end));
+    }
+
+    private static boolean containsDigit(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            if (Character.isDigit(s.charAt(i))) return true;
+        }
+        return false;
     }
 
     /**
