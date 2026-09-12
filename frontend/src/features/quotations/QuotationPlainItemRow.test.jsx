@@ -61,3 +61,17 @@ describe('QuotationPlainItemRow (v3 S2)', () => {
     expect(screen.getByText('กรุณาเลือกหน่วย')).not.toBeNull();
   });
 });
+
+describe('ส่วนลด % on a plain row — blank by default, clearable (owner, 2026-09-13)', () => {
+  it('a new plain row starts with an empty discount and says what blank means', () => {
+    renderRow();
+    expect(screen.getByLabelText(/^ส่วนลด %/).value).toBe('');
+    expect(screen.getByText('เว้นว่าง = ไม่มีส่วนลด (พิมพ์ Net)')).not.toBeNull();
+  });
+
+  it('clearing a typed discount leaves it blank instead of snapping back to 0', () => {
+    const { onChange } = renderRow({ item: { ...emptyPlainItem('g1'), discountPct: 5 } });
+    fireEvent.change(screen.getByLabelText(/^ส่วนลด %/), { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({ discountPct: null });
+  });
+});

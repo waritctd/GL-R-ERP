@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
-  emptyQuotationItem, QuotationItemRow, resolveTileSqmPerPiece, sizeTextFromCatalog,
+  emptyQuotationItem, QuotationItemRow, resolveTileSqmPerPiece, sizeTextFromCatalog, emptyPlainItem, itemInputFromRow,
 } from './QuotationItemRow.jsx';
 
 globalThis.React = React;
@@ -414,5 +414,36 @@ describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, neve
     expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
     expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');
     expect(sizeTextFromCatalog({})).toBe('');
+  });
+});
+
+describe('ส่วนลด % — blank by default, and a rep can clear it (owner, 2026-09-13)', () => {
+  function renderNet(item, onChange = vi.fn()) {
+    render(<QuotationItemRow item={item} index={0} priceMode="NET" onChange={onChange} onRemove={vi.fn()} />);
+    return onChange;
+  }
+
+  it('a new row starts with an empty discount, not a pre-filled 0', () => {
+    renderNet(emptyQuotationItem());
+    expect(screen.getByLabelText(/^ส่วนลด %/).value).toBe('');
+  });
+
+  it('clearing a typed discount leaves it blank instead of snapping back to 0', () => {
+    // The reported bug: onChange turned '' back into 0, so the field could never be emptied.
+    const onChange = renderNet({ ...emptyQuotationItem(), discountPct: 5 });
+    fireEvent.change(screen.getByLabelText(/^ส่วนลด %/), { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({ discountPct: null });
+  });
+
+  it('a typed discount is still captured as a number', () => {
+    const onChange = renderNet(emptyQuotationItem());
+    fireEvent.change(screen.getByLabelText(/^ส่วนลด %/), { target: { value: '7.5' } });
+    expect(onChange).toHaveBeenCalledWith({ discountPct: 7.5 });
+  });
+
+  it('a blank discount still reaches the server as 0 — pricing is unchanged', () => {
+    // The server prices null and 0 identically (WastageCalculator), but the payload must never send ''.
+    expect(itemInputFromRow({ ...emptyQuotationItem(), discountPct: null }, 'NET').discountPct).toBe(0);
+    expect(itemInputFromRow({ ...emptyPlainItem(), discountPct: null }).discountPct).toBe(0);
   });
 });
