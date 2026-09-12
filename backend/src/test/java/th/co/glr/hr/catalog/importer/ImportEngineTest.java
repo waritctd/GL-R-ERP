@@ -1162,5 +1162,186 @@ class ImportEngineTest {
             assertThat(row.widthMm()).isEqualByComparingTo("600.00");
             assertThat(row.heightMm()).isEqualByComparingTo("1200.00");
         }
+
+        // ── thickness provenance: Equipe / Vives / Bode (owner-supplied thickness sources) ────
+
+        @Test @DisplayName("Equipe — a thickness RANGE ('9.5–19.5', EN DASH) stores the MINIMUM "
+            + "and preserves the original text; every status value imports and reaches provenance")
+        void equipe_rangeStoresMinimum_statusReachesProvenance() throws Exception {
+            Object[][] data = {
+                {"Artículo", "Descripción", "Precio Pallet", "Unidad", "Thickness (mm)", "Thickness status"},
+                {"EQ-001",   "Tile Range",  25.5,             "MQ",    "9.5–19.5",  "Best-effort / verify"},
+                {"EQ-002",   "Tile Plain",  30.0,             "MQ",    "10",              "Verified / matched"},
+                {"EQ-003",   "Tile Conflict", 40.0,           "MQ",    "12",              "Verified, source conflict"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code",     "Artículo",
+                "product_name",     "Descripción",
+                "price",            "Precio Pallet",
+                "unit",             "Unidad",
+                "thickness_mm",     "Thickness (mm)",
+                "thickness_status", "Thickness status"
+            ), Map.of("currency", "EUR"), "EXTRACOMUNITARIOS", 1);
+            prof.thicknessUnit = "mm"; // Equipe's appended column is self-describing "(mm)"
+
+            ImportResult r = engine.parse(makeWorkbook("EXTRACOMUNITARIOS", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(3);
+
+            PriceRow range = r.rows().get(0);
+            assertThat(range.thicknessMm()).as("minimum of the range, per owner ruling")
+                .isEqualByComparingTo("9.50");
+            assertThat(range.thicknessProvenance()).isEqualTo("stated");
+            assertThat(range.thicknessNote())
+                .as("original range text must not be discarded")
+                .contains("Best-effort / verify")
+                .contains("9.5–19.5");
+
+            PriceRow plain = r.rows().get(1);
+            assertThat(plain.thicknessMm()).isEqualByComparingTo("10.00");
+            assertThat(plain.thicknessProvenance()).isEqualTo("stated");
+            assertThat(plain.thicknessNote()).isEqualTo("Verified / matched");
+
+            PriceRow conflict = r.rows().get(2);
+            assertThat(conflict.thicknessMm()).isEqualByComparingTo("12.00");
+            assertThat(conflict.thicknessProvenance()).isEqualTo("stated");
+            assertThat(conflict.thicknessNote()).isEqualTo("Verified, source conflict");
+        }
+
+        @Test @DisplayName("Vives — sidecar join hits on (CODIGO, MODELO); a blank THICKNESS_MM "
+            + "imports as NULL and is NOT defaulted; an unmatched key is also NULL, not an error")
+        void vives_sidecarJoinOnCompositeKey() throws Exception {
+            Object[][] mainData = {
+                {"CODIGO", "MODELO", "NOMBRE",  "Precio"},
+                {"C1",     "M1",     "Tile A",  10.0},   // sidecar has a value
+                {"C2",     "M2",     "Tile B",  20.0},   // sidecar row exists, value blank
+                {"C3",     "M3",     "Tile C",  30.0},   // no sidecar row at all
+            };
+            Object[][] sidecarData = {
+                {"CODIGO", "MODELO", "THICKNESS_MM", "THICKNESS_STATUS"},
+                {"C1",     "M1",     8.5,             "Verified / matched"},
+                {"C2",     "M2",     null,            "Not published — special/complementary piece"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "MODELO",
+                "product_name", "NOMBRE",
+                "price",        "Precio"
+            ), Map.of("currency", "EUR"), "Hoja1", 1);
+            prof.thicknessUnit = "none"; // Vives' own price list carries no thickness at all
+            ImportProfile.ThicknessSidecar sc = new ImportProfile.ThicknessSidecar();
+            sc.sheet = "Products with Thickness";
+            sc.headerRow = 1;
+            sc.keyColumns = List.of("CODIGO", "MODELO");
+            sc.sidecarKeyColumns = List.of("CODIGO", "MODELO");
+            sc.valueColumn = "THICKNESS_MM";
+            sc.statusColumn = "THICKNESS_STATUS";
+            prof.thicknessSidecar = sc;
+
+            ImportResult r = engine.parse(
+                makeWorkbook("Hoja1", mainData),
+                makeWorkbook("Products with Thickness", sidecarData),
+                prof, 1L
+            );
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(3);
+
+            PriceRow hit = r.rows().get(0);
+            assertThat(hit.thicknessMm()).isEqualByComparingTo("8.5");
+            assertThat(hit.thicknessProvenance()).isEqualTo("sidecar_resolved");
+            assertThat(hit.thicknessNote()).isEqualTo("Verified / matched");
+
+            PriceRow blank = r.rows().get(1);
+            assertThat(blank.thicknessMm()).as("blank sidecar value must NOT be defaulted").isNull();
+            assertThat(blank.thicknessProvenance()).isEqualTo("absent");
+            assertThat(blank.thicknessNote()).isEqualTo("Not published — special/complementary piece");
+
+            PriceRow noMatch = r.rows().get(2);
+            assertThat(noMatch.thicknessMm()).isNull();
+            assertThat(noMatch.thicknessProvenance()).isEqualTo("absent");
+            assertThat(noMatch.thicknessNote()).isNull();
+        }
+
+        @Test @DisplayName("Vives — a profile declaring thickness_sidecar but given no sidecar "
+            + "file fails the whole import loudly, same discipline as a missing size_unit")
+        void vives_sidecarConfiguredButNoFileSupplied_failsLoudly() throws Exception {
+            Object[][] mainData = {
+                {"CODIGO", "MODELO", "Precio"},
+                {"C1",     "M1",     10.0},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "MODELO", "price", "Precio"
+            ), Map.of("currency", "EUR"), "Hoja1", 1);
+            prof.thicknessUnit = "none";
+            ImportProfile.ThicknessSidecar sc = new ImportProfile.ThicknessSidecar();
+            sc.sheet = "Products with Thickness";
+            sc.keyColumns = List.of("CODIGO", "MODELO");
+            sc.sidecarKeyColumns = List.of("CODIGO", "MODELO");
+            sc.valueColumn = "THICKNESS_MM";
+            prof.thicknessSidecar = sc;
+
+            ImportResult r = engine.parse(makeWorkbook("Hoja1", mainData), prof, 1L); // no sidecar stream
+            assertThat(r.rows()).isEmpty();
+            assertThat(r.errors()).hasSize(1);
+            assertThat(r.errors().get(0)).contains("thickness_sidecar");
+        }
+
+        @Test @DisplayName("Bode — profile-level default_thickness_mm fills a row with no "
+            + "thickness of its own, tagged 'profile_default'; it never overrides a row that has "
+            + "a real, stated thickness")
+        void bode_profileDefaultFillsGapsOnly_neverOverridesStated() throws Exception {
+            Object[][] data = {
+                {"series",    "code",  "size",           "Precio", "Unità"},
+                {"Limestone", "BD-01", "600x600 9MM",    23.5,     "MQ"}, // stated: 9mm
+                {"Limestone", "BD-02", "600x600",        25.0,     "MQ"}, // no thickness -> default
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "collection",   "series",
+                "product_code", "code",
+                "size_raw",     "size",
+                "price",        "Precio",
+                "unit",         "Unità"
+            ), Map.of("currency", "USD"), "Sheet", 1);
+            prof.sizeUnit = "mm";
+            prof.thicknessUnit = "mm";
+            // Deliberately DIFFERENT from the stated 9mm above, so an accidental override is
+            // immediately visible as a wrong number, not just a wrong provenance tag.
+            prof.defaultThicknessMm = new BigDecimal("5.0");
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(2);
+
+            PriceRow stated = r.rows().get(0);
+            assertThat(stated.thicknessMm()).as("the default must NEVER override a real value")
+                .isEqualByComparingTo("9.00");
+            assertThat(stated.thicknessProvenance()).isEqualTo("stated");
+
+            PriceRow defaulted = r.rows().get(1);
+            assertThat(defaulted.thicknessMm()).isEqualByComparingTo("5.0");
+            assertThat(defaulted.thicknessProvenance()).isEqualTo("profile_default");
+            assertThat(defaulted.thicknessNote()).isNotBlank();
+        }
+
+        @Test @DisplayName("no default and no thickness source anywhere -> imports with "
+            + "thickness_mm NULL, provenance 'absent', and does not fail the row")
+        void noDefaultNoSource_importsNullThickness_doesNotFail() throws Exception {
+            Object[][] data = {
+                {"Code", "Size",    "Price", "Um"},
+                {"X-1",  "600x600", 23.5,    "MQ"},
+            };
+            ImportProfile prof = profileWith(Map.of(
+                "product_code", "Code", "size_raw", "Size", "price", "Price", "unit", "Um"
+            ), Map.of("currency", "USD"), "Sheet", 1);
+            prof.sizeUnit = "mm";
+            prof.thicknessUnit = "none";
+            // no defaultThicknessMm, no thicknessSidecar
+
+            ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);
+            assertThat(r.errors()).isEmpty();
+            assertThat(r.rows()).hasSize(1);
+            PriceRow row = r.rows().get(0);
+            assertThat(row.thicknessMm()).isNull();
+            assertThat(row.thicknessProvenance()).isEqualTo("absent");
+        }
     }
 }

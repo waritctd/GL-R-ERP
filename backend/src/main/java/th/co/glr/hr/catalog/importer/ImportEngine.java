@@ -65,6 +65,18 @@ public class ImportEngine {
     /** The only legitimate dimension separators across all ten source price lists. */
     private static final Pattern SEPARATOR = Pattern.compile("\\s*[×xX]\\s*");
 
+    /**
+     * A thickness RANGE in a dedicated thickness column — Equipe's shape ("9.5–19.5", EN DASH,
+     * U+2013). A plain ASCII hyphen is accepted too for robustness (a thickness is never negative,
+     * so there is no "is this a minus sign" ambiguity the way there would be in a general-purpose
+     * number parser). Owner ruling ("เก็บค่าน้อยสุด (9.5)"): only the MINIMUM of the two bounds is
+     * ever stored as the numeric thickness — see {@link #resolveThicknessFromColumn} for where the
+     * original text is preserved instead of discarded. Anchored end-to-end so a single plain number
+     * (the overwhelmingly common case) never matches this and falls through to the ordinary path.
+     */
+    private static final Pattern THICKNESS_RANGE =
+        Pattern.compile("^(\\d+(?:[.,]\\d+)?)\\s*[\\u2013\\-]\\s*(\\d+(?:[.,]\\d+)?)$");
+
     /** No default, no magnitude fallback — see {@link ImportProfile#sizeUnit}. */
     private static final Set<String> VALID_SIZE_UNITS = Set.of("mm", "cm");
 
@@ -90,6 +102,20 @@ public class ImportEngine {
     // ── public API ────────────────────────────────────────────────────────────
 
     public ImportResult parse(InputStream in, ImportProfile prof, long factoryId) {
+        return parse(in, null, prof, factoryId);
+    }
+
+    /**
+     * @param thicknessSidecarIn the SEPARATE thickness workbook {@link ImportProfile#thicknessSidecar}
+     *        describes, or {@code null} when the profile declares no sidecar. Required (not merely
+     *        optional) whenever {@code prof.thicknessSidecar != null} — a profile that declares a
+     *        sidecar but receives no file fails the whole import loudly, the same discipline as a
+     *        missing {@code size_unit}/{@code thickness_unit}, rather than silently importing every
+     *        row with {@code thickness_mm = NULL}.
+     */
+    public ImportResult parse(
+        InputStream in, InputStream thicknessSidecarIn, ImportProfile prof, long factoryId
+    ) {
         List<PriceRow> rows   = new ArrayList<>();
         List<String>   errors = new ArrayList<>();
         List<ImportResult.QuarantinedRow> quarantined = new ArrayList<>();
@@ -114,6 +140,21 @@ public class ImportEngine {
             return new ImportResult(rows, errors, quarantined);
         }
 
+        // ── thickness sidecar (Vives' shape: thickness lives in a SEPARATE workbook) ─────────────
+        // Loaded once, up front, into a plain lookup map — never per-row I/O. A declared sidecar
+        // with no file supplied fails the whole import loudly (same discipline as size_unit/
+        // thickness_unit above) rather than quietly importing every row with thickness_mm = NULL,
+        // which would look identical to "genuinely no thickness data" and hide a wiring mistake.
+        Map<String, SidecarThickness> thicknessSidecarMap = null;
+        if (prof.thicknessSidecar != null) {
+            if (thicknessSidecarIn == null) {
+                errors.add("โปรไฟล์นำเข้าของ factory id=" + factoryId + " กำหนด thickness_sidecar "
+                    + "ไว้ แต่ไม่ได้แนบไฟล์ความหนามาด้วย — ต้องอัปโหลดไฟล์ความหนาคู่กับไฟล์ราคาเสมอ");
+                return new ImportResult(rows, errors, quarantined);
+            }
+            thicknessSidecarMap = loadThicknessSidecar(thicknessSidecarIn, prof.thicknessSidecar, errors);
+        }
+
         try (Workbook wb = WorkbookFactory.create(in)) {
             FormulaEvaluator evaluator = wb.getCreationHelper().createFormulaEvaluator();
 
@@ -123,7 +164,8 @@ public class ImportEngine {
                     errors.add("[" + sh.name + "] ไม่พบชีตในไฟล์");
                     continue;
                 }
-                processSheet(sheet, sh, prof, factoryId, sizeUnit, thicknessUnit, evaluator, rows, errors, quarantined);
+                processSheet(sheet, sh, prof, factoryId, sizeUnit, thicknessUnit,
+                    thicknessSidecarMap, evaluator, rows, errors, quarantined);
             }
         } catch (Exception e) {
             errors.add("เปิดไฟล์ไม่ได้: " + e.getMessage()
@@ -148,7 +190,8 @@ public class ImportEngine {
 
     private void processSheet(
         Sheet sheet, ImportProfile.SheetConfig sh, ImportProfile prof,
-        long factoryId, String sizeUnit, String thicknessUnit, FormulaEvaluator evaluator,
+        long factoryId, String sizeUnit, String thicknessUnit,
+        Map<String, SidecarThickness> thicknessSidecarMap, FormulaEvaluator evaluator,
         List<PriceRow> rows, List<String> errors, List<ImportResult.QuarantinedRow> quarantined
     ) {
         String sheetName = sh.name;
@@ -178,6 +221,14 @@ public class ImportEngine {
         // last-seen values for fill-down
         Map<String, Object> lastSeen = new HashMap<>();
 
+        // thickness sidecar join key: resolved ONCE per sheet against the MAIN header (raw header
+        // names, independent of prof.columns/aliases — see ImportProfile.ThicknessSidecar#keyColumns).
+        List<Integer> sidecarKeyIdx = (prof.thicknessSidecar != null)
+            ? prof.thicknessSidecar.keyColumns.stream()
+                .map(name -> header.indexOf(normHeader(name)))
+                .toList()
+            : List.of();
+
         int lastRowNum = sheet.getLastRowNum();
         for (int r = headerRowIdx + 1; r <= lastRowNum; r++) {
             Row row = sheet.getRow(r);
@@ -187,8 +238,15 @@ public class ImportEngine {
             injectPriceVariants(row, priceColIdx, evaluator, rec);
             applyFillDown(rec, fillDownTargets, lastSeen);
 
+            SidecarThickness sidecarHit = null;
+            if (thicknessSidecarMap != null && !sidecarKeyIdx.isEmpty()) {
+                String key = buildJoinKey(row, sidecarKeyIdx, evaluator);
+                if (key != null) sidecarHit = thicknessSidecarMap.get(key);
+            }
+
             String rowErr = processRow(
-                rec, rule, priceColIdx, prof, factoryId, sizeUnit, thicknessUnit, sheetName, r + 1, rows, quarantined
+                rec, rule, priceColIdx, prof, factoryId, sizeUnit, thicknessUnit, sidecarHit,
+                sheetName, r + 1, rows, quarantined
             );
             if (rowErr != null) errors.add("[" + sheetName + "] r" + (r + 1) + ": " + rowErr);
         }
@@ -204,6 +262,7 @@ public class ImportEngine {
         long factoryId,
         String sizeUnit,
         String thicknessUnit,
+        SidecarThickness sidecarHit,
         String sheetName, int sourceRow,
         List<PriceRow> out,
         List<ImportResult.QuarantinedRow> quarantined
@@ -344,8 +403,44 @@ public class ImportEngine {
         // #resolveThicknessFromColumn's own Javadoc for the measured data behind this. Every other
         // profile in production uses exactly one of the two sources, so this ordering changes
         // nothing for them.
-        BigDecimal thicknessFromColumn = resolveThicknessFromColumn(rec.get("thickness_mm"), fmt, thicknessUnit);
-        BigDecimal thickness = thicknessFromColumn != null ? thicknessFromColumn : dims[2];
+        ThicknessResolution thicknessFromColumn =
+            resolveThicknessFromColumn(rec.get("thickness_mm"), fmt, thicknessUnit);
+        String thicknessStatus = blankToNull(stringify(rec.get("thickness_status")));
+
+        // ── thickness provenance ─────────────────────────────────────────────────
+        // Four states, checked in this order, matching PriceRow#thicknessProvenance's decision
+        // table: a real value STATED in this row's own source always wins; a SIDECAR join fills a
+        // row whose own source has none; a PROFILE DEFAULT only ever fills what's left; anything
+        // still unresolved is a recorded ABSENCE, never silently masked by the default.
+        BigDecimal thickness;
+        String thicknessProvenance;
+        String thicknessNote;
+
+        if (thicknessFromColumn != null && thicknessFromColumn.mm() != null) {
+            thickness = thicknessFromColumn.mm();
+            thicknessProvenance = "stated";
+            thicknessNote = joinNotes(thicknessStatus, thicknessFromColumn.note());
+        } else if (dims[2] != null) {
+            thickness = dims[2];
+            thicknessProvenance = "stated";
+            thicknessNote = thicknessStatus;
+        } else if (sidecarHit != null && sidecarHit.mm() != null) {
+            thickness = sidecarHit.mm();
+            thicknessProvenance = "sidecar_resolved";
+            thicknessNote = sidecarHit.status();
+        } else if (prof.defaultThicknessMm != null) {
+            // Owner ruling (Bode, "ตั้งค่าตามที่ได้ไปก่อน เดี๋ยวเซลแก้เองถ้าผิด") — applied ONLY here,
+            // after every real source above came back null, and always tagged "profile_default" so
+            // it can never be mistaken for a measured value.
+            thickness = prof.defaultThicknessMm;
+            thicknessProvenance = "profile_default";
+            thicknessNote = "ค่าความหนา default ของโปรไฟล์ (" + prof.defaultThicknessMm.toPlainString()
+                + " มม.) — ไม่มีความหนาต่อแถวในไฟล์ต้นฉบับ กรุณาตรวจสอบและแก้ไขหากไม่ถูกต้อง";
+        } else {
+            thickness = null;
+            thicknessProvenance = "absent";
+            thicknessNote = sidecarHit != null ? sidecarHit.status() : thicknessStatus;
+        }
 
         // ── attributes (barcode, …) ───────────────────────────────────────────
         Map<String, String> attributes = null;
@@ -374,7 +469,7 @@ public class ImportEngine {
                 priceVariants, attributes,
                 sheetName, sourceRow,
                 sizeUnit, sqmProvenance, sqmPerLinearM, quarantineReason,
-                thicknessUnit
+                thicknessUnit, thicknessProvenance, thicknessNote
             ));
             if (quarantineReason != null) {
                 quarantined.add(new ImportResult.QuarantinedRow(sheetName, sourceRow, c, quarantineReason));
@@ -673,6 +768,11 @@ public class ImportEngine {
         return mm.setScale(2, RoundingMode.HALF_UP);
     }
 
+    /** Result of resolving a dedicated thickness COLUMN's cell value — the millimetre figure to
+     * store, plus an optional free-text note (currently: the original wording of a collapsed
+     * range) to carry into {@code PriceRow#thicknessNote}. {@code null} note is the common case. */
+    private record ThicknessResolution(BigDecimal mm, String note) {}
+
     /**
      * A dedicated thickness COLUMN's raw cell value, resolved to millimetres — {@code null} when
      * the cell is blank/unparseable or {@code thicknessUnit} is {@code "none"}.
@@ -688,21 +788,126 @@ public class ImportEngine {
      * <p>Self-describing first, exactly like the size string: a value already carrying an explicit
      * unit letter (Padana's own {@code "8MM"}/{@code "9MM"} column text, matched by the SAME
      * {@link #THICKNESS_SUFFIX} pattern used on the size string) is read directly as millimetres,
-     * regardless of {@code thicknessUnit}. A bare numeric column value (REFIN/CITY/CDE's plain
-     * {@code "9"} — already labelled "(mm)" in their own header text — or Panaria's unlabelled
-     * {@code "SPESSORE"}) is converted from the DECLARED {@code thicknessUnit}, never guessed.
+     * regardless of {@code thicknessUnit}.
+     *
+     * <p>Next, a RANGE (Equipe's spec sheet, e.g. {@code "9.5–19.5"}, EN DASH): owner ruling
+     * ("เก็บค่าน้อยสุด (9.5)") stores the MINIMUM of the two bounds as {@code mm}, and the returned
+     * {@link ThicknessResolution#note} carries the original range text verbatim — {@code
+     * #processRow} folds it into {@code thicknessNote} rather than discarding it.
+     *
+     * <p>Otherwise a bare numeric column value (REFIN/CITY/CDE's plain {@code "9"} — already
+     * labelled "(mm)" in their own header text — Panaria's unlabelled {@code "SPESSORE"}, or
+     * Equipe's own {@code "Thickness (mm)"} column) is converted from the DECLARED {@code
+     * thicknessUnit}, never guessed.
      */
-    private static BigDecimal resolveThicknessFromColumn(Object raw, String fmt, String thicknessUnit) {
+    private static ThicknessResolution resolveThicknessFromColumn(Object raw, String fmt, String thicknessUnit) {
         if ("none".equals(thicknessUnit)) return null;
         String s = stringify(raw);
         if (s == null || s.isBlank()) return null;
-        Matcher tm = THICKNESS_SUFFIX.matcher(s.strip());
+        String trimmed = s.strip();
+
+        Matcher tm = THICKNESS_SUFFIX.matcher(trimmed);
         if (tm.find()) {
             BigDecimal n = parseNum(tm.group(1));
-            return n == null ? null : n.setScale(2, RoundingMode.HALF_UP);
+            return n == null ? null : new ThicknessResolution(n.setScale(2, RoundingMode.HALF_UP), null);
         }
+
+        Matcher rm = THICKNESS_RANGE.matcher(trimmed);
+        if (rm.matches()) {
+            BigDecimal lo = parseNum(rm.group(1));
+            BigDecimal hi = parseNum(rm.group(2));
+            if (lo != null && hi != null) {
+                BigDecimal min = lo.min(hi);
+                return new ThicknessResolution(
+                    toThicknessMm(min, thicknessUnit),
+                    "ช่วงความหนาที่ระบุในไฟล์ต้นฉบับ: " + trimmed + " มม. — บันทึกค่าน้อยสุด");
+            }
+            // Two numeric groups matched but somehow failed to parse — fall through to the plain
+            // path below rather than silently dropping the cell.
+        }
+
         BigDecimal n = toDecimal(s, fmt);
-        return n == null ? null : toThicknessMm(n, thicknessUnit);
+        return n == null ? null : new ThicknessResolution(toThicknessMm(n, thicknessUnit), null);
+    }
+
+    /** Joins two optional free-text notes with "; ", omitting either side when blank/null. Used to
+     * combine Equipe's per-row status column with a range's own preserved-text note without ever
+     * producing a stray separator when only one side is present. */
+    private static String joinNotes(String a, String b) {
+        boolean hasA = a != null && !a.isBlank();
+        boolean hasB = b != null && !b.isBlank();
+        if (hasA && hasB) return a + "; " + b;
+        if (hasA) return a;
+        if (hasB) return b;
+        return null;
+    }
+
+    /** One resolved sidecar row: the thickness value (already millimetres, no unit conversion —
+     * see {@link ImportProfile.ThicknessSidecar#valueColumn}), and an optional status/reason text
+     * carried into {@code thicknessNote} whether or not a value was present (Vives: "Not published
+     * — special/complementary piece" explains a blank value just as well as "Verified / matched"
+     * explains a present one). */
+    private record SidecarThickness(BigDecimal mm, String status) {}
+
+    /**
+     * Reads {@code cfg}'s sheet from the SEPARATE sidecar workbook into a lookup map keyed by the
+     * normalized, "|"-joined composite key of {@code cfg.sidecarKeyColumns}' cell values. A row
+     * missing any key column value is skipped entirely (never null-joined) — see {@link
+     * ImportProfile.ThicknessSidecar} for the general contract this exists to serve.
+     */
+    private Map<String, SidecarThickness> loadThicknessSidecar(
+        InputStream sidecarIn, ImportProfile.ThicknessSidecar cfg, List<String> errors
+    ) {
+        Map<String, SidecarThickness> map = new HashMap<>();
+        try (Workbook wb = WorkbookFactory.create(sidecarIn)) {
+            FormulaEvaluator ev = wb.getCreationHelper().createFormulaEvaluator();
+            Sheet sheet = wb.getSheet(cfg.sheet);
+            if (sheet == null) {
+                errors.add("[thickness sidecar] ไม่พบชีต \"" + cfg.sheet + "\" ในไฟล์ความหนา");
+                return map;
+            }
+            int headerRowIdx = cfg.headerRow - 1;
+            Row headerRow = sheet.getRow(headerRowIdx);
+            if (headerRow == null) {
+                errors.add("[thickness sidecar] ไม่พบแถว header ที่ row " + cfg.headerRow);
+                return map;
+            }
+            List<String> header = readHeader(headerRow, ev);
+            List<Integer> keyIdx = cfg.sidecarKeyColumns.stream()
+                .map(name -> header.indexOf(normHeader(name)))
+                .toList();
+            int valueIdx  = cfg.valueColumn  != null ? header.indexOf(normHeader(cfg.valueColumn))  : -1;
+            int statusIdx = cfg.statusColumn != null ? header.indexOf(normHeader(cfg.statusColumn)) : -1;
+
+            int lastRowNum = sheet.getLastRowNum();
+            for (int r = headerRowIdx + 1; r <= lastRowNum; r++) {
+                Row row = sheet.getRow(r);
+                if (isBlankRow(row)) continue;
+                String key = buildJoinKey(row, keyIdx, ev);
+                if (key == null) continue; // incomplete key -- never null-joined
+                String valStr = valueIdx >= 0 ? cellString(row.getCell(valueIdx), ev) : null;
+                BigDecimal mm = (valStr == null || valStr.isBlank()) ? null : parseNum(valStr.strip());
+                String status = statusIdx >= 0 ? blankToNull(cellString(row.getCell(statusIdx), ev)) : null;
+                map.put(key, new SidecarThickness(mm, status));
+            }
+        } catch (Exception e) {
+            errors.add("[thickness sidecar] อ่านไฟล์ไม่ได้: " + e.getMessage());
+        }
+        return map;
+    }
+
+    /** Builds the "|"-joined, case/whitespace-normalized composite key from {@code row}'s cells at
+     * {@code colIdx} — {@code null} if any index is unresolved (header name not found) or any cell
+     * is blank, so an incomplete key can never accidentally match another incomplete key. */
+    private String buildJoinKey(Row row, List<Integer> colIdx, FormulaEvaluator ev) {
+        List<String> parts = new ArrayList<>(colIdx.size());
+        for (int i : colIdx) {
+            if (i < 0) return null;
+            String v = cellString(row.getCell(i), ev);
+            if (v == null || v.isBlank()) return null;
+            parts.add(normKeyPart(v));
+        }
+        return String.join("|", parts);
     }
 
     /** Comma-as-decimal aware; {@code null} (not an exception) on anything not a plain number. */

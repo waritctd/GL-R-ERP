@@ -52,10 +52,28 @@ public class PriceImportService {
         String label,
         long uploadedBy
     ) {
+        return uploadAndStage(factoryId, originalFilename, fileStream, null, label, uploadedBy);
+    }
+
+    /**
+     * @param thicknessSidecarStream the SEPARATE thickness workbook a profile with {@code
+     *        thickness_sidecar} configured requires (Vives) — {@code null} for every other
+     *        profile. Threaded straight through to {@code ImportEngine#parse}; see that method's
+     *        Javadoc for the loud failure when a sidecar-configured profile receives none.
+     */
+    @Transactional
+    public UploadReport uploadAndStage(
+        long factoryId,
+        String originalFilename,
+        InputStream fileStream,
+        InputStream thicknessSidecarStream,
+        String label,
+        long uploadedBy
+    ) {
         ImportProfile prof = loadProfile(factoryId);
         ImportResult result;
         try {
-            result = engine.parse(fileStream, prof, factoryId);
+            result = engine.parse(fileStream, thicknessSidecarStream, prof, factoryId);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
@@ -137,7 +155,7 @@ public class PriceImportService {
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row, import_session_id,
                 size_unit_declared, sqm_provenance, sqm_per_linear_m, import_error,
-                thickness_unit_declared
+                thickness_unit_declared, thickness_provenance, thickness_note
             ) VALUES (
                 :fid, :vid, :code, :grade, :col, :name,
                 :color, :surf, :sizeRaw, :w, :h, :t,
@@ -145,7 +163,7 @@ public class PriceImportService {
                 :pcs, :sqmBox, :kg,
                 CAST(:variants AS jsonb), CAST(:attrs AS jsonb), :sheet, :row, :sid,
                 :sizeUnit, :sqmProv, :sqmLinM, :qerr,
-                :thicknessUnit
+                :thicknessUnit, :thicknessProv, :thicknessNote
             )
             """;
 
@@ -184,6 +202,8 @@ public class PriceImportService {
             // same as before; validate() may still flag them for other reasons (e.g. duplicates).
             p.addValue("qerr",     r.quarantineReason());
             p.addValue("thicknessUnit", r.thicknessUnitDeclared());
+            p.addValue("thicknessProv", r.thicknessProvenance());
+            p.addValue("thicknessNote", r.thicknessNote());
             return p;
         }).toArray(MapSqlParameterSource[]::new);
 
@@ -364,7 +384,8 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row,
-                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared,
+                thickness_provenance, thickness_note
             )
             SELECT
                 factory_id, version_id, product_code, grade, collection, product_name,
@@ -372,7 +393,8 @@ public class PriceImportService {
                 price, currency, price_unit, sqm_per_piece,
                 pcs_per_box, sqm_per_box, kg_per_box,
                 price_variants, attributes, source_sheet, source_row,
-                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
+                size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared,
+                thickness_provenance, thickness_note
               FROM price_catalog.product_price_staging
              WHERE version_id = :vid
                AND import_error IS NULL
@@ -393,7 +415,9 @@ public class PriceImportService {
                    size_unit_declared = EXCLUDED.size_unit_declared,
                    sqm_provenance     = EXCLUDED.sqm_provenance,
                    sqm_per_linear_m   = EXCLUDED.sqm_per_linear_m,
-                   thickness_unit_declared = EXCLUDED.thickness_unit_declared
+                   thickness_unit_declared = EXCLUDED.thickness_unit_declared,
+                   thickness_provenance    = EXCLUDED.thickness_provenance,
+                   thickness_note          = EXCLUDED.thickness_note
             """,
             Map.of("vid", versionId)
         );
@@ -408,7 +432,8 @@ public class PriceImportService {
                     price, currency, price_unit, sqm_per_piece,
                     pcs_per_box, sqm_per_box, kg_per_box,
                     price_variants, attributes, source_sheet, source_row,
-                    size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared
+                    size_unit_declared, sqm_provenance, sqm_per_linear_m, thickness_unit_declared,
+                    thickness_provenance, thickness_note
                 )
                 SELECT
                     p.factory_id, :vid, p.product_code, p.grade, p.collection, p.product_name,
@@ -416,7 +441,8 @@ public class PriceImportService {
                     p.price, p.currency, p.price_unit, p.sqm_per_piece,
                     p.pcs_per_box, p.sqm_per_box, p.kg_per_box,
                     p.price_variants, p.attributes, p.source_sheet, p.source_row,
-                    p.size_unit_declared, p.sqm_provenance, p.sqm_per_linear_m, p.thickness_unit_declared
+                    p.size_unit_declared, p.sqm_provenance, p.sqm_per_linear_m, p.thickness_unit_declared,
+                    p.thickness_provenance, p.thickness_note
                   FROM price_catalog.product_prices p
                  WHERE p.version_id = :prevVid
                    AND NOT EXISTS (
@@ -786,10 +812,20 @@ public class PriceImportService {
         long factoryId, String originalFilename,
         InputStream fileStream, String label, long uploadedBy
     ) {
+        return uploadAndCommit(factoryId, originalFilename, fileStream, null, label, uploadedBy);
+    }
+
+    /** @param thicknessSidecarStream see {@link #uploadAndStage(long, String, InputStream,
+     *        InputStream, String, long)}'s Javadoc — identical contract. */
+    @Transactional
+    public UploadCommitResult uploadAndCommit(
+        long factoryId, String originalFilename,
+        InputStream fileStream, InputStream thicknessSidecarStream, String label, long uploadedBy
+    ) {
         ImportProfile prof = loadProfile(factoryId);
         ImportResult result;
         try {
-            result = engine.parse(fileStream, prof, factoryId);
+            result = engine.parse(fileStream, thicknessSidecarStream, prof, factoryId);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "อ่านไฟล์ไม่สำเร็จ: " + e.getMessage());
         }

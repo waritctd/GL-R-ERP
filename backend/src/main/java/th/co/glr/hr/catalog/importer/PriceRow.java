@@ -52,5 +52,25 @@ public record PriceRow(
     // The declared thickness unit ("mm"/"cm"/"none") the profile stated for THIS row — never
     // guessed, see ImportProfile#thicknessUnit. "none" records a genuine, owner-confirmed absence
     // of thickness data in the source (Bode/Vives/Equipe), not a missing declaration.
-    String thicknessUnitDeclared
+    String thicknessUnitDeclared,
+    // How thicknessMm (above) was obtained, or why it is null. One of:
+    //   stated            — a real value existed in the source for this row: a dedicated column, a
+    //                       self-describing "9MM" token, a size-embedded bare 3rd value, or an
+    //                       Equipe range collapsed to its minimum (see thicknessNote for the
+    //                       original range text)
+    //   sidecar_resolved  — resolved by joining a separate thickness workbook on a declared
+    //                       composite key (Vives: CODIGO+MODELO) — see ImportProfile#thicknessSidecar
+    //   profile_default   — no per-row thickness existed anywhere; ImportProfile#defaultThicknessMm
+    //                       was applied (Bode: 9mm). MUST stay distinguishable from "stated" so a
+    //                       sales rep can find and correct it on the quotation — never silently
+    //                       masks a real value: only applied when every other source came back null.
+    //   absent            — no thickness value exists for this row from any source; thicknessMm is
+    //                       null, and that is a recorded, deliberate absence, not a missing case
+    String thicknessProvenance,
+    // Free-text detail accompanying thicknessProvenance — Equipe's per-row verification status
+    // text, an Equipe range's original wording ("9.5–19.5"), a Vives sidecar's stated reason for a
+    // blank thickness ("Not published — special/complementary piece" / "Not found on current
+    // catalogue"), or the Bode profile-default's own explanation. Never structured — read
+    // thicknessProvenance for that. Null when there is nothing to say.
+    String thicknessNote
 ) {}
