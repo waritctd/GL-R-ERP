@@ -125,11 +125,11 @@ export function QuotationPlainItemRow({
             onChange={(e) => onChange({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
           />
         </FormField>
-        <FormField label="ส่วนลด %" htmlFor={`plain-disc-${index}`} hint="ปกติ 0 (พิมพ์ Net)">
+        <FormField label="ส่วนลด %" htmlFor={`plain-disc-${index}`} hint="เว้นว่าง = ไม่มีส่วนลด (พิมพ์ Net)">
           <input
             id={`plain-disc-${index}`} type="number" step="0.01" min="0" disabled={readOnly}
-            value={item.discountPct ?? 0}
-            onChange={(e) => onChange({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
+            value={item.discountPct ?? ''}
+            onChange={(e) => onChange({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
           />
         </FormField>
       </div>
