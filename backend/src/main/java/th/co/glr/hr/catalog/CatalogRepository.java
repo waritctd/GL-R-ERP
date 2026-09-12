@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -156,7 +157,8 @@ public class CatalogRepository {
                    pp.product_code, pp.grade, pp.collection, pp.product_name,
                    pp.color, pp.surface, pp.size_raw,
                    pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece,
-                   pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code
+                   pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code,
+                   pp.width_mm, pp.height_mm
               FROM price_catalog.product_prices pp
               JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
               JOIN price_catalog.factories           f   ON f.factory_id   = pp.factory_id
@@ -192,8 +194,49 @@ public class CatalogRepository {
                 rs.getBigDecimal("thickness_mm"),
                 rs.getBigDecimal("pcs_per_box"),
                 rs.getBigDecimal("sqm_per_box"),
-                rs.getString("origin_country_code")
+                rs.getString("origin_country_code"),
+                rs.getBigDecimal("width_mm"),
+                rs.getBigDecimal("height_mm")
             )
         );
+    }
+
+    /**
+     * One catalog price row's {@code sqm_per_piece}/{@code price_unit}/{@code width_mm}/
+     * {@code height_mm}, by its {@code price_id} — used by {@code DealQuotationService
+     * #resolveSqmPerPiece} to resolve a tile's ตร.ม./แผ่น from the catalogue rather than guessing
+     * the unit of a free-text size string (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง").
+     *
+     * <p>Deliberately its own record and its own query rather than widening {@link #findPricingKeys}'s
+     * {@link CatalogPricingKey} — that record and its callers ({@code DealQuotationService} would
+     * become a third, alongside the pre-existing {@code LandedCostCalculator}) are keyed and
+     * batched for a DIFFERENT purpose; broadening it here risks an unrelated caller.
+     *
+     * <p>NOT {@code ACTIVE}-version-filtered on purpose (unlike {@link #searchProductPrices}): a
+     * saved item may point at a price row whose {@code price_list_versions} has since gone
+     * non-ACTIVE (a superseded price list), and the catalogue's own geometry for that EXACT row is
+     * still the right fallback — this is "what does the row Sales already picked say", not "what
+     * can Sales currently pick".
+     *
+     * @return {@code Optional.empty()} when {@code priceId} does not exist at all.
+     */
+    public record CatalogSqmBasis(BigDecimal sqmPerPiece, String priceUnit, BigDecimal widthMm, BigDecimal heightMm) {}
+
+    public Optional<CatalogSqmBasis> findSqmBasis(long priceId) {
+        List<CatalogSqmBasis> rows = jdbc.query(
+            """
+            SELECT sqm_per_piece, price_unit, width_mm, height_mm
+              FROM price_catalog.product_prices
+             WHERE price_id = :priceId
+            """,
+            Map.of("priceId", priceId),
+            (rs, i) -> new CatalogSqmBasis(
+                rs.getBigDecimal("sqm_per_piece"),
+                rs.getString("price_unit"),
+                rs.getBigDecimal("width_mm"),
+                rs.getBigDecimal("height_mm")
+            )
+        );
+        return rows.stream().findFirst();
     }
 }

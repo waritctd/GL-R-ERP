@@ -22,6 +22,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -95,7 +96,7 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
         quotationService = new DealQuotationService(new DealQuotationRepository(jdbc), tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), new EmployeeAuthRepository(jdbc),
-            new EmployeeSignatureRepository(jdbc), "https://portal.test",
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
             // app.quotation.bank-block-line1..3 (#929) — empty: the bank block is not under test here.
             "", "", "");
 

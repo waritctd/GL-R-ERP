@@ -21,6 +21,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
+import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -91,6 +93,10 @@ public class DealQuotationService {
     private final CustomerRepository customers;
     private final ContactRepository contacts;
     private final NotificationRepository notifications;
+    /** Owner ruling 2026-09-12 ("2) ไม่มีค่อยคำนวนเอง"): {@link #resolveSqmPerPiece} reads a
+     * tile's ตร.ม./แผ่น from THIS, never from the free-text size string — see that method's own
+     * Javadoc for the resolution order. */
+    private final CatalogRepository catalog;
     /** The per-employee "can create quotations" capability gate (owner ruling, Ploy 2026-09-09) —
      * read LIVE at decision time via {@link EmployeeAuthRepository#canCreateQuotation}, never from
      * {@code actor} (a {@link UserPrincipal} is captured at login and would otherwise go stale the
@@ -114,6 +120,7 @@ public class DealQuotationService {
                                 th.co.glr.hr.ticket.QuotationRenderer renderer,
                                 EmployeeAuthRepository employeeAuth,
                                 EmployeeSignatureRepository signatures,
+                                CatalogRepository catalog,
                                 @Value("${app.mail.app-base-url:}") String appBaseUrl,
                                 // app.quotation.bank-block-line1..3 — the unnumbered bank block on an
                                 // ENGLISH document, taken verbatim from the owner's own quotations and
@@ -138,6 +145,7 @@ public class DealQuotationService {
         this.renderer = renderer;
         this.employeeAuth = employeeAuth;
         this.signatures = signatures;
+        this.catalog = catalog;
         this.appBaseUrl = appBaseUrl == null ? "" : appBaseUrl.trim();
     }
 
@@ -1137,11 +1145,68 @@ public class DealQuotationService {
             item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline());
     }
 
+    // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
+    // (V153: 561 real catalog rows). Its sqm_per_piece is NOT an area for these rows -- it is
+    // LINEAR METRES per piece (the source sqm_per_box column is mislabelled the same way, per that
+    // migration's own column comment) -- so #sqmPerPieceFromCatalog must never read it as one, nor
+    // ever compute a geometric fallback for it (width_mm x height_mm there describes the PROFILE,
+    // not a tile face). Mirrors frontend/src/features/quotations/QuotationItemRow.jsx's own
+    // PRICE_UNIT_PER_LINEAR_M constant -- kept as its own literal here (not a shared enum) because
+    // the two sides have no shared constants module; if this ever drifts from CatalogRepository's
+    // own column values, {@code sqmPerPiece_neverGeometricOrCatalogForPerLinearMRows} below breaks.
+    private static final String PRICE_UNIT_PER_LINEAR_M = "per_linear_m";
+    private static final BigDecimal SQ_MM_PER_SQM = new BigDecimal("1000000");
+
+    /**
+     * Owner ruling 2026-09-12 ("2) ไม่มีค่อยคำนวนเอง"): resolve a tile's ตร.ม./แผ่น from the
+     * CATALOGUE, never by guessing the unit of a free-text size string — see
+     * {@code WastageCalculator}'s deleted {@code parseSqmPerPieceFromSize}/{@code detectUnit} for
+     * the heuristic this replaces. It got a REAL catalog product wrong: "200x300" is not &gt; 300
+     * on either side, so it read as CENTIMETRES (6.0 sqm/piece) against the owner's own document
+     * for that product (0.061 sqm/piece, 16.39 pcs/sqm) — wrong by ~98x.
+     *
+     * <p>Resolution order, in this priority, and NEVER inferred from {@code input.sizeText()}:
+     * <ol>
+     *   <li>the item's own {@code sqmPerPiece}, if Sales supplied or overrode one;</li>
+     *   <li>else the catalog row's own {@code sqm_per_piece} (by {@code catalogPriceId}) — this is
+     *       the AUTHORITATIVE figure; geometry disagrees with it on 8.6% of the real catalog (by
+     *       up to 14x on trims), so it is never recomputed even when width/height are available;</li>
+     *   <li>else, when the catalogue itself has no {@code sqm_per_piece}, COMPUTE it from that same
+     *       row's {@code width_mm x height_mm / 1,000,000} — both columns are unambiguous
+     *       millimetres, unlike the free-text size;</li>
+     *   <li>else {@code null} — {@link #requireItemComplete} then fails the row with a plain Thai
+     *       "ขาด ตร.ม./แผ่น" rather than this method ever inventing a number.</li>
+     * </ol>
+     *
+     * <p>Steps 2 and 3 NEVER apply to a {@code per_linear_m} row — see
+     * {@link #PRICE_UNIT_PER_LINEAR_M}'s own comment. Such a row falls straight from step 1 to
+     * step 4 unless Sales types a value by hand.
+     */
     private BigDecimal resolveSqmPerPiece(ItemInput input) {
         if (input.sqmPerPiece() != null) {
             return input.sqmPerPiece();
         }
-        return WastageCalculator.parseSqmPerPieceFromSize(input.sizeText());
+        if (input.catalogPriceId() == null) {
+            return null;
+        }
+        return catalog.findSqmBasis(input.catalogPriceId())
+            .map(this::sqmPerPieceFromCatalog)
+            .orElse(null);
+    }
+
+    private BigDecimal sqmPerPieceFromCatalog(CatalogSqmBasis basis) {
+        if (PRICE_UNIT_PER_LINEAR_M.equals(basis.priceUnit())) {
+            return null;
+        }
+        if (basis.sqmPerPiece() != null && basis.sqmPerPiece().signum() > 0) {
+            return basis.sqmPerPiece();
+        }
+        if (basis.widthMm() != null && basis.heightMm() != null
+            && basis.widthMm().signum() > 0 && basis.heightMm().signum() > 0) {
+            return basis.widthMm().multiply(basis.heightMm())
+                .divide(SQ_MM_PER_SQM, 6, RoundingMode.HALF_UP);
+        }
+        return null;
     }
 
     /**

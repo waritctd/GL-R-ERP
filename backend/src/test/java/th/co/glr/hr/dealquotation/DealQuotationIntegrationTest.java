@@ -17,6 +17,7 @@ import th.co.glr.hr.activity.ActivityLogRepository;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ChromiumPdfPrinter;
 import th.co.glr.hr.common.LibreOfficePdfConverter;
@@ -118,7 +119,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             quotationRenderer.setPdfRenderer(QuotationRenderer.PDF_RENDERER_CHROMIUM);
         }
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts, notifications,
-            approvalMailer, quotationRenderer, employeeAuth, signatureRepository, "https://portal.test",
+            approvalMailer, quotationRenderer, employeeAuth, signatureRepository, new CatalogRepository(jdbc),
+            "https://portal.test",
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
             // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
             "", "", "");

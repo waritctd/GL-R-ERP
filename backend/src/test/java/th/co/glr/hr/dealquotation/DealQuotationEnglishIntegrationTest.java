@@ -20,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -105,7 +106,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // the XLS the PDF is drawn from, so no soffice/Chromium precondition is introduced.
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), employeeAuth,
-            new EmployeeSignatureRepository(jdbc), "https://portal.test",
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
             // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
@@ -367,6 +368,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             contacts, notifications,
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test"),
             new QuotationRenderer(), employeeAuth, new EmployeeSignatureRepository(jdbc),
+            new CatalogRepository(jdbc),
             "https://portal.test", block.get(0), block.get(1), block.get(2));
 
         DealQuotationDto created = withBank.create(ticketId,
