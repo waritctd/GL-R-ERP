@@ -13,6 +13,24 @@ public record ProductPriceDto(
     String     color,
     String     surface,
     String     sizeRaw,
+
+    /**
+     * The size to SHOW a human, in centimetres — {@code price_catalog.product_prices.size_cm}
+     * (V174), a stored generated column derived from {@code width_mm}/{@code height_mm}.
+     *
+     * <p><b>Prefer this over {@link #sizeRaw} everywhere a size is displayed or printed.</b>
+     * {@code sizeRaw} is the factory's own string in the factory's OWN declared unit, kept for
+     * provenance (V171), and it is the wrong thing to display in two distinct ways the owner
+     * reported on 2026-09-13: the four mm-declared sources (Panaria, LEA, CDE, Bode) make a
+     * 20x20 cm tile read "200x200" in a field labelled ซม., and Equipe's profile takes
+     * {@code size_from: product_name} so its sizeRaw IS the product name
+     * ("1,2X20 JOLLY COCO WHITE MATT"). 18,353 of 24,486 production rows with dimensions differ
+     * between the two.
+     *
+     * <p>{@code null} for the ~49 rows carrying no dimensions at all; fall back to
+     * {@link #sizeRaw} there, since a dirty string a rep can correct beats an empty field.
+     */
+    String     sizeCm,
     BigDecimal price,
     String     currency,
     String     priceUnit,
