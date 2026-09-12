@@ -27,11 +27,15 @@ const PRICE_UNIT_PER_LINEAR_M = 'per_linear_m';
  *      This is the authoritative figure (price_catalog.product_prices.sqm_per_piece); geometry
  *      (width x height) disagrees with it on 8.6% of the real catalog, by up to 14x on trims, so
  *      it is never recomputed here even when a width/height happened to be available.
- *   b. No catalogue link -- would fall back to explicit width/height millimetre values, but
- *      neither `ProductPriceDto` nor the quotation item carries those today (only the free-text
- *      ขนาด field, which mixes cm and mm in the same column -- confirmed against production data,
- *      and exactly what the owner said not to infer a unit from). There is nothing safe to compute
- *      here yet, so this branch is a deliberate no-op: `null`, same as (d).
+ *   b. Catalogue row with NO `sqmPerPiece` -- compute from `widthMm` x `heightMm`, which are
+ *      ALWAYS millimetres in price_catalog.product_prices and so need no unit inference at all.
+ *      Owner ruling 2026-09-12: "2) ไม่มีค่อยคำนวนเอง" -- fall back to computing it, but from the
+ *      CATALOGUE's own dimensions, never from the free-text ขนาด field, which mixes cm and mm in
+ *      the same column (confirmed against production data, and exactly what "Do not infer
+ *      anything" forbids). ~250 catalogue rows carry width/height without a sqm_per_piece.
+ *      ⚠️ This MUST mirror DealQuotationService#resolveSqmPerPiece's step 3: if the UI leaves the
+ *      field blank where the server would have resolved it, frontend validation blocks a row the
+ *      backend would have accepted.
  *   c. priceUnit === per_linear_m -- `cat.sqmPerPiece` is LINEAR METRES per piece, not area (see
  *      the constant above). Never computed geometrically either. Returns `null` so the rep enters
  *      it, and the UI says why (see the "ต่อเมตร" hint below).
@@ -39,7 +43,11 @@ const PRICE_UNIT_PER_LINEAR_M = 'per_linear_m';
  */
 export function resolveTileSqmPerPiece(cat) {
   if (cat?.priceUnit === PRICE_UNIT_PER_LINEAR_M) return null;
-  return cat?.sqmPerPiece ?? null;
+  if (cat?.sqmPerPiece != null) return cat.sqmPerPiece;
+  const w = Number(cat?.widthMm);
+  const h = Number(cat?.heightMm);
+  if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return (w * h) / 1e6;
+  return null;
 }
 
 /**

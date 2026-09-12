@@ -279,9 +279,32 @@ describe('QuotationItemRow — แผ่น/ตร.ม. resolution (resolveTileS
     expect(resolveTileSqmPerPiece(cat)).toBeNull();
   });
 
-  // No catalogue link and nothing typed: the rule is "ask the rep", never "invent a number" --
-  // there is no width_mm/height_mm reaching the editor today (see resolveTileSqmPerPiece's own
-  // comment on branch (b)), so this is the only reachable "no catalogue row" outcome.
+  // Branch (b), owner ruling 2026-09-12 "2) ไม่มีค่อยคำนวนเอง": when the catalogue row has no
+  // sqm_per_piece, compute from ITS OWN width_mm/height_mm -- always millimetres, so no unit is
+  // ever inferred. ~250 production rows carry dimensions without a factor. This MUST agree with
+  // DealQuotationService#resolveSqmPerPiece step 3, or the UI blocks a row the server accepts.
+  it('falls back to the catalogue\'s own width_mm x height_mm when it has no sqm_per_piece', () => {
+    const cat = { priceUnit: 'per_sqm', sqmPerPiece: null, widthMm: 600, heightMm: 1200 };
+    expect(resolveTileSqmPerPiece(cat)).toBeCloseTo(0.72, 6);
+  });
+
+  // Order matters: sqm_per_piece WINS over geometry wherever the two disagree (8.6% of the real
+  // catalogue). 300x600 storing 0.135 against a geometric 0.180 is a real production row.
+  it('prefers the catalogue sqm_per_piece over its own dimensions when the two disagree', () => {
+    const cat = { priceUnit: 'per_piece', sqmPerPiece: 0.135, widthMm: 300, heightMm: 600 };
+    expect(resolveTileSqmPerPiece(cat)).toBe(0.135);
+  });
+
+  // A per_linear_m row must not reach branch (b) either -- geometry is as wrong there as the
+  // stored figure, so dimensions being present changes nothing.
+  it('still resolves nothing for per_linear_m even when width/height are present', () => {
+    const cat = { priceUnit: 'per_linear_m', sqmPerPiece: null, widthMm: 70, heightMm: 600 };
+    expect(resolveTileSqmPerPiece(cat)).toBeNull();
+  });
+
+  // No catalogue link and nothing typed: the rule is "ask the rep", never "invent a number".
+  // Branch (b) cannot help here either -- it needs the CATALOGUE's width_mm/height_mm, and an
+  // unpicked row has no catalogue at all.
   it('a brand-new row with no catalogue pick invents nothing — the field starts empty', () => {
     const item = emptyQuotationItem();
     expect(item.sqmPerPiece).toBeNull();
