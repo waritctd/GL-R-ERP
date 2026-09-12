@@ -367,6 +367,43 @@ export function isDealQuotationNeedingRework(row) {
   return row?.docStatus === 'DRAFT' && (row.approvalNote != null || row.parentQuotationId != null);
 }
 
+// ── แผ่น/ตร.ม. (owner feedback 2026-09-12) ───────────────────────────────────────────────────────
+// "ขณะเพิ่มสินค้า ปัจจุบันแสดงเป็น จำนวน ตรม ต่อ แผ่น ขอแค่เป็น จำนวนแผ่นต่อตารางเมตรแทน" -- a rep
+// thinks in "how many pieces make up one ตร.ม.", not "how much area one piece covers", so the
+// editor now shows/accepts the RECIPROCAL of what it stores. `sqmPerPiece` (ตร.ม./แผ่น) stays the
+// wire/DB field verbatim -- CLAUDE.md requires stating a sales contract change explicitly and this
+// one is avoidable, so the swap happens only here, at the UI edge, on the way in and out.
+//
+// ⚠️ These two are a DISPLAY-ONLY mirror of `WastageCalculator#piecesPerSqm`'s formula
+// (`round(1/x, 2, HALF_UP)`), never a replacement for it: SPECIAL_SQM's net-per-piece figure is
+// still always the SERVER's (see itemInputFromRow's own comment on that), and nothing here feeds
+// money math. They exist solely so the input can render/accept "แผ่น/ตร.ม." while the value that
+// actually travels to the server, and back, is still ตร.ม./แผ่น.
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+/** ตร.ม./แผ่น (stored `item.sqmPerPiece`) → แผ่น/ตร.ม. (what the field shows). `null` when there
+ * is nothing to invert yet, so an empty/zero field reads as empty rather than as `Infinity`. */
+export function piecesPerSqmFromSqmPerPiece(sqmPerPiece) {
+  const n = Number(sqmPerPiece);
+  return n > 0 ? round2(1 / n) : null;
+}
+
+/**
+ * แผ่น/ตร.ม. (what the rep typed) → ตร.ม./แผ่น (what gets stored in `item.sqmPerPiece`).
+ * Rounded to 6dp, matching the column's own precision everywhere `sqm_per_piece` is persisted
+ * (`NUMERIC(10,6)` -- V24, V165): that headroom below the 2dp the reverse direction rounds to is
+ * what makes the round trip exact. Typing 16.39 stores 1/16.39 as 0.061013, and
+ * `piecesPerSqmFromSqmPerPiece(0.061013)` reads back exactly 16.39, never 16.38/16.40 --
+ * see quotationMeta.test.js for the fixture this is checked against.
+ */
+export function sqmPerPieceFromPiecesPerSqm(piecesPerSqm) {
+  const n = Number(piecesPerSqm);
+  if (!(n > 0)) return null;
+  return Math.round((1 / n + Number.EPSILON) * 1e6) / 1e6;
+}
+
 // ── Item completeness (frontend pass 4, owner ruling 2026-09-10) ────────────────────────────────
 // "Autofill as much as possible when the item is in the database; sales can also fill in their own
 // item if it is not in the database, but ALL info about the tile has to be completed." A catalog
@@ -399,7 +436,7 @@ export function validateQuotationItem(item, priceMode = 'NET') {
   if (!item?.sizeText?.trim()) errors.sizeText = 'กรุณาระบุขนาด';
   if (!(Number(item?.thicknessMm) > 0)) errors.thicknessMm = 'กรุณาระบุความหนา (มม.)';
   if (!(Number(item?.piecesPerBox) >= 1)) errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
-  if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุตร.ม./แผ่น';
+  if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุแผ่น/ตร.ม.';
   if (priceMode === 'DIRECT_NET') {
     if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
     // Optional here, but a typed one must still be positive — the server refuses a non-positive
@@ -433,7 +470,7 @@ const QUOTATION_ITEM_FIELD_ORDER = [
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
-  sqmPerPiece: 'ตร.ม./แผ่น', piecesPerBox: 'แผ่น/กล่อง', unitPrice: 'ราคา/หน่วย',
+  sqmPerPiece: 'แผ่น/ตร.ม.', piecesPerBox: 'แผ่น/กล่อง', unitPrice: 'ราคา/หน่วย',
   areaSqm: 'จำนวน (พื้นที่)', piecesInput: 'จำนวน (แผ่น)',
   // v3
   description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',

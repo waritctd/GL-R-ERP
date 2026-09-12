@@ -299,8 +299,11 @@ async function fillCompleteQuotationItem() {
   fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'Lappato' } });
   fireEvent.change(screen.getByLabelText(/^ขนาด/), { target: { value: '60x120' } });
   fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
-  fireEvent.change(screen.getByLabelText(/^ตร\.ม\./), { target: { value: '0.72' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น/), { target: { value: '3' } });
+  // แผ่น/ตร.ม. (owner feedback 2026-09-12) -- the field now shows/accepts the RECIPROCAL of
+  // `item.sqmPerPiece`; typed value only needs to be positive for completeness, so it is not
+  // required to be the exact reciprocal of any other fixture's figure.
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
   fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '850' } });
   fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
