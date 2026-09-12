@@ -2,7 +2,9 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
-import { emptyQuotationItem, QuotationItemRow, resolveTileSqmPerPiece } from './QuotationItemRow.jsx';
+import {
+  emptyQuotationItem, QuotationItemRow, resolveTileSqmPerPiece, sizeTextFromCatalog,
+} from './QuotationItemRow.jsx';
 
 globalThis.React = React;
 
@@ -370,5 +372,34 @@ describe('QuotationItemRow — แผ่น/ตร.ม. resolution (resolveTileS
       index={0} onChange={onChange} onRemove={vi.fn()}
     />);
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('16.39');
+  });
+});
+
+describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, never the raw string', () => {
+  it("does not leak Equipe's product name into ขนาด (the owner's 2026-09-13 report)", () => {
+    // VEN027994 exactly as production holds it: the Equipe profile takes size_from product_name,
+    // so size_raw IS the product name. Before this fix the field read the whole string.
+    const cat = {
+      widthMm: 12, heightMm: 200,
+      sizeRaw: '1,2X20 JOLLY COCO WHITE MATT',
+    };
+    expect(sizeTextFromCatalog(cat)).toBe('1.2x20');
+    expect(sizeTextFromCatalog(cat)).not.toContain('JOLLY');
+  });
+
+  it('renders whole-centimetre sizes without trailing zeros, matching the field hint', () => {
+    expect(sizeTextFromCatalog({ widthMm: 600, heightMm: 1200 })).toBe('60x120');
+    expect(sizeTextFromCatalog({ widthMm: 200, heightMm: 200 })).toBe('20x20');
+  });
+
+  it('keeps a real fractional centimetre rather than rounding it away', () => {
+    // Vives writes 36'4X33'7 = 364 x 337 mm; 36.4x33.7 must survive, not become 36x34.
+    expect(sizeTextFromCatalog({ widthMm: 364, heightMm: 337 })).toBe('36.4x33.7');
+  });
+
+  it('falls back to the raw string only when the catalogue has no dimensions', () => {
+    expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
+    expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');
+    expect(sizeTextFromCatalog({})).toBe('');
   });
 });
