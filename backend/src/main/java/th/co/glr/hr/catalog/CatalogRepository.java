@@ -155,7 +155,7 @@ public class CatalogRepository {
             """
             SELECT pp.price_id, f.factory_id, f.name AS factory_name,
                    pp.product_code, pp.grade, pp.collection, pp.product_name,
-                   pp.color, pp.surface, pp.size_raw,
+                   pp.color, pp.surface, pp.size_raw, pp.size_cm,
                    pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece,
                    pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code,
                    pp.width_mm, pp.height_mm
@@ -187,6 +187,7 @@ public class CatalogRepository {
                 rs.getString("color"),
                 rs.getString("surface"),
                 rs.getString("size_raw"),
+                rs.getString("size_cm"),
                 rs.getBigDecimal("price"),
                 rs.getString("currency"),
                 rs.getString("price_unit"),

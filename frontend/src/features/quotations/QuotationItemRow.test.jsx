@@ -397,6 +397,19 @@ describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, neve
     expect(sizeTextFromCatalog({ widthMm: 364, heightMm: 337 })).toBe('36.4x33.7');
   });
 
+  it("prefers the database's own size_cm (V174) when the backend serves it", () => {
+    expect(sizeTextFromCatalog({ sizeCm: '20x20', widthMm: 200, heightMm: 200, sizeRaw: '200x200' }))
+      .toBe('20x20');
+  });
+
+  it('computes the same value when sizeCm is absent — the backend image lags the frontend deploy', () => {
+    // Not dead code: main deploys the frontend immediately while Render runs a pinned image, so
+    // there is always a window where sizeCm is not yet served. Both paths must agree.
+    const cat = { widthMm: 200, heightMm: 200, sizeRaw: '200x200' };
+    expect(sizeTextFromCatalog(cat)).toBe('20x20');
+    expect(sizeTextFromCatalog({ ...cat, sizeCm: '20x20' })).toBe(sizeTextFromCatalog(cat));
+  });
+
   it('falls back to the raw string only when the catalogue has no dimensions', () => {
     expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
     expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');

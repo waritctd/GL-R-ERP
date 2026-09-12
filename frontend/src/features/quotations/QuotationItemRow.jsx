@@ -70,12 +70,21 @@ export function resolveTileSqmPerPiece(cat) {
  * string the rep can correct beats an empty required field.
  */
 export function sizeTextFromCatalog(cat) {
+  // 1. The database's own display column (V174 `size_cm`), once the backend serving it is
+  //    deployed. One derivation, shared with the printed ใบเสนอราคา, so the screen and the
+  //    document can never disagree about a size.
+  if (cat?.sizeCm) return cat.sizeCm;
+  // 2. Compute the identical value client-side. This is not dead code: the frontend deploys from
+  //    main the moment it merges while the backend runs a PINNED image, so there is always a
+  //    window where the UI is new and `sizeCm` is not being served yet (the 2026-08-17
+  //    /fulfilment incident is this exact asymmetry). Same formula as V174's generated column.
   const w = Number(cat?.widthMm);
   const h = Number(cat?.heightMm);
   if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
     const cm = (mm) => String(Number((mm / 10).toFixed(2)));
     return `${cm(w)}x${cm(h)}`;
   }
+  // 3. Only when the row carries no dimensions at all (~49 production rows).
   return cat?.sizeRaw ?? cat?.size ?? '';
 }
 
