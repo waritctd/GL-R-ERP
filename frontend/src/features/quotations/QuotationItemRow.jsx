@@ -8,7 +8,47 @@ import {
   LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
+  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm,
 } from './quotationMeta.js';
+
+// ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
+// `sqm_per_piece` is NOT an area for these rows -- it is LINEAR METRES per piece (the source
+// sqm_per_box column is mislabelled the same way, per that migration's own column comment), so
+// resolveTileSqmPerPiece below must never read it as one. Kept a named constant rather than a bare
+// string so the one place this matters cannot silently drift from CatalogRepository's own literal.
+const PRICE_UNIT_PER_LINEAR_M = 'per_linear_m';
+
+/**
+ * The pieces-per-ตร.ม. resolution order for a catalog pick (owner feedback 2026-09-12; see
+ * QuotationItemRow's module comment for the full request). Returns the `sqmPerPiece` (ตร.ม./แผ่น,
+ * the wire field) to autofill, or `null` when nothing should be invented and the rep must type it:
+ *
+ *   a. Catalog-linked, priceUnit != per_linear_m -- `cat.sqmPerPiece` STRAIGHT FROM THE CATALOGUE.
+ *      This is the authoritative figure (price_catalog.product_prices.sqm_per_piece); geometry
+ *      (width x height) disagrees with it on 8.6% of the real catalog, by up to 14x on trims, so
+ *      it is never recomputed here even when a width/height happened to be available.
+ *   b. Catalogue row with NO `sqmPerPiece` -- compute from `widthMm` x `heightMm`, which are
+ *      ALWAYS millimetres in price_catalog.product_prices and so need no unit inference at all.
+ *      Owner ruling 2026-09-12: "2) ไม่มีค่อยคำนวนเอง" -- fall back to computing it, but from the
+ *      CATALOGUE's own dimensions, never from the free-text ขนาด field, which mixes cm and mm in
+ *      the same column (confirmed against production data, and exactly what "Do not infer
+ *      anything" forbids). ~250 catalogue rows carry width/height without a sqm_per_piece.
+ *      ⚠️ This MUST mirror DealQuotationService#resolveSqmPerPiece's step 3: if the UI leaves the
+ *      field blank where the server would have resolved it, frontend validation blocks a row the
+ *      backend would have accepted.
+ *   c. priceUnit === per_linear_m -- `cat.sqmPerPiece` is LINEAR METRES per piece, not area (see
+ *      the constant above). Never computed geometrically either. Returns `null` so the rep enters
+ *      it, and the UI says why (see the "ต่อเมตร" hint below).
+ *   d. Nothing resolved -- `null`. The field stays exactly as the rep left it; nothing is invented.
+ */
+export function resolveTileSqmPerPiece(cat) {
+  if (cat?.priceUnit === PRICE_UNIT_PER_LINEAR_M) return null;
+  if (cat?.sqmPerPiece != null) return cat.sqmPerPiece;
+  const w = Number(cat?.widthMm);
+  const h = Number(cat?.heightMm);
+  if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return (w * h) / 1e6;
+  return null;
+}
 
 /**
  * One item row of the ใบเสนอราคา editor -- catalog typeahead (autofills, everything stays
@@ -69,7 +109,14 @@ export function QuotationItemRow({
     // catalog LINK (this is no longer "the row picked from the dropdown"), but productCode is
     // its own free-text field the user may have typed or edited independently; wiping it just
     // because รุ่น changed threw away data the user never asked to clear.
-    patch({ model: value, catalogPriceId: null });
+    //
+    // catalogSqmPerPiece/catalogPriceUnit ride along for the same reason: they are this row's
+    // provenance snapshot for the แผ่น/ตร.ม. badge below (owner feedback 2026-09-12), and a
+    // provenance claim about a catalog row this line no longer names would be exactly the kind of
+    // stale claim #M9 already fixed for the "จาก catalog" badge itself. `sqmPerPiece` (the actual
+    // value) is deliberately left alone -- retyping รุ่น should not blank out a number the rep may
+    // still want, only stop claiming it came from a catalog match.
+    patch({ model: value, catalogPriceId: null, catalogSqmPerPiece: null, catalogPriceUnit: null });
     setCatalogOpen(true);
     debouncedCatalogSearch(value, async (q) => {
       if (!q?.trim()) { setCatalogResults([]); return; }
@@ -110,6 +157,17 @@ export function QuotationItemRow({
     // lead-time default below never fires on a row that already had an origin, since
     // originCountry is then === item.originCountry.
     const originCountry = item.originCountry || originCountryFromCode(cat.originCountryCode) || '';
+    // แผ่น/ตร.ม. resolution order (a)/(c)/(d) -- see resolveTileSqmPerPiece's own Javadoc-style
+    // comment above for the full rule and why (b) (geometry from explicit width/height) is a
+    // deliberate no-op today. `resolvedSqmPerPiece` is `null` for a per_linear_m row EVEN IF
+    // `cat.sqmPerPiece` is populated -- that figure is linear metres per piece there, not area
+    // (V153's own column comment), so it must never fall into the `?? item.sqmPerPiece` chain as
+    // if it were a real catalog answer. `catalogSqmPerPiece`/`catalogPriceUnit` are UI-only
+    // provenance (never sent to the server -- see tileInputFromRow's explicit field list below):
+    // they are what lets the field distinguish "resolved from catalog" from "the rep overrode it"
+    // and what lets it explain a per_linear_m row's blank field instead of just failing validation
+    // silently.
+    const resolvedSqmPerPiece = resolveTileSqmPerPiece(cat);
     patch({
       catalogPriceId: cat.priceId ?? null,
       productCode: cat.productCode ?? null,
@@ -119,7 +177,17 @@ export function QuotationItemRow({
       texture: cat.surface ?? '',
       sizeText: cat.sizeRaw ?? cat.size ?? '',
       thicknessMm: cat.thicknessMm ?? item.thicknessMm ?? null,
-      sqmPerPiece: cat.sqmPerPiece ?? item.sqmPerPiece ?? null,
+      sqmPerPiece: resolvedSqmPerPiece ?? item.sqmPerPiece ?? null,
+      piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(resolvedSqmPerPiece ?? item.sqmPerPiece) ?? '',
+      // A fresh, real resolution always overwrites a stale "manual" flag from a previous pick --
+      // the rep just linked a (possibly new) catalog row and has typed nothing on THIS pick, so
+      // the badge must read "from catalog", not "overridden" left over from before. When nothing
+      // resolves (per_linear_m, or the catalog row itself has no factor), the previous source is
+      // left exactly as it was: a rep's earlier manual entry does not become unexplained just
+      // because this pick had nothing to add, and a still-unset field stays unset (d).
+      sqmPerPieceSource: resolvedSqmPerPiece != null ? 'catalog' : item.sqmPerPieceSource ?? null,
+      catalogSqmPerPiece: resolvedSqmPerPiece,
+      catalogPriceUnit: cat.priceUnit ?? null,
       piecesPerBox: cat.pcsPerBox ?? item.piecesPerBox ?? null,
       originCountry,
       ...(originCountry && originCountry !== item.originCountry ? defaultLeadTimeForOrigin(originCountry) : {}),
@@ -137,6 +205,26 @@ export function QuotationItemRow({
   // Groups this row could be moved INTO — every group but its own. Rendered only when there is
   // somewhere to go, so a single-location quotation carries no dead control.
   const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
+
+  // แผ่น/ตร.ม. status line (owner feedback 2026-09-12) -- one of three mutually exclusive states,
+  // each visibly distinct per the owner's ask that an overridden value read differently from a
+  // resolved one:
+  //   - a per_linear_m catalog row with nothing entered yet: explain WHY it is blank (resolveTile-
+  //     SqmPerPiece's rule (c)) rather than just failing validation silently.
+  //   - `sqmPerPieceSource === 'catalog'`: this row's current value is still exactly what the last
+  //     catalog pick resolved (a) -- info tone, badgeCheck icon, matching the row's own "จาก
+  //     catalog" badge.
+  //   - `sqmPerPieceSource === 'manual'`: the rep typed over either the resolved value or a blank
+  //     field (the owner's "แก้ทับได้") -- warning tone, pencil icon, so it never reads as if the
+  //     catalog vouches for a number the rep chose.
+  const isLinearMCatalog = Boolean(item.catalogPriceId) && item.catalogPriceUnit === PRICE_UNIT_PER_LINEAR_M;
+  const sqmPerPieceStatus = isLinearMCatalog && !(Number(item.sqmPerPiece) > 0)
+    ? { tone: 'text-warning', icon: 'info', text: 'สินค้านี้ขายต่อเมตร (per_linear_m) — ตร.ม./แผ่น ในแคตตาล็อกไม่ใช่พื้นที่ กรุณากรอกแผ่น/ตร.ม. เอง' }
+    : item.sqmPerPieceSource === 'catalog'
+      ? { tone: 'text-info', icon: 'badgeCheck', text: 'คำนวณจาก catalog' }
+      : item.sqmPerPieceSource === 'manual'
+        ? { tone: 'text-warning', icon: 'pencil', text: 'แก้ไขเอง' }
+        : null;
 
   return (
     <li className="grid gap-3 rounded-md border border-border p-3.5">
@@ -308,12 +396,43 @@ export function QuotationItemRow({
             onChange={(e) => patch({ thicknessMm: e.target.value === '' ? null : Number(e.target.value) })}
           />
         </FormField>
-        <FormField label="ตร.ม./แผ่น" htmlFor={`sqm-${index}`} required error={errors.sqmPerPiece}>
+        <FormField label="แผ่น/ตร.ม." htmlFor={`sqm-${index}`} required error={errors.sqmPerPiece}>
+          {/* Shows/accepts the RECIPROCAL of what is stored (owner feedback 2026-09-12) --
+              `item.sqmPerPiece` (ตร.ม./แผ่น) stays the wire field verbatim, converted at this UI
+              edge only (see quotationMeta.js's piecesPerSqmFromSqmPerPiece/sqmPerPieceFromPieces-
+              PerSqm). `piecesPerSqmDisplay` is the literal text the rep is typing, kept separately
+              from the derived number specifically so a partial decimal ("16.") is never clobbered
+              back to "16" by a same-render round-trip through the reciprocal -- see those two
+              helpers' own comments for why 6dp storage makes the round trip exact once a value IS
+              complete. Falls back to deriving from the stored value for a row that has never had
+              piecesPerSqmDisplay set (freshly loaded from the server, or a brand-new blank row). */}
           <input
-            id={`sqm-${index}`} type="number" step="0.0001" disabled={readOnly}
-            value={item.sqmPerPiece ?? ''}
-            onChange={(e) => patch({ sqmPerPiece: e.target.value === '' ? null : Number(e.target.value) })}
+            id={`sqm-${index}`} type="number" step="0.01" disabled={readOnly}
+            value={item.piecesPerSqmDisplay ?? piecesPerSqmFromSqmPerPiece(item.sqmPerPiece) ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === '') {
+                patch({ piecesPerSqmDisplay: '', sqmPerPiece: null, sqmPerPieceSource: 'manual' });
+                return;
+              }
+              const parsed = Number(raw);
+              patch({
+                piecesPerSqmDisplay: raw,
+                sqmPerPiece: Number.isFinite(parsed) && parsed > 0
+                  ? sqmPerPieceFromPiecesPerSqm(parsed)
+                  : item.sqmPerPiece,
+                // The owner's "แก้ทับได้": ANY direct edit here is an override, whether it starts
+                // from a catalog-resolved value, a per_linear_m blank, or an already-manual one.
+                sqmPerPieceSource: 'manual',
+              });
+            }}
           />
+          {sqmPerPieceStatus ? (
+            <span className={`mt-1 flex items-center gap-1 text-2xs font-bold ${sqmPerPieceStatus.tone}`} data-testid={`sqm-status-${index}`}>
+              <Icon name={sqmPerPieceStatus.icon} size={11} />
+              {sqmPerPieceStatus.text}
+            </span>
+          ) : null}
         </FormField>
         <FormField label="แผ่น/กล่อง" htmlFor={`ppb-${index}`} required error={errors.piecesPerBox}>
           <input
@@ -634,6 +753,11 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     specialPriceSqm: '', directNetPrice: '',
     locationLabel: '', catalogPriceId: null, productCode: '',
     brand: '', model: '', color: '', texture: '', sizeText: '', thicknessMm: null, sqmPerPiece: null,
+    // แผ่น/ตร.ม. provenance -- UI-only (see tileInputFromRow's explicit field list; none of these
+    // travel to the server). `piecesPerSqmDisplay: null` rather than `''` so the field's own
+    // fallback (derive from `sqmPerPiece`) kicks in for a row that has never had the reciprocal
+    // typed into it directly -- see the `sqm-${index}` input's own comment in the render below.
+    catalogSqmPerPiece: null, catalogPriceUnit: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
     unitPrice: '', discountPct: 0,

@@ -2,6 +2,7 @@ package th.co.glr.hr.catalog.importer;
 
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.MediaType;
@@ -89,6 +90,10 @@ public class PriceImportController {
     PriceImportService.UploadCommitResult uploadAndCommit(
         @RequestParam("factoryId") long factoryId,
         @RequestParam("file") MultipartFile file,
+        // OPTIONAL — the SEPARATE thickness workbook required by any profile that declares
+        // thickness_sidecar (Vives). Absent for every other factory; svc.uploadAndCommit passes
+        // null straight through to ImportEngine, which fails loudly if the profile needed one.
+        @RequestParam(value = "thicknessFile", required = false) MultipartFile thicknessFile,
         @RequestParam(value = "label", required = false) String label,
         HttpSession session
     ) {
@@ -97,8 +102,10 @@ public class PriceImportController {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ว่างเปล่า");
         String effectiveLabel = (label != null && !label.isBlank()) ? label : file.getOriginalFilename();
         try {
+            InputStream thicknessStream = (thicknessFile != null && !thicknessFile.isEmpty())
+                ? thicknessFile.getInputStream() : null;
             return svc.uploadAndCommit(factoryId, file.getOriginalFilename(),
-                file.getInputStream(), effectiveLabel, user.id());
+                file.getInputStream(), thicknessStream, effectiveLabel, user.id());
         } catch (IOException e) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "อ่านไฟล์ไม่ได้: " + e.getMessage());
         }
@@ -108,6 +115,8 @@ public class PriceImportController {
     PriceImportService.UploadReport upload(
         @RequestParam("factoryId") long factoryId,
         @RequestParam("file") MultipartFile file,
+        // OPTIONAL — see uploadAndCommit's identical parameter above.
+        @RequestParam(value = "thicknessFile", required = false) MultipartFile thicknessFile,
         @RequestParam(value = "label", required = false) String label,
         HttpSession session
     ) {
@@ -120,10 +129,13 @@ public class PriceImportController {
             : file.getOriginalFilename();
 
         try {
+            InputStream thicknessStream = (thicknessFile != null && !thicknessFile.isEmpty())
+                ? thicknessFile.getInputStream() : null;
             return svc.uploadAndStage(
                 factoryId,
                 file.getOriginalFilename(),
                 file.getInputStream(),
+                thicknessStream,
                 effectiveLabel,
                 user.id()
             );

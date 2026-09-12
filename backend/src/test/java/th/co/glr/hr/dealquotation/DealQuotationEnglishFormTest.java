@@ -421,11 +421,15 @@ class DealQuotationEnglishFormTest {
 
     /**
      * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row, so line 3 is
-     * the fallback. That fallback used to read "3.Goods are in stock at the factory in Italy; …" — a country that appears
-     * nowhere on the document. It must name no country, and the box must stay at exactly 8 lines.
+     * the fallback. Owner feedback pass 3 (2026-09-11) deliberately moved this fallback OFF the
+     * "names no country" line it held after review (itself a fix for an even older "Goods are in
+     * stock at the factory in Italy; …" default) and onto her own two default cases, verbatim:
+     * "ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค 3-7 วัน" — see
+     * {@code DealQuotationRenderAdapter#EN_LINE3_FALLBACK}'s own comment for the full history. The
+     * box must stay at exactly 8 lines either way.
      */
     @Test
-    void remarks_anAllPlainDocument_printsANeutralDeliveryLine_inBothLayouts() throws Exception {
+    void remarks_anAllPlainDocument_printsTheChinaThailandDefaultDeliveryLine_inBothLayouts() throws Exception {
         DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
             plainRow(1, "Supply of Porcelain Tiles"), plainRow(2, "Freight China to Male"))));
         for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
@@ -438,12 +442,26 @@ class DealQuotationEnglishFormTest {
             String layout = block.isEmpty() ? "no bank" : "bank";
             assertThat(remarks).as("8 lines, %s layout", layout).hasSize(8).allMatch(l -> !l.isBlank());
             assertThat(remarks.get(block.isEmpty() ? 2 : 5)).as("line 3, %s layout", layout)
-                .isEqualTo("3.Delivery : lead time will be confirmed at order confirmation.");
+                .isEqualTo("3.Delivery : China (import) approximately 30-45 days; "
+                    + "Thailand (in stock) approximately 3-7 days.");
             assertThat(String.join("\n", remarks)).as("%s layout", layout)
                 .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian");
             remarks.forEach(l -> assertThat(l.length()).as("%s layout: %s", layout, l)
                 .isLessThanOrEqualTo(130));
         }
+    }
+
+    /** The Thai twin of the test above, pinning {@code DealQuotationRenderAdapter#LINE3_FALLBACK}
+     * — same owner request, same two default cases, Thai words. */
+    @Test
+    void remarks_anAllPlainThaiDocument_printsTheChinaThailandDefaultDeliveryLine() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRow(1, "ค่าขนส่งกระเบื้อง"), plainRow(2, "ค่าติดตั้ง")));
+        Sheet sheet = render(allPlain);
+        // Thai never carries a bank block (see #thaiDocument_neverCarriesTheBankBlock_...), so this
+        // is always the no-bank-block layout: line 3 is remark index 2, i.e. row 23 + 2 = 25.
+        assertThat(str(sheet, 25, 1))
+            .isEqualTo("3.ระยะเวลานำเข้า : จีน ประมาณ 30-45 วัน  ไทย มีในสต็อก ประมาณ 3-7 วัน");
     }
 
     /** B1 must be the owner's own spelling from her F-SM-008 form, not the older "&amp; R." one. */

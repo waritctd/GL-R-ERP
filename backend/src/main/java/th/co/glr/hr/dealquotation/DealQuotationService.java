@@ -21,6 +21,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
+import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -91,6 +93,10 @@ public class DealQuotationService {
     private final CustomerRepository customers;
     private final ContactRepository contacts;
     private final NotificationRepository notifications;
+    /** Owner ruling 2026-09-12 ("2) ไม่มีค่อยคำนวนเอง"): {@link #resolveSqmPerPiece} reads a
+     * tile's ตร.ม./แผ่น from THIS, never from the free-text size string — see that method's own
+     * Javadoc for the resolution order. */
+    private final CatalogRepository catalog;
     /** The per-employee "can create quotations" capability gate (owner ruling, Ploy 2026-09-09) —
      * read LIVE at decision time via {@link EmployeeAuthRepository#canCreateQuotation}, never from
      * {@code actor} (a {@link UserPrincipal} is captured at login and would otherwise go stale the
@@ -114,6 +120,7 @@ public class DealQuotationService {
                                 th.co.glr.hr.ticket.QuotationRenderer renderer,
                                 EmployeeAuthRepository employeeAuth,
                                 EmployeeSignatureRepository signatures,
+                                CatalogRepository catalog,
                                 @Value("${app.mail.app-base-url:}") String appBaseUrl,
                                 // app.quotation.bank-block-line1..3 — the unnumbered bank block on an
                                 // ENGLISH document, taken verbatim from the owner's own quotations and
@@ -138,6 +145,7 @@ public class DealQuotationService {
         this.renderer = renderer;
         this.employeeAuth = employeeAuth;
         this.signatures = signatures;
+        this.catalog = catalog;
         this.appBaseUrl = appBaseUrl == null ? "" : appBaseUrl.trim();
     }
 
@@ -158,7 +166,13 @@ public class DealQuotationService {
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
-        String number = quotations.nextQuotationCode();
+        // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
+        // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
+        // ("0014") is minted here and immediately formatted as revision 1 of itself
+        // ({@link DealQuotationRepository#revisionNumber}) — "QT-2026-0014-1", not a bare
+        // "QT-2026-0014". The sequence allocation itself (nextQuotationCode) is unchanged: this
+        // only changes how revision 1's number is FORMATTED, never which "0014" a ticket gets.
+        String number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
         long id = quotations.insertDraft(new InsertDraftParams(
             ticketId, number, actor.id(), ticket.createdById(),
             customerSnapshot.name(), customerSnapshot.address(),
@@ -463,6 +477,10 @@ public class DealQuotationService {
         if (quotations.hasOpenRevision(source.id())) {
             throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
         }
+        // Works unchanged for BOTH a post-2026-09-11 parent ("QT-2026-0014-1", revisionNo 1 -> base
+        // "QT-2026-0014") and a legacy pre-change parent ("QT-2026-0014" bare, revisionNo 1 -> base
+        // itself unchanged) -- see DealQuotationRepository#baseNumber's own Javadoc for why one
+        // formula covers both eras with no special-casing here.
         String baseNumber = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
         // M3 (found while testing the fix above): NOT source.revisionNo() + 1 -- see
         // DealQuotationRepository#nextRevisionNo's own Javadoc for the duplicate-key crash that
@@ -953,7 +971,13 @@ public class DealQuotationService {
 
     private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode,
                                   BigDecimal vatRate) {
-        BigDecimal sqmPerPiece = resolveSqmPerPiece(input);
+        // Fetched ONCE and threaded through both #resolveSqmPerPiece AND the NewItem below --
+        // #resolveSqmPerPiece used to run this same catalog lookup on its own; now the catalogue's
+        // width_mm/height_mm also ride along so DealQuotationLines#sizeLine can print the face size
+        // in centimetres from unambiguous millimetres (owner ruling 2026-09-12) without a second
+        // round trip for the same catalogPriceId. See NewItem#catalogWidthMm's own comment.
+        CatalogSqmBasis catalogBasis = resolveCatalogBasis(input);
+        BigDecimal sqmPerPiece = resolveSqmPerPiece(input, catalogBasis);
         if (rowNumber != null) {
             requireItemComplete(rowNumber, input, sqmPerPiece);
         }
@@ -1012,7 +1036,9 @@ public class DealQuotationService {
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             descriptionLine,
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()), "แผ่น",
-            specialPriceSqm, null, null);
+            specialPriceSqm, null, null,
+            catalogBasis == null ? null : catalogBasis.widthMm(),
+            catalogBasis == null ? null : catalogBasis.heightMm());
     }
 
     /**
@@ -1053,7 +1079,8 @@ public class DealQuotationService {
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             input.description() == null ? null : input.description().trim(),
             WastageCalculator.LINE_TYPE_PLAIN, quantity, blankToNull(input.unit()),
-            null, null, null);
+            null, null, null,
+            null, null);
     }
 
     /**
@@ -1100,7 +1127,8 @@ public class DealQuotationService {
             null, null, null, input.itemNotes(),
             description,
             WastageCalculator.LINE_TYPE_ADJUSTMENT, BigDecimal.valueOf(-1), null,
-            null, input.adjustmentPct(), input.adjustmentDeadline());
+            null, input.adjustmentPct(), input.adjustmentDeadline(),
+            null, null);
     }
 
     /** v3b: {@code vatRate} is the SOURCE document's, so a revision of an English quotation copies
@@ -1124,14 +1152,85 @@ public class DealQuotationService {
             // rather than re-derived (re-deriving would silently move the number if the parent had
             // been saved under an older rule).
             item.lineType(), item.quantity(), item.unit(),
-            item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline());
+            item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline(),
+            // Transient render-only fields (see NewItem#catalogWidthMm) -- this NewItem is bound
+            // for insertDraft, never for #toItemDto, so there is nothing here to carry through.
+            null, null);
     }
 
-    private BigDecimal resolveSqmPerPiece(ItemInput input) {
+    // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
+    // (V153: 561 real catalog rows). Its sqm_per_piece is NOT an area for these rows -- it is
+    // LINEAR METRES per piece (the source sqm_per_box column is mislabelled the same way, per that
+    // migration's own column comment) -- so #sqmPerPieceFromCatalog must never read it as one, nor
+    // ever compute a geometric fallback for it (width_mm x height_mm there describes the PROFILE,
+    // not a tile face). Mirrors frontend/src/features/quotations/QuotationItemRow.jsx's own
+    // PRICE_UNIT_PER_LINEAR_M constant -- kept as its own literal here (not a shared enum) because
+    // the two sides have no shared constants module; if this ever drifts from CatalogRepository's
+    // own column values, {@code sqmPerPiece_neverGeometricOrCatalogForPerLinearMRows} below breaks.
+    private static final String PRICE_UNIT_PER_LINEAR_M = "per_linear_m";
+    private static final BigDecimal SQ_MM_PER_SQM = new BigDecimal("1000000");
+
+    /**
+     * Owner ruling 2026-09-12 ("2) ไม่มีค่อยคำนวนเอง"): resolve a tile's ตร.ม./แผ่น from the
+     * CATALOGUE, never by guessing the unit of a free-text size string — see
+     * {@code WastageCalculator}'s deleted {@code parseSqmPerPieceFromSize}/{@code detectUnit} for
+     * the heuristic this replaces. It got a REAL catalog product wrong: "200x300" is not &gt; 300
+     * on either side, so it read as CENTIMETRES (6.0 sqm/piece) against the owner's own document
+     * for that product (0.061 sqm/piece, 16.39 pcs/sqm) — wrong by ~98x.
+     *
+     * <p>Resolution order, in this priority, and NEVER inferred from {@code input.sizeText()}:
+     * <ol>
+     *   <li>the item's own {@code sqmPerPiece}, if Sales supplied or overrode one;</li>
+     *   <li>else the catalog row's own {@code sqm_per_piece} (by {@code catalogPriceId}) — this is
+     *       the AUTHORITATIVE figure; geometry disagrees with it on 8.6% of the real catalog (by
+     *       up to 14x on trims), so it is never recomputed even when width/height are available;</li>
+     *   <li>else, when the catalogue itself has no {@code sqm_per_piece}, COMPUTE it from that same
+     *       row's {@code width_mm x height_mm / 1,000,000} — both columns are unambiguous
+     *       millimetres, unlike the free-text size;</li>
+     *   <li>else {@code null} — {@link #requireItemComplete} then fails the row with a plain Thai
+     *       "ขาด ตร.ม./แผ่น" rather than this method ever inventing a number.</li>
+     * </ol>
+     *
+     * <p>Steps 2 and 3 NEVER apply to a {@code per_linear_m} row — see
+     * {@link #PRICE_UNIT_PER_LINEAR_M}'s own comment. Such a row falls straight from step 1 to
+     * step 4 unless Sales types a value by hand.
+     *
+     * <p>Takes the {@link CatalogSqmBasis} as a PARAMETER (see {@link #resolveCatalogBasis}) rather
+     * than fetching it itself, so {@link #buildTileItem} can fetch it ONCE and also thread its
+     * {@code width_mm}/{@code height_mm} through to {@code NewItem} for {@code
+     * DealQuotationLines#sizeLine} (owner ruling 2026-09-12, "normalize it in the database...") —
+     * without this it would need its own second {@code catalog.findSqmBasis} round trip for the
+     * same {@code catalogPriceId}.
+     */
+    private BigDecimal resolveSqmPerPiece(ItemInput input, CatalogSqmBasis basis) {
         if (input.sqmPerPiece() != null) {
             return input.sqmPerPiece();
         }
-        return WastageCalculator.parseSqmPerPieceFromSize(input.sizeText());
+        return basis == null ? null : sqmPerPieceFromCatalog(basis);
+    }
+
+    /** The catalogue basis lookup {@link #resolveSqmPerPiece} used to perform on its own —
+     * extracted so {@link #buildTileItem} can fetch it exactly once and reuse it both for
+     * ตร.ม./แผ่น AND for {@code DealQuotationLines#sizeLine}'s face-size-in-centimetres. {@code
+     * null} when the item carries no catalog link at all (nothing to look up) or the linked row
+     * does not exist. */
+    private CatalogSqmBasis resolveCatalogBasis(ItemInput input) {
+        return input.catalogPriceId() == null ? null : catalog.findSqmBasis(input.catalogPriceId()).orElse(null);
+    }
+
+    private BigDecimal sqmPerPieceFromCatalog(CatalogSqmBasis basis) {
+        if (PRICE_UNIT_PER_LINEAR_M.equals(basis.priceUnit())) {
+            return null;
+        }
+        if (basis.sqmPerPiece() != null && basis.sqmPerPiece().signum() > 0) {
+            return basis.sqmPerPiece();
+        }
+        if (basis.widthMm() != null && basis.heightMm() != null
+            && basis.widthMm().signum() > 0 && basis.heightMm().signum() > 0) {
+            return basis.widthMm().multiply(basis.heightMm())
+                .divide(SQ_MM_PER_SQM, 6, RoundingMode.HALF_UP);
+        }
+        return null;
     }
 
     /**
@@ -1299,7 +1398,8 @@ public class DealQuotationService {
         BigDecimal piecesPerSqm = item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
             ? WastageCalculator.piecesPerSqm(item.sqmPerPiece()) : null;
         boolean tile = WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
-        String sizeLine = tile ? DealQuotationLines.sizeLine(item.sizeText(), item.thicknessMm()) : null;
+        String sizeLine = tile ? DealQuotationLines.sizeLine(item.sizeText(), item.thicknessMm(),
+            item.catalogWidthMm(), item.catalogHeightMm()) : null;
         String calculationLine = tile
             ? DealQuotationLines.calculationLine(item.quantityMode(), item.areaSqm(), piecesPerSqm,
                 item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),

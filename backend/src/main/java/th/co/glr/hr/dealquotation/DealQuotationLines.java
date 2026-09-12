@@ -57,17 +57,75 @@ public final class DealQuotationLines {
     }
 
     /**
-     * {@code ขนาด {size}x{thickness} cm. (ขนาดโดยประมาณ)} — {@code "60x120"} + thickness 2 →
-     * {@code "60x120x2 cm."}. layout-spec §2: when thickness is absent there is NO separate ขนาด
-     * row at all — the size already went inline on {@link #descriptionLine} — so this returns
-     * {@code null} (not an empty/dangling string) and the caller must omit the row entirely.
+     * {@code ขนาด {width} cm x {height} cm x {thickness} mm (ขนาดโดยประมาณ)} — owner ruling
+     * 2026-09-12, verbatim: <i>"normalize it in the database so its the same in unit. make the
+     * size cm and the thickness mm"</i>. STORAGE stays MILLIMETRES (the columns are literally
+     * named {@code width_mm}/{@code height_mm}/{@code thickness_mm} — writing centimetres into a
+     * {@code _mm} column would manufacture exactly the 10x-error class this branch exists to
+     * remove); PRESENTATION is normalized here, in ONE place: face size divided by 10 into
+     * centimetres, thickness left in millimetres.
+     *
+     * <p><b>Correction to the previous ("owner feedback pass 3") version of this method.</b> That
+     * pass built the face size by splitting the REP'S FREE-TEXT {@code sizeText} on "x" and
+     * unit-suffixing both halves "cm" unconditionally, e.g. {@code sizeLine("200x300", 9, ...)}
+     * printed {@code "ขนาด 200 cm x 300 cm x 9 mm"}. That is wrong whenever the rep typed
+     * millimetres — confirmed against the owner's own price-list documents, which mix cm-typed and
+     * mm-typed sizes in the very same free-text column. The real product behind a typed "200x300"
+     * is a 20 cm x 30 cm tile, so the old line was off by 10x on both dimensions — the identical
+     * defect, one layer up, from the "200x300 read as centimetres" regression fixed in {@code
+     * DealQuotationService#resolveSqmPerPiece} (200mm x 300mm is 0.06 sqm/piece, not 6.0).
+     *
+     * <p>The fix: derive the face size from the CATALOGUE's own {@code width_mm}/{@code height_mm}
+     * — {@code catalogWidthMm}/{@code catalogHeightMm} here, unambiguous millimetres, never
+     * inferred from text — resolved the SAME way {@code DealQuotationService#resolveSqmPerPiece}
+     * already resolves {@code sqmPerPiece}: via {@code CatalogRepository#findSqmBasis}/{@code
+     * #findSqmBases}. Divide by 10 for centimetres; {@link #format(BigDecimal)}'s {@code "#,##0.##"}
+     * pattern already drops a trailing ".0" (60 cm, never 60.0 cm).
+     *
+     * <p><b>FALLBACK</b> — no catalogue dimensions available (no catalog link on the row, or the
+     * linked row has neither dimension populated): print {@code sizeText} EXACTLY AS TYPED, unit
+     * and all, un-split, un-converted. There is no way to tell which unit free text is in from the
+     * text alone, so a size the rep recognises beats a confidently mangled one. Only the thickness
+     * is ever unit-suffixed in this branch — thickness is always entered in millimetres regardless
+     * of source, which is the one thing this method is never unsure about.
+     *
+     * <p>layout-spec §2: when thickness is absent there is NO separate ขนาด row at all — the size
+     * already went inline on {@link #descriptionLine} — so this returns {@code null} (not an
+     * empty/dangling string) and the caller must omit the row entirely.
      */
-    public static String sizeLine(String sizeText, BigDecimal thicknessMm) {
+    public static String sizeLine(String sizeText, BigDecimal thicknessMm,
+                                  BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
         if (thicknessMm == null) {
             return null;
         }
-        String size = blank(sizeText) ? "" : sizeText.trim();
-        return "ขนาด " + size + "x" + format(thicknessMm) + " cm. (ขนาดโดยประมาณ)";
+        String thicknessPart = format(thicknessMm) + " mm";
+        String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
+        if (facePart == null && !blank(sizeText)) {
+            // FALLBACK: no catalogue geometry -- print exactly what the rep typed. Never split it
+            // on "x", never unit-suffix it, never treat SIZE_HAS_UNIT as license to reformat it --
+            // see this method's Javadoc for why guessing here was the bug.
+            facePart = sizeText.trim();
+        }
+        if (blank(facePart)) {
+            return "ขนาด " + thicknessPart + " (ขนาดโดยประมาณ)";
+        }
+        return "ขนาด " + facePart + " x " + thicknessPart + " (ขนาดโดยประมาณ)";
+    }
+
+    /**
+     * {@code "{width} cm x {height} cm"} from the catalogue's OWN {@code width_mm}/{@code
+     * height_mm} — always millimetres, never inferred from free text — divided by 10 into
+     * centimetres via {@link BigDecimal#movePointLeft}, which is an exact decimal shift (no
+     * division rounding to worry about).
+     *
+     * @return {@code null} when either dimension is missing or non-positive, so {@link #sizeLine}
+     *     falls back to the rep's typed text rather than printing a bogus "0 cm x 0 cm".
+     */
+    private static String faceSizeFromCatalogMm(BigDecimal widthMm, BigDecimal heightMm) {
+        if (widthMm == null || heightMm == null || widthMm.signum() <= 0 || heightMm.signum() <= 0) {
+            return null;
+        }
+        return format(widthMm.movePointLeft(1)) + " cm x " + format(heightMm.movePointLeft(1)) + " cm";
     }
 
     /**
@@ -79,22 +137,28 @@ public final class DealQuotationLines {
                                          int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
                                          int piecesFinal, Integer piecesPerBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
-            ? "จำนวน " + piecesBeforeWastage + " แผ่น"
-            : "พื้นที่ " + format(areaSqm) + " ตร.ม.ๆละ " + format(piecesPerSqm) + " แผ่น รวม " + piecesBeforeWastage + " แผ่น";
+            ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
+            : "พื้นที่ " + format(areaSqm) + " ตร.ม.ๆละ " + format(piecesPerSqm) + " แผ่น รวม "
+                + format(piecesBeforeWastage) + " แผ่น";
 
+        // Owner feedback pass 3: "ตัด '+ เผื่อ 0%' ออกทั้งหมด" -- a ZERO wastage value prints
+        // NOTHING for this part, in either mode, rather than "+ เผื่อ 0%" / "+ เผื่อ 0 แผ่น".
+        // Printing-only: piecesFinal itself is unaffected, it is computed upstream and simply
+        // echoed below exactly as it always was.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
         String wastagePart = "";
-        if (WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
+        if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + "%";
-        } else if (WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
+        } else if (hasWastage && WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + " แผ่น";
         }
 
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
         String roundingPart = hasBox ? " และปัดลงกล่อง" : "";
 
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + piecesFinal + " แผ่น)";
+        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " แผ่น)";
         if (hasBox) {
-            line += " (บรรจุ " + piecesPerBox + " แผ่น/กล่อง)";
+            line += " (บรรจุ " + format(piecesPerBox) + " แผ่น/กล่อง)";
         }
         return line;
     }
@@ -171,6 +235,18 @@ public final class DealQuotationLines {
             return "";
         }
         DecimalFormat format = new DecimalFormat("#,##0.##", DecimalFormatSymbols.getInstance(Locale.US));
+        return format.format(value);
+    }
+
+    /**
+     * Owner feedback pass 3: "Format ตัวเลขในคำอธิบายขอ comma ด้วย" -- thousands-grouped, no
+     * decimal places (these are always whole piece/box counts), Locale.US so the separator is
+     * "," and the decimal point (never reached here) would be ".". Same discipline as
+     * {@link #format(BigDecimal)}, just for the {@code int} piece counts that line printed
+     * ungrouped via string concatenation before this pass.
+     */
+    private static String format(int value) {
+        DecimalFormat format = new DecimalFormat("#,##0", DecimalFormatSymbols.getInstance(Locale.US));
         return format.format(value);
     }
 }

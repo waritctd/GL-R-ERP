@@ -29,6 +29,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
+      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a
+      // ผู้ออกแบบ pick") -- getByCode default-resolves to undefined so the picker's own
+      // resolved-name hint effect just finds nothing rather than throwing when a test
+      // never sets a unitCode.
+      designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       // Consumed by DealCustomerCard.jsx, which QuotationEditorPage renders instead of the
       // read-only deal summary whenever /quotations/new has no ?ticket= (inline deal creation,
       // owner ask 2026-09-10) -- see the "inline deal creation" describe block below.
@@ -299,8 +304,11 @@ async function fillCompleteQuotationItem() {
   fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'Lappato' } });
   fireEvent.change(screen.getByLabelText(/^ขนาด/), { target: { value: '60x120' } });
   fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
-  fireEvent.change(screen.getByLabelText(/^ตร\.ม\./), { target: { value: '0.72' } });
-  fireEvent.change(screen.getByLabelText(/^แผ่น/), { target: { value: '3' } });
+  // แผ่น/ตร.ม. (owner feedback 2026-09-12) -- the field now shows/accepts the RECIPROCAL of
+  // `item.sqmPerPiece`; typed value only needs to be positive for completeness, so it is not
+  // required to be the exact reciprocal of any other fixture's figure.
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
   fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '850' } });
   fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
@@ -595,8 +603,10 @@ describe('QuotationEditorPage inline deal creation', () => {
     await waitFor(() => expect(screen.getAllByText(testCustomer.name).length).toBeGreaterThan(0)); // the chip that replaces the search input
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
 
-    const projectSelect = await screen.findByLabelText(/^โครงการ/);
-    fireEvent.change(projectSelect, { target: { value: String(testProject.id) } });
+    // โครงการ is a type-ahead combobox (owner testing feedback, 2026-09-11), not a <select> --
+    // open it and pick the option, same "role=option" listbox shape as ลูกค้า above.
+    fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(testProject.name) }));
   }
 
   // #M4 (owner ruling 2026-09-10): "ALL info about the tile has to be completed" -- reuses the

@@ -74,6 +74,35 @@ function addOneDay(iso) {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * The first Mon-Fri day at or after today, in Asia/Bangkok.
+ *
+ * The same-day ADVANCE_NOTICE cases need a period that STARTS today -- that is what makes the
+ * notice 0 days, so PERSONAL's 1-day requirement is violated and the rule fires. But the period
+ * must ALSO contain at least one working day: `LeaveService` refuses one that does not, with
+ * `400 ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน`. Those two demands conflict on a Sat/Sun, which is
+ * why cases 1, 3 and 6 failed every weekend (first seen 2026-09-12, a Saturday -- and the suite
+ * had never run on a weekend before, so it went unnoticed).
+ *
+ * Using this as the END date satisfies both: the period still starts today, and it now reaches a
+ * working day. On a WEEKDAY this returns today, so the period stays today..today and behaviour is
+ * byte-for-byte what it was. On a Sat/Sun it returns the coming Monday, giving today..Monday --
+ * which still counts exactly ONE working day, because totalDays counts working days only. Every
+ * downstream "1 วัน" assertion therefore holds unchanged on either kind of day.
+ *
+ * Public holidays are NOT skipped, matching `adjacentWeekdayPairStart`'s own caveat above: if the
+ * next working day is a holiday this is still wrong, but it is wrong the same way the rest of this
+ * file already is, rather than a new mechanism.
+ */
+function firstWorkingDayOnOrAfterToday() {
+  for (let i = 0; i < 10; i += 1) {
+    const iso = daysFromToday(i);
+    const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
+    if (dow >= 1 && dow <= 5) return iso;
+  }
+  throw new Error('no Mon-Fri day found within 10 days of today');
+}
+
 // ── Composer navigation helpers ─────────────────────────────────────────────
 
 async function gotoComposer(page) {
@@ -135,9 +164,16 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
   test('case 1: a warning renders amber (not danger), submit stays enabled, and the button label states the pay consequence', async ({ page }) => {
     await gotoComposer(page);
     await chooseTypeAndAdvance(page, 'ลากิจ'); // PERSONAL, advance_notice_days = 1
-    // Dates default to today/today (defaultForm) -- 0 days' notice, violating PERSONAL's 1-day
-    // requirement, so ADVANCE_NOTICE (WARN_UNPAID_ALL) fires with no date change needed.
-    await fillStep2({ page, reason: 'e2e-real: case1 amber warning, enabled submit' });
+    // The start date defaults to today (defaultForm) -- 0 days' notice, violating PERSONAL's
+    // 1-day requirement, so ADVANCE_NOTICE (WARN_UNPAID_ALL) fires. The END date is stretched to
+    // the first working day so the period is not all-weekend, which the service rejects outright;
+    // on a weekday that IS today, leaving this exactly as it was. See
+    // firstWorkingDayOnOrAfterToday.
+    await fillStep2({
+      page,
+      endDate: firstWorkingDayOnOrAfterToday(),
+      reason: 'e2e-real: case1 amber warning, enabled submit',
+    });
     await advanceToStep3(page);
 
     // The ADVANCE_NOTICE panel is rendered (RULE_META label), amber-toned, and NOT wrapped in the
@@ -207,7 +243,11 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
     // `!step2Blocking && step2Warnings.length === 0`.
     await gotoComposer(page);
     await chooseTypeAndAdvance(page, 'ลากิจ');
-    await fillStep2({ page, reason: 'e2e-real: case3 warning suppresses passed line' });
+    await fillStep2({
+      page,
+      endDate: firstWorkingDayOnOrAfterToday(),
+      reason: 'e2e-real: case3 warning suppresses passed line',
+    });
     await expect(page.getByText('แจ้งล่วงหน้าไม่ครบกำหนด', { exact: true })).toBeVisible();
     await expect(passedLine).toHaveCount(0);
 
@@ -305,14 +345,14 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     expect(personalBefore, 'PERSONAL balance must be present in the baseline read').toBeTruthy();
     quotaRemainingBeforeCreate = Number(personalBefore.remainingDays);
 
-    // Same-day PERSONAL -> ADVANCE_NOTICE (WARN_UNPAID_ALL): the whole request becomes unpaid by
+    // PERSONAL starting today -> ADVANCE_NOTICE (WARN_UNPAID_ALL): the request becomes unpaid by
     // rule if approved, which is what makes "quota has not moved" a meaningful assertion below --
     // LeaveRepository#sumUsedDays deliberately subtracts unpaid_by_rule_days from quota
     // consumption (see that method's own Javadoc).
     const created = await apiWrite(sessions[OWNER_ROLE], 'post', '/api/leave', {
       leaveTypeCode: 'PERSONAL',
       startDate: todayInBangkok(),
-      endDate: todayInBangkok(),
+      endDate: firstWorkingDayOnOrAfterToday(),
       reason,
     });
     const body = await created.text();
@@ -321,7 +361,9 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     expect(request_.status).toBe('SUBMITTED');
     requestId = request_.id;
     totalDays = Number(request_.totalDays);
-    expect(totalDays, 'a single same-day request must be exactly 1 day').toBe(1);
+    // Still exactly 1 even when the end date is stretched over a weekend: totalDays counts
+    // WORKING days, so today..Monday on a Saturday is the single Monday.
+    expect(totalDays, 'this request must resolve to exactly 1 working day').toBe(1);
   });
 
   test.afterAll(async () => {

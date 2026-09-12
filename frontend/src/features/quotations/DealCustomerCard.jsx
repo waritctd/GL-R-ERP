@@ -60,6 +60,75 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const [newProjectName, setNewProjectName] = useState('');
   const [savingProject, setSavingProject] = useState(false);
 
+  // โครงการ type-ahead (owner testing feedback, 2026-09-11: "as the project list grows, typing
+  // the first few characters should filter it down"). The full list is already fetched once per
+  // customer above (`api.customers.projects`), so this filters CLIENT-SIDE over that already-loaded
+  // array rather than adding a search endpoint -- there is no per-keystroke request to debounce.
+  // Interaction mirrors the ลูกค้า combobox above (input + `role="listbox"` popup, a chip once
+  // something is picked) but adds real keyboard support, which that one does not have: arrow keys
+  // move a highlighted row (tracked as an index, not DOM focus, so typing and navigating both stay
+  // on the input -- the standard ARIA 1.2 combobox pattern), Enter picks the highlighted row (or
+  // opens "เพิ่มโครงการใหม่" when that row is highlighted), Escape closes the popup without
+  // picking anything.
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectActiveIndex, setProjectActiveIndex] = useState(-1);
+  const trimmedProjectSearch = projectSearch.trim().toLowerCase();
+  const filteredProjects = trimmedProjectSearch
+    ? projectOptions.filter((p) => p.name.toLowerCase().includes(trimmedProjectSearch))
+    : projectOptions;
+  // filteredProjects.length is one past the last real row: the "+ เพิ่มโครงการใหม่" row that
+  // always renders last in the popup.
+  const projectRowCount = filteredProjects.length + 1;
+
+  function openProjectDropdown() {
+    if (!customer) return;
+    setProjectOpen(true);
+  }
+
+  function closeProjectDropdown() {
+    setProjectOpen(false);
+    setProjectActiveIndex(-1);
+  }
+
+  function selectProject(next) {
+    onChange({ project: next });
+    setProjectSearch('');
+    closeProjectDropdown();
+  }
+
+  function openNewProjectFromDropdown() {
+    // F3-style seed, same idea as เพิ่มลูกค้าใหม่ below: start the new-project name from whatever
+    // the rep already typed into the filter instead of a blank field.
+    setNewProjectName(projectSearch.trim());
+    setShowNewProject(true);
+    closeProjectDropdown();
+  }
+
+  function handleProjectKeyDown(e) {
+    if (!customer) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!projectOpen) { openProjectDropdown(); return; }
+      setProjectActiveIndex((i) => (i + 1) % projectRowCount);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!projectOpen) { openProjectDropdown(); return; }
+      setProjectActiveIndex((i) => (i - 1 + projectRowCount) % projectRowCount);
+    } else if (e.key === 'Enter') {
+      if (!projectOpen || projectActiveIndex === -1) return;
+      e.preventDefault();
+      if (projectActiveIndex === filteredProjects.length) {
+        openNewProjectFromDropdown();
+      } else {
+        selectProject(filteredProjects[projectActiveIndex]);
+      }
+    } else if (e.key === 'Escape' && projectOpen) {
+      e.preventDefault();
+      closeProjectDropdown();
+    }
+  }
+
   // ผู้สั่งซื้อ itself now lives in QuotationContactPicker (owner feedback F2, 2026-09-10) --
   // including its own contact fetch -- because the editor needs the same control on the
   // `?ticket=` and existing-DRAFT paths, where this card is not rendered at all.
@@ -94,16 +163,21 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
 
   function selectCustomer(next) {
     // Picking a NEW customer always resets โครงการ/ผู้ติดต่อ -- either was scoped to the
-    // previous customer and cannot carry over.
+    // previous customer and cannot carry over. Also drops any in-progress โครงการ filter text/popup
+    // state, which otherwise would go on filtering the NEW customer's project list.
     onChange({ customer: next, project: null, contact: null });
     setCustomerSearch('');
     setCustomerResults([]);
     setCustomerOpen(false);
     setShowNewCustomer(false);
+    setProjectSearch('');
+    closeProjectDropdown();
   }
 
   function clearCustomer() {
     onChange({ customer: null, project: null, contact: null });
+    setProjectSearch('');
+    closeProjectDropdown();
   }
 
   async function handleCreateCustomer() {
@@ -123,10 +197,6 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     } finally {
       setSavingCustomer(false);
     }
-  }
-
-  function selectProject(next) {
-    onChange({ project: next });
   }
 
   async function handleCreateProject() {
@@ -235,22 +305,82 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
           ) : null}
         </div>
 
-        <FormField label="โครงการ" htmlFor="deal-project" required error={errors?.project}>
-          <select
-            id="deal-project"
-            disabled={!customer}
-            value={project?.id ?? ''}
-            onChange={(e) => {
-              if (e.target.value === '__new__') { setShowNewProject(true); return; }
-              const found = projectOptions.find((p) => String(p.id) === e.target.value) ?? null;
-              selectProject(found);
-            }}
-          >
-            <option value="">{customer ? (projectsLoading ? 'กำลังโหลด…' : '- เลือกโครงการ -') : 'เลือกลูกค้าก่อน'}</option>
-            {projectOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            {customer ? <option value="__new__">+ โครงการใหม่</option> : null}
-          </select>
-        </FormField>
+        <div className="relative">
+          <FormField label="โครงการ" htmlFor="deal-project" required error={errors?.project}>
+            {project ? (
+              <div className="flex items-center gap-2 rounded-md border border-border-muted bg-surface-muted px-2.5 py-1.5 text-sm">
+                <span className="flex-1">{project.name}</span>
+                <button
+                  type="button"
+                  onClick={() => { onChange({ project: null }); setProjectSearch(''); }}
+                  className="cursor-pointer border-0 bg-transparent p-0 text-text-faint"
+                  aria-label="ล้างโครงการที่เลือก"
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              </div>
+            ) : (
+              <input
+                id="deal-project"
+                role="combobox"
+                autoComplete="off"
+                disabled={!customer}
+                aria-expanded={projectOpen}
+                aria-controls="project-typeahead-list"
+                aria-autocomplete="list"
+                aria-activedescendant={projectOpen && projectActiveIndex >= 0 ? `project-option-${projectActiveIndex}` : undefined}
+                placeholder={customer ? (projectsLoading ? 'กำลังโหลด…' : 'พิมพ์ค้นหาโครงการ…') : 'เลือกลูกค้าก่อน'}
+                value={projectSearch}
+                onChange={(e) => { setProjectSearch(e.target.value); setProjectActiveIndex(-1); openProjectDropdown(); }}
+                onFocus={openProjectDropdown}
+                onBlur={() => setTimeout(closeProjectDropdown, 150)}
+                onKeyDown={handleProjectKeyDown}
+              />
+            )}
+          </FormField>
+          {!project && projectOpen && customer ? (
+            <ul
+              id="project-typeahead-list"
+              role="listbox"
+              aria-label="ผลการค้นหาโครงการ"
+              className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
+            >
+              {projectsLoading ? <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังโหลด…</li> : null}
+              {!projectsLoading && filteredProjects.length === 0 ? (
+                <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบโครงการ</li>
+              ) : null}
+              {filteredProjects.map((p, idx) => (
+                <li key={p.id} role="presentation">
+                  <button
+                    type="button"
+                    id={`project-option-${idx}`}
+                    role="option"
+                    aria-selected={idx === projectActiveIndex}
+                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                    onMouseEnter={() => setProjectActiveIndex(idx)}
+                    onMouseDown={(e) => { e.preventDefault(); selectProject(p); }}
+                  >
+                    {p.name}
+                  </button>
+                </li>
+              ))}
+              <li className="border-t border-border-subtle bg-surface-muted">
+                <button
+                  type="button"
+                  id={`project-option-${filteredProjects.length}`}
+                  role="option"
+                  aria-selected={filteredProjects.length === projectActiveIndex}
+                  className={`flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link ${filteredProjects.length === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                  onMouseEnter={() => setProjectActiveIndex(filteredProjects.length)}
+                  onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
+                >
+                  <Icon name="plus" size={13} />
+                  เพิ่มโครงการใหม่
+                </button>
+              </li>
+            </ul>
+          ) : null}
+        </div>
       </div>
 
       {customer ? (
@@ -316,6 +446,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
       <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
         <QuotationContactPicker
           customerId={customer?.id ?? null}
+          customerName={customer?.name ?? null}
           value={contact}
           onChange={(next) => onChange({ contact: next })}
           error={errors?.contact}

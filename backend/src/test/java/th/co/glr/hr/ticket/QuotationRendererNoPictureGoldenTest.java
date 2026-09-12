@@ -53,6 +53,18 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * branch, the paginated branch (with no-split breaks), the English form, and the legacy (non-v2)
  * wrappers' shape. Regenerate ONLY when a change to the no-picture output is intended:
  * {@code ./mvnw -Dtest=QuotationRendererNoPictureGoldenTest -Dquotation.golden.update=true test}.
+ *
+ * <p><b>Re-baselined 2026-09-12</b> for {@code single-page}/{@code one-page-scaled}/
+ * {@code paginated}/{@code english} (not {@code legacy-shape}, which has no signature block): the
+ * owner-reported A4 signature-row-width defect (3f80c23c, "ช่วยจัดตำแหน่ง ... ให้พอดีความกว้างหน้า
+ * กระดาษ A4" — the four signature labels stopped ~65% across an otherwise full-width form) and the
+ * related zero-sized-signature-anchor defect (same commit) deliberately change the signature
+ * labels row, the names row, the date row, and the signature picture's anchor — nothing else. This
+ * is an INTENTIONAL move of the pinned baseline forward to the post-fix renderer, not baseline
+ * drift: it was confirmed by diffing every fixture's regenerated dump against its prior version and
+ * finding changes confined to exactly those four regions in each. The XLS byte hashes below were
+ * re-derived the same way from a real regenerated run (docker + backend/fonts/ licensed Thai
+ * fonts), not copied from elsewhere.
  */
 class QuotationRendererNoPictureGoldenTest {
     private static final String UPDATE_PROPERTY = "quotation.golden.update";
@@ -94,12 +106,16 @@ class QuotationRendererNoPictureGoldenTest {
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "english", "legacy-shape"})
     void aQuotationWithoutPicturesRendersByteIdenticallyToBefore(String fixture) throws Exception {
+        // Re-pinned 2026-09-12 for single-page/one-page-scaled/paginated/english: the owner-reported
+        // A4 signature-row-width fix (3f80c23c) deliberately moves the signature labels/names/date
+        // rows and the signature picture anchor -- see this class's own Javadoc. legacy-shape has
+        // no signature block, so its hash is untouched from the pre-picture baseline.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "d4a3be94340ad689db387ba249e71d67d64d1178cec52416f7c2c150ee759070",
-            "one-page-scaled", "f9227c8d890881e92cd0b824ccd3e6f988890a06466839b14bc83e75304da563",
-            "paginated", "3c42cbd892921bdab80a235265abf985ed42a454bf11c945891caee2212ca122",
+            "single-page", "b1eb3532779ff32924fb47a924713a331dedbbad43a1e06aaf83045eec81b6a2",
+            "one-page-scaled", "7bd39413de1df940753bccad20de0baff575cb73a403a0ad2f120cd9d611dd2b",
+            "paginated", "50d979cb59c89188b9a113ba5d810d386cb2a31aac3666391aa8de9bb8f1b047",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
-            "english", "6974c14278613b2521e77218a383b8a38835e6b2c08295ad0831d548a33efbd1",
+            "english", "9e5d8eb285008332f3c128ec8743c21b8242c13aa50c19694c949fe6c04a04dd",
             "legacy-shape", "0eeb95aac63791149d8e230de304554126e91ee8ceca66c833cd8912fce4a6f2");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),

@@ -663,9 +663,32 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     });
   });
 
-  // All 215 Bode rows are priced per_sqm yet carry no sqm_per_piece, which left the แผ่น↔ตร.ม.
-  // toggle unable to cross-fill — the stranded-quantity state reported from UAT.
-  it('derives ตร.ม./แผ่น from a millimetre size when the catalog has no factor', async () => {
+  // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolves ตร.ม./แผ่น the same way
+  // the quotation item editor does (resolveTileSqmPerPiece) — the catalog's own sqm_per_piece,
+  // nothing guessed from the free-text size.
+  it('fills ตร.ม./แผ่น straight from the catalog row when one is present', async () => {
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct({ sqmPerPiece: 0.72 })] });
+    renderModal({ onSubmit: vi.fn() });
+
+    await selectCustomerAndProject();
+    await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+
+    expect(await screen.findByText(/1 แผ่น = 0.72 ตร.ม./)).toBeTruthy();
+
+    // Cross-fill works from the catalog figure: 10 แผ่น → 7.200 ตร.ม.
+    fireEvent.change(screen.getByPlaceholderText('จำนวนแผ่น'), { target: { value: '10' } });
+    expect(screen.getByPlaceholderText('เช่น 120.500').value).toBe('7.200');
+  });
+
+  // REGRESSION (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง"): this modal used to carry its own
+  // deriveSqmPerPiece(sizeRaw), which read "600x1200" as MILLIMETRES (both dimensions >= 100) and
+  // silently resolved 0.72 ตร.ม./แผ่น. All 215 Bode rows are priced per_sqm yet carry no
+  // sqm_per_piece of their own, which is exactly the shape that used to trigger the guess. The
+  // owner's ruling forbids inferring a unit from the free-text size at all: with no catalog
+  // sqm_per_piece, nothing may be invented, so the rep enters both quantities by hand instead —
+  // the SAME "no factor" state as any other catalog row with nothing to resolve from.
+  it('never derives ตร.ม./แผ่น from the size string, even one the deleted heuristic read as millimetres', async () => {
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct({ sqmPerPiece: null })] });
     renderModal({ onSubmit: vi.fn() });
 
@@ -673,18 +696,15 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     await addItemAndSearchBrand('Bode');
     await pickFromDropdown('Bode');
 
-    // 600mm × 1200mm = 0.72 ตร.ม., and the UI says so is derived rather than catalog fact.
-    expect(await screen.findByText(/1 แผ่น = 0.72 ตร.ม./)).toBeTruthy();
-    expect(screen.getByText(/คำนวณจากขนาด 600x1200/)).toBeTruthy();
-
-    // Cross-fill now works: 10 แผ่น → 7.200 ตร.ม.
-    fireEvent.change(screen.getByPlaceholderText('จำนวนแผ่น'), { target: { value: '10' } });
-    expect(screen.getByPlaceholderText('เช่น 120.500').value).toBe('7.200');
+    expect(await screen.findByText(/ไม่มีค่า ตร.ม./)).toBeTruthy();
+    expect(screen.queryByText(/คำนวณจากขนาด/)).toBeNull();
+    expect(screen.getByPlaceholderText('จำนวนแผ่น').readOnly).toBe(false);
+    expect(screen.getByPlaceholderText('เช่น 120.500').readOnly).toBe(false);
   });
 
   it('leaves BOTH quantity boxes editable when no ตร.ม./แผ่น factor can be established', async () => {
-    // A size that cannot be read as millimetres ("598X598X18" carries a thickness) — the catalog
-    // has no factor and none can be derived, so neither box may be locked.
+    // A size string that carries a thickness suffix ("598X598X18") -- the catalog has no factor
+    // and none is derived, so neither box may be locked.
     api.catalog.prices.mockResolvedValue({
       items: [mockCatalogProduct({ sizeRaw: '598X598X18', sqmPerPiece: null })],
     });
@@ -697,6 +717,22 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     expect(await screen.findByText(/ไม่มีค่า ตร.ม./)).toBeTruthy();
     expect(screen.getByPlaceholderText('จำนวนแผ่น').readOnly).toBe(false);
     expect(screen.getByPlaceholderText('เช่น 120.500').readOnly).toBe(false);
+  });
+
+  // V153: a per_linear_m row's own sqm_per_piece is LINEAR METRES per piece, not area (the same
+  // rule QuotationItemRow's resolveTileSqmPerPiece pins) -- reading it as ตร.ม./แผ่น here would be
+  // 14x off, so it must resolve to "no factor" exactly like an absent one.
+  it('never reads a per_linear_m catalog row\'s sqm_per_piece as an area', async () => {
+    api.catalog.prices.mockResolvedValue({
+      items: [mockCatalogProduct({ priceUnit: 'per_linear_m', sqmPerPiece: 0.36 })],
+    });
+    renderModal({ onSubmit: vi.fn() });
+
+    await selectCustomerAndProject();
+    await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+
+    expect(await screen.findByText(/ไม่มีค่า ตร.ม./)).toBeTruthy();
   });
 });
 

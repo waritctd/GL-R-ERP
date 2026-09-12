@@ -22,6 +22,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -93,9 +94,9 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
             new QuotationRenderer(), null, new EmployeeAuthRepository(jdbc));
         NotificationEmailService approvalMailer =
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
-        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc), tickets, customers, contacts,
+        quotationService = new DealQuotationService(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)), tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), new EmployeeAuthRepository(jdbc),
-            new EmployeeSignatureRepository(jdbc), "https://portal.test",
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
             // app.quotation.bank-block-line1..3 (#929) — empty: the bank block is not under test here.
             "", "", "");
 
@@ -557,9 +558,11 @@ class DealQuotationPictureIntegrationTest extends AbstractPostgresIntegrationTes
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30, null, items);
     }
 
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
+     * see DealQuotationService#resolveSqmPerPiece's Javadoc). */
     private static ItemInput sampleItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), null, WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
+            new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, pieces,
             WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก",
             30, 45, null);
     }
