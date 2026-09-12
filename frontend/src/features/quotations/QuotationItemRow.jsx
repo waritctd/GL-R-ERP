@@ -51,6 +51,35 @@ export function resolveTileSqmPerPiece(cat) {
 }
 
 /**
+ * The ขนาด (ซม.) text for a catalogue pick, built from the catalogue's OWN millimetres.
+ *
+ * ⚠️ Do NOT go back to `cat.sizeRaw` here. That column is the raw source string exactly as the
+ * factory's price list wrote it, kept for provenance (V171) — and for some sources it is not a
+ * size at all. Equipe's list carries the size inside the product NAME (its import profile sets
+ * `size_from: product_name`), so every one of its 2,124 production rows has a `size_raw` like
+ * `"1,2X20 JOLLY COCO WHITE MATT"`. Putting that in a field labelled ขนาด (ซม.) is what the owner
+ * reported on 2026-09-13, and it reached the printed ใบเสนอราคา.
+ *
+ * `widthMm`/`heightMm` are ALWAYS millimetres (same guarantee `resolveTileSqmPerPiece` relies on
+ * above, verified across all ten brands in production), so this is a pure /10 into the centimetres
+ * the field asks for — no unit inference, which is exactly what the owner's "Do not infer
+ * anything" ruling forbids. Trailing zeros are trimmed so 600x1200 mm reads "60x120", not
+ * "60.0x120.0", matching the field's own `เช่น 60x120` hint.
+ *
+ * Falls back to `sizeRaw` only when the catalogue has no dimensions at all (~50 rows): a dirty
+ * string the rep can correct beats an empty required field.
+ */
+export function sizeTextFromCatalog(cat) {
+  const w = Number(cat?.widthMm);
+  const h = Number(cat?.heightMm);
+  if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+    const cm = (mm) => String(Number((mm / 10).toFixed(2)));
+    return `${cm(w)}x${cm(h)}`;
+  }
+  return cat?.sizeRaw ?? cat?.size ?? '';
+}
+
+/**
  * One item row of the ใบเสนอราคา editor -- catalog typeahead (autofills, everything stays
  * editable after), quantity mode toggle, wastage segmented control, and the live calculation
  * line the parent keeps up to date via a 300ms-debounced `calculate-line` call (see
@@ -175,7 +204,7 @@ export function QuotationItemRow({
       model: cat.collection ?? cat.productName ?? cat.productCode ?? item.model,
       color: cat.color ?? '',
       texture: cat.surface ?? '',
-      sizeText: cat.sizeRaw ?? cat.size ?? '',
+      sizeText: sizeTextFromCatalog(cat),
       thicknessMm: cat.thicknessMm ?? item.thicknessMm ?? null,
       sqmPerPiece: resolvedSqmPerPiece ?? item.sqmPerPiece ?? null,
       piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(resolvedSqmPerPiece ?? item.sqmPerPiece) ?? '',
