@@ -596,8 +596,8 @@ export function QuotationItemRow({
           <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
             <input
               id={`disc-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.discountPct ?? 0}
-              onChange={(e) => patch({ discountPct: e.target.value === '' ? 0 : Number(e.target.value) })}
+              value={item.discountPct ?? ''}
+              onChange={(e) => patch({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
             />
           </FormField>
         ) : null}
@@ -789,7 +789,7 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     catalogSqmPerPiece: null, catalogPriceUnit: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
-    unitPrice: '', discountPct: 0,
+    unitPrice: '', discountPct: null,
     originCountry, ...defaultLeadTimeForOrigin(originCountry),
     itemNotes: '',
     piecesPerSqm: null, piecesBeforeWastage: null, piecesAfterWastage: null, piecesFinal: null, boxes: null,
@@ -808,7 +808,7 @@ export function emptyPlainItem(groupId = null) {
     groupId,
     lineType: LINE_TYPE_PLAIN,
     locationLabel: '',
-    description: '', quantity: '', unit: '', unitPrice: '', discountPct: 0, itemNotes: '',
+    description: '', quantity: '', unit: '', unitPrice: '', discountPct: null, itemNotes: '',
     netUnitPrice: null, lineAmount: null, calcPending: false,
   };
 }
@@ -841,7 +841,7 @@ export function rowFromServerItem(item, priceMode = 'NET') {
     return {
       ...base, lineType: LINE_TYPE_PLAIN, description: item.descriptionLine ?? '',
       quantity: item.quantity ?? '', unit: item.unit ?? '', unitPrice: item.unitPrice ?? '',
-      discountPct: item.discountPct ?? 0,
+      discountPct: item.discountPct ?? null,
     };
   }
   if (type === LINE_TYPE_ADJUSTMENT) {
