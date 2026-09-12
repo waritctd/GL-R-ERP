@@ -31,5 +31,17 @@ public record ProductPriceDto(
     // CatalogPricingKey already uses (never sales.factory_config.country -- V151). Appended last,
     // same reason as thicknessMm/pcsPerBox/sqmPerBox: every pre-existing 16-arg construction site
     // keeps compiling.
-    String originCountryCode
+    String originCountryCode,
+    // Unit-guessing heuristic removal (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง"):
+    // price_catalog.product_prices.width_mm/height_mm are ALWAYS millimetres (unlike the
+    // free-text size_raw column, which mixes cm and mm) -- DealQuotationService#resolveSqmPerPiece
+    // uses these to COMPUTE sqmPerPiece when the catalog row's own sqm_per_piece is absent,
+    // instead of guessing the unit of a typed size string. Never used for a per_linear_m row (its
+    // sqm_per_piece is linear metres, not area, and geometry disagrees with the catalogue's own
+    // sqm_per_piece on ~1,500 further rows -- mesh/mosaic sheets at a clean 0.750 ratio -- so the
+    // catalogue's own sqm_per_piece always wins when present). Appended last, same reason as
+    // thicknessMm/pcsPerBox/sqmPerBox/originCountryCode above: every pre-existing 17-arg
+    // construction site keeps compiling.
+    BigDecimal widthMm,
+    BigDecimal heightMm
 ) {}

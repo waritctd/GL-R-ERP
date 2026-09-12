@@ -187,6 +187,12 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * The subtle one: a size-level override is the escape hatch for a collection whose trim differs
      * from its field tile. A bulk collection-level save must not wipe it.
+     *
+     * <p>{@code size_norm = '200X200'} is the V172 canonical form (derived from
+     * {@code width_mm}/{@code height_mm}, both 200 in {@link #seedRowWithoutThickness}), not the
+     * pre-V172 raw-text form ('20X20' from {@code size_raw = '20x20'}) — the override must be
+     * expressed in whatever form {@code product_prices.size_norm} actually takes for the join to
+     * fire at all.
      */
     @Test
     void aBulkCollectionSaveLeavesSizeLevelOverridesIntact() throws Exception {
@@ -196,7 +202,7 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("""
             INSERT INTO price_catalog.collection_thickness_default
                 (factory_id, collection, size_norm, thickness_mm)
-            VALUES (:f, 'ANTHOLOGY', '20X20', 20)
+            VALUES (:f, 'ANTHOLOGY', '200X200', 20)
             """, new MapSqlParameterSource().addValue("f", factoryId));
 
         mockMvc.perform(put("/api/catalog/thickness-defaults").session(session("ceo"))
@@ -206,7 +212,7 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
 
         Integer overrides = jdbc.queryForObject("""
             SELECT count(*) FROM price_catalog.collection_thickness_default
-             WHERE size_norm = '20X20' AND thickness_mm = 20
+             WHERE size_norm = '200X200' AND thickness_mm = 20
             """, Map.of(), Integer.class);
         assertThat(overrides).as("the size-level override must survive a collection-level save")
             .isEqualTo(1);

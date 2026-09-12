@@ -143,14 +143,48 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", id), Long.class);
 
         // Three overlapping defaults, deliberately inserted least-specific first so a naive
-        // "first row wins" implementation would pick the wrong one.
+        // "first row wins" implementation would pick the wrong one. '300X600' is the V172
+        // canonical form (from width_mm=300/height_mm=600 above), not the pre-V172 raw-text
+        // form ('30X60' from size_raw) -- the override must match whatever size_norm actually is.
         jdbc.update("""
             INSERT INTO price_catalog.collection_thickness_default
                 (factory_id, collection, size_norm, thickness_mm)
-            VALUES (:f, NULL, NULL, 6), (:f, 'BARNET', NULL, 9), (:f, 'BARNET', '30X60', 12)
+            VALUES (:f, NULL, NULL, 6), (:f, 'BARNET', NULL, 9), (:f, 'BARNET', '300X600', 12)
             """, new MapSqlParameterSource().addValue("f", factoryId));
 
         assertThat(view(id).thickness()).isEqualByComparingTo("12");
+    }
+
+    /**
+     * V172 regression guard: recanonicalising size_norm (from raw text to
+     * {@code width_mm}x{@code height_mm}) must not disturb the ONE shape actually in production
+     * today — a collection-level default ({@code size_norm IS NULL}), which matches regardless of
+     * {@code size_norm}'s value or format. Measured on production before V172: all 37 rows in
+     * {@code collection_thickness_default} are collection-level; none key on a specific size.
+     */
+    @Test
+    void collectionLevelDefaultStillMatchesAfterSizeNormCanonicalisation() {
+        long id = insertCatalogProduct("V172 F1", "IT", "SN-1",
+            new BigDecimal("55.00"), "EUR", "per_sqm", "ACTIVE");
+        // Deliberately messy size_raw (the exact shape V172's header describes size_norm used to
+        // mishandle) — collection-level matching must not care what size_norm resolves to here.
+        setGeometry(id, "60x120 9MM", 600, 1200, null, null, null);
+        jdbc.update("UPDATE price_catalog.product_prices SET collection = 'SN-COLL' WHERE price_id = :id",
+            Map.of("id", id));
+        Long factoryId = jdbc.queryForObject(
+            "SELECT factory_id FROM price_catalog.product_prices WHERE price_id = :id",
+            Map.of("id", id), Long.class);
+
+        assertThat(view(id).status()).isEqualTo("NO_THICKNESS");
+
+        jdbc.update("""
+            INSERT INTO price_catalog.collection_thickness_default
+                (factory_id, collection, size_norm, thickness_mm)
+            VALUES (:f, 'SN-COLL', NULL, 11)
+            """, new MapSqlParameterSource().addValue("f", factoryId));
+
+        assertThat(view(id).status()).isEqualTo("PRICEABLE");
+        assertThat(view(id).thickness()).isEqualByComparingTo("11");
     }
 
     @Test

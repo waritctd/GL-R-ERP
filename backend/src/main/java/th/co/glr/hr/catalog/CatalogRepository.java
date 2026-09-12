@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -156,7 +157,8 @@ public class CatalogRepository {
                    pp.product_code, pp.grade, pp.collection, pp.product_name,
                    pp.color, pp.surface, pp.size_raw,
                    pp.price, pp.currency, pp.price_unit, pp.sqm_per_piece,
-                   pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code
+                   pp.thickness_mm, pp.pcs_per_box, pp.sqm_per_box, f.country AS origin_country_code,
+                   pp.width_mm, pp.height_mm
               FROM price_catalog.product_prices pp
               JOIN price_catalog.price_list_versions plv ON plv.version_id = pp.version_id
               JOIN price_catalog.factories           f   ON f.factory_id   = pp.factory_id
@@ -192,8 +194,95 @@ public class CatalogRepository {
                 rs.getBigDecimal("thickness_mm"),
                 rs.getBigDecimal("pcs_per_box"),
                 rs.getBigDecimal("sqm_per_box"),
-                rs.getString("origin_country_code")
+                rs.getString("origin_country_code"),
+                rs.getBigDecimal("width_mm"),
+                rs.getBigDecimal("height_mm")
             )
         );
+    }
+
+    /**
+     * One catalog price row's {@code sqm_per_piece}/{@code price_unit}/{@code width_mm}/
+     * {@code height_mm}, by its {@code price_id} — used by {@code DealQuotationService
+     * #resolveSqmPerPiece} to resolve a tile's ตร.ม./แผ่น from the catalogue rather than guessing
+     * the unit of a free-text size string (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง").
+     *
+     * <p>Deliberately its own record and its own query rather than widening {@link #findPricingKeys}'s
+     * {@link CatalogPricingKey} — that record and its callers ({@code DealQuotationService} would
+     * become a third, alongside the pre-existing {@code LandedCostCalculator}) are keyed and
+     * batched for a DIFFERENT purpose; broadening it here risks an unrelated caller.
+     *
+     * <p>NOT {@code ACTIVE}-version-filtered on purpose (unlike {@link #searchProductPrices}): a
+     * saved item may point at a price row whose {@code price_list_versions} has since gone
+     * non-ACTIVE (a superseded price list), and the catalogue's own geometry for that EXACT row is
+     * still the right fallback — this is "what does the row Sales already picked say", not "what
+     * can Sales currently pick".
+     *
+     * @return {@code Optional.empty()} when {@code priceId} does not exist at all.
+     */
+    public record CatalogSqmBasis(BigDecimal sqmPerPiece, String priceUnit, BigDecimal widthMm, BigDecimal heightMm) {}
+
+    public Optional<CatalogSqmBasis> findSqmBasis(long priceId) {
+        List<CatalogSqmBasis> rows = jdbc.query(
+            """
+            SELECT sqm_per_piece, price_unit, width_mm, height_mm
+              FROM price_catalog.product_prices
+             WHERE price_id = :priceId
+            """,
+            Map.of("priceId", priceId),
+            (rs, i) -> new CatalogSqmBasis(
+                rs.getBigDecimal("sqm_per_piece"),
+                rs.getString("price_unit"),
+                rs.getBigDecimal("width_mm"),
+                rs.getBigDecimal("height_mm")
+            )
+        );
+        return rows.stream().findFirst();
+    }
+
+    /**
+     * Batched twin of {@link #findSqmBasis} — same SELECT shape, one round trip for every distinct
+     * {@code priceId} instead of one call per row. Added for {@code DealQuotationRepository}'s
+     * item-mapping path (owner ruling 2026-09-12, "normalize it in the database so its the same in
+     * unit. make the size cm and the thickness mm"): a loaded quotation can carry a few dozen tile
+     * rows, and {@code DealQuotationLines#sizeLine} needs each row's {@code width_mm}/{@code
+     * height_mm} to print the face size in centimetres — looking that up ONE ROW AT A TIME while
+     * mapping the result set would reintroduce the exact N+1 shape {@link #findPricingKeys}'s own
+     * Javadoc already documents fixing for {@code LandedCostCalculator}.
+     *
+     * <p>Same non-{@code ACTIVE}-filtered semantics as {@link #findSqmBasis} — deliberately: a
+     * stored quotation item may point at a price row whose version has since gone non-ACTIVE, and
+     * the catalogue's geometry for that EXACT row is still the right one to print.
+     *
+     * @return a map with one entry per DISTINCT id in {@code priceIds} that exists in {@code
+     *         price_catalog.product_prices} — an id that does not exist there (deleted row) simply
+     *         has no entry, same as {@link #findSqmBasis}'s {@code Optional.empty()}.
+     */
+    public Map<Long, CatalogSqmBasis> findSqmBases(Collection<Long> priceIds) {
+        if (priceIds == null || priceIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> distinctIds = new ArrayList<>(new LinkedHashSet<>(priceIds));
+        Map<Long, CatalogSqmBasis> result = new HashMap<>();
+        for (int start = 0; start < distinctIds.size(); start += PRICE_ID_CHUNK_SIZE) {
+            List<Long> chunk = distinctIds.subList(start, Math.min(start + PRICE_ID_CHUNK_SIZE, distinctIds.size()));
+            jdbc.query(
+                """
+                SELECT price_id, sqm_per_piece, price_unit, width_mm, height_mm
+                  FROM price_catalog.product_prices
+                 WHERE price_id IN (:priceIds)
+                """,
+                new MapSqlParameterSource().addValue("priceIds", chunk),
+                rs -> {
+                    result.put(rs.getLong("price_id"), new CatalogSqmBasis(
+                        rs.getBigDecimal("sqm_per_piece"),
+                        rs.getString("price_unit"),
+                        rs.getBigDecimal("width_mm"),
+                        rs.getBigDecimal("height_mm")
+                    ));
+                }
+            );
+        }
+        return result;
     }
 }

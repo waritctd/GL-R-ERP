@@ -173,64 +173,18 @@ class WastageCalculatorTest {
         assertThat(grand).isEqualByComparingTo("160.51");
     }
 
-    @Test
-    void parseSqmPerPieceFromSize_readsWidthByHeightAsCentimetres() {
-        // The worked example in docs/sales/quotation-v2-plan.md: "60x120" -> 0.72 sqm.
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60x120")).isEqualByComparingTo("0.72");
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60X60")).isEqualByComparingTo("0.36");
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60×60")).isEqualByComparingTo("0.36");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_returnsNullWhenUnparseable() {
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize(null)).isNull();
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("")).isNull();
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("round")).isNull();
-    }
-
-    // ── H4: "600x1200" used to resolve as 72 sqm (unconditional ÷100 on each dimension) — a
-    // 100x under-quote. All six cases below describe THE SAME PHYSICAL TILE (60cm x 120cm, or
-    // 60cm x 60cm) under different notations, and must all resolve to the same figure. ──────────
-
-    @Test
-    void parseSqmPerPieceFromSize_bareCentimetreNotation_60x120() {
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60x120")).isEqualByComparingTo("0.72");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_bareMillimetreNotation_600x1200_noLongerReads100xTooBig() {
-        // The H4 regression case: NOT 72 (the old unconditional-cm bug), 0.72 (mm, by magnitude).
-        BigDecimal result = WastageCalculator.parseSqmPerPieceFromSize("600x1200");
-        assertThat(result).isEqualByComparingTo("0.72");
-        assertThat(result).isNotEqualByComparingTo("72");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_explicitCmToken_60x120Cm() {
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60 x 120 cm")).isEqualByComparingTo("0.72");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_explicitMmToken_600x1200Mm() {
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("600X1200 mm")).isEqualByComparingTo("0.72");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_thicknessSuffixIgnored_60x60x0_9() {
-        // The regex only reads the first WxH pair; a trailing "x0.9" thickness must not confuse it
-        // into reading "60" against "0.9".
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60x60x0.9")).isEqualByComparingTo("0.36");
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_largeFormatMillimetreSlab_598x598x18_noExplicitToken() {
-        // A real large-format porcelain slab notation (598mm x 598mm x 18mm thick), with no
-        // explicit unit token — must resolve by magnitude alone as millimetres, not centimetres
-        // (which would wrongly claim a 35.76 sqm single tile).
-        BigDecimal result = WastageCalculator.parseSqmPerPieceFromSize("598X598X18");
-        assertThat(result).isEqualByComparingTo("0.357604");
-        assertThat(result).isLessThan(new BigDecimal("1"));
-    }
+    // ── REMOVED (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง") ───────────────────────────────
+    // This class used to carry parseSqmPerPieceFromSize/detectUnit -- a cm-vs-mm GUESS from a
+    // free-text size string -- and nine tests here (readsWidthByHeightAsCentimetres,
+    // returnsNullWhenUnparseable, the six H4 "same tile, different notation" cases, and
+    // ignoresIncidentalLettersThatMerelyContainAUnitToken) pinned that guess's behaviour. Deleted
+    // along with the method: it got a REAL catalog product wrong ("200x300" read as centimetres --
+    // a 2m x 3m tile, 6.0 sqm/piece -- against the owner's own document for that product, 0.061
+    // sqm/piece; wrong by ~98x). The regression that guards against this heuristic ever coming
+    // back now lives on {@code DealQuotationService} instead, since resolution is now the
+    // service's job (catalog lookup), not this pure-arithmetic class's -- see
+    // {@code DealQuotationServiceSqmPerPieceTest#sqmPerPiece_200x300_isNeverSilentlyReadAsCentimetres}.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void areaMode_missingSqmPerPiece_throws() {
@@ -277,15 +231,12 @@ class WastageCalculatorTest {
     }
 
     @Test
-    void sqmPerPiece_tooLarge_rejectedWithThaiMessage_evenWhenAnExplicitUnitTokenProducedIt() {
-        // An explicit (but mislabeled) unit token can still hand the calculator an unreasonable
-        // figure -- "600x1200 cm" claims the pair is centimetres despite plainly being millimetre-
-        // scale, resolving to 72 sqm per piece. The sanity bound is the backstop for exactly this:
-        // it does not re-litigate the unit, it just refuses an implausible RESULT.
-        BigDecimal mislabeled = WastageCalculator.parseSqmPerPieceFromSize("600x1200 cm");
-        assertThat(mislabeled).isEqualByComparingTo("72");
+    void sqmPerPiece_tooLarge_rejectedWithThaiMessage() {
+        // The sanity bound doesn't care how an implausible figure was arrived at -- 72 sqm/piece
+        // is refused whether it came from a mislabeled unit, a bad catalog row, or anything else
+        // that resolved sqmPerPiece; it refuses the RESULT, not any particular source of it.
         assertThatThrownBy(() -> WastageCalculator.calculate(new Input(
-            mislabeled, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
+            new BigDecimal("72"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, null, BigDecimal.TEN, null)))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("ขนาดสินค้าไม่สมเหตุสมผล");
@@ -318,16 +269,6 @@ class WastageCalculatorTest {
             WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("-1"), null,
             new BigDecimal("50"), BigDecimal.ZERO)))
             .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void parseSqmPerPieceFromSize_ignoresIncidentalLettersThatMerelyContainAUnitToken() {
-        // Review finding MED-2: an unanchored "mm" match flipped "60x60 Summer" to millimetres
-        // (0.0036 m2/piece, a 100x piece over-count inside the sanity bound).
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60x60 Summer")).isEqualByComparingTo("0.36");
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("60x120 Command")).isEqualByComparingTo("0.72");
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("600x1200 mm")).isEqualByComparingTo("0.72");
-        assertThat(WastageCalculator.parseSqmPerPieceFromSize("600x1200mm")).isEqualByComparingTo("0.72");
     }
 
     // ── quotation v3 (owner feedback pass 3, 2026-09-11) — SPECIAL_SQM + ADJUSTMENT ──────────

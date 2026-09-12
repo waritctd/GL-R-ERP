@@ -1,11 +1,18 @@
 package th.co.glr.hr.dealquotation;
 
+import java.awt.AlphaComposite;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import javax.imageio.ImageIO;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.activity.ActivityLogRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ImageDecodability;
 import th.co.glr.hr.dealquotation.EmployeeSignatureRepository.SignatureImage;
 
 /**
@@ -57,7 +64,63 @@ public class EmployeeSignatureService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รองรับเฉพาะไฟล์รูปภาพ PNG หรือ JPEG เท่านั้น (ตรวจสอบจากเนื้อไฟล์จริง ไม่ใช่แค่ชื่อไฟล์)");
         }
-        signatures.upsert(employeeId, mimeType, bytes, actor.id());
+        // The magic-byte sniff above proves the container (PNG/JPEG) and nothing else — a
+        // 16-bit-depth PNG, an interlaced/APNG, or a CMYK JPEG all pass it and then fail to
+        // decode, which is exactly the defect this method exists to close: such a file used to
+        // be stored as-is and only failed, silently, months later at quotation render time (see
+        // QuotationRenderer#anchorApproverSignature's Javadoc). Probe decodability with the same
+        // shared check QuotationRenderer uses, HERE, so a bad upload is rejected with an
+        // actionable message instead of being accepted and quietly dropped from a customer
+        // document later.
+        BufferedImage decoded = ImageDecodability.decode(bytes);
+        if (decoded == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ไม่สามารถอ่านไฟล์รูปภาพนี้ได้ กรุณาบันทึกเป็น PNG หรือ JPEG มาตรฐานแล้วอัปโหลดใหม่");
+        }
+        // Re-encode to a canonical 8-bit PNG rather than storing the original bytes verbatim:
+        // this repairs decodable-but-atypical files (16-bit depth, odd color types, an
+        // interlaced/APNG, a CMYK-but-decodable JPEG) so every later reader of
+        // hr.employee_signature sees one predictable format instead of having to guess.
+        byte[] canonicalPng = encodeCanonicalPng(decoded);
+        if (canonicalPng.length > MAX_BYTES) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ลายเซ็นมีขนาดใหญ่เกินไป (สูงสุด 1 MB)");
+        }
+        signatures.upsert(employeeId, "image/png", canonicalPng, actor.id());
+    }
+
+    /**
+     * Re-encodes {@code decoded} to a canonical 8-bit ARGB PNG. The signature is drawn over a
+     * printed rule in the quotation template — {@code QuotationRenderer#placeSignaturePicture}'s
+     * own comment notes the PNG's alpha is what keeps the rule visible on both sides of the ink —
+     * so this MUST NOT flatten or drop transparency.
+     *
+     * <p>Converting to {@link BufferedImage#TYPE_INT_ARGB} before writing, rather than calling
+     * {@code ImageIO.write(decoded, "png", out)} directly, guarantees an alpha channel exists
+     * regardless of {@code decoded}'s own color model (indexed, grayscale, opaque RGB, 16-bit,
+     * CMYK-derived, etc.) instead of leaving it to ImageIO's PNG writer to infer one — some
+     * {@link BufferedImage} types write out opaque even when the source had transparency.
+     * {@code AlphaComposite.Src} makes the copy a straight per-pixel copy of source ARGB (as
+     * opposed to the default {@code SrcOver}, which would composite onto whatever the destination
+     * already held — here always fully-transparent black, so the two are equivalent for a fresh
+     * canvas, but {@code Src} says the intent plainly and stays correct if that ever changes).
+     */
+    private static byte[] encodeCanonicalPng(BufferedImage decoded) {
+        BufferedImage argb = new BufferedImage(decoded.getWidth(), decoded.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = argb.createGraphics();
+        try {
+            g.setComposite(AlphaComposite.Src);
+            g.drawImage(decoded, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            ImageIO.write(argb, "png", out);
+        } catch (IOException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ไม่สามารถแปลงไฟล์รูปภาพนี้เป็น PNG ได้ กรุณาบันทึกเป็น PNG หรือ JPEG มาตรฐานแล้วอัปโหลดใหม่");
+        }
+        return out.toByteArray();
     }
 
     public SignatureImage get(long employeeId, UserPrincipal actor) {

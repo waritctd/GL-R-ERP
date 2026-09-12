@@ -493,6 +493,26 @@ const mockCustomers = [
 ];
 let mockCustomerSeq = mockCustomers.length + 1;
 
+// Mirrors sales.designer (V173) — a small ILLUSTRATIVE slice, not the real 1,115-row production
+// seed (that table is populated only by V173's own migration, never by mock data). Two rows
+// (D002, D999) carry the SAME shape as production's own real example the owner used when asking
+// for this feature ("D.Co. = D002"); one row (A060) is active: false, so
+// mockApi.dealQuotations.designers.test.js-style coverage has an inactive row to exercise
+// without needing all 13 real ones. Names here are already fictional-but-plausible, same as the
+// rest of this file's fixtures — nothing about the CONFIDENTIALITY requirement depends on the
+// mock's own names being real; it depends on this table's `name` field never flowing into
+// mockDealQuotations' rendered/print-facing fields, which it does not (see designers.search below
+// and dealQuotations' own unitCode handling — a plain string, exactly like the Java side).
+const mockDesigners = [
+  { code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true },
+  { code: 'A060', name: 'ABACUS DESIGN CO.,LTD (เดิม)', active: false },
+  { code: 'D002', name: 'DEVELOPMENT DESIGN STUDIO', active: true },
+  { code: 'D999', name: 'DESIGN NINE NINE NINE', active: true },
+  { code: 'FL1', name: 'FLOW ARCHITECTS', active: true },
+  { code: 'ON001', name: 'ONYX INTERIOR', active: true },
+  { code: 'ก001', name: 'กรีนสเปซ ดีไซน์', active: true },
+];
+
 const mockContacts = [
   { id: 1, customerId: 1, firstName: 'วิภา',   lastName: 'สมิทธ์',   position: 'ผู้จัดการโครงการ', email: 'wipa@kaona.co.th',     phone: '081-111-2222' },
   { id: 2, customerId: 1, firstName: 'ธนพล',   lastName: 'อภิชัย',   position: 'วิศวกรโยธา',       email: 'thanaphon@kaona.co.th', phone: '082-333-4444' },
@@ -4776,19 +4796,25 @@ function nextMockDealQuotationNumber() {
   return `QT-${new Date().getFullYear()}-${String(mockDealQuotationNumberSeq++).padStart(4, '0')}`;
 }
 
-// A revision child's number is `{base}-{revisionNo}` -- mirrors DealQuotationRepository
-// .baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a source number's own
-// `-{sourceRevisionNo}` suffix (a no-op when sourceRevisionNo <= 1) to recover the ORIGINAL
-// first-revision number regardless of how many times the chain has already been revised,
-// without walking parentQuotationId to the root.
+// A revision child's number is `{base}-{revisionNo}` -- INCLUDING revision 1 (owner feedback
+// 2026-09-11: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1") -- mirrors
+// DealQuotationRepository.baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a
+// source number's own `-{sourceRevisionNo}` suffix to recover the ORIGINAL base number regardless
+// of how many times the chain has already been revised, without walking parentQuotationId to the
+// root.
+//
+// Legacy rows: the two seed fixtures below (id 1/2) intentionally keep BARE numbers
+// ('QT-2026-0001'/'QT-2026-0002', no '-1') to stand in for quotations issued before this change --
+// see DealQuotationRepository#baseNumber's Javadoc for why one `endsWith` check (no special-case
+// for sourceRevisionNo === 1) handles both eras: a bare seed number simply never ends with '-1',
+// so it falls through unchanged.
 function dealQuotationBaseNumber(sourceNumber, sourceRevisionNo) {
-  if (sourceRevisionNo <= 1) return sourceNumber;
   const suffix = `-${sourceRevisionNo}`;
   return sourceNumber.endsWith(suffix) ? sourceNumber.slice(0, -suffix.length) : sourceNumber;
 }
 
 function dealQuotationRevisionNumber(baseNumber, revisionNo) {
-  return revisionNo <= 1 ? baseNumber : `${baseNumber}-${revisionNo}`;
+  return `${baseNumber}-${revisionNo}`;
 }
 
 // round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
@@ -9300,6 +9326,37 @@ export const api = {
     },
   },
 
+  // Mirrors DesignerController (designer/) — READ-ONLY. Owner ruling "อ่านอย่างเดียว อัปเดตจาก
+  // Excel" is enforced by construction: there is no create/update/delete method in this namespace
+  // and there must never be one. Open to any authenticated user, same as catalog above — a sales
+  // rep filling in a quotation needs to search this, and #205's own reasoning applies (see
+  // DesignerController's Javadoc): the confidentiality requirement is about the PRINTED DOCUMENT,
+  // not about which role may search the directory.
+  designers: {
+    // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly
+    // like the Java WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
+    async search(q) {
+      requireSession();
+      const lower = (q ?? '').toLowerCase();
+      const results = mockDesigners.filter((d) => {
+        if (!d.active) return false;
+        if (!lower) return true;
+        return d.code.toLowerCase().includes(lower) || d.name.toLowerCase().includes(lower);
+      });
+      const ordered = [...results].sort((a, b) => pgAsc(a.code, b.code));
+      return delay({ items: ordered.slice(0, 30) });
+    },
+    // Resolves ANY code, active or not — mirrors DesignerRepository.findByCode exactly, so an
+    // existing quotation whose unit_code names a since-cancelled designer still resolves for the
+    // editor's own display (never for a new pick — that stays search()'s job above).
+    async getByCode(code) {
+      requireSession();
+      const found = mockDesigners.find((d) => d.code === String(code ?? '').trim());
+      if (!found) fail('ไม่พบผู้ออกแบบรหัสนี้', 404);
+      return delay({ ...found });
+    },
+  },
+
   // Mirrors DealStageMetaController (ticket/). Canned data, deliberately: the catalog is the same
   // fifteen constants for every caller, and data/dealStageCatalog.js is checked against
   // DealStage.java by features/tickets/stageCatalog.test.js so this fixture cannot go stale the
@@ -11921,7 +11978,10 @@ export const api = {
       const items = buildDealQuotationItems(payload.items, header.priceMode);
       const row = {
         id: mockDealQuotationSeq++,
-        number: nextMockDealQuotationNumber(),
+        // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
+        // too -- "QT-2026-0014-1", not a bare "QT-2026-0014". Mirrors
+        // DealQuotationService#create's own dealQuotationRevisionNumber(nextQuotationCode(), 1).
+        number: dealQuotationRevisionNumber(nextMockDealQuotationNumber(), 1),
         ticketId: ticket.id,
         docStatus: 'DRAFT',
         revisionNo: 1,

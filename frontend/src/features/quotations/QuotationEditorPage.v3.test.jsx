@@ -30,6 +30,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
+      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a
+      // ผู้ออกแบบ pick") -- getByCode default-resolves to undefined so the picker's own
+      // resolved-name hint effect just finds nothing rather than throwing when a test
+      // never sets a unitCode.
+      designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
         search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
         contacts: vi.fn(), createContact: vi.fn(),

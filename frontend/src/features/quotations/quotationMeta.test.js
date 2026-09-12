@@ -17,8 +17,10 @@ import {
   hasDealQuotationGrant,
   isDealQuotationEditable,
   isDealQuotationReadOnlyViewer,
+  piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
+  sqmPerPieceFromPiecesPerSqm,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -289,8 +291,8 @@ describe('remainderModeLabel / defaultLeadTimeForOrigin', () => {
   it('gives each origin country its documented default lead-time range', () => {
     expect(defaultLeadTimeForOrigin('อิตาลี')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
     expect(defaultLeadTimeForOrigin('สเปน')).toEqual({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
-    expect(defaultLeadTimeForOrigin('จีน')).toEqual({ leadTimeMinDays: 60, leadTimeMaxDays: 75 });
-    expect(defaultLeadTimeForOrigin('ไทย-สต็อก')).toEqual({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
+    expect(defaultLeadTimeForOrigin('จีน')).toEqual({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
+    expect(defaultLeadTimeForOrigin('ไทย-สต็อก')).toEqual({ leadTimeMinDays: 3, leadTimeMaxDays: 7 });
     expect(defaultLeadTimeForOrigin('อื่นๆ')).toEqual({ leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 
@@ -344,9 +346,9 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ thicknessMm: 0 }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
   });
 
-  it('flags a missing or non-positive ตร.ม./แผ่น', () => {
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: null }))).toEqual({ sqmPerPiece: 'กรุณาระบุตร.ม./แผ่น' });
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: 0 }))).toEqual({ sqmPerPiece: 'กรุณาระบุตร.ม./แผ่น' });
+  it('flags a missing or non-positive แผ่น/ตร.ม.', () => {
+    expect(validateQuotationItem(completeItem({ sqmPerPiece: null }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
+    expect(validateQuotationItem(completeItem({ sqmPerPiece: 0 }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
   });
 
   it('flags a missing or sub-1 แผ่น/กล่อง', () => {
@@ -392,6 +394,49 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(Object.keys(errors).sort()).toEqual(
       ['areaSqm', 'color', 'model', 'piecesPerBox', 'sizeText', 'sqmPerPiece', 'texture', 'thicknessMm', 'unitPrice'].sort(),
     );
+  });
+});
+
+// Owner feedback 2026-09-12: the editor shows/accepts แผ่น/ตร.ม. (pieces per sqm) while the wire
+// field stays ตร.ม./แผ่น (sqmPerPiece) verbatim -- see quotationMeta.js's own comment on these two
+// for the full contract. `WastageCalculator#piecesPerSqm`'s formula (round(1/x, 2, HALF_UP)) is
+// mirrored for DISPLAY only; these tests pin that mirror and the round trip through it, never the
+// money math itself.
+describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่น/ตร.ม. display, owner feedback 2026-09-12)', () => {
+  it('mirrors WastageCalculator#piecesPerSqm — round(1/x, 2, HALF_UP)', () => {
+    expect(piecesPerSqmFromSqmPerPiece(0.72)).toBe(1.39);
+    expect(piecesPerSqmFromSqmPerPiece(0.36)).toBe(2.78);
+    // The real disagreement this feature exists to route around: a 300x600 mesh sheet whose
+    // covered area is genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
+    expect(piecesPerSqmFromSqmPerPiece(0.135)).toBe(7.41);
+  });
+
+  it('returns null rather than Infinity for nothing to invert', () => {
+    expect(piecesPerSqmFromSqmPerPiece(null)).toBeNull();
+    expect(piecesPerSqmFromSqmPerPiece(0)).toBeNull();
+    expect(piecesPerSqmFromSqmPerPiece('')).toBeNull();
+  });
+
+  it('CLAUDE.md acceptance check — enter 16.39, store 1/16.39, redisplay exactly 16.39', () => {
+    const stored = sqmPerPieceFromPiecesPerSqm(16.39);
+    // NUMERIC(10,6) precision -- matches sqm_per_piece's own column scale everywhere it is
+    // persisted (V24, V165), which is what leaves enough headroom below the 2dp the reverse
+    // direction rounds to for the round trip to land on the exact original figure.
+    expect(stored).toBeCloseTo(1 / 16.39, 6);
+    expect(piecesPerSqmFromSqmPerPiece(stored)).toBe(16.39);
+  });
+
+  it('round-trips a spread of real figures without drift', () => {
+    for (const piecesPerSqm of [1.39, 2.78, 7.41, 16.39, 1, 100, 0.5]) {
+      const stored = sqmPerPieceFromPiecesPerSqm(piecesPerSqm);
+      expect(piecesPerSqmFromSqmPerPiece(stored)).toBe(piecesPerSqm);
+    }
+  });
+
+  it('returns null rather than a bogus reciprocal for a non-positive แผ่น/ตร.ม.', () => {
+    expect(sqmPerPieceFromPiecesPerSqm(0)).toBeNull();
+    expect(sqmPerPieceFromPiecesPerSqm(-1)).toBeNull();
+    expect(sqmPerPieceFromPiecesPerSqm(null)).toBeNull();
   });
 });
 
@@ -733,7 +778,7 @@ describe('buildQuotationChecklist', () => {
       adjustmentErrorsByRow: [{ adjustmentPct: 'กรุณาระบุเปอร์เซ็นต์ส่วนลด' }],
     });
     expect(entries.map((e) => [e.blocking, e.targetId, e.message])).toEqual([
-      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, ตร.ม./แผ่น, แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
+      [true, 'thickness-0', 'รายการที่ 1: ขาด ความหนา, แผ่น/ตร.ม., แผ่น/กล่อง, ราคา/หน่วย, จำนวน (พื้นที่)'],
       [true, 'plain-unit-1', 'รายการที่ 2: ขาด หน่วย'],
       [true, 'adj-pct-2', 'รายการที่ 3: ขาด เปอร์เซ็นต์ส่วนลด'],
     ]);

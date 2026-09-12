@@ -20,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -98,14 +99,14 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), null, employeeAuth);
 
-        quotationRepository = new DealQuotationRepository(jdbc);
+        quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         NotificationEmailService approvalMailer = new NotificationEmailService(
             new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
         // The default (LibreOffice) PDF engine deliberately: this test never renders a PDF, only
         // the XLS the PDF is drawn from, so no soffice/Chromium precondition is introduced.
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), employeeAuth,
-            new EmployeeSignatureRepository(jdbc), "https://portal.test",
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
             // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
@@ -367,6 +368,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             contacts, notifications,
             new NotificationEmailService(new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test"),
             new QuotationRenderer(), employeeAuth, new EmployeeSignatureRepository(jdbc),
+            new CatalogRepository(jdbc),
             "https://portal.test", block.get(0), block.get(1), block.get(2));
 
         DealQuotationDto created = withBank.create(ticketId,
@@ -435,10 +437,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             null, priceMode, language, currency, items);
     }
 
-    /** 60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1 (box rounding a no-op), 30-45 day lead time. */
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
+     * see DealQuotationService#resolveSqmPerPiece's Javadoc), piecesPerBox 1 (box rounding a
+     * no-op), 30-45 day lead time. */
     private ItemInput tileItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
-            new BigDecimal("10"), null,
+            new BigDecimal("10"), new BigDecimal("0.36"),
             WastageCalculator.QUANTITY_MODE_PIECES, null, pieces, WastageCalculator.WASTAGE_MODE_NONE, null, 1,
             new BigDecimal(unitPrice), BigDecimal.ZERO, "Italy", 30, 45, null);
     }

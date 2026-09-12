@@ -75,6 +75,7 @@ describe('DealCustomerCard', () => {
 
     expect(screen.queryByText(testCustomer.name)).toBeNull();
     expect(await screen.findByLabelText(/^ลูกค้า/)).not.toBeNull(); // search input is back
+    expect(screen.queryByText(testProject.name)).toBeNull(); // โครงการ chip is gone too
     expect(screen.getByLabelText(/^โครงการ/).disabled).toBe(true);
   });
 
@@ -122,14 +123,68 @@ describe('DealCustomerCard', () => {
     render(wrap(<Harness initial={{ customer: testCustomer, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
 
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
-    fireEvent.change(await screen.findByLabelText(/^โครงการ/), { target: { value: '__new__' } });
+    fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
+    fireEvent.mouseDown(await screen.findByRole('option', { name: 'เพิ่มโครงการใหม่' }));
 
     const nameInput = screen.getByPlaceholderText('ชื่อโครงการ');
     fireEvent.change(nameInput, { target: { value: 'โครงการใหม่ทดสอบ' } });
     fireEvent.click(screen.getByRole('button', { name: 'เพิ่มโครงการ' }));
 
     await waitFor(() => expect(api.customers.createProject).toHaveBeenCalledWith(testCustomer.id, { name: 'โครงการใหม่ทดสอบ' }));
-    await waitFor(() => expect(screen.getByLabelText(/^โครงการ/).value).toBe('2'));
+    // The chip replaces the search input once a project is selected -- same pattern as ลูกค้า.
+    await waitFor(() => expect(screen.getByText('โครงการใหม่ทดสอบ')).not.toBeNull());
+  });
+
+  // ── โครงการ type-ahead (owner testing feedback, 2026-09-11) ──────────────────────────────────
+  describe('โครงการ type-ahead filter', () => {
+    const projectA = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
+    const projectB = { id: 2, customerId: 1, name: 'โครงการ Siam Paragon ชั้น 3' };
+
+    function renderWithProjects() {
+      api.customers.projects.mockResolvedValue({ projects: [projectA, projectB] });
+      return render(wrap(<Harness initial={{ customer: testCustomer, project: null, contact: null, entryChannel: 'UNSPECIFIED' }} />));
+    }
+
+    it('typing filters the already-loaded list client-side, without a second fetch', async () => {
+      renderWithProjects();
+      const field = await screen.findByLabelText(/^โครงการ/);
+      fireEvent.focus(field);
+      await screen.findByRole('option', { name: /Central Ladprao/ });
+      expect(screen.getByRole('option', { name: /Siam Paragon/ })).not.toBeNull();
+
+      fireEvent.change(field, { target: { value: 'Siam' } });
+
+      expect(screen.queryByRole('option', { name: /Central Ladprao/ })).toBeNull();
+      expect(screen.getByRole('option', { name: /Siam Paragon/ })).not.toBeNull();
+      expect(api.customers.projects).toHaveBeenCalledTimes(1); // client-side filter, not a new request
+    });
+
+    it('ArrowDown highlights options and Enter picks the highlighted one', async () => {
+      renderWithProjects();
+      const field = await screen.findByLabelText(/^โครงการ/);
+      fireEvent.focus(field);
+      await screen.findByRole('option', { name: /Central Ladprao/ });
+
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      fireEvent.keyDown(field, { key: 'Enter' });
+
+      // Second row (index 1) is Siam Paragon -- picking it replaces the input with a chip.
+      await waitFor(() => expect(screen.getByText(projectB.name)).not.toBeNull());
+      expect(screen.queryByLabelText(/^โครงการ/)).toBeNull();
+    });
+
+    it('Escape closes the popup without picking anything', async () => {
+      renderWithProjects();
+      const field = await screen.findByLabelText(/^โครงการ/);
+      fireEvent.focus(field);
+      await screen.findByRole('option', { name: /Central Ladprao/ });
+
+      fireEvent.keyDown(field, { key: 'Escape' });
+
+      expect(screen.queryByRole('listbox', { name: 'ผลการค้นหาโครงการ' })).toBeNull();
+      expect(screen.getByLabelText(/^โครงการ/)).not.toBeNull(); // still unselected, field still there
+    });
   });
 
   it('a create-customer failure toasts the backend message and keeps the inline form open', async () => {

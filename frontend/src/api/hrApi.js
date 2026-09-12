@@ -500,6 +500,17 @@ export const api = {
     updateProduct: (priceId, input) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'PUT', body: input }),
     deleteProduct: (priceId) => apiRequest(API_ROUTES.catalog.price(priceId), { method: 'DELETE' }),
   },
+  // Mirrors DesignerController (designer/). READ-ONLY ผู้ออกแบบ (designer) directory (V173) for
+  // the quotation-editor picker — owner ruling "อ่านอย่างเดียว อัปเดตจาก Excel" means there is no
+  // create/update/delete method here and there must never be one. search() excludes the 13 rows
+  // seeded active=false (ยกเลิก); getByCode() resolves ANY code, active or not, so the editor can
+  // still show who is currently selected on an old quotation. The NAME this returns is
+  // confidential and exists only for the picker's own display — never let it reach a DTO or field
+  // that flows into a rendered quotation (see DesignerDto's own Javadoc on the backend).
+  designers: {
+    search: (q) => apiRequest(API_ROUTES.designers.search(q ?? '')),
+    getByCode: (code) => apiRequest(API_ROUTES.designers.byCode(code)),
+  },
   // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
   // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and
   // the lost/cancel reason CODE sets. Labels stay client-side; see utils/format.js + stageMeta.js.

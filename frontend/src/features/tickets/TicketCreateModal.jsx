@@ -11,38 +11,22 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
 import { formatCatalogPrice } from './catalogPriceDisplay.js';
+import { resolveTileSqmPerPiece } from '../quotations/QuotationItemRow.jsx';
 
-/**
- * ตร.ม. per piece derived from a catalog `size_raw` string, for the ~350 active catalog rows that
- * carry no `sqm_per_piece` of their own (all of factory Bode, plus LEA's trim pieces). Without a
- * factor the แผ่น↔ตร.ม. toggle cannot cross-fill, which is what stranded a rep's entered quantity
- * in UAT.
- *
- * Only ever called when the catalog has no factor of its own, and deliberately only accepts a
- * MILLIMETRE reading — both dimensions >= 100. Catalog sizes are genuinely mixed-unit ("600x1200"
- * is mm, "30 x 60" and "120 x 278" are cm), and there is no reliable way to tell them apart from
- * the string alone. Every row that actually lacks a factor is millimetres; every centimetre-format
- * row already ships its own `sqm_per_piece` and so never reaches this function. Anything else —
- * centimetre-looking values, a third thickness dimension ("598X598X18"), junk ("15X1'5"), or no
- * size at all — returns null, and the UI then lets the rep enter both quantities by hand rather
- * than converting on a guess.
- */
-export function deriveSqmPerPiece(sizeRaw) {
-  const match = /^\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*$/.exec(sizeRaw ?? '');
-  if (!match) return null;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!(width >= 100) || !(height >= 100)) return null;
-  const sqm = (width / 1000) * (height / 1000);
-  return sqm > 0 ? Number(sqm.toFixed(6)) : null;
-}
+// ── REMOVED (owner ruling 2026-09-12, "แก้ด้วย — ใช้ catalog เหมือนกัน") ─────────────────────────
+// This file used to carry its own deriveSqmPerPiece(sizeRaw): a magnitude guess (both dimensions
+// >= 100 => millimetres) applied to the catalog's own free-text size_raw for the ~350 active rows
+// with no sqm_per_piece of their own. Deleted along with WastageCalculator's twin heuristic
+// (parseSqmPerPieceFromSize/detectUnit, see WastageCalculatorTest) for the same reason: the owner
+// ruled that a unit must never be GUESSED from a size string, catalogue only. This modal now
+// resolves ตร.ม./แผ่น the same way the quotation item editor does — see resolveTileSqmPerPiece
+// (imported above) for the resolution order (catalog's own sqm_per_piece; never for a
+// per_linear_m row; otherwise nothing is invented and the rep types both quantities by hand).
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 
 const emptyItem = () => ({
   brand: '', model: '', color: '', texture: '', size: '', factory: '',
   unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null,
-  // True when sqmPerPiece came from deriveSqmPerPiece() rather than the catalog, so the UI can
-  // label the conversion as derived instead of presenting it as catalog fact.
-  sqmPerPieceDerived: false,
   // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only
   // — never sent in the onSubmit payload (see submit() below). They exist so the items view can
   // badge a line "จากแคตตาล็อก" vs "custom" and show the catalog's own price in its own currency
@@ -682,14 +666,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
         if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
       }
-      // A size edit invalidates a factor that was DERIVED from the old size (see
-      // deriveSqmPerPiece) — recompute it, or drop it when the new size can't be read. A factor
-      // the catalog supplied is left alone; the user editing the size already unlinks the row.
-      if (field === 'size' && item.sqmPerPieceDerived) {
-        const rederived = deriveSqmPerPiece(value);
-        updated.sqmPerPiece = rederived;
-        updated.sqmPerPieceDerived = rederived != null;
-      }
       // A hand-edit to any field that describes WHICH product this row is invalidates a
       // previously-picked catalog link — what's typed no longer necessarily matches what the
       // link points at. Mirrors PricingRequestCreateModal.updateItem's identical rule.
@@ -722,12 +698,15 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       // dropdown opens is the search query, not an independent brand entry.
       const factory = cat.factoryName || cat.factory || cat.brand || '';
 
-      // The catalog carries a per-piece area for 98.4% of rows; derive it from the size for the
-      // rest so the แผ่น↔ตร.ม. toggle can still cross-fill (see deriveSqmPerPiece).
-      const catalogSqmPerPiece = cat.sqmPerPiece || null;
+      // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolved the same way the
+      // quotation item editor resolves it — see resolveTileSqmPerPiece's own Javadoc-style
+      // comment for the order (catalog's own sqm_per_piece; never for a per_linear_m row). The
+      // ~350 active catalog rows with no sqm_per_piece of their own (all of factory Bode, plus
+      // LEA's trim pieces) resolve to `null` here — nothing is guessed from the free-text size
+      // any more, so the แผ่น↔ตร.ม. toggle simply leaves both quantities editable for those rows
+      // (see the "ไม่มีค่า ตร.ม./แผ่น ในแคตตาล็อก" branch below).
       const sizeRaw = cat.sizeRaw || cat.size || '';
-      const derivedSqmPerPiece = catalogSqmPerPiece ? null : deriveSqmPerPiece(sizeRaw);
-      const sqmPerPiece = catalogSqmPerPiece ?? derivedSqmPerPiece;
+      const sqmPerPiece = resolveTileSqmPerPiece(cat);
       const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
 
       return {
@@ -741,7 +720,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         texture:     cat.surface      || '',
         size:        sizeRaw,
         sqmPerPiece,
-        sqmPerPieceDerived: catalogSqmPerPiece == null && derivedSqmPerPiece != null,
         qtySqm:      newQtySqm,
         // UI-only provenance — see emptyItem()'s comment.
         source: 'catalog',
@@ -1328,10 +1306,11 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     const basis = item.unitBasis || 'PIECE';
     // With a ตร.ม./แผ่น factor the two quantity boxes cross-fill, so whichever one the rep is not
     // driving is derived and read-only. Without a factor NEITHER can be derived — ~350 active
-    // catalog rows carry no area per piece and their size string could not be read either — so
-    // both stay editable instead of leaving the required box empty while the number the rep
-    // actually typed sits greyed out in the other one. That stranding is the exact state in the
-    // UAT screenshot: "1000 แผ่น" greyed beside an empty, erroring พื้นที่ (ตร.ม.).
+    // catalog rows carry no sqm_per_piece of their own, and nothing is guessed from their size
+    // string (owner ruling 2026-09-12) — so both stay editable instead of leaving the required
+    // box empty while the number the rep actually typed sits greyed out in the other one. That
+    // stranding is the exact state in the UAT screenshot: "1000 แผ่น" greyed beside an empty,
+    // erroring พื้นที่ (ตร.ม.).
     const hasFactor = Boolean(item.sqmPerPiece);
     const catalogPrice = item.catalogPrice != null
       ? formatCatalogPrice(item.catalogPrice, item.catalogCurrency, item.catalogPriceUnit, fxRatesByCurrency)
@@ -1439,7 +1418,6 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           {hasFactor ? (
             <span className="text-2xs text-text-muted">
               1 แผ่น = {item.sqmPerPiece} ตร.ม.
-              {item.sqmPerPieceDerived ? ` (คำนวณจากขนาด ${item.size})` : ''}
             </span>
           ) : (
             <span className="text-2xs text-text-muted">

@@ -452,7 +452,7 @@ row 36 h=405
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 37 h=405
-  c0 STRING style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "Printed by_______________________Quoted by_______________________Approved by_____________________Ordered by______________________"
+  c0 STRING style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "Printed by______________________Quoted by______________________Approved by____________________Ordered by_____________________"
   c1 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -465,7 +465,7 @@ row 37 h=405
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=143 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 38 h=405
-  c0 STRING style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                         (จุฑาทิพ)                                           (ผึ้ง)                                         (สมหญิง ใจดี)                 "
+  c0 STRING style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -478,7 +478,7 @@ row 38 h=405
   c10 BLANK style=121 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 39 h=405
-  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               Date 10/9/2026                               Date 10/9/2026                               Date 11/9/2026                        Date ........./........./.........        "
+  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               Date 10/9/2026                             Date 10/9/2026                             Date 11/9/2026                     Date ........./........./.........       "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -555,4 +555,4 @@ row 55 h=225
 merges=[A38:I38, A39:I39, A40:I40, B23:H23, B24:H24, B25:H25, B26:H26, B27:H27, B28:H28, B29:H29, B30:H30, B31:H31, B5:G5, B6:G6, C36:I36, E33:G33, E34:H34, F7:G7, H6:I6, K1:K6]
 picture r0+41 c0+213 -> r2+164 c1+199 md5=37c268c5f55b95434005f145ab9f68f6
 picture r0+81 c3+363 -> r2+114 c6+465 md5=cd52dfb83fa021c48b4eb6b18f57fc10
-picture r36+175 c2+619 -> r37+206 c4+260 md5=c55f225dbf14a022d81c0ea1ba629d41
+picture r36+175 c2+270 -> r37+206 c3+962 md5=c55f225dbf14a022d81c0ea1ba629d41

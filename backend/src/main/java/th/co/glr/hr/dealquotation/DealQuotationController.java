@@ -214,10 +214,11 @@ public class DealQuotationController {
             .body(image.image());
     }
 
-    /** Keeps a quotation number ({@code QT-2026-0042} or a revision's {@code QT-2026-0042-2})
-     * safe as a bare Content-Disposition filename token: anything outside a conservative
-     * filesystem-safe set becomes {@code _}, and a wiped-out result falls back to a generic name
-     * rather than emitting an empty/blank filename. */
+    /** Keeps a quotation number ({@code QT-2026-0042-1}, or a legacy pre-2026-09-11 bare
+     * {@code QT-2026-0042}, or a later revision's {@code QT-2026-0042-2}) safe as a bare
+     * Content-Disposition filename token: anything outside a conservative filesystem-safe set
+     * becomes {@code _}, and a wiped-out result falls back to a generic name rather than emitting
+     * an empty/blank filename. */
     private String sanitizeFilename(String number) {
         String base = number == null ? "" : number.trim().replaceAll("[^A-Za-z0-9._-]", "_");
         return base.isEmpty() ? "quotation" : base;

@@ -32,13 +32,33 @@ function emptyNewContact() {
  * a quotation that in fact has one.
  */
 export function QuotationContactPicker({
-  customerId, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
+  customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
 }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [newContact, setNewContact] = useState(emptyNewContact());
   const [saving, setSaving] = useState(false);
+  // "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11: "when the customer and the
+  // purchaser are the same person, let the rep reuse the customer name instead of retyping it").
+  //
+  // Decided behaviour, documented here because there is no spec doc for it:
+  //  - Checking the box copies `customerName` into ชื่อ and blanks นามสกุล (the customer record
+  //    is a single name string; splitting it into first/last would be a guess this component has
+  //    no basis for), and disables ชื่อ while checked so the field can't silently drift out of
+  //    sync with a checkbox that claims "same as".
+  //  - While checked, ชื่อ stays LIVE-bound to `customerName` (the effect below re-copies it) --
+  //    covers the rep switching to a different selected customer without first unchecking.
+  //  - Unchecking hands ชื่อ back for manual editing and freezes it at whatever it last held; it
+  //    does NOT clear the field. Editing by hand therefore means "uncheck first" -- there's no
+  //    silent-divergence state where the box reads checked but the text no longer matches.
+  //  - HIDDEN entirely when there is no customer name yet to copy -- a checkbox offering to
+  //    reuse a name that does not exist would be a dead control, not a disabled one.
+  const [sameAsCustomer, setSameAsCustomer] = useState(false);
+  useEffect(() => {
+    if (!sameAsCustomer) return;
+    setNewContact((prev) => ({ ...prev, firstName: customerName ?? '', lastName: '' }));
+  }, [sameAsCustomer, customerName]);
 
   useEffect(() => {
     if (!customerId) {
@@ -86,6 +106,7 @@ export function QuotationContactPicker({
       setOptions((prev) => [...prev, res.contact]);
       onChange(res.contact);
       setNewContact(emptyNewContact());
+      setSameAsCustomer(false);
       setShowNew(false);
     } catch (err) {
       showToast?.('error', err.message || 'เพิ่มผู้สั่งซื้อใหม่ไม่สำเร็จ');
@@ -137,12 +158,23 @@ export function QuotationContactPicker({
       {showNew && customerId ? (
         <div className="col-span-full mt-1 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
           <p className="m-0 text-xs font-bold text-info">เพิ่มผู้สั่งซื้อใหม่</p>
+          {customerName ? (
+            <label className="m-0 flex items-center gap-1.5 text-2xs">
+              <input
+                type="checkbox"
+                checked={sameAsCustomer}
+                onChange={(e) => setSameAsCustomer(e.target.checked)}
+              />
+              ใช้ชื่อเดียวกับลูกค้า ({customerName})
+            </label>
+          ) : null}
           <div className="grid grid-cols-4 gap-2 tablet:grid-cols-2 mobile:grid-cols-1">
             <label className="m-0">
               <span className="text-2xs">ชื่อ *</span>
               <input
                 aria-label="ชื่อผู้สั่งซื้อ"
                 value={newContact.firstName}
+                disabled={sameAsCustomer}
                 onChange={(e) => setNewContact((p) => ({ ...p, firstName: e.target.value }))}
               />
             </label>
@@ -176,7 +208,7 @@ export function QuotationContactPicker({
             <Button variant="primary" size="sm" loading={saving} disabled={!newContact.firstName.trim() || saving} onClick={handleCreate}>
               เพิ่มผู้สั่งซื้อ
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowNew(false); setNewContact(emptyNewContact()); }}>
+            <Button variant="secondary" size="sm" onClick={() => { setShowNew(false); setNewContact(emptyNewContact()); setSameAsCustomer(false); }}>
               ยกเลิก
             </Button>
           </div>
