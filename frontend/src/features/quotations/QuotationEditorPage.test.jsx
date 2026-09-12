@@ -29,6 +29,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
+      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a
+      // ผู้ออกแบบ pick") -- getByCode default-resolves to undefined so the picker's own
+      // resolved-name hint effect just finds nothing rather than throwing when a test
+      // never sets a unitCode.
+      designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       // Consumed by DealCustomerCard.jsx, which QuotationEditorPage renders instead of the
       // read-only deal summary whenever /quotations/new has no ?ticket= (inline deal creation,
       // owner ask 2026-09-10) -- see the "inline deal creation" describe block below.

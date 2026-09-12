@@ -28,6 +28,7 @@ import {
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
+import { DesignerPicker } from './DesignerPicker.jsx';
 import { QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
@@ -1317,9 +1318,21 @@ export function QuotationEditorPage({ user, showToast }) {
                 <FormField label="ฝ่าย" htmlFor="deptCode">
                   <input id="deptCode" value={terms.deptCode} onChange={(e) => { setTerms((t) => ({ ...t, deptCode: e.target.value })); setDirty(true); }} />
                 </FormField>
-                <FormField label="หน่วยงาน" htmlFor="unitCode">
+                <FormField
+                  label="หน่วยงาน"
+                  htmlFor="unitCode"
+                  hint="D.Co. — พิมพ์รหัสเองได้ หรือค้นหาผู้ออกแบบด้านล่างเพื่อกรอกรหัสอัตโนมัติ (ชื่อผู้ออกแบบไม่แสดงในเอกสาร)"
+                >
                   <input id="unitCode" value={terms.unitCode} onChange={(e) => { setTerms((t) => ({ ...t, unitCode: e.target.value })); setDirty(true); }} />
                 </FormField>
+                {/* Owner ask, 2026-09-12: pick a ผู้ออกแบบ and its CODE fills the D.Co. field
+                    above automatically. The name is confidential and never leaves this picker --
+                    see DesignerPicker's own doc for the full guarantee. */}
+                <DesignerPicker
+                  value={terms.unitCode}
+                  onSelectCode={(code) => { setTerms((t) => ({ ...t, unitCode: code })); setDirty(true); }}
+                  idPrefix="quotation-designer-picker"
+                />
               </div>
             </Panel>
           )}

@@ -206,6 +206,12 @@ export const API_ROUTES = {
     // make a single sitting 244 round trips.
     thicknessDefaults: '/api/catalog/thickness-defaults',
   },
+  // Mirrors DesignerController (designer/) — READ-ONLY ผู้ออกแบบ directory, V173. There is no
+  // write route here on purpose; see that controller's own doc comment.
+  designers: {
+    search: (q) => `/api/designers${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    byCode: (code) => `/api/designers/${encodeURIComponent(code)}`,
+  },
   factoryConfigs: {
     list: '/api/factory-configs',
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
