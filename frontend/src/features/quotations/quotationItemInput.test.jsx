@@ -26,6 +26,13 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
     expect(input).toMatchObject({ specialPriceSqm: 1350, directNetPrice: null, discountPct: null, unitPrice: 850 });
   });
 
+  it('English per-sqm sends the USD/ตร.ม. AS the unit price, the ตร.ม./กล่อง, and no discount (owner decision 2026-09-13)', () => {
+    const input = itemInputFromRow({ ...tile, specialPriceSqm: 64, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN');
+    expect(input).toMatchObject({ specialPriceSqm: 64, unitPrice: 64, sqmPerBox: 0.6, discountPct: null, directNetPrice: null });
+    // The same row in Thai keeps the rep's list price per piece.
+    expect(itemInputFromRow({ ...tile, specialPriceSqm: 64, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'TH').unitPrice).toBe(850);
+  });
+
   it('DIRECT_NET sends the net, and a blank list price becomes the net (prints Net)', () => {
     expect(itemInputFromRow(tile, 'DIRECT_NET')).toMatchObject({ directNetPrice: 500, specialPriceSqm: null, unitPrice: 850 });
     expect(itemInputFromRow({ ...tile, unitPrice: '' }, 'DIRECT_NET').unitPrice).toBe(500);

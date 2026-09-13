@@ -26,14 +26,21 @@
 #   2. A Render registry credential named `ghcr-glr` exists (Dashboard → Settings → Registry
 #      Credentials) holding a GitHub PAT with read:packages. Without it the pull 401s.
 #
-# Bumping the deployed version = push a new tag, change image.url here, deploy. autoDeploy is off,
-# so nothing rolls out until someone chooses to.
+# Bumping the deployed version = push a new tag, set it on the service in the Render dashboard, keep
+# image.url below in step, deploy. autoDeploy is off, so nothing rolls out until someone chooses to.
+#
+# ⚠️ THE RENDER DASHBOARD DECIDES WHAT RUNS, NOT THIS FILE (verified 2026-09-13). From 2026-09-10 to
+# 2026-09-13 the dashboard's Source for gl-r-erp was a Git build of `main` with auto-deploy on every
+# push, overriding both `runtime: image` and `autoDeploy: false` below: prod never ran the pinned
+# image, had no licensed fonts, and every merge to main deployed the backend. The owner switched the
+# Source back to Existing Image v2026-09-13 on 2026-09-13. Whether the blueprint still syncs this file
+# to the service is unverified — read Settings -> Build before assuming this file is what runs.
 services:
   - type: web
     name: gl-r-erp
     runtime: image
     image:
-      url: ghcr.io/waritctd/glr-hr-backend:v2026-09-12
+      url: ghcr.io/waritctd/glr-hr-backend:v2026-09-13
       creds:
         fromRegistryCreds:
           name: ghcr-glr

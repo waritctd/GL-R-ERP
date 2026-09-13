@@ -4,7 +4,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -41,6 +44,28 @@ class DealQuotationControllerTest {
         .standaloneSetup(new DealQuotationController(service, new SessionContext()))
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
+
+    /** Owner decision 2026-09-13 (B): calculate-line forwards ?documentLanguage to the service,
+     * and an absent one reaches it as null (which the service reads as TH). */
+    @Test
+    void calculateLineForwardsTheDocumentLanguageQueryParam() throws Exception {
+        DealQuotationDtos.DealQuotationItemDto preview = new DealQuotationDtos.DealQuotationItemDto(0L, 0,
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, 0, 0, 0, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null);
+        when(service.calculateLine(any(), eq("EN"), any(UserPrincipal.class))).thenReturn(preview);
+        when(service.calculateLine(any(), isNull(), any(UserPrincipal.class))).thenReturn(preview);
+
+        mvc.perform(post("/api/deal-quotations/calculate-line?documentLanguage=EN").session(session())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isOk());
+        verify(service).calculateLine(any(), eq("EN"), any(UserPrincipal.class));
+
+        mvc.perform(post("/api/deal-quotations/calculate-line").session(session())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isOk());
+        verify(service).calculateLine(any(), isNull(), any(UserPrincipal.class));
+    }
 
     @Test
     void fileDefaultsToPdf() throws Exception {
