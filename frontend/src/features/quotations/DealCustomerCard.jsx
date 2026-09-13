@@ -3,6 +3,7 @@ import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { entryChannelLabel } from '../../utils/format.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
@@ -178,6 +179,18 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     onChange({ customer: null, project: null, contact: null });
     setProjectSearch('');
     closeProjectDropdown();
+  }
+
+  function closeNewCustomer() {
+    if (savingCustomer) return;
+    setShowNewCustomer(false);
+    setNewCustomer(emptyNewCustomer());
+  }
+
+  function closeNewProject() {
+    if (savingProject) return;
+    setShowNewProject(false);
+    setNewProjectName('');
   }
 
   async function handleCreateCustomer() {
@@ -394,8 +407,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
       ) : null}
 
       {showNewCustomer && !customer ? (
-        <div className="mt-3 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
-          <p className="m-0 text-xs font-bold text-info">เพิ่มลูกค้าใหม่</p>
+        <Modal title="เพิ่มลูกค้าใหม่" onClose={closeNewCustomer}>
           <div className="grid grid-cols-2 gap-2 mobile:grid-cols-1">
             <label className="col-span-2 m-0 mobile:col-span-1">
               <span className="text-2xs">ชื่อบริษัท / ลูกค้า *</span>
@@ -414,33 +426,34 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               <input value={newCustomer.address} onChange={(e) => setNewCustomer((p) => ({ ...p, address: e.target.value }))} placeholder="ที่อยู่บริษัท" />
             </label>
           </div>
-          <div className="mt-1 flex gap-2">
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button variant="primary" size="sm" loading={savingCustomer} disabled={!newCustomer.name.trim() || savingCustomer} onClick={handleCreateCustomer}>
               บันทึกลูกค้าใหม่
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowNewCustomer(false); setNewCustomer(emptyNewCustomer()); }}>
+            <Button variant="secondary" size="sm" disabled={savingCustomer} onClick={closeNewCustomer}>
               ยกเลิก
             </Button>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {showNewProject && customer ? (
-        <div className="mt-3 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
-          <p className="m-0 text-xs font-bold text-info">โครงการใหม่</p>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="m-0 min-w-[200px] flex-1">
+        <Modal title="โครงการใหม่" onClose={closeNewProject}>
+          <div className="flex flex-col gap-3">
+            <label className="m-0">
               <span className="text-2xs">ชื่อโครงการ *</span>
               <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="ชื่อโครงการ" />
             </label>
+          </div>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button variant="primary" size="sm" loading={savingProject} disabled={!newProjectName.trim() || savingProject} onClick={handleCreateProject}>
               เพิ่มโครงการ
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowNewProject(false); setNewProjectName(''); }}>
+            <Button variant="secondary" size="sm" disabled={savingProject} onClick={closeNewProject}>
               ยกเลิก
             </Button>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
