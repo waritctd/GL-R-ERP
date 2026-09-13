@@ -1,6 +1,9 @@
 package th.co.glr.hr.customer;
 
 import java.util.List;
+import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.location.ThaiLocationRepository;
+import th.co.glr.hr.location.ThaiAddress;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -21,7 +24,7 @@ public class CustomerRepository {
         try {
             CustomerDto customer = jdbc.queryForObject(
                 """
-                SELECT customer_id, name, tax_id, address, branch, phone
+                SELECT customer_id, name, tax_id, address, branch, phone, address_line, province_code, district_code, subdistrict_code, postal_code, province_name_th, district_name_th, subdistrict_name_th, legacy_address
                   FROM customers.customer
                  WHERE customer_id = :id
                 """,
@@ -32,7 +35,9 @@ public class CustomerRepository {
                     rs.getString("tax_id"),
                     rs.getString("address"),
                     rs.getString("branch"),
-                    rs.getString("phone")
+                    rs.getString("phone"), rs.getString("address_line"), rs.getString("province_code"),
+                rs.getString("district_code"), rs.getString("subdistrict_code"), rs.getString("postal_code"),
+                rs.getString("province_name_th"), rs.getString("district_name_th"), rs.getString("subdistrict_name_th"), rs.getString("legacy_address")
                 )
             );
             return Optional.ofNullable(customer);
@@ -46,7 +51,7 @@ public class CustomerRepository {
         String pattern = q == null || q.isBlank() ? "%" : "%" + q.trim() + "%";
         return jdbc.query(
             """
-            SELECT customer_id, name, tax_id, address, branch, phone
+            SELECT customer_id, name, tax_id, address, branch, phone, address_line, province_code, district_code, subdistrict_code, postal_code, province_name_th, district_name_th, subdistrict_name_th, legacy_address
               FROM customers.customer
              WHERE name ILIKE :q OR tax_id ILIKE :q
              ORDER BY name
@@ -59,7 +64,9 @@ public class CustomerRepository {
                 rs.getString("tax_id"),
                 rs.getString("address"),
                 rs.getString("branch"),
-                rs.getString("phone")
+                rs.getString("phone"), rs.getString("address_line"), rs.getString("province_code"),
+                rs.getString("district_code"), rs.getString("subdistrict_code"), rs.getString("postal_code"),
+                rs.getString("province_name_th"), rs.getString("district_name_th"), rs.getString("subdistrict_name_th"), rs.getString("legacy_address")
             )
         );
     }
@@ -98,7 +105,16 @@ public class CustomerRepository {
             UPDATE customers.customer
                SET name    = COALESCE(:name, name),
                    tax_id  = COALESCE(:taxId, tax_id),
+                   legacy_address = CASE WHEN CAST(:address AS text) IS NOT NULL THEN COALESCE(legacy_address, address) ELSE legacy_address END,
                    address = COALESCE(:address, address),
+                   address_line = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE address_line END,
+                   province_code = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE province_code END,
+                   district_code = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE district_code END,
+                   subdistrict_code = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE subdistrict_code END,
+                   postal_code = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE postal_code END,
+                   province_name_th = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE province_name_th END,
+                   district_name_th = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE district_name_th END,
+                   subdistrict_name_th = CASE WHEN CAST(:address AS text) IS NOT NULL THEN NULL ELSE subdistrict_name_th END,
                    branch  = COALESCE(:branch, branch),
                    phone   = COALESCE(:phone, phone)
              WHERE customer_id = :id
@@ -111,5 +127,38 @@ public class CustomerRepository {
                 .addValue("branch", branch)
                 .addValue("phone", phone));
         return updated == 0 ? Optional.empty() : findById(id);
+    }
+
+    @Transactional
+    public CustomerDto createStructured(String name, String taxId, String branch, String phone,
+        String line, String province, String district, String subdistrict, String postal) {
+        ThaiAddress address = new ThaiLocationRepository(jdbc).resolve(line, province, district, subdistrict, postal);
+        CustomerDto customer = create(name, taxId, null, branch, phone);
+        writeStructured(customer.id(), address);
+        return findById(customer.id()).orElseThrow();
+    }
+
+    @Transactional
+    public Optional<CustomerDto> updateStructured(long id, String name, String taxId, String branch, String phone,
+        String line, String province, String district, String subdistrict, String postal) {
+        ThaiAddress address = new ThaiLocationRepository(jdbc).resolve(line, province, district, subdistrict, postal);
+        if (update(id, name, taxId, null, branch, phone).isEmpty()) return Optional.empty();
+        writeStructured(id, address);
+        return findById(id);
+    }
+
+    private void writeStructured(long id, ThaiAddress a) {
+        jdbc.update("""
+            UPDATE customers.customer SET
+                legacy_address=CASE WHEN province_code IS NULL THEN COALESCE(legacy_address,address) ELSE legacy_address END,
+                address=:address, address_line=:line, province_code=:province, district_code=:district,
+                subdistrict_code=:subdistrict, postal_code=:postal,
+                province_name_th=:pn, district_name_th=:dn, subdistrict_name_th=:sn
+            WHERE customer_id=:id
+            """, new MapSqlParameterSource("id", id).addValue("address", a.printable())
+                .addValue("line",a.addressLine()).addValue("province",a.provinceCode())
+                .addValue("district",a.districtCode()).addValue("subdistrict",a.subdistrictCode())
+                .addValue("postal",a.postalCode()).addValue("pn",a.provinceNameTh())
+                .addValue("dn",a.districtNameTh()).addValue("sn",a.subdistrictNameTh()));
     }
 }

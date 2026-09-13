@@ -1,3 +1,5 @@
+import thaiLocations from '../data/thai-locations.json';
+import { formatThaiAddress } from '../features/locations/thaiAddress.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
 //
@@ -9657,10 +9659,15 @@ export const api = {
   // canCreateQuotation grant holder. The three reads OR that same grant into
   // CUSTOMER_VIEWER_ROLES (sales/sales_manager are already members of that set, so the grant is
   // the only thing it adds) via requireCustomerViewer().
+  locations: {
+    async provinces() { requireSession(); return delay({ items: thaiLocations.provinces }); },
+    async districts(provinceCode) { requireSession(); return delay({ items: thaiLocations.districts.filter((d) => d.provinceCode === provinceCode) }); },
+    async subdistricts(districtCode) { requireSession(); return delay({ items: thaiLocations.subdistricts.filter((s) => s.districtCode === districtCode) }); },
+  },
   customers: {
     async create(payload) {
       requireDealEntry();
-      const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null };
+      const customer = { id: mockCustomerSeq++, name: payload.name, taxId: payload.taxId || null, address: payload.address || null, branch: payload.branch || 'สำนักงานใหญ่', phone: payload.phone || null, ...structuredCustomerAddress(payload) };
       mockCustomers.push(customer);
       return delay({ customer });
     },
@@ -9681,8 +9688,16 @@ export const api = {
       if (!customer) fail('ไม่พบลูกค้ารายนี้', 404);
       if (payload.name != null && !String(payload.name).trim()) fail('กรุณาระบุชื่อลูกค้า', 400);
       if (payload.branch != null && !String(payload.branch).trim()) fail('กรุณาระบุสาขา', 400);
+      const structured = structuredCustomerAddress(payload);
+      if (structured) {
+        customer.legacyAddress ??= customer.address;
+        Object.assign(customer, structured);
+      } else if (payload.address != null) {
+        customer.legacyAddress ??= customer.address;
+        for (const key of ['addressLine', 'provinceCode', 'districtCode', 'subdistrictCode', 'postalCode', 'provinceNameTh', 'districtNameTh', 'subdistrictNameTh']) customer[key] = null;
+      }
       for (const key of ['name', 'taxId', 'address', 'branch', 'phone']) {
-        if (payload[key] != null) customer[key] = payload[key];
+        if (payload[key] != null && !(structured && key === 'address')) customer[key] = payload[key];
       }
       return delay({ customer: { ...customer } });
     },
@@ -12246,3 +12261,15 @@ export const api = {
     },
   },
 };
+
+function structuredCustomerAddress(payload) {
+  if (!['addressLine', 'provinceCode', 'districtCode', 'subdistrictCode', 'postalCode'].some((k) => payload[k] != null)) return null;
+  const p = thaiLocations.provinces.find((r) => r.code === payload.provinceCode);
+  const d = thaiLocations.districts.find((r) => r.code === payload.districtCode && r.provinceCode === p?.code);
+  const s = thaiLocations.subdistricts.find((r) => r.code === payload.subdistrictCode && r.districtCode === d?.code);
+  const postalCode = payload.postalCode || (s?.postalCodes.length === 1 ? s.postalCodes[0] : null);
+  if (!p || !d || !s || (s.postalCodes.length && !s.postalCodes.includes(postalCode)) || (!s.postalCodes.length && postalCode)) fail('กรุณาเลือกข้อมูลที่อยู่ให้สัมพันธ์กัน', 400);
+  const address = { addressLine: payload.addressLine?.trim() ?? '', provinceCode: p.code, districtCode: d.code,
+    subdistrictCode: s.code, postalCode, provinceNameTh: p.nameTh, districtNameTh: d.nameTh, subdistrictNameTh: s.nameTh };
+  return { ...address, address: formatThaiAddress(address) };
+}

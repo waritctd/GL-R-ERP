@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
+import data from '../../data/thai-locations.json';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
@@ -12,6 +13,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
+      locations: { provinces: vi.fn(), districts: vi.fn(), subdistricts: vi.fn() },
       customers: {
         search: vi.fn(),
         create: vi.fn(),
@@ -45,6 +47,9 @@ function Harness({ initial, showToast = vi.fn() }) {
 describe('DealCustomerCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.locations.provinces.mockResolvedValue({ items: data.provinces });
+    api.locations.districts.mockResolvedValue({ items: data.districts.filter((d) => d.provinceCode === '10') });
+    api.locations.subdistricts.mockResolvedValue({ items: data.subdistricts.filter((d) => d.districtCode === '1039') });
     api.customers.projects.mockResolvedValue({ projects: [testProject] });
     api.customers.contacts.mockResolvedValue({ contacts: [testContact] });
   });
@@ -90,6 +95,7 @@ describe('DealCustomerCard', () => {
 
     const nameInput = screen.getByPlaceholderText('บริษัท … จำกัด');
     fireEvent.change(nameInput, { target: { value: 'บริษัท ใหม่ จำกัด' } });
+    await selectAddress();
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }));
 
     await waitFor(() => expect(api.customers.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'บริษัท ใหม่ จำกัด' })));
@@ -195,6 +201,7 @@ describe('DealCustomerCard', () => {
     fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
     fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
     fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'บริษัท ซ้ำ จำกัด' } });
+    await selectAddress();
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ชื่อลูกค้าซ้ำในระบบ'));
@@ -271,7 +278,7 @@ describe('DealCustomerCard', () => {
       await waitFor(() => expect(screen.getByLabelText(/^โทร\./).value).toBe('02-111-2222'));
     });
 
-    it('the inline เพิ่มลูกค้าใหม่ form is unchanged -- it keeps its own four fields', async () => {
+    it('the add-customer modal keeps customer details and requires structured geography', async () => {
       api.customers.search.mockResolvedValue({ customers: [] });
       render(wrap(<Harness />));
       fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
@@ -280,7 +287,8 @@ describe('DealCustomerCard', () => {
       expect(screen.getByPlaceholderText('บริษัท … จำกัด')).not.toBeNull();
       expect(screen.getByPlaceholderText('0105xxxxxxxxx')).not.toBeNull();
       expect(screen.getByPlaceholderText('02-xxx-xxxx')).not.toBeNull();
-      expect(screen.getByPlaceholderText('ที่อยู่บริษัท')).not.toBeNull();
+      expect(screen.getByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
     });
   });
 
@@ -301,6 +309,9 @@ describe('DealCustomerCard', () => {
 describe('DealCustomerCard — ที่อยู่ on the selected customer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.locations.provinces.mockResolvedValue({ items: data.provinces });
+    api.locations.districts.mockResolvedValue({ items: data.districts.filter((d) => d.provinceCode === '10') });
+    api.locations.subdistricts.mockResolvedValue({ items: data.subdistricts.filter((d) => d.districtCode === '1039') });
     api.customers.projects.mockResolvedValue({ projects: [testProject] });
     api.customers.contacts.mockResolvedValue({ contacts: [testContact] });
   });
@@ -345,3 +356,11 @@ describe('DealCustomerCard — ที่อยู่ on the selected customer', 
     await waitFor(() => expect(screen.getByLabelText(/^ที่อยู่/).value).toBe(repeat.address));
   });
 });
+
+async function selectAddress() {
+  for (const [label, name] of [['จังหวัด', 'กรุงเทพมหานคร'], ['เขต', 'วัฒนา'], ['แขวง', 'คลองเตยเหนือ']]) {
+    fireEvent.focus(screen.getByRole('combobox', { name: label }));
+    fireEvent.change(screen.getByRole('combobox', { name: label }), { target: { value: name } });
+    fireEvent.click(await screen.findByRole('option', { name, exact: true }));
+  }
+}

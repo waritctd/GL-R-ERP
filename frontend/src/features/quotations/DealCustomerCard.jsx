@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../locations/ThaiAddressFields.jsx';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
@@ -17,7 +18,7 @@ import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 const ENTRY_CHANNEL_CODES = ['UNSPECIFIED', 'DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
 function emptyNewCustomer() {
-  return { name: '', taxId: '', address: '', phone: '' };
+  return { name: '', taxId: '', phone: '', ...emptyThaiAddress() };
 }
 
 /**
@@ -194,13 +195,17 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   }
 
   async function handleCreateCustomer() {
-    if (!newCustomer.name.trim()) return;
+    if (!newCustomer.name.trim() || !completeThaiAddress(newCustomer)) return;
     setSavingCustomer(true);
     try {
       const res = await api.customers.create({
         name: newCustomer.name.trim(),
         taxId: newCustomer.taxId.trim() || null,
-        address: newCustomer.address.trim() || null,
+        addressLine: newCustomer.addressLine.trim(),
+        provinceCode: newCustomer.provinceCode,
+        districtCode: newCustomer.districtCode,
+        subdistrictCode: newCustomer.subdistrictCode,
+        postalCode: newCustomer.postalCode || null,
         phone: newCustomer.phone.trim() || null,
       });
       selectCustomer(res.customer);
@@ -421,13 +426,12 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               <span className="text-2xs">โทรศัพท์</span>
               <input value={newCustomer.phone} onChange={(e) => setNewCustomer((p) => ({ ...p, phone: e.target.value }))} placeholder="02-xxx-xxxx" />
             </label>
-            <label className="col-span-2 m-0 mobile:col-span-1">
-              <span className="text-2xs">ที่อยู่</span>
-              <input value={newCustomer.address} onChange={(e) => setNewCustomer((p) => ({ ...p, address: e.target.value }))} placeholder="ที่อยู่บริษัท" />
-            </label>
+            <div className="col-span-full">
+              <ThaiAddressFields value={newCustomer} onChange={(patch) => setNewCustomer((prev) => ({ ...prev, ...patch }))} disabled={savingCustomer} />
+            </div>
           </div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button variant="primary" size="sm" loading={savingCustomer} disabled={!newCustomer.name.trim() || savingCustomer} onClick={handleCreateCustomer}>
+            <Button variant="primary" size="sm" loading={savingCustomer} disabled={!newCustomer.name.trim() || !completeThaiAddress(newCustomer) || savingCustomer} onClick={handleCreateCustomer}>
               บันทึกลูกค้าใหม่
             </Button>
             <Button variant="secondary" size="sm" disabled={savingCustomer} onClick={closeNewCustomer}>

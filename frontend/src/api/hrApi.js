@@ -527,6 +527,11 @@ export const api = {
     // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
     // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.sendFactoryQuote.
   },
+  locations: {
+    provinces: () => apiRequest(API_ROUTES.locations.provinces),
+    districts: (provinceCode) => apiRequest(API_ROUTES.locations.districts(provinceCode)),
+    subdistricts: (districtCode) => apiRequest(API_ROUTES.locations.subdistricts(districtCode)),
+  },
   customers: {
     create: (payload) => apiRequest(API_ROUTES.customers.create, { method: 'POST', body: payload }),
     // Owner feedback F7 (2026-09-10): เลขที่ผู้เสียภาษี / โทร. are editable on the SELECTED customer
