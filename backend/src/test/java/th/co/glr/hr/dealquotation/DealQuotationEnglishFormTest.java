@@ -155,6 +155,138 @@ class DealQuotationEnglishFormTest {
             .noneMatch(t -> t.toUpperCase(java.util.Locale.ROOT).contains("VAT"));
     }
 
+    // ── owner ruling 2026-09-13 (2): no blank bordered cells above Grand Total ────────────
+
+    /**
+     * The subtotal and VAT rows are emptied on an English document — and must not PRINT either. The
+     * template's own borders on those cells survived the clearing, which printed two empty boxes
+     * in column I between the table and Grand Total. Asserted on the single-page layout AND the
+     * flowing (multi-page) one, where the footer block has been relocated.
+     */
+    @Test
+    void totals_theEmptiedSubtotalAndVatRowsCarryNoBorderAndDoNotPrint_inBothLayouts() throws Exception {
+        for (int extraTiles : new int[] {0, 14}) {
+            Sheet sheet = render(realLinesQuotation(WastageCalculator.DOCUMENT_LANGUAGE_EN, extraTiles));
+            int total = rowContaining(sheet, 4, "Grand Total (USD)");
+            if (extraTiles == 0) {
+                assertThat(total).as("single-page layout keeps the native total row").isEqualTo(TOTAL_ROW);
+            } else {
+                assertThat(total).as("flowing layout relocates the footer").isGreaterThan(TOTAL_ROW);
+            }
+            for (int r : new int[] {total - 2, total - 1}) {
+                Row row = sheet.getRow(r);
+                assertThat(row.getZeroHeight()).as("layout %d, row %d must not print", extraTiles, r).isTrue();
+                for (int c = 0; c <= VALUE_COL; c++) {
+                    assertThat(blank(sheet, r, c)).as("row %d col %d blank", r, c).isTrue();
+                    Cell cell = row.getCell(c);
+                    if (cell == null) continue;
+                    var style = cell.getCellStyle();
+                    assertThat(List.of(style.getBorderTop(), style.getBorderRight(), style.getBorderBottom(),
+                            style.getBorderLeft()))
+                        .as("layout %d, row %d col %d must carry no border", extraTiles, r, c)
+                        .containsOnly(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+                }
+            }
+            // Grand Total sits DIRECTLY under the table box: the last visible row above it is the
+            // box's own closing row (remark line 8, bottom rule across A..I).
+            int above = total - 3;
+            assertThat(sheet.getRow(above).getZeroHeight()).isFalse();
+            assertThat(sheet.getRow(above).getCell(VALUE_COL).getCellStyle().getBorderBottom())
+                .as("layout %d: the table box closes on the row directly above Grand Total", extraTiles)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+            assertThat(sheet.getRow(total).getZeroHeight()).isFalse();
+            assertThat(sheet.getRow(total).getCell(VALUE_COL).getNumericCellValue()).isPositive();
+        }
+    }
+
+    /** Wrong-way-round: the THAI totals rows still print, with their borders. */
+    @Test
+    void thaiDocument_subtotalAndVatRowsStillPrintWithTheirBorders() throws Exception {
+        Sheet sheet = render(realLinesQuotation(WastageCalculator.DOCUMENT_LANGUAGE_TH, 0));
+        for (int r : new int[] {SUBTOTAL_ROW, VAT_ROW}) {
+            assertThat(sheet.getRow(r).getZeroHeight()).isFalse();
+            assertThat(sheet.getRow(r).getCell(VALUE_COL).getCellStyle().getBorderRight())
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        assertThat(str(sheet, SUBTOTAL_ROW, 7)).isEqualTo("รวมเป็นเงิน");
+    }
+
+    // ── owner ruling 2026-09-13 (1)(4): an English item table carries no Thai ──────────────
+
+    private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
+
+    /**
+     * Every string cell from the first item row through the Grand Total row of an English render
+     * is free of Thai script — tiles with and without thickness, AREA and PIECES, a DIRECT_NET row
+     * whose net differs from its list price (the discount word), a freight row, and a ส่วนลดพิเศษ row
+     * whose STORED description is the Thai write-time composition. Lines come from the real
+     * DealQuotationLines, units and the adjustment text from the same read-time helpers the
+     * repository mapping uses.
+     */
+    @Test
+    void englishItemAndTotalsZone_containsNoThaiCharacter_inBothLayouts() throws Exception {
+        for (int extraTiles : new int[] {0, 14}) {
+            Sheet sheet = render(realLinesQuotation(WastageCalculator.DOCUMENT_LANGUAGE_EN, extraTiles));
+            int total = rowContaining(sheet, 4, "Grand Total (USD)");
+            List<String> offending = new ArrayList<>();
+            for (int r = 9; r <= total; r++) {
+                Row row = sheet.getRow(r);
+                if (row == null) continue;
+                for (int c = 0; c <= VALUE_COL; c++) {
+                    Cell cell = row.getCell(c);
+                    if (cell != null && cell.getCellType() == CellType.STRING
+                        && THAI.matcher(cell.getStringCellValue()).find()) {
+                        offending.add("r" + r + "c" + c + ": " + cell.getStringCellValue());
+                    }
+                }
+            }
+            assertThat(offending).as("layout %d", extraTiles).isEmpty();
+            // Positive landmarks too, so an EMPTY item zone cannot pass the scan above. The renderer
+            // word-wraps a long line across rows at whitespace, so column B is re-joined first.
+            assertThat(joinedColumn(sheet, 1, 9, total))
+                .contains("Tile Model BIOARCH Color BARGE GRIGIA Finish ONDULATO No.APGBBK15")
+                .contains("Size 20 cm x 30.5 cm x 9 mm (approx.)")
+                .contains("Tile Model Reverso Cement Color Grigio Finish Matt Size 60x60 cm. No.BS66R13GP")
+                .contains("(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs) (20 pcs/box)")
+                .contains("Special discount 3% for orders placed by July 31, 2026");
+            assertThat(str(sheet, 9, 3)).isEqualTo("PCS");
+            assertThat(str(sheet, 9, 6)).isEqualTo("Special");
+            // Only the English per-sqm row gets the 2dp quantity format; a pieces row keeps the template's.
+            assertThat(new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.US)
+                .formatCellValue(sheet.getRow(9).getCell(2))).isEqualTo("5,180");
+            // The paginated layout's page counter is English too.
+            assertThat(THAI.matcher(sheet.getFooter().getCenter()).find())
+                .as("layout %d footer: %s", extraTiles, sheet.getFooter().getCenter()).isFalse();
+        }
+    }
+
+    /** Wrong-way-round: the same items on a Thai document still print their Thai lines, unit and word. */
+    @Test
+    void thaiDocument_itemTableKeepsItsThaiLinesUnitAndDiscountWord() throws Exception {
+        Sheet sheet = render(realLinesQuotation(WastageCalculator.DOCUMENT_LANGUAGE_TH, 0));
+        assertThat(joinedColumn(sheet, 1, 9, TOTAL_ROW))
+            .contains("กระเบื้อง รุ่น BIOARCH สี BARGE GRIGIA ผิว ONDULATO No.APGBBK15")
+            .contains("ขนาด 20 cm x 30.5 cm x 9 mm (ขนาดโดยประมาณ)")
+            .contains("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+        assertThat(str(sheet, 9, 3)).isEqualTo("แผ่น");
+        assertThat(str(sheet, 9, 6)).isEqualTo("พิเศษ");
+        assertThat(render(realLinesQuotation(WastageCalculator.DOCUMENT_LANGUAGE_TH, 14)).getFooter().getCenter())
+            .isEqualTo("หน้า &P/&N");
+        assertThat(allText(sheet)).doesNotContain("PCS", "Special");
+    }
+
+    /** A tile DTO with NO unit prints the language's own tile unit. */
+    @Test
+    void adapter_aTileWithNoUnitPrintsPCSInEnglishAndPhaenInThai() {
+        DealQuotationItemDto noUnit = tileLines(1, WastageCalculator.DOCUMENT_LANGUAGE_EN, new BigDecimal("9"), null);
+        assertThat(DealQuotationRenderAdapter.toRenderModel(
+                withItems(englishQuotation(), List.of(noUnit)), null, null).items().get(0).unit())
+            .isEqualTo("PCS");
+        assertThat(DealQuotationRenderAdapter.toRenderModel(
+                withItems(thaiQuotation(), List.of(noUnit)), null, null).items().get(0).unit())
+            .isEqualTo("แผ่น");
+    }
+
     // ── remarks ────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -555,6 +687,95 @@ class DealQuotationEnglishFormTest {
         Cell cell = r.getCell(col);
         if (cell == null || cell.getCellType() == CellType.BLANK) return true;
         return cell.getCellType() == CellType.STRING && cell.getStringCellValue().isBlank();
+    }
+
+    /** Column {@code col}'s string cells over rows {@code from..to}, joined with single spaces. */
+    private String joinedColumn(Sheet sheet, int col, int from, int to) {
+        List<String> parts = new ArrayList<>();
+        for (int r = from; r <= to; r++) {
+            String text = str(sheet, r, col);
+            if (!text.isBlank()) parts.add(text.strip());
+        }
+        return String.join(" ", parts);
+    }
+
+    private int rowContaining(Sheet sheet, int col, String text) {
+        for (int r = 0; r <= sheet.getLastRowNum(); r++) {
+            if (text.equals(str(sheet, r, col))) return r;
+        }
+        throw new AssertionError("no row with \"" + text + "\" in column " + col);
+    }
+
+    /**
+     * A DIRECT_NET quotation whose printed strings come from the REAL {@link DealQuotationLines}
+     * in {@code lang}: a BIOARCH tile with thickness (AREA, 5%, boxed), a PIECES tile with no
+     * thickness (inline size), {@code extraTiles} more tiles (14 pushes the render into the flowing
+     * layout), a freight row and a 3% ส่วนลดพิเศษ whose stored text is the Thai composition.
+     */
+    private DealQuotationDto realLinesQuotation(String lang, int extraTiles) {
+        List<DealQuotationItemDto> items = new ArrayList<>();
+        String storedUnit = "แผ่น"; // what the write path stores on every TILE row
+        items.add(tileLines(1, lang, new BigDecimal("9"), DealQuotationLines.printedTileUnit(lang, storedUnit)));
+        items.add(tileLines(2, lang, null, DealQuotationLines.printedTileUnit(lang, storedUnit)));
+        for (int i = 0; i < extraTiles; i++) {
+            items.add(tileLines(3 + i, lang, new BigDecimal("9"), DealQuotationLines.printedTileUnit(lang, storedUnit)));
+        }
+        int seq = items.size() + 1;
+        items.add(plainRow(seq++, "Transportation Charges"));
+        BigDecimal adj = new BigDecimal("30.00");
+        LocalDate deadline = LocalDate.of(2026, 7, 31);
+        String storedAdjustment = DealQuotationLines.adjustmentDescription(new BigDecimal("3"), deadline);
+        items.add(new DealQuotationItemDto((long) seq, seq,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            adj, null, null, null, null, null,
+            null, 0, 0, 0, null,
+            adj, adj.negate(),
+            DealQuotationLines.printedAdjustmentDescription(lang, storedAdjustment, new BigDecimal("3"), deadline),
+            null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, BigDecimal.valueOf(-1), null, null, new BigDecimal("3"),
+            deadline, null, null));
+        DealQuotationDto base = WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(lang) ? englishQuotation() : thaiQuotation();
+        DealQuotationDto q = withItems(base, items);
+        return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
+            q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(),
+            q.salesRepId(), q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(),
+            q.submittedAt(), q.approvedById(), q.approvedByName(), q.approvedByNameEn(), q.approvedAt(),
+            q.approvalNote(), q.quotationDate(), q.customerName(), q.customerAddress(),
+            q.customerTaxId(), q.customerPhone(), q.contactId(), q.contactName(), q.contactPhone(),
+            q.contactEmail(), q.projectName(), q.deptCode(), q.unitCode(), q.offerDate(),
+            q.depositPercent(), q.remainderMode(), q.creditDays(), q.validityDays(),
+            q.validityDate(), q.customerNotes(), WastageCalculator.PRICE_MODE_DIRECT_NET, q.documentLanguage(),
+            q.subtotalAmount(), q.vatAmount(), q.grandTotal(), q.currency(),
+            q.approverHasSignature(), items, q.createdAt(), q.updatedAt());
+    }
+
+    /** List price 14.00, net 12.50 (so DIRECT_NET prints the discount WORD), lines in {@code lang}. */
+    private DealQuotationItemDto tileLines(int seq, String lang, BigDecimal thickness, String unit) {
+        boolean inlineSize = thickness == null;
+        String model = inlineSize ? "Reverso Cement" : "BIOARCH";
+        String color = inlineSize ? "Grigio" : "BARGE GRIGIA";
+        String texture = inlineSize ? "Matt" : "ONDULATO";
+        String code = inlineSize ? "BS66R13GP" : "APGBBK15";
+        String quantityMode = inlineSize ? WastageCalculator.QUANTITY_MODE_PIECES : WastageCalculator.QUANTITY_MODE_AREA;
+        String wastageMode = inlineSize ? WastageCalculator.WASTAGE_MODE_PIECES : WastageCalculator.WASTAGE_MODE_PERCENT;
+        BigDecimal wastage = inlineSize ? new BigDecimal("10") : new BigDecimal("5");
+        int before = inlineSize ? 200 : 4917;
+        int fin = inlineSize ? 210 : 5180;
+        Integer box = inlineSize ? null : 20;
+        BigDecimal area = inlineSize ? null : new BigDecimal("300");
+        BigDecimal pps = new BigDecimal("16.39");
+        BigDecimal net = new BigDecimal("12.50");
+        return new DealQuotationItemDto((long) seq, seq, null, null, code, null, model, color, texture,
+            inlineSize ? "60x60" : "200x305", thickness, new BigDecimal("0.061013"), quantityMode, area,
+            inlineSize ? 200 : null, wastageMode, wastage, box, new BigDecimal("14.00"), null, null, 30, 45, null,
+            pps, before, fin, fin, box == null ? null : fin / box, net, net.multiply(BigDecimal.valueOf(fin)),
+            DealQuotationLines.descriptionLine(lang, model, color, texture, code, inlineSize ? "60x60" : "200x305",
+                thickness),
+            DealQuotationLines.sizeLine(lang, "200x305", thickness, new BigDecimal("200"), new BigDecimal("305")),
+            DealQuotationLines.calculationLine(lang, quantityMode, area, pps, before, wastageMode, wastage, fin, box),
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(fin), unit, null, null, null,
+            DealQuotationLines.specialPriceLine(lang, null), null);
     }
 
     private List<String> allText(Sheet sheet) {

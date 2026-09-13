@@ -18,6 +18,71 @@ function renderRow(itemOverrides = {}, onChange = vi.fn()) {
   return { item, onChange };
 }
 
+describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () => {
+  function renderPerSqm(itemOverrides = {}, { priceMode = 'SPECIAL_SQM', documentLanguage = 'EN' } = {}) {
+    const onChange = vi.fn();
+    const item = { ...emptyQuotationItem(), ...itemOverrides };
+    render(
+      <QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()}
+        priceMode={priceMode} documentLanguage={documentLanguage} currency="USD" />,
+    );
+    return { onChange };
+  }
+
+  it('asks for USD/ตร.ม. and ตร.ม./กล่อง instead of a list price per piece', () => {
+    renderPerSqm({ sqmPerBox: 0.6 });
+    expect(screen.getByLabelText(/^ราคา \(USD\/ตร\.ม\.\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/).value).toBe('0.6');
+    expect(screen.queryByLabelText(/^ราคาตั้ง\/แผ่น/)).toBeNull();
+    expect(screen.queryByLabelText(/^ราคาพิเศษ \(บาท/)).toBeNull();
+  });
+
+  // The null-on-clear convention: the payload builders coerce with `??`, and `'' ?? x` stays ''.
+  it('clearing ตร.ม./กล่อง stores null, never an empty string', () => {
+    const { onChange } = renderPerSqm({ sqmPerBox: 0.6 });
+    fireEvent.change(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/), { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: null });
+    fireEvent.change(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/), { target: { value: '0.495' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: 0.495 });
+  });
+
+  it('a cleared (null or blank) ตร.ม./กล่อง reaches the wire as null', () => {
+    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: null }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBeNull();
+    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: '' }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBeNull();
+    expect(itemInputFromRow({ ...emptyQuotationItem(), sqmPerBox: 0.495 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe(0.495);
+  });
+
+  it('a THAI ราคาพิเศษ row is unchanged: list price + ราคาพิเศษ, no ตร.ม./กล่อง field', () => {
+    renderPerSqm({}, { documentLanguage: 'TH' });
+    expect(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/)).not.toBeNull();
+    expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
+  });
+
+  it('English in another mode shows no ตร.ม./กล่อง field', () => {
+    renderPerSqm({}, { priceMode: 'NET' });
+    expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
+  });
+
+  async function pick(cat) {
+    api.catalog.prices.mockImplementation(async (q) => ((q ?? '').includes('Menorca') ? { items: [cat] } : { items: [] }));
+    const { onChange } = renderPerSqm({ sqmPerBox: 9.99 });
+    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Menorca' } });
+    fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /Menorca/ }), { timeout: 1000 }));
+    return onChange.mock.calls.at(-1)[0];
+  }
+
+  it('a catalogue pick carries ProductPriceDto.sqmPerBox onto the row', async () => {
+    const patch = await pick({ priceId: 7, collection: 'Menorca', sizeRaw: '6.5x32.8', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: 0.6 });
+    expect(patch).toMatchObject({ piecesPerBox: 28, sqmPerBox: 0.6 });
+  });
+
+  it('a per_linear_m pick NEVER carries its sqm_per_box (linear metres), nor keeps the old value', async () => {
+    const patch = await pick({ priceId: 8, collection: 'Menorca trim', sizeRaw: '7x60', priceUnit: 'per_linear_m', pcsPerBox: 10, sqmPerBox: 6.0 });
+    expect(patch.sqmPerBox).toBeNull();
+  });
+});
+
 describe('QuotationItemRow', () => {
   // #M9: typing in รุ่น must clear only catalogPriceId (the row is no longer "picked from the
   // catalog"), never productCode -- that is its own free-text field the user may have typed or
@@ -103,6 +168,9 @@ describe('QuotationItemRow', () => {
       piecesPerSqmDisplay: 1.39,
       sqmPerPieceSource: 'catalog',
       piecesPerBox: 3,
+      // V176: this catalogue row states no ตร.ม./กล่อง, so the field is set blank (null), never
+      // inherited from whatever the row carried before the pick.
+      sqmPerBox: null,
       // F1: IT -> อิตาลี, plus that country's default lead-time range, both still editable.
       originCountry: 'อิตาลี',
       leadTimeMinDays: 75,

@@ -130,7 +130,7 @@ describe('QuotationEditorPage item calc wiring', () => {
     expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
 
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }));
+    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }), 'TH');
 
     expect(await screen.findByText('(พื้นที่ 36 ตร.ม. รวม 100 แผ่น)')).not.toBeNull();
     // getAllByText, not getByText: with only one item, its own line amount and the M6
@@ -151,7 +151,7 @@ describe('QuotationEditorPage item calc wiring', () => {
 
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
     // The LAST value wins -- an intermediate keystroke's debounced call was cancelled, not queued.
-    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }));
+    expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 350 }), 'TH');
   });
 
   it('never calls calculate-line before any item row exists', async () => {
@@ -204,11 +204,11 @@ describe('QuotationEditorPage item calc wiring', () => {
 
     fireEvent.change(priceInput, { target: { value: '100' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(1), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(1, expect.objectContaining({ unitPrice: 100 }));
+    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(1, expect.objectContaining({ unitPrice: 100 }), 'TH');
 
     fireEvent.change(priceInput, { target: { value: '200' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalledTimes(2), { timeout: 1000 });
-    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(2, expect.objectContaining({ unitPrice: 200 }));
+    expect(api.dealQuotations.calculateLine).toHaveBeenNthCalledWith(2, expect.objectContaining({ unitPrice: 200 }), 'TH');
 
     // The NEWER request settles first (a faster response for the latest edit).
     resolveSecond({ item: { lineAmount: 2000, calculationLine: 'newer' } });

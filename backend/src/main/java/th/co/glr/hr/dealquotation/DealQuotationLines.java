@@ -34,12 +34,27 @@ public final class DealQuotationLines {
      * #sizeLine} prints it on its own row and this line stays exactly as before. */
     public static String descriptionLine(String model, String color, String texture, String productCode,
                                          String sizeText, BigDecimal thicknessMm) {
-        StringBuilder sb = new StringBuilder("กระเบื้อง");
-        appendLabelled(sb, "รุ่น", model);
-        appendLabelled(sb, "สี", color);
-        appendLabelled(sb, "ผิว", texture);
+        return descriptionLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, model, color, texture, productCode,
+            sizeText, thicknessMm);
+    }
+
+    /**
+     * Owner ruling 2026-09-13 (1): the ENGLISH document prints the same description, word for
+     * word translated, with every component the Thai line carries and in the same order —
+     * {@code Tile Model {model} Color {color} Finish {texture}}, the inline {@code Size {size} cm.}
+     * when there is no thickness, then {@code No.{productCode}}. Any language other than
+     * {@code EN} (including null) is the Thai line, byte-for-byte what the six-argument overload
+     * above always returned.
+     */
+    public static String descriptionLine(String documentLanguage, String model, String color, String texture,
+                                         String productCode, String sizeText, BigDecimal thicknessMm) {
+        boolean en = english(documentLanguage);
+        StringBuilder sb = new StringBuilder(en ? "Tile" : "กระเบื้อง");
+        appendLabelled(sb, en ? "Model" : "รุ่น", model);
+        appendLabelled(sb, en ? "Color" : "สี", color);
+        appendLabelled(sb, en ? "Finish" : "ผิว", texture);
         if (thicknessMm == null && !blank(sizeText)) {
-            sb.append(" ขนาด ").append(sizeText.trim());
+            sb.append(en ? " Size " : " ขนาด ").append(sizeText.trim());
             // Only supply the unit when the text has none (a catalog size_raw can already say
             // "600x1200 mm"; appending " cm." to that printed "mm cm." -- review finding LOW-2).
             if (!SIZE_HAS_UNIT.matcher(sizeText.trim()).find()) sb.append(" cm.");
@@ -95,6 +110,18 @@ public final class DealQuotationLines {
      */
     public static String sizeLine(String sizeText, BigDecimal thicknessMm,
                                   BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
+        return sizeLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, sizeText, thicknessMm, catalogWidthMm,
+            catalogHeightMm);
+    }
+
+    /** Owner ruling 2026-09-13 (1): {@code Size {w} cm x {h} cm x {t} mm (approx.)} on an English
+     * document — the same face-size resolution (catalogue mm first, the rep's typed text as the
+     * fallback) and the same null-when-no-thickness contract as the Thai line. */
+    public static String sizeLine(String documentLanguage, String sizeText, BigDecimal thicknessMm,
+                                  BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
+        boolean en = english(documentLanguage);
+        String label = en ? "Size " : "ขนาด ";
+        String approx = en ? " (approx.)" : " (ขนาดโดยประมาณ)";
         if (thicknessMm == null) {
             return null;
         }
@@ -107,9 +134,9 @@ public final class DealQuotationLines {
             facePart = sizeText.trim();
         }
         if (blank(facePart)) {
-            return "ขนาด " + thicknessPart + " (ขนาดโดยประมาณ)";
+            return label + thicknessPart + approx;
         }
-        return "ขนาด " + facePart + " x " + thicknessPart + " (ขนาดโดยประมาณ)";
+        return label + facePart + " x " + thicknessPart + approx;
     }
 
     /**
@@ -136,6 +163,27 @@ public final class DealQuotationLines {
     public static String calculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
                                          int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
                                          int piecesFinal, Integer piecesPerBox) {
+        return calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, quantityMode, areaSqm, piecesPerSqm,
+            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox);
+    }
+
+    /**
+     * Owner ruling 2026-09-13 (1) — the English calculation line, clause for clause the Thai one:
+     * <pre>
+     *   (Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs) (20 pcs/box)
+     *   (Quantity 200 pcs + 10 pcs allowance, rounded up to full boxes = 220 pcs) (20 pcs/box)
+     *   (Area 10 sqm @ 2 pcs/sqm = 20 pcs + 10% allowance = 22 pcs)          -- no pieces-per-box
+     * </pre>
+     * The zero-wastage omission and the grouped number format are shared with the Thai line, so
+     * the two cannot drift apart on anything but the words.
+     */
+    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
+                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
+                                         BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
+        if (english(documentLanguage)) {
+            return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
+                wastageValue, piecesFinal, piecesPerBox);
+        }
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
             : "พื้นที่ " + format(areaSqm) + " ตร.ม.ๆละ " + format(piecesPerSqm) + " แผ่น รวม "
@@ -163,6 +211,123 @@ public final class DealQuotationLines {
         return line;
     }
 
+    private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
+                                                 int piecesBeforeWastage, String wastageMode,
+                                                 BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
+        return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
+            wastageValue, piecesFinal, piecesPerBox, null);
+    }
+
+    /**
+     * {@code boxes} non-null = the English PER-SQM variant (owner decision 2026-09-13): the same
+     * area/wastage derivation, closed with the box count the printed quantity is computed from
+     * instead of the "(N pcs/box)" tail — that fact moves to {@link #boxLine}, which prints right
+     * under it:
+     * <pre>
+     *   (Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs = 259 boxes)
+     *   (1 box = 20 pcs = 0.61 sqm)
+     * </pre>
+     */
+    private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
+                                                 int piecesBeforeWastage, String wastageMode,
+                                                 BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
+                                                 Integer boxes) {
+        String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
+            ? "Quantity " + format(piecesBeforeWastage) + " pcs"
+            : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
+                + format(piecesBeforeWastage) + " pcs";
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        String wastagePart = "";
+        if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
+            wastagePart = " + " + format(wastageValue) + "% allowance";
+        } else if (hasWastage && WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
+            wastagePart = " + " + format(wastageValue) + " pcs allowance";
+        }
+        boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
+        String roundingPart = hasBox ? ", rounded up to full boxes" : "";
+        if (boxes != null) {
+            return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
+                + format(boxes) + (boxes == 1 ? " box)" : " boxes)");
+        }
+        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs)";
+        if (hasBox) {
+            line += " (" + format(piecesPerBox) + " pcs/box)";
+        }
+        return line;
+    }
+
+    /**
+     * The English per-sqm box sub-line, exactly her QN6900933's shape: {@code (1 box = 28 pcs =
+     * 0.6 sqm)}, {@code (1 box = 66 pcs = 0.495 sqm)} — the box area as the supplier states it,
+     * trailing zeros dropped (up to the column's 6 decimals).
+     */
+    public static String boxLine(Integer piecesPerBox, BigDecimal sqmPerBox) {
+        if (piecesPerBox == null || piecesPerBox <= 0 || sqmPerBox == null || sqmPerBox.signum() <= 0) {
+            return null;
+        }
+        DecimalFormat area = new DecimalFormat("#,##0.######", DecimalFormatSymbols.getInstance(Locale.US));
+        return "(1 box = " + format(piecesPerBox) + " pcs = " + area.format(sqmPerBox) + " sqm)";
+    }
+
+    /** What a TILE row prints in the quantity/unit cells and under its description, decided in ONE
+     * place for both the stored-row mapping and the calculate-line preview. */
+    public record TilePrint(String calculationLine, BigDecimal quantity, String unit, String subLine) {}
+
+    /**
+     * The TILE row's calculation line, printed quantity, unit and sub-line.
+     *
+     * <ul>
+     *   <li><b>English per-sqm</b> ({@link WastageCalculator#isEnglishPerSqm}) with box data:
+     *       quantity = {@link WastageCalculator#sqmQuantityFromBoxes}, unit {@code SQM}, the
+     *       box-count calculation line and {@link #boxLine}.</li>
+     *   <li>Everything else: {@link #calculationLine}, the stored quantity (pieces), the language's
+     *       tile unit ({@link #printedTileUnit}) and {@link #specialPriceLine}. For Thai this is
+     *       byte-for-byte what the row always printed.</li>
+     * </ul>
+     *
+     * <p>An English per-sqm row WITHOUT box data cannot be written (the service refuses it), so
+     * reaching the second branch for one means a hand-edited row; it prints pieces rather than
+     * inventing an area.
+     */
+    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
+                                      BigDecimal areaSqm, BigDecimal piecesPerSqm, int piecesBeforeWastage,
+                                      String wastageMode, BigDecimal wastageValue, int piecesFinal,
+                                      Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm) {
+        if (WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode) && boxes != null
+            && piecesPerBox != null && piecesPerBox > 0 && sqmPerBox != null && sqmPerBox.signum() > 0) {
+            return new TilePrint(
+                englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
+                    wastageValue, piecesFinal, piecesPerBox, boxes),
+                WastageCalculator.sqmQuantityFromBoxes(boxes, sqmPerBox), TILE_UNIT_SQM,
+                boxLine(piecesPerBox, sqmPerBox));
+        }
+        return new TilePrint(
+            calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
+                wastageValue, piecesFinal, piecesPerBox),
+            storedQuantity, printedTileUnit(documentLanguage, storedUnit),
+            specialPriceLine(documentLanguage, specialPriceSqm));
+    }
+
+    /** The tile row's printed unit: "แผ่น" on the Thai form, "PCS" on the English one (owner ruling
+     * 2026-09-13 (1)). */
+    public static String tileUnit(String documentLanguage) {
+        return english(documentLanguage) ? TILE_UNIT_EN : TILE_UNIT_TH;
+    }
+
+    /**
+     * The unit a stored TILE row prints, resolved at READ time so every existing English quotation
+     * picks it up (ruling 5). Thai returns the stored {@code raw_unit} untouched, null included —
+     * byte-for-byte the value the mapping always passed through. English maps the Thai tile unit
+     * (and a missing one) to "PCS" and leaves any other stored unit alone.
+     */
+    public static String printedTileUnit(String documentLanguage, String storedUnit) {
+        if (!english(documentLanguage)) {
+            return storedUnit;
+        }
+        return storedUnit == null || TILE_UNIT_TH.equals(storedUnit.trim()) ? TILE_UNIT_EN : storedUnit;
+    }
+
     // ── quotation v3 (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
 
     /**
@@ -177,6 +342,18 @@ public final class DealQuotationLines {
      *     than printing an empty one (same contract as {@link #sizeLine}).
      */
     public static String specialPriceLine(BigDecimal specialPriceSqm) {
+        return specialPriceLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, specialPriceSqm);
+    }
+
+    /**
+     * ⚠️ English: ALWAYS {@code null}. The Thai sub-line states a VAT-inclusive baht price, which
+     * is false on a USD/no-VAT document. The English per-sqm row prints {@link #boxLine} in this
+     * slot instead — see {@link #tilePrint}.
+     */
+    public static String specialPriceLine(String documentLanguage, BigDecimal specialPriceSqm) {
+        if (english(documentLanguage)) {
+            return null;
+        }
         if (specialPriceSqm == null || specialPriceSqm.signum() <= 0) {
             return null;
         }
@@ -198,6 +375,22 @@ public final class DealQuotationLines {
      *     entirely rather than printed with a blank or a placeholder date.
      */
     public static String adjustmentDescription(BigDecimal pct, LocalDate deadline) {
+        return adjustmentDescription(WastageCalculator.DOCUMENT_LANGUAGE_TH, pct, deadline);
+    }
+
+    /**
+     * Owner ruling 2026-09-13 (4): {@code Special discount 3% for orders placed by July 31, 2026}
+     * on an English document — Gregorian year and the month NAME, the same {@code "MMMM d, yyyy"}
+     * / {@code Locale.US} shape as {@code QuotationRenderer#englishDate}, so a JVM with a Thai
+     * default locale cannot turn the month Thai. With no deadline: {@code Special discount 3%}.
+     */
+    public static String adjustmentDescription(String documentLanguage, BigDecimal pct, LocalDate deadline) {
+        if (english(documentLanguage)) {
+            String head = "Special discount" + (pct == null ? "" : " " + format(pct) + "%");
+            return deadline == null ? head
+                : head + " for orders placed by "
+                    + deadline.format(java.time.format.DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US));
+        }
         String head = "ส่วนลดพิเศษ" + (pct == null ? "" : " " + format(pct) + "%");
         if (deadline == null) {
             return head;
@@ -218,12 +411,46 @@ public final class DealQuotationLines {
      *     ever non-null, which is what keeps the echoed payload legal under
      *     {@code DealQuotationService#requirePriceValidForType}'s "exactly one of percent / flat".
      */
+    /**
+     * The description an ADJUSTMENT row prints, resolved at READ time (ruling 5: every existing
+     * English quotation, no migration). The stored {@code description} was composed at WRITE time,
+     * in Thai, whatever the document's language.
+     *
+     * <ul>
+     *   <li>Thai: the stored text, untouched — byte-for-byte what was always printed.</li>
+     *   <li>English, a PERCENT adjustment: always system-composed, so it is re-derived in English.</li>
+     *   <li>English, a FLAT adjustment: re-derived only when the stored text is exactly the
+     *       system's own Thai composition (the rep typed no wording of their own). A rep's own
+     *       wording is printed as they typed it — it is theirs, in whatever language.</li>
+     * </ul>
+     */
+    public static String printedAdjustmentDescription(String documentLanguage, String storedDescription,
+                                                      BigDecimal pct, LocalDate deadline) {
+        if (!english(documentLanguage)) {
+            return storedDescription;
+        }
+        if (pct != null || blank(storedDescription)
+            || storedDescription.equals(adjustmentDescription(WastageCalculator.DOCUMENT_LANGUAGE_TH, null, deadline))) {
+            return adjustmentDescription(documentLanguage, pct, deadline);
+        }
+        return storedDescription;
+    }
+
     public static BigDecimal flatAdjustmentAmount(String lineType, BigDecimal adjustmentPct,
                                                   BigDecimal unitPrice) {
         if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType) || adjustmentPct != null) {
             return null;
         }
         return unitPrice;
+    }
+
+    private static final String TILE_UNIT_TH = "แผ่น";
+    private static final String TILE_UNIT_EN = "PCS";
+    /** The English per-sqm tile unit (owner decision 2026-09-13). */
+    public static final String TILE_UNIT_SQM = "SQM";
+
+    private static boolean english(String documentLanguage) {
+        return WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage);
     }
 
     private static boolean blank(String s) {

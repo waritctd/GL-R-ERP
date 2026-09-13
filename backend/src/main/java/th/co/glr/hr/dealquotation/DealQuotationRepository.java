@@ -182,8 +182,34 @@ public class DealQuotationRepository {
         // for the same catalogPriceId. A STORED item's sizeLine is instead recomputed at READ time
         // by this class's own #mapItemColumns, which looks the same basis up fresh (batched, see
         // CatalogRepository#findSqmBases) since these two fields never reach the database.
-        BigDecimal catalogWidthMm, BigDecimal catalogHeightMm
-    ) {}
+        BigDecimal catalogWidthMm, BigDecimal catalogHeightMm,
+        // V176 (owner decision 2026-09-13) — the supplier-stated sqm per box. PERSISTED
+        // (sales.quotation_item.sqm_per_box); an English per-sqm row's quantity is boxes × this.
+        BigDecimal sqmPerBox
+    ) {
+        /** The pre-V176 shape (no sqmPerBox) — PLAIN/ADJUSTMENT rows and existing call sites. */
+        public NewItem(
+            String locationLabel, Long catalogPriceId, String productCode,
+            String brand, String model, String color, String texture, String sizeText,
+            BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+            String wastageMode, BigDecimal wastageValue, Integer piecesPerBox,
+            int piecesBeforeWastage, int piecesAfterWastage, int piecesFinal, Integer boxes,
+            BigDecimal unitPrice, BigDecimal discountPct, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            BigDecimal vat, BigDecimal lineTotal,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String descriptionLine,
+            String lineType, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
+            BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
+            this(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, null);
+        }
+    }
 
     /** The ผู้สั่งซื้อ snapshot written onto {@code sales.quotation} (V167) — see {@link
      * DealQuotationService#resolveContact}; a revision copies its parent's verbatim. */
@@ -326,7 +352,9 @@ public class DealQuotationRepository {
             .addValue("lineType", item.lineType())
             .addValue("specialPriceSqm", item.specialPriceSqm())
             .addValue("adjustmentPct", item.adjustmentPct())
-            .addValue("adjustmentDeadline", item.adjustmentDeadline());
+            .addValue("adjustmentDeadline", item.adjustmentDeadline())
+            // V176
+            .addValue("sqmPerBox", item.sqmPerBox());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -337,7 +365,7 @@ public class DealQuotationRepository {
              quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
-             line_type, special_price_sqm, adjustment_pct, adjustment_deadline)
+             line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -345,7 +373,7 @@ public class DealQuotationRepository {
              :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
-             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline)
+             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox)
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
@@ -410,7 +438,8 @@ public class DealQuotationRepository {
                    lead_time_min_days = :leadTimeMinDays, lead_time_max_days = :leadTimeMaxDays,
                    item_notes = :itemNotes,
                    line_type = :lineType, special_price_sqm = :specialPriceSqm,
-                   adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline
+                   adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline,
+                   sqm_per_box = :sqmPerBox
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
@@ -765,8 +794,15 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement
-              FROM sales.quotation_item
+                   picture_placement, sqm_per_box,
+                   -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
+                   -- (and, for the English per-sqm quantity, its price mode), resolved at read time
+                   -- so every existing English quotation picks them up.
+                   (SELECT q.document_language FROM sales.quotation q
+                     WHERE q.quotation_id = qi.quotation_id) AS document_language,
+                   (SELECT q.price_mode FROM sales.quotation q
+                     WHERE q.quotation_id = qi.quotation_id) AS price_mode
+              FROM sales.quotation_item qi
              WHERE quotation_id = :id
              ORDER BY seq
             """, Map.of("id", quotationId), (rs, rowNum) -> mapItem(rs, basisByPriceId));
@@ -786,8 +822,15 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement
-              FROM sales.quotation_item
+                   picture_placement, sqm_per_box,
+                   -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
+                   -- (and, for the English per-sqm quantity, its price mode), resolved at read time
+                   -- so every existing English quotation picks them up.
+                   (SELECT q.document_language FROM sales.quotation q
+                     WHERE q.quotation_id = qi.quotation_id) AS document_language,
+                   (SELECT q.price_mode FROM sales.quotation q
+                     WHERE q.quotation_id = qi.quotation_id) AS price_mode
+              FROM sales.quotation_item qi
              WHERE quotation_id IN (:ids)
              ORDER BY quotation_id, seq
             """, Map.of("ids", ids), (ResultSet rs) -> {
@@ -938,6 +981,13 @@ public class DealQuotationRepository {
 
     private DealQuotationItemDto mapItemColumns(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId)
             throws SQLException {
+        // NULL document_language (every pre-V169 row) reads as TH, exactly as #mapQuotation does.
+        String documentLanguage = rs.getString("document_language") == null
+            ? WastageCalculator.DOCUMENT_LANGUAGE_TH : rs.getString("document_language");
+        // NULL price_mode (every pre-V168 row) reads as NET, exactly as #mapQuotation does.
+        String priceMode = rs.getString("price_mode") == null
+            ? WastageCalculator.PRICE_MODE_NET : rs.getString("price_mode");
+        BigDecimal sqmPerBox = rs.getBigDecimal("sqm_per_box");
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
@@ -998,7 +1048,14 @@ public class DealQuotationRepository {
                 nullableInt(rs, "lead_time_max_days"), rs.getString("item_notes"),
                 piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
                 nullableInt(rs, "boxes"), rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"),
-                storedDescription, null, null,
+                // An ADJUSTMENT's description was composed in Thai at write time; an English document
+                // re-derives it here (DealQuotationLines#printedAdjustmentDescription). A PLAIN row's
+                // text is the rep's own and is printed as typed.
+                WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)
+                    ? DealQuotationLines.printedAdjustmentDescription(documentLanguage, storedDescription,
+                        adjustmentPct, adjustmentDeadline)
+                    : storedDescription,
+                null, null,
                 lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
                 adjustmentDeadline, null,
                 // Review fix F2: a FLAT adjustment's amount has no column of its own, so echo it
@@ -1006,6 +1063,11 @@ public class DealQuotationRepository {
                 DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct,
                     rs.getBigDecimal("unit_price")));
         }
+        // English per-sqm (owner decision 2026-09-13) or the ordinary pieces print — decided in
+        // DealQuotationLines#tilePrint, the SAME call DealQuotationService#toItemDto makes.
+        DealQuotationLines.TilePrint print = DealQuotationLines.tilePrint(documentLanguage, priceMode, quantityMode,
+            areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox,
+            nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm);
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),
             rs.getInt("seq"),
@@ -1038,18 +1100,19 @@ public class DealQuotationRepository {
             nullableInt(rs, "boxes"),
             rs.getBigDecimal("final_unit_price"),
             rs.getBigDecimal("amount"),
-            DealQuotationLines.descriptionLine(model, color, texture, productCode, sizeText, thicknessMm),
-            DealQuotationLines.sizeLine(sizeText, thicknessMm, catalogWidthMm, catalogHeightMm),
-            DealQuotationLines.calculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-                wastageMode, wastageValue, piecesFinal, piecesPerBox),
-            lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
+            DealQuotationLines.descriptionLine(documentLanguage, model, color, texture, productCode, sizeText,
+                thicknessMm),
+            DealQuotationLines.sizeLine(documentLanguage, sizeText, thicknessMm, catalogWidthMm, catalogHeightMm),
+            print.calculationLine(),
+            lineType, print.quantity(), print.unit(),
+            specialPriceSqm, adjustmentPct,
             adjustmentDeadline,
-            DealQuotationLines.specialPriceLine(specialPriceSqm),
+            print.subLine(),
             // Always null on this branch — it is the TILE branch, and only an ADJUSTMENT row can
             // carry a flat amount. Routed through the same helper anyway so the two branches can
             // never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
-        );
+        ).withSqmPerBox(sqmPerBox);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

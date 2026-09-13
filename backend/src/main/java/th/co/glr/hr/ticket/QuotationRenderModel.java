@@ -110,12 +110,23 @@ public record QuotationRenderModel(
         BigDecimal amount,
         /** GLA-75: the item's picture, or null (every legacy/PCR item, and every direct-deal item
          * without one — which renders exactly as it did before pictures existed). */
-        ItemPicture picture
+        ItemPicture picture,
+        /** Owner decision 2026-09-13: an Excel number format for the จำนวน/Qty cell, or null to keep
+         * the template's own (whole numbers). Only the English per-sqm row sets one ("#,##0.00"),
+         * because its quantity is square metres to 2dp — her QN6900933 prints 72.00 / 56.43. */
+        String qtyFormat
     ) {
+        /** The pre-2026-09-13 shape: the template's own quantity format. */
+        public RenderItem(String headingLabel, List<String> descriptionLines, BigDecimal qty, String unit,
+                          BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount,
+                          ItemPicture picture) {
+            this(headingLabel, descriptionLines, qty, unit, unitPrice, discountLabel, netUnitPrice, amount, picture, null);
+        }
+
         /** The pre-GLA-75 shape: no picture. Every legacy wrapper and existing fixture uses it. */
         public RenderItem(String headingLabel, List<String> descriptionLines, BigDecimal qty, String unit,
                           BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
-            this(headingLabel, descriptionLines, qty, unit, unitPrice, discountLabel, netUnitPrice, amount, null);
+            this(headingLabel, descriptionLines, qty, unit, unitPrice, discountLabel, netUnitPrice, amount, null, null);
         }
     }
 

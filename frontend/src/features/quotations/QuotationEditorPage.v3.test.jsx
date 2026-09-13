@@ -120,36 +120,120 @@ beforeEach(() => {
 });
 
 describe('v3/v3b document settings', () => {
-  it('English does not offer ราคาพิเศษ; a ราคาพิเศษ draft switched to English moves to ราคาสุทธิต่อแผ่น and SAYS so', async () => {
+  // ── owner ruling 2026-09-13: "Clear all prices on switch" ───────────────────────────────────
+  const PLAIN_ITEM = {
+    id: 102, seq: 2, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1, unit: 'งาน',
+    unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
+  };
+  const inputValues = () => [...document.querySelectorAll('input')].map((el) => el.value);
+  const byId = (id) => document.getElementById(id);
+  async function flushPreviewDebounce() {
+    await new Promise((resolve) => { setTimeout(resolve, 450); });
+  }
+
+  it('a SAVED English per-sqm draft switched to Thai clears EVERY price — the USD/sqm 64 appears nowhere — and keeps %, quantities and box figures', async () => {
     api.dealQuotations.get.mockResolvedValue({
-      quotation: draft({ priceMode: 'SPECIAL_SQM', items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84 }] }),
+      quotation: draft({
+        priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', currency: 'USD',
+        subtotalAmount: 4454.75, vatAmount: 0, grandTotal: 4454.75,
+        items: [
+          // What the server serves for an English per-sqm row: unitPrice IS the USD/sqm (64).
+          { ...TILE_ITEM, unitPrice: 64, specialPriceSqm: 64, netUnitPrice: 64, lineAmount: 4608, quantity: 72, unit: 'SQM', sqmPerBox: 0.6, discountPct: null },
+          { ...PLAIN_ITEM, unitPrice: 777, netUnitPrice: 777, lineAmount: 777, unit: 'JOB' },
+          { id: 103, seq: 3, lineType: 'ADJUSTMENT', adjustmentPct: null, adjustmentAmount: 55, unitPrice: 55, netUnitPrice: 55, lineAmount: -55, quantity: -1, unit: null, descriptionLine: 'Rebate', piecesFinal: 0 },
+          { id: 104, seq: 4, lineType: 'ADJUSTMENT', adjustmentPct: 3, adjustmentAmount: null, unitPrice: 139.29, netUnitPrice: 139.29, lineAmount: -139.29, quantity: -1, unit: null, descriptionLine: 'Special discount 3%', piecesFinal: 0 },
+        ],
+      }),
     });
     renderEditor('/quotations/5');
-    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
-    // waitFor, not a bare expect: the group renders one frame BEFORE the seeding effect applies the
-    // stored mode, so under a loaded full-suite run the first read still sees the NET default.
-    await waitFor(() => expect(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }).getAttribute('aria-pressed')).toBe('true'));
+    await waitFor(() => expect(byId('special-0')?.value).toBe('64'));
+    expect(inputValues()).toContain('777');
+    expect(inputValues()).toContain('55');
+    api.dealQuotations.calculateLine.mockClear();
+
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
+
+    // Thai SPECIAL_SQM shows BOTH the list price and the ราคาพิเศษ — neither may inherit the USD 64.
+    expect(byId('price-0').value).toBe('');
+    expect(byId('special-0').value).toBe('');
+    expect(byId('plain-price-1').value).toBe('');
+    expect(screen.getByLabelText(/^จำนวนเงินส่วนลด/).value).toBe('');
+    const values = inputValues();
+    for (const stale of ['64', '777', '55', '4608', '139.29']) expect(values, `no input still holds ${stale}`).not.toContain(stale);
+    // Non-money kept: the area, the pieces-per-box, the plain quantity and the PERCENT adjustment.
+    expect(byId('plain-qty-1').value).toBe('1');
+    expect(byId('ppb-0').value).toBe('3');
+    expect(screen.getByLabelText(/^ส่วนลด %/, { selector: '[id^="adj-pct-"]' }).value).toBe('3');
+    await flushPreviewDebounce();
+    expect(document.body.textContent).not.toMatch(/4,608|4,454\.75|777\.00/);
+    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
+    expect(screen.getByText('เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็นบาท')).not.toBeNull();
+    expect(screen.queryByText(/ตามตัวเลขเดิม/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
+  }, 20000);
+
+  it.each([
+    ['NET', { discountPct: 5 }, (i) => { fireEvent.change(byId(`price-${i}`), { target: { value: '12' } }); }, { unitPrice: 12, discountPct: 5, directNetPrice: null, specialPriceSqm: null }],
+    ['DIRECT_NET', { unitPrice: 900, netUnitPrice: 850 }, (i) => { fireEvent.change(byId(`direct-net-${i}`), { target: { value: '11' } }); }, { directNetPrice: 11, unitPrice: 11, specialPriceSqm: null }],
+    ['SPECIAL_SQM', { specialPriceSqm: 1350, netUnitPrice: 453.84 }, (i) => {
+      fireEvent.change(byId(`special-${i}`), { target: { value: '64' } });
+      fireEvent.change(byId(`sqm-box-${i}`), { target: { value: '0.6' } });
+    }, { specialPriceSqm: 64, unitPrice: 64, sqmPerBox: 0.6, directNetPrice: null }],
+  ])('a THAI %s draft switched to English clears every price, keeps percentages and quantities, blocks save, then saves the NEW numbers', async (mode, tileOverrides, reenterTile, expectedTile) => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: mode, items: [{ ...TILE_ITEM, ...tileOverrides }, PLAIN_ITEM] }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('plain-price-1')?.value).toBe('800'));
+    api.dealQuotations.calculateLine.mockClear();
 
     fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
 
-    expect(within(group('วิธีกรอกราคากระเบื้อง')).queryByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).toBeNull();
-    expect(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByText(/เอกสารภาษาอังกฤษใช้ "ราคาพิเศษ บาท\/ตร\.ม\." ไม่ได้/)).not.toBeNull();
+    for (const id of ['price-0', 'direct-net-0', 'special-0', 'plain-price-1']) {
+      if (byId(id)) expect(byId(id).value, id).toBe('');
+    }
+    for (const stale of ['800', '850', '900', '1350']) expect(inputValues(), `no input still holds ${stale}`).not.toContain(stale);
+    if (mode === 'NET') expect(byId('disc-0').value).toBe('5');
+    expect(byId('plain-qty-1').value).toBe('1');
+    expect(screen.getByText('เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็น USD (ไม่มี VAT)')).not.toBeNull();
+    await flushPreviewDebounce();
+    expect(api.dealQuotations.calculateLine).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toMatch(/48,450|51,841\.50|800\.00/);
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
 
-    // The net is NOT silently carried across a currency change — the rep has to state it.
-    const save = screen.getByRole('button', { name: 'บันทึกร่าง' });
-    expect(save.disabled).toBe(true);
-    expect(within(screen.getByTestId('checklist-blocking')).getByText('รายการที่ 1: ขาด ราคาสุทธิ/แผ่น')).not.toBeNull();
-
-    fireEvent.change(screen.getByLabelText(/^ราคาสุทธิ\/แผ่น/), { target: { value: '12.5' } });
+    reenterTile(0);
+    fireEvent.change(byId('plain-price-1'), { target: { value: '700' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
-
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     const [, payload] = api.dealQuotations.update.mock.calls[0];
-    expect(payload).toMatchObject({ priceMode: 'DIRECT_NET', documentLanguage: 'EN', currency: 'USD' });
-    expect(payload.items[0]).toMatchObject({ directNetPrice: 12.5, specialPriceSqm: null });
-  }, 15000);
+    expect(payload).toMatchObject({ priceMode: mode, documentLanguage: 'EN', currency: 'USD' });
+    expect(payload.items[0]).toMatchObject(expectedTile);
+    expect(payload.items[1]).toMatchObject({ lineType: 'PLAIN', unitPrice: 700, quantity: 1 });
+  }, 25000);
+
+  it('switching back does NOT restore any cleared price', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: 'SPECIAL_SQM', items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84 }, PLAIN_ITEM] }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
+    expect(byId('special-0').value).toBe('');
+    expect(byId('price-0').value).toBe('');
+    expect(byId('plain-price-1').value).toBe('');
+    for (const stale of ['1350', '850', '800']) expect(inputValues()).not.toContain(stale);
+  }, 20000);
+
+  it('the live preview of a Thai draft still calls calculate-line with TH', async () => {
+    renderEditor('/quotations/new?ticket=18');
+    await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    fireEvent.change(screen.getByLabelText(/^ราคา\/หน่วย/), { target: { value: '350' } });
+    await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
+    expect(api.dealQuotations.calculateLine.mock.calls.at(-1)[1]).toBe('TH');
+  });
 
   it('ALWAYS sends priceMode and documentLanguage on update, even when untouched', async () => {
     renderEditor('/quotations/5');
@@ -165,6 +249,10 @@ describe('v3/v3b document settings', () => {
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
     fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }));
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    // The Thai ราคาพิเศษ needs its list price as well (DealQuotationService#requirePriceValidForType
+    // refuses a TILE row without one); until both are typed the editor previews nothing at all —
+    // quotationMeta#rowHasPriceForPreview — rather than a figure priced under another mode.
+    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/), { target: { value: '2000' } });
     fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\./), { target: { value: '1350' } });
 
     await waitFor(() => expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)'));

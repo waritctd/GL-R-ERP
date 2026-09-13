@@ -24,6 +24,67 @@ describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => 
   });
 });
 
+describe('mock dealQuotations -- item lines follow the document language (owner ruling 2026-09-13)', () => {
+  const THAI = /[\u0E00-\u0E7F]/;
+  const ADJUSTMENT = { lineType: 'ADJUSTMENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' };
+
+  it('an ENGLISH quotation\'s tile lines, tile unit and discount text carry no Thai', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      documentLanguage: 'EN', currency: 'USD', items: [{ ...ONE_ITEM, productCode: 'APGBBK15' }, ADJUSTMENT],
+    });
+    const [tile, adjustment] = quotation.items;
+    expect(tile.descriptionLine).toBe('Tile Model Trilogy Color Ash Finish Matt No.APGBBK15');
+    expect(tile.calculationLine).toMatch(/^\(Area 20 sqm @ .+ pcs\/sqm = .+ pcs, rounded up to full boxes = .+ pcs\) \(3 pcs\/box\)$/);
+    expect(tile.unit).toBe('PCS');
+    expect(adjustment.descriptionLine).toBe('Special discount 3% for orders placed by July 31, 2026');
+    for (const text of [tile.descriptionLine, tile.sizeLine, tile.calculationLine, tile.unit, adjustment.descriptionLine]) {
+      expect(text).not.toMatch(THAI);
+    }
+  });
+
+  it('a THAI quotation keeps its Thai lines and แผ่น (wrong-way-round)', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM, ADJUSTMENT] });
+    expect(quotation.items[0].descriptionLine).toBe('กระเบื้อง รุ่น Trilogy สี Ash ผิว Matt');
+    expect(quotation.items[0].unit).toBe('แผ่น');
+    expect(quotation.items[1].descriptionLine).toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
+  });
+});
+
+describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mirrors the RULES', () => {
+  it('accepts SPECIAL_SQM on English with box data, printing SQM and the box line; the numbers stay the server\'s', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', currency: 'USD',
+      items: [{ ...ONE_ITEM, piecesPerBox: 28, sqmPerBox: 0.6, unitPrice: 64, specialPriceSqm: 64 }],
+    });
+    const [tile] = quotation.items;
+    expect(tile.unit).toBe('SQM');
+    expect(tile.specialPriceLine).toBe('(1 box = 28 pcs = 0.6 sqm)');
+    expect(tile.quantity).toBeNull();
+    expect(tile.lineAmount).toBeNull();
+  });
+
+  it('refuses an English per-sqm row with no ตร.ม./กล่อง (400), on create and on the preview', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [{ ...ONE_ITEM, specialPriceSqm: 64 }],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ตร.ม./กล่อง') });
+    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 }, 'EN'))
+      .rejects.toMatchObject({ status: 400 });
+    // The same row previewed in Thai is an ordinary ราคาพิเศษ — no box rule.
+    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 })).resolves.toBeTruthy();
+  });
+
+  it('calculateLine takes the document language: English lines on EN', async () => {
+    await api.auth.login(salesUser);
+    const { item } = await api.dealQuotations.calculateLine(ONE_ITEM, 'EN');
+    expect(item.descriptionLine).toBe('Tile Model Trilogy Color Ash Finish Matt');
+    expect(item.unit).toBe('PCS');
+  });
+});
+
 describe('mock dealQuotations.update -- #M7 direct assignment, null clears', () => {
   it('an explicit null in the request CLEARS the field, not "keep the old value"', async () => {
     await api.auth.login(salesUser);
