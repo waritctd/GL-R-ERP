@@ -116,8 +116,36 @@ public final class DealQuotationRequests {
          * dropped unless another row (e.g. a parent revision sharing it) still references it.
          * Ignored on create and by calculate-line.
          */
-        Long id
+        Long id,
+
+        /**
+         * Owner decision 2026-09-13 (V176): the supplier-stated square metres in ONE box — the
+         * factor an ENGLISH per-sqm quotation prints its quantity from ({@code boxes × sqmPerBox},
+         * 2dp). Optional on the wire; stored on every TILE row that carries it, and REQUIRED (with
+         * {@code piecesPerBox}) only for SPECIAL_SQM on an EN document. {@code @Digits} matches
+         * {@code sales.quotation_item.sqm_per_box}'s NUMERIC(10,6).
+         */
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox
     ) {
+        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}) — kept so every
+         * existing construction site compiles unchanged. */
+        public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
+                         String model, String color, String texture, String sizeText,
+                         BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+                         BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+                         BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+                         BigDecimal discountPct, String originCountry, Integer leadTimeMinDays,
+                         Integer leadTimeMaxDays, String itemNotes, String lineType, String description,
+                         BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+                         BigDecimal directNetPrice, BigDecimal adjustmentPct, LocalDate adjustmentDeadline,
+                         BigDecimal adjustmentAmount, Long id) {
+            this(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
+                wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, lineType, description, quantity, unit, specialPriceSqm,
+                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, id, null);
+        }
+
         /** The v3 shape — every field except {@link #id}; see the class-level note on the legacy
          * constructors below. Defaults {@code id} to null (a brand-new item, no picture). */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
@@ -134,7 +162,7 @@ public final class DealQuotationRequests {
                 thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
                 wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes, lineType, description, quantity, unit, specialPriceSqm,
-                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, null);
+                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, (Long) null);
         }
 
         /**
@@ -157,7 +185,7 @@ public final class DealQuotationRequests {
                 thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
                 wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes,
-                null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, (Long) null);
         }
     }
 

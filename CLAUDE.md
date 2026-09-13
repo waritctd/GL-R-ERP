@@ -285,19 +285,37 @@ being released, because merging to `main` *is* the frontend deploy.
   | | Deploys from `main`? | What it takes |
   |---|---|---|
   | **Frontend (Vercel)** | **YES** | merge — it is live |
-  | **Backend (Render)** | **NO** | build+push a tagged image → bump `render.yaml`'s `image.url` → deploy from the dashboard |
+  | **Backend (Render)** | **NO** — while the service's Source is an image (see below) | build+push a tagged image → set it on the `gl-r-erp` service in the dashboard, keeping `render.yaml`'s `image.url` in step → deploy |
 
-  `render.yaml` sets **`autoDeploy: false`** and runs a **pre-built image** from ghcr, because the
-  licensed Thai fonts are gitignored and an image Render builds itself could never contain them
-  (#666). So a merged backend change is **not live and its migrations are not applied** until someone
-  does those three steps.
+  The service is meant to run a **pre-built image** from ghcr, because the licensed Thai fonts are
+  gitignored and an image Render builds itself can never contain them (#666).
+
+  ⚠️ **The Render dashboard decides what runs, not `render.yaml`** — verified 2026-09-13. This
+  paragraph used to say "`render.yaml` sets `autoDeploy: false` and runs a pre-built image", and for
+  three days that was false: from 2026-09-10 to 2026-09-13 the dashboard's Source for `gl-r-erp` was a
+  **Git build of `main`** (Root Directory `backend`, Dockerfile `backend/./Dockerfile`) with
+  **auto-deploy on every push**, overriding both `runtime: image` and `autoDeploy: false` in the file.
+  During that window production never ran the pinned ghcr images, had **no licensed fonts** (quotation
+  PDFs embedded Kinnari/Garuda substitutes), and **every merge to `main` deployed the backend and
+  applied its migrations within minutes** — V174 merged to `main` at 21:01:50 UTC (#950) and was
+  applied at 21:03:34 with no manual step. On 2026-09-13 the owner switched the Source to **Existing
+  Image** `ghcr.io/waritctd/glr-hr-backend:v2026-09-13` (digest `sha256:15b0873d…`, revision
+  `e26f2ac7`); a fresh prod PDF then embedded AngsanaNew/Tahoma, which only the image carries.
+
+  So **today** a merged backend change is **not live and its migrations are not applied** until
+  someone builds an image and deploys it. It is not proven whether the blueprint still syncs
+  `render.yaml` to the service — **re-read Settings → Build before relying on either model**.
 
   - **The asymmetry is what bites.** Merge a feature whose frontend and backend are separate PRs and
     the UI ships alone, calling endpoints the running image does not have. That happened on
     2026-08-17: `/fulfilment` rendered "งานนำเข้าทั้งหมดดำเนินการครบแล้ว" — the exact lie its backend
     fix removed — and the ใบขอซื้อ block 404'd, for hours, while everything looked merged and green.
-    **Before reasoning about what production is running, read `render.yaml`'s pinned tag and when that
-    image was built. Not the git log.** `./scripts/build-push-backend-image.sh <tag>` builds it; verify
+    **Before reasoning about what production is running, read Render → `gl-r-erp` → Settings → Build
+    (Source and image) — not `render.yaml`, and not the git log.** This line used to say "read
+    `render.yaml`'s pinned tag", which is exactly the file the dashboard overrode above. Two outside
+    checks help: prod's Flyway max is a **lower bound** on the running code (it cannot say how the code
+    got there), and a fresh prod quotation PDF's embedded fonts distinguish an image (AngsanaNew,
+    Tahoma) from a Git build (Kinnari/Garuda substitutes). `./scripts/build-push-backend-image.sh <tag>` builds it; verify
     by copying `app.jar` OUT of the pushed image and reading it, because `v2026-08-17` shipped stale
     code with a completely clean build log.
   - **This bullet used to read "The Render demo is a showcase, not real production", and that was
@@ -320,7 +338,9 @@ being released, because merging to `main` *is* the frontend deploy.
     deploy successfully and silently skip that branch's migration on merge". **Proof, not
     inference:** `V11.1`/`V11.2` have sat unapplied below prod's max for months while every deploy
     succeeded, most recently 2026-08-17. (Two *unapplied* migrations on `main` in any authoring
-    order do still simply apply ascending — that half was right.)
+    order do still simply apply ascending — that half was right.) **With an image Source this is about
+    the order IMAGES deploy, not the order PRs merge:** never deploy an image containing a higher
+    migration unless every lower pending one is in the same image or already applied.
   - **Before a backend deploy, diff the migration SET — never `max(version)`.** On 2026-08-25 prod
     and `main` both read V155 while `V11.1`/`V11.2` were still unapplied, so the max agreed and the
     sets did not. Use `SELECT string_agg(version, ',' ORDER BY version::numeric) FROM

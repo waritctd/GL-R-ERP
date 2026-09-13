@@ -1104,7 +1104,11 @@ export const api = {
     update: (id, payload) => apiRequest(API_ROUTES.dealQuotations.detail(id), { method: 'PUT', body: payload }),
     // Stateless preview — same calc the server applies on save, run against one item input with
     // nothing persisted. Debounced 300ms by the editor; see QuotationEditorPage.jsx.
-    calculateLine: (payload) => apiRequest(API_ROUTES.dealQuotations.calculateLine, { method: 'POST', body: payload }),
+    // Owner decision 2026-09-13 (B): `?documentLanguage=` so the preview prints in the document's
+    // language; omitted (null/'') means TH, the pre-existing behaviour.
+    calculateLine: (payload, documentLanguage) => apiRequest(
+      withQuery(API_ROUTES.dealQuotations.calculateLine, { documentLanguage }), { method: 'POST', body: payload },
+    ),
     submit: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.submit(id), { method: 'POST', body: payload }),
     approve: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload) => apiRequest(API_ROUTES.dealQuotations.reject(id), { method: 'POST', body: payload }),

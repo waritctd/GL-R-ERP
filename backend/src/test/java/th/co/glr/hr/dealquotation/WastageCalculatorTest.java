@@ -371,4 +371,56 @@ class WastageCalculatorTest {
         assertThatThrownBy(() -> WastageCalculator.adjustmentAmount(new BigDecimal("1000"), null))
             .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── owner decision 2026-09-13: English per-sqm quantity = boxes × supplier sqm/box ─────────
+
+    /** Her QN6900933, all three rows, to the cent. */
+    @Test
+    void sqmQuantityFromBoxes_reproducesQN6900933() {
+        assertThat(WastageCalculator.sqmQuantityFromBoxes(120, new BigDecimal("0.6"))).isEqualByComparingTo("72.00");
+        assertThat(WastageCalculator.sqmQuantityFromBoxes(30, new BigDecimal("0.6"))).isEqualByComparingTo("18.00");
+        assertThat(WastageCalculator.sqmQuantityFromBoxes(114, new BigDecimal("0.495"))).isEqualByComparingTo("56.43");
+        assertThat(WastageCalculator.sqmQuantityFromBoxes(114, new BigDecimal("0.495")).scale()).isEqualTo(2);
+        // HALF_UP at the cent: 1 × 0.005 = 0.005 → 0.01 (HALF_EVEN would give 0.00).
+        assertThat(WastageCalculator.sqmQuantityFromBoxes(1, new BigDecimal("0.005"))).isEqualByComparingTo("0.01");
+    }
+
+    /**
+     * Review fix (Opus, 2026-09-13): a sqm/box whose box quantity is NOT already a whole cent.
+     * Prod catalogue values go to 5dp; every QN6900933 figure happens to multiply out exactly, so
+     * those fixtures cannot tell "round the qty, then price it" from "price the unrounded qty".
+     * 120 × 0.59696 = 71.6352 → 71.64, and the amount the document prints is 71.64 × 64 = 4,584.96
+     * (the qty the customer SEES, times the price) — NOT 71.6352 × 64 = 4,584.65.
+     */
+    @Test
+    void sqmQuantityFromBoxes_roundsAFiveDecimalBoxAreaToTheCent_beforeAnyPriceIsApplied() {
+        BigDecimal qty = WastageCalculator.sqmQuantityFromBoxes(120, new BigDecimal("0.59696"));
+        assertThat(qty).isEqualByComparingTo("71.64");
+        assertThat(qty.scale()).isEqualTo(2);
+        assertThat(qty.multiply(new BigDecimal("64")).setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.96");
+        // The trap, stated: pricing the unrounded box area gives a figure that disagrees with the
+        // printed Qty × Unit price by 0.31.
+        assertThat(new BigDecimal("120").multiply(new BigDecimal("0.59696")).multiply(new BigDecimal("64"))
+            .setScale(2, RoundingMode.HALF_UP)).isEqualByComparingTo("4584.65");
+    }
+
+    @Test
+    void sqmQuantityFromBoxes_refusesMissingBoxData_neverFallsBackToPieces() {
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(null, new BigDecimal("0.6")))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(120, null))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromBoxes(120, BigDecimal.ZERO))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void isEnglishPerSqm_isExactlySpecialSqmOnAnEnglishDocument() {
+        assertThat(WastageCalculator.isEnglishPerSqm("EN", "SPECIAL_SQM")).isTrue();
+        assertThat(WastageCalculator.isEnglishPerSqm("TH", "SPECIAL_SQM")).isFalse();
+        assertThat(WastageCalculator.isEnglishPerSqm(null, "SPECIAL_SQM")).isFalse();
+        assertThat(WastageCalculator.isEnglishPerSqm("EN", "NET")).isFalse();
+        assertThat(WastageCalculator.isEnglishPerSqm("EN", "DIRECT_NET")).isFalse();
+        assertThat(WastageCalculator.isEnglishPerSqm("EN", null)).isFalse();
+    }
 }

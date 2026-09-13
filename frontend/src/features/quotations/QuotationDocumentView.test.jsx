@@ -332,6 +332,33 @@ describe('QuotationDocumentView — the English (USD) document', () => {
     expect(container.textContent).not.toContain('฿');
   });
 
+  // Review fix (Opus, 2026-09-13): mock mode returns quantity null for an English per-sqm row and
+  // the fallback used to print the PIECE count under "SQM" ("3,360 SQM") — a plausible-looking lie.
+  it('an English per-sqm row with no server quantity prints "-", never its piece count as SQM', () => {
+    const perSqm = {
+      ...en, priceMode: 'SPECIAL_SQM',
+      items: [{
+        id: 31, seq: 1, lineType: 'TILE', descriptionLine: 'Tile Model Menorca', quantity: null, unit: 'SQM',
+        piecesFinal: 3360, unitPrice: 64, netUnitPrice: 64, lineAmount: null,
+        specialPriceLine: '(1 box = 28 pcs = 0.6 sqm)',
+      }],
+    };
+    const { container } = render(<QuotationDocumentView quotation={perSqm} />);
+    const tileRow = container.querySelector('.data-row[data-line-type="TILE"]');
+    expect(tileRow.querySelector('[data-label="Qty"]').textContent).toBe('-');
+    expect(tileRow.textContent).not.toContain('3,360');
+    // With the server's figure it prints it, 2dp as computed.
+    const { container: withQty } = render(<QuotationDocumentView quotation={{
+      ...perSqm, items: [{ ...perSqm.items[0], quantity: 71.64 }],
+    }} />);
+    expect(withQty.querySelector('.data-row[data-line-type="TILE"] [data-label="Qty"]').textContent).toBe('71.64 SQM');
+    // A pieces row with no quantity still falls back to piecesFinal, as before.
+    const { container: pcs } = render(<QuotationDocumentView quotation={{
+      ...perSqm, priceMode: 'NET', items: [{ ...perSqm.items[0], unit: 'PCS' }],
+    }} />);
+    expect(pcs.querySelector('.data-row[data-line-type="TILE"] [data-label="Qty"]').textContent).toBe('3,360 PCS');
+  });
+
   it('prints English signatory names, falling back to the Thai one rather than an empty slot', () => {
     const { container } = render(<QuotationDocumentView quotation={en} />);
     expect(container.textContent).toContain('Quoted by');

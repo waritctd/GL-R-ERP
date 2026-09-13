@@ -29,6 +29,7 @@ import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
@@ -231,45 +232,217 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     // ── SPECIAL_SQM is unavailable in English ──────────────────────────────────────────────
 
+    // ── owner decision 2026-09-13: English per-sqm pricing (Option A) ───────────────────────────
+
     /**
-     * ⚠️ ราคาพิเศษ divides a บาท/ตร.ม. price by 1.07 to strip Thai VAT. On a USD document there is
-     * no VAT to strip, so the same arithmetic silently produces a number with no meaning. Refused
-     * at the SERVICE — on create AND on update, because a rep can reach the same state either way.
+     * The owner's QN6900933 reproduced exactly through the real service and real Postgres:
+     * 120 boxes × 0.6 = 72.00 SQM × 64 = 4,608.00; 30 × 0.6 = 18.00 × 36 = 648.00;
+     * 114 × 0.495 = 56.43 × 64 = 3,611.52; Grand Total 8,867.52 with no VAT. The figures are the
+     * PRINTED sample's, typed in — not computed by the code under test.
      */
     @Test
-    void specialSqmOnAnEnglishDocument_isRefusedOnCreate() {
-        assertThatThrownBy(() -> quotationService.create(ticketId,
-            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
-                List.of(specialSqmItem("2000.00", 10, "1350"))), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("ราคาพิเศษ");
+    void englishPerSqm_reproducesTheOwnersQN6900933() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                perSqmItem(3360, 28, "0.6", "64"),
+                perSqmItem(1800, 60, "0.6", "36"),
+                perSqmItem(7524, 66, "0.495", "64"))), salesActor);
+
+        assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
+        String[][] expected = {
+            {"72.00", "64.00", "4608.00", "(1 box = 28 pcs = 0.6 sqm)", "120"},
+            {"18.00", "36.00", "648.00", "(1 box = 60 pcs = 0.6 sqm)", "30"},
+            {"56.43", "64.00", "3611.52", "(1 box = 66 pcs = 0.495 sqm)", "114"},
+        };
+        for (int i = 0; i < 3; i++) {
+            var item = created.items().get(i);
+            assertThat(item.quantity()).as("row %d qty", i + 1).isEqualByComparingTo(expected[i][0]);
+            assertThat(item.unit()).isEqualTo("SQM");
+            assertThat(item.unitPrice()).isEqualByComparingTo(expected[i][1]);
+            assertThat(item.netUnitPrice()).isEqualByComparingTo(expected[i][1]);
+            assertThat(item.discountPct()).isNull();
+            assertThat(item.lineAmount()).as("row %d amount", i + 1).isEqualByComparingTo(expected[i][2]);
+            assertThat(item.specialPriceLine()).isEqualTo(expected[i][3]);
+            assertThat(item.boxes()).isEqualTo(Integer.valueOf(expected[i][4]));
+        }
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("8867.52");
+        assertThat(created.vatAmount()).isEqualByComparingTo("0.00");
+        assertThat(created.grandTotal()).isEqualByComparingTo("8867.52");
+
+        // Stored: qty stays the PIECE count, sqm_per_box is persisted (V176), raw_unit SQM.
+        assertThat(jdbc.getJdbcOperations().queryForList(
+            "SELECT qty::int || '|' || sqm_per_box::text || '|' || raw_unit FROM sales.quotation_item"
+                + " WHERE quotation_id = " + created.id() + " ORDER BY seq", String.class))
+            .containsExactly("3360|0.600000|SQM", "1800|0.600000|SQM", "7524|0.495000|SQM");
+
+        // The rendered English sheet: Qty in sqm, Unit SQM, Unit price and Net price the USD/sqm,
+        // Disc. "Net", the box sub-line, Grand Total 8,867.52.
+        Sheet sheet = renderSheet(created.id());
+        int row = rowWithText(sheet, 1, "Tile Model Model A");
+        assertThat(sheet.getRow(row).getCell(2).getNumericCellValue()).isEqualTo(72.00);
+        // Printed to 2dp: the template's whole-number format showed 56.43 as "56" (caught on the
+        // rendered PDF). DataFormatter applies the cell's own format, as Excel/LibreOffice do.
+        org.apache.poi.ss.usermodel.DataFormatter shown = new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.US);
+        assertThat(shown.formatCellValue(sheet.getRow(row).getCell(2))).isEqualTo("72.00");
+        int fango = rowWithText(sheet, 1, "Tile Model Model A", row + 1);
+        fango = rowWithText(sheet, 1, "Tile Model Model A", fango + 1);
+        assertThat(shown.formatCellValue(sheet.getRow(fango).getCell(2))).isEqualTo("56.43");
+        assertThat(str(sheet, row, 3)).isEqualTo("SQM");
+        assertThat(sheet.getRow(row).getCell(4).getNumericCellValue()).isEqualTo(64.00);
+        assertThat(str(sheet, row, 6)).isEqualTo("Net");
+        assertThat(sheet.getRow(row).getCell(7).getNumericCellValue()).isEqualTo(64.00);
+        assertThat(sheet.getRow(row).getCell(8).getNumericCellValue()).isEqualTo(4608.00);
+        assertThat(allText(sheet)).contains("(1 box = 28 pcs = 0.6 sqm)", "(1 box = 66 pcs = 0.495 sqm)");
+        int total = rowWithText(sheet, 4, "Grand Total (USD)");
+        assertThat(sheet.getRow(total).getCell(8).getNumericCellValue()).isEqualTo(8867.52);
+
+        // Submit's stored-row gate accepts it (no per-piece list price is required).
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
+    /**
+     * Review fix (Opus, 2026-09-13): a supplier sqm/box to 5 decimals, as the prod catalogue
+     * carries them, whose box quantity is NOT a whole cent. 120 boxes × 0.59696 = 71.6352 → Qty
+     * 71.64, and Amount = the printed Qty × 64 = 4,584.96 — not 71.6352 × 64 = 4,584.65. Checked on
+     * the DTO, the stored document totals, and the rendered sheet's own cells, so the printed row
+     * multiplies out (Qty × Unit price = Amount) for anyone checking it with a calculator.
+     */
     @Test
-    void specialSqmOnAnEnglishDocument_isRefusedOnUpdateToo() {
+    void englishPerSqm_aFiveDecimalBoxArea_pricesTheRoundedQtyThatIsPrinted() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(perSqmItem(3360, 28, "0.59696", "64"))), salesActor);
+        var item = created.items().get(0);
+        assertThat(item.boxes()).isEqualTo(120);
+        assertThat(item.quantity()).isEqualByComparingTo("71.64");
+        assertThat(item.lineAmount()).isEqualByComparingTo("4584.96");
+        assertThat(item.specialPriceLine()).isEqualTo("(1 box = 28 pcs = 0.59696 sqm)");
+        assertThat(item.sqmPerBox()).isEqualByComparingTo("0.59696");
+        assertThat(created.subtotalAmount()).isEqualByComparingTo("4584.96");
+        assertThat(created.vatAmount()).isEqualByComparingTo("0.00");
+        assertThat(created.grandTotal()).isEqualByComparingTo("4584.96");
+        // Re-read through the repository mapping, not just the create response.
+        var reread = quotationService.get(created.id(), salesActor).items().get(0);
+        assertThat(reread.quantity()).isEqualByComparingTo("71.64");
+        assertThat(reread.lineAmount()).isEqualByComparingTo("4584.96");
+
+        Sheet sheet = renderSheet(created.id());
+        int row = rowWithText(sheet, 1, "Tile Model Model A");
+        org.apache.poi.ss.usermodel.DataFormatter shown = new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.US);
+        assertThat(shown.formatCellValue(sheet.getRow(row).getCell(2))).isEqualTo("71.64");
+        assertThat(sheet.getRow(row).getCell(8).getNumericCellValue()).isEqualTo(4584.96);
+        assertThat(allText(sheet)).contains("(1 box = 28 pcs = 0.59696 sqm)");
+        int total = rowWithText(sheet, 4, "Grand Total (USD)");
+        assertThat(sheet.getRow(total).getCell(8).getNumericCellValue()).isEqualTo(4584.96);
+    }
+
+    /** AREA mode with wastage: the pieces derivation is the ordinary one; only the qty is sqm. */
+    @Test
+    void englishPerSqm_areaModeWithWastage_usesTheBoxesWastageCalculatorRoundedTo() {
+        ItemInput area = withQuantity(perSqmItem(0, 20, "1.22", "10"), WastageCalculator.QUANTITY_MODE_AREA,
+            new BigDecimal("300"), null, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"),
+            new BigDecimal("0.061013"));
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(area)), salesActor);
+        var item = created.items().get(0);
+        // 300 × 16.39 = 4,917 → +5% = 5,163 → 20/box = 5,180 pcs = 259 boxes; 259 × 1.22 = 315.98.
+        assertThat(item.boxes()).isEqualTo(259);
+        assertThat(item.quantity()).isEqualByComparingTo("315.98");
+        assertThat(item.lineAmount()).isEqualByComparingTo("3159.80");
+        assertThat(item.calculationLine()).isEqualTo(
+            "(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs = 259 boxes)");
+        assertThat(item.specialPriceLine()).isEqualTo("(1 box = 20 pcs = 1.22 sqm)");
+    }
+
+    /** Wrong-way-round: no box data → a rep-facing Thai 400, on create, update and the preview —
+     * never a silent quantity in pieces. */
+    @Test
+    void englishPerSqm_withoutBoxData_isRefusedInThai_onCreateUpdateAndPreview() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(perSqmItem(3360, 28, null, "64"))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("ตร.ม./กล่อง");
+
         DealQuotationDto created = quotationService.create(ticketId,
             englishRequest(List.of(tileItem("100.00", 10))), salesActor);
         assertThatThrownBy(() -> quotationService.update(created.id(),
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
-                List.of(specialSqmItem("2000.00", 10, "1350"))), salesActor))
+                List.of(perSqmItem(3360, 28, null, "64"))), salesActor))
             .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
-        // And the stored document is untouched by the refused update.
-        assertThat(quotationService.get(created.id(), salesActor).priceMode())
-            .isEqualTo(WastageCalculator.PRICE_MODE_NET);
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ตร.ม./กล่อง");
+        assertThat(quotationService.get(created.id(), salesActor).priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+
+        // The lenient preview has no completeness gate — the box-data refusal still applies there.
+        ItemInput neither = withBoxes(perSqmItem(3360, 28, null, "64"), null);
+        assertThatThrownBy(() -> quotationService.calculateLine(neither, "EN", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("แผ่น/กล่อง").hasMessageContaining("ตร.ม./กล่อง");
+        // ...while the SAME row previewed as a THAI ราคาพิเศษ needs no box data at all.
+        assertThat(quotationService.calculateLine(withSqmPerPiece(neither, "0.36"), null, salesActor).unit())
+            .isEqualTo("แผ่น");
     }
 
-    /** Wrong-way-round: SPECIAL_SQM is still perfectly available on a THAI document — the refusal
-     * must be about the LANGUAGE, not about the mode having been broken. */
+    /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
+    @Test
+    void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
+        DealQuotationItemDto preview = quotationService.calculateLine(perSqmItem(3360, 28, "0.6", "64"), "EN", salesActor);
+        assertThat(preview.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
+        assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
+        assertThat(preview.specialPriceLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
+        assertThat(preview.quantity()).isEqualByComparingTo("72.00");
+        assertThat(preview.unit()).isEqualTo("SQM");
+        assertThat(preview.lineAmount()).isEqualByComparingTo("4608.00");
+        assertThat(preview.sqmPerBox()).isEqualByComparingTo("0.6");
+
+        // An English NET preview: English lines, PCS, pieces.
+        DealQuotationItemDto net = quotationService.calculateLine(tileItem("100.00", 10), "EN", salesActor);
+        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        assertThat(net.unit()).isEqualTo("PCS");
+
+        assertThatThrownBy(() -> quotationService.calculateLine(tileItem("100.00", 10), "FR", salesActor))
+            .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
+    }
+
+    /** A revision of an English per-sqm quotation copies the PIECE count into qty (not the sqm
+     * figure the DTO prints) and keeps sqm_per_box, so its printed qty and amount are unchanged. */
+    @Test
+    void revisingAnEnglishPerSqmQuotation_keepsQtyAmountAndSqmPerBox() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(perSqmItem(7524, 66, "0.495", "64"))), salesActor);
+        quotationService.submit(created.id(), salesActor);
+        quotationService.approve(created.id(), new ApproveRequest("ok"), salesManagerActor);
+        DealQuotationDto revision = quotationService.createRevision(created.id(), salesActor);
+        var item = revision.items().get(0);
+        assertThat(item.quantity()).isEqualByComparingTo("56.43");
+        assertThat(item.lineAmount()).isEqualByComparingTo("3611.52");
+        assertThat(item.unit()).isEqualTo("SQM");
+        assertThat(item.sqmPerBox()).isEqualByComparingTo("0.495");
+        assertThat(jdbc.getJdbcOperations().queryForObject(
+            "SELECT qty::int FROM sales.quotation_item WHERE quotation_id = " + revision.id(), Integer.class))
+            .isEqualTo(7524);
+    }
+
+    /** Wrong-way-round: the THAI SPECIAL_SQM is unchanged — a VAT-inclusive baht/ตร.ม. turned into a
+     * per-piece net, quantity in pieces — even when the row carries a sqm/box. */
     @Test
     void specialSqmOnAThaiDocument_isStillAccepted() {
         DealQuotationDto created = quotationService.create(ticketId,
             thaiRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
-                List.of(specialSqmItem("2000.00", 10, "1350"))), salesActor);
+                List.of(withSqmPerBox(specialSqmItem("2000.00", 10, "1350"), "0.72"))), salesActor);
         assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
         // 1350 / 1.07 / 2.78 = 453.84 per piece (the owner's own QN6900704-2 figure).
         assertThat(created.items().get(0).netUnitPrice()).isEqualByComparingTo("453.84");
+        assertThat(created.items().get(0).unitPrice()).isEqualByComparingTo("2000.00");
+        assertThat(created.items().get(0).quantity()).isEqualByComparingTo("10");
+        assertThat(created.items().get(0).unit()).isEqualTo("แผ่น");
+        assertThat(created.items().get(0).lineAmount()).isEqualByComparingTo("4538.40");
+        assertThat(created.items().get(0).specialPriceLine()).isEqualTo("(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
     }
 
     /** DIRECT_NET touches no VAT, so it stays available in English. */
@@ -281,6 +454,98 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_DIRECT_NET);
         assertThat(created.subtotalAmount()).isEqualByComparingTo("7775.00");
         assertThat(created.vatAmount()).isEqualByComparingTo("0.00");
+    }
+
+    // ── owner ruling 2026-09-13 (1)(4)(5): the item lines follow the language, at READ time ──
+
+    private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
+
+    /**
+     * Through the real repository mapping: an English quotation's tile lines, tile unit and
+     * ส่วนลดพิเศษ text come back in English, while the STORED description/raw_unit columns keep the
+     * Thai write-time values — proving the translation is read-time, not a data rewrite.
+     */
+    @Test
+    void englishQuotation_itemLinesUnitAndDiscountTextAreEnglish_storedColumnsUntouched() throws Exception {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequest(List.of(tileItem("100.00", 10), adjustmentItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+        var tile = created.items().get(0);
+        assertThat(tile.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
+        assertThat(tile.sizeLine()).isEqualTo("Size 60x60 x 10 mm (approx.)");
+        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        assertThat(tile.unit()).isEqualTo("PCS");
+        var adjustment = created.items().get(1);
+        assertThat(adjustment.descriptionLine()).isEqualTo("Special discount 3% for orders placed by July 31, 2026");
+
+        assertThat(jdbc.getJdbcOperations().queryForList(
+            "SELECT COALESCE(raw_unit, '') || '|' || COALESCE(description, '') FROM sales.quotation_item"
+                + " WHERE quotation_id = " + created.id() + " ORDER BY seq", String.class))
+            // The write path stores the THAI tile description and unit, and the Thai discount text,
+            // whatever the document language — the English above is produced on read.
+            .containsExactly("แผ่น|กระเบื้อง รุ่น Model A สี White ผิว Matte",
+                "|ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+
+        // And the rendered item + totals zone carries no Thai script.
+        Sheet sheet = renderSheet(created.id());
+        List<String> offending = new java.util.ArrayList<>();
+        for (int r = 9; r <= 33; r++) {
+            Row row = sheet.getRow(r);
+            if (row == null) continue;
+            for (int c = 0; c <= 8; c++) {
+                Cell cell = row.getCell(c);
+                if (cell != null && cell.getCellType() == CellType.STRING
+                    && THAI.matcher(cell.getStringCellValue()).find()) {
+                    offending.add("r" + r + "c" + c + ": " + cell.getStringCellValue());
+                }
+            }
+        }
+        assertThat(offending).isEmpty();
+        assertThat(str(sheet, 33, 4)).isEqualTo("Grand Total (USD)");
+        assertThat(sheet.getRow(31).getZeroHeight()).isTrue();
+        assertThat(sheet.getRow(32).getZeroHeight()).isTrue();
+    }
+
+    /**
+     * Ruling 5 — EXISTING documents, no migration: a quotation written as Thai and then flipped to
+     * English directly in the table (standing in for any English row already in the database) reads
+     * back in English with nothing re-saved. And the Thai read of the very same rows, before the
+     * flip, is the Thai text.
+     */
+    @Test
+    void anExistingRowReadsInTheDocumentsCurrentLanguage_withNoRewrite() {
+        DealQuotationDto thai = quotationService.create(ticketId,
+            thaiRequest(List.of(tileItem("100.00", 10), adjustmentItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+        assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
+        assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60x60 x 10 mm (ขนาดโดยประมาณ)");
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดลงกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
+        assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
+
+        jdbc.getJdbcOperations().update(
+            "UPDATE sales.quotation SET document_language = 'EN', currency = 'USD' WHERE quotation_id = " + thai.id());
+        DealQuotationDto reread = quotationService.get(thai.id(), salesActor);
+        assertThat(reread.items().get(0).descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
+        assertThat(reread.items().get(0).unit()).isEqualTo("PCS");
+        assertThat(reread.items().get(1).descriptionLine()).isEqualTo("Special discount 3% for orders placed by July 31, 2026");
+        assertThat(reread.items()).allSatisfy(item -> {
+            for (String line : new String[] {item.descriptionLine(), item.sizeLine(), item.calculationLine(), item.unit()}) {
+                if (line != null) assertThat(THAI.matcher(line).find()).as(line).isFalse();
+            }
+        });
+    }
+
+    /** A NULL document_language (every pre-V169 row) still reads as Thai. */
+    @Test
+    void aNullDocumentLanguageRow_readsItsLinesInThai() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            thaiRequest(List.of(tileItem("100.00", 10))), salesActor);
+        jdbc.getJdbcOperations().update(
+            "UPDATE sales.quotation SET document_language = NULL WHERE quotation_id = " + created.id());
+        var item = quotationService.get(created.id(), salesActor).items().get(0);
+        assertThat(item.descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
+        assertThat(item.unit()).isEqualTo("แผ่น");
     }
 
     // ── currency must agree with the language ──────────────────────────────────────────────
@@ -456,6 +721,77 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             base.leadTimeMinDays(), base.leadTimeMaxDays(), base.itemNotes(),
             WastageCalculator.LINE_TYPE_TILE, null, null, null,
             new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
+    /** An English per-sqm tile in PIECES mode, no wastage — {@code sqmPerBox} null to omit it. */
+    private ItemInput perSqmItem(int pieces, int piecesPerBox, String sqmPerBox, String usdPerSqm) {
+        ItemInput base = tileItem("1.00", pieces);
+        return new ItemInput(base.locationLabel(), base.catalogPriceId(), base.productCode(), base.brand(),
+            base.model(), base.color(), base.texture(), base.sizeText(), base.thicknessMm(), base.sqmPerPiece(),
+            base.quantityMode(), base.areaSqm(), base.piecesInput(), base.wastageMode(), base.wastageValue(),
+            piecesPerBox, null, null, base.originCountry(),
+            base.leadTimeMinDays(), base.leadTimeMaxDays(), base.itemNotes(),
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(usdPerSqm), null, null, null, null, null,
+            sqmPerBox == null ? null : new BigDecimal(sqmPerBox));
+    }
+
+    private ItemInput copy(ItemInput b, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+                           String wastageMode, BigDecimal wastageValue, BigDecimal sqmPerPiece, Integer piecesPerBox,
+                           BigDecimal sqmPerBox) {
+        return new ItemInput(b.locationLabel(), b.catalogPriceId(), b.productCode(), b.brand(), b.model(), b.color(),
+            b.texture(), b.sizeText(), b.thicknessMm(), sqmPerPiece, quantityMode, areaSqm, piecesInput,
+            wastageMode, wastageValue, piecesPerBox, b.unitPrice(), b.discountPct(), b.originCountry(),
+            b.leadTimeMinDays(), b.leadTimeMaxDays(), b.itemNotes(), b.lineType(), b.description(), b.quantity(),
+            b.unit(), b.specialPriceSqm(), b.directNetPrice(), b.adjustmentPct(), b.adjustmentDeadline(),
+            b.adjustmentAmount(), b.id(), sqmPerBox);
+    }
+
+    private ItemInput withQuantity(ItemInput b, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+                                   String wastageMode, BigDecimal wastageValue, BigDecimal sqmPerPiece) {
+        return copy(b, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, sqmPerPiece, b.piecesPerBox(),
+            b.sqmPerBox());
+    }
+
+    private ItemInput withBoxes(ItemInput b, Integer piecesPerBox) {
+        return copy(b, b.quantityMode(), b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(),
+            b.sqmPerPiece(), piecesPerBox, b.sqmPerBox());
+    }
+
+    private ItemInput withSqmPerBox(ItemInput b, String sqmPerBox) {
+        return copy(b, b.quantityMode(), b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(),
+            b.sqmPerPiece(), b.piecesPerBox(), new BigDecimal(sqmPerBox));
+    }
+
+    /** The row as a THAI ราคาพิเศษ would send it: a list price per piece and a ตร.ม./แผ่น. */
+    private ItemInput withSqmPerPiece(ItemInput b, String sqmPerPiece) {
+        ItemInput c = copy(b, b.quantityMode(), b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(),
+            new BigDecimal(sqmPerPiece), b.piecesPerBox(), b.sqmPerBox());
+        return new ItemInput(c.locationLabel(), c.catalogPriceId(), c.productCode(), c.brand(), c.model(), c.color(),
+            c.texture(), c.sizeText(), c.thicknessMm(), c.sqmPerPiece(), c.quantityMode(), c.areaSqm(), c.piecesInput(),
+            c.wastageMode(), c.wastageValue(), c.piecesPerBox(), new BigDecimal("2000.00"), c.discountPct(),
+            c.originCountry(), c.leadTimeMinDays(), c.leadTimeMaxDays(), c.itemNotes(), c.lineType(), c.description(),
+            c.quantity(), c.unit(), c.specialPriceSqm(), c.directNetPrice(), c.adjustmentPct(), c.adjustmentDeadline(),
+            c.adjustmentAmount(), c.id(), c.sqmPerBox());
+    }
+
+    private int rowWithText(Sheet sheet, int col, String prefix) {
+        return rowWithText(sheet, col, prefix, 0);
+    }
+
+    private int rowWithText(Sheet sheet, int col, String prefix, int fromRow) {
+        for (int r = fromRow; r <= sheet.getLastRowNum(); r++) {
+            if (str(sheet, r, col).startsWith(prefix)) return r;
+        }
+        throw new AssertionError("no row starting with \"" + prefix + "\" in column " + col);
+    }
+
+    /** A 3% ส่วนลดพิเศษ with a deadline — the row the English "Special discount" line is derived for. */
+    private ItemInput adjustmentItem(String pct, LocalDate deadline) {
+        return new ItemInput(null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, null, null, null, null, null,
+            new BigDecimal(pct), deadline, null);
     }
 
     private ItemInput directNetItem(String listPrice, int pieces, String directNet) {

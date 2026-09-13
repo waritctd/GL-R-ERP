@@ -162,7 +162,6 @@ public class DealQuotationService {
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
         String currency = resolveCurrency(documentLanguage, request.currency());
-        requirePriceModeAvailableInLanguage(priceMode, documentLanguage);
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
@@ -238,6 +237,16 @@ public class DealQuotationService {
     /** Rule: server recomputes every number, always — this is the stateless preview the item
      * editor calls on every keystroke (debounced client-side), performing ZERO writes. */
     public DealQuotationItemDto calculateLine(ItemInput input, UserPrincipal actor) {
+        return calculateLine(input, null, actor);
+    }
+
+    /**
+     * Owner decision 2026-09-13 (B): the preview takes the DOCUMENT's language
+     * ({@code ?documentLanguage=EN}), so the editor's live line reads exactly what the saved
+     * document will print — the English lines, and on English the per-sqm quantity. Null/blank
+     * is TH, the pre-existing behaviour.
+     */
+    public DealQuotationItemDto calculateLine(ItemInput input, String documentLanguage, UserPrincipal actor) {
         if (!EDIT_ROLES.contains(actor.role()) && !hasQuotationGrant(actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -250,8 +259,13 @@ public class DealQuotationService {
         // stored per-item vat column has always held. The preview never shows that column and the
         // saved row is recomputed by #buildItems with the document's REAL language, so this cannot
         // reach a document.
-        return toItemDto(0L, 0, buildItem(input, null, inferPriceMode(input),
-            WastageCalculator.DOCUMENT_LANGUAGE_TH, BigDecimal.ZERO));
+        String language = resolveDocumentLanguage(documentLanguage);
+        if (!WastageCalculator.DOCUMENT_LANGUAGE_TH.equals(language)
+            && !WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(language)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ภาษาเอกสารไม่ถูกต้อง: " + language);
+        }
+        String priceMode = inferPriceMode(input);
+        return toItemDto(0L, 0, buildItem(input, null, priceMode, language, BigDecimal.ZERO), language, priceMode);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -284,11 +298,16 @@ public class DealQuotationService {
         String documentLanguage = isBlank(request.documentLanguage())
             ? resolveDocumentLanguage(existing.documentLanguage())
             : resolveDocumentLanguage(request.documentLanguage());
+        // ⚠️ NOT enforced here (owner ruling 2026-09-13, "Clear all prices on switch"): a TH↔EN switch
+        // must not carry ANY typed amount into the other currency as the same number — list price,
+        // net price, per-sqm price, PLAIN price and flat adjustment are all re-entered by the rep.
+        // That rule lives in the EDITOR (QuotationEditorPage#changeLanguage,
+        // quotationMeta#rowsWithPricesCleared). This service cannot tell a re-typed price from a
+        // stale one, so it prices whatever the PUT carries.
         // Currency is NOT given the same treatment, deliberately: #resolveCurrency derives it from
         // the resolved language and accepts only the matching one, so the stored value can add
         // nothing. Passing it would merely turn a legitimate language switch into a spurious 400.
         String currency = resolveCurrency(documentLanguage, request.currency());
-        requirePriceModeAvailableInLanguage(priceMode, documentLanguage);
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
@@ -368,8 +387,9 @@ public class DealQuotationService {
         // this on write (#buildItem), but a row can predate this rule (created before this
         // migration of behaviour) or a stale client could in principle bypass the write-time
         // check -- submit is the last gate before an approver ever sees the document.
+        boolean perSqm = WastageCalculator.isEnglishPerSqm(quotation.documentLanguage(), quotation.priceMode());
         for (DealQuotationItemDto item : quotation.items()) {
-            requireStoredItemComplete(item);
+            requireStoredItemComplete(item, perSqm);
         }
         int rows = quotations.submit(id, actor.id());
         if (rows == 0) {
@@ -489,7 +509,7 @@ public class DealQuotationService {
         String newNumber = DealQuotationRepository.revisionNumber(baseNumber, nextRevisionNo);
         BigDecimal sourceVatRate = WastageCalculator.vatRateFor(source.documentLanguage());
         List<NewItem> items = source.items().stream()
-            .map(item -> toNewItemFromDto(item, sourceVatRate)).toList();
+            .map(item -> toNewItemFromDto(item, sourceVatRate, source.documentLanguage())).toList();
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
@@ -621,12 +641,25 @@ public class DealQuotationService {
         return toRenderModel(quotation);
     }
 
-    /** Resolves the approver's signature bytes (a live {@code hr.employee_signature} read — never
-     * cached) and hands everything to the adapter, which is otherwise a pure function. */
+    /** Resolves the approver's signature bytes and hands everything to the adapter, which is
+     * otherwise a pure function.
+     *
+     * <p>V175 (owner ruling 2026-09-13, "already-sent quotations never change afterwards"): the
+     * bytes come from the snapshot frozen at approval — {@link DealQuotationRepository#approve}
+     * writes it in the same statement as the status change — and NEVER from the live
+     * {@code hr.employee_signature} row when a snapshot exists, even one with no image (the
+     * approver had none on file then, so the document stays unsigned). The live read below is only
+     * a defensive fallback for an approved row with no snapshot (V175's backfill, owner ruling
+     * 2026-09-13 "Freeze them unsigned.", gives every pre-V175 approval one); a DRAFT/PENDING
+     * row has {@code approvedById == null} and so gets no signature either way. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
-        if (quotation.approverHasSignature() && quotation.approvedById() != null) {
+        var snapshot = quotations.findApproverSignatureSnapshot(quotation.id());
+        if (snapshot.isPresent()) {
+            signaturePng = snapshot.get().image();
+            signatureMime = snapshot.get().mimeType();
+        } else if (quotation.approverHasSignature() && quotation.approvedById() != null) {
             var signature = signatures.find(quotation.approvedById());
             if (signature.isPresent()) {
                 signaturePng = signature.get().image();
@@ -892,29 +925,11 @@ public class DealQuotationService {
         return currency;
     }
 
-    /**
-     * v3b: <b>{@code SPECIAL_SQM} is unavailable on an English document.</b>
-     *
-     * <p>ราคาพิเศษ is a Thai-market concept end to end: the rep quotes บาท per ตร.ม. <i>including
-     * VAT</i>, and {@link WastageCalculator#netPerPieceFromSpecialSqm} recovers the per-piece net
-     * by dividing that figure by 1.07. An English/USD document carries no VAT at all, so the same
-     * arithmetic would be dividing a USD-per-sqm price by a Thai VAT rate that does not apply to
-     * it — a number with no meaning, printed as if it did. The sub-line the mode emits
-     * ("ราคารวมภาษีมูลค่าเพิ่ม") says so in Thai on an otherwise English page, which is the visible
-     * symptom of the same mistake.
-     *
-     * <p>Refused at the SERVICE, on both write paths, rather than hidden in the UI: a hidden
-     * control is not a rule. {@code NET} and {@code DIRECT_NET} are both available in either
-     * language — neither touches VAT.
-     */
-    private void requirePriceModeAvailableInLanguage(String priceMode, String documentLanguage) {
-        if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)
-            && WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ราคาพิเศษ (บาท/ตร.ม. รวมภาษี) ใช้กับเอกสารภาษาอังกฤษไม่ได้ "
-                    + "เนื่องจากเอกสารภาษาอังกฤษไม่มีภาษีมูลค่าเพิ่ม กรุณาเลือกราคาสุทธิต่อแผ่นแทน");
-        }
-    }
+    // v3b's requirePriceModeAvailableInLanguage (SPECIAL_SQM refused on English) is GONE — owner
+    // decision 2026-09-13: an English document may be priced per square metre. SPECIAL_SQM now means
+    // "the rep states one price per sqm", and what that price means follows the document's
+    // language (WastageCalculator#isEnglishPerSqm): VAT-inclusive baht turned into a per-piece net
+    // on Thai (unchanged), USD per sqm with the quantity printed in sqm on English.
 
     /** See {@link #calculateLine} — the stateless preview has no quotation to read a mode off. */
     private String inferPriceMode(ItemInput input) {
@@ -952,7 +967,7 @@ public class DealQuotationService {
         String lineType = lineType(input);
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
-        requirePriceValidForType(input, lineType, priceMode, rowNumber);
+        requirePriceValidForType(input, lineType, priceMode, documentLanguage, rowNumber);
         // v3b: the stored per-item vat/line_total columns follow the DOCUMENT's language, so an EN
         // row stores 0.00 VAT rather than a 7% figure nothing on that document ever charges. These
         // two columns are internal (neither is on DealQuotationItemDto, and the renderer never
@@ -963,14 +978,18 @@ public class DealQuotationService {
             case WastageCalculator.LINE_TYPE_PLAIN -> buildPlainItem(input, rowNumber, vatRate);
             case WastageCalculator.LINE_TYPE_ADJUSTMENT ->
                 buildAdjustmentItem(input, rowNumber, adjustmentBase, vatRate);
-            case WastageCalculator.LINE_TYPE_TILE -> buildTileItem(input, rowNumber, priceMode, vatRate);
+            case WastageCalculator.LINE_TYPE_TILE -> buildTileItem(input, rowNumber, priceMode, documentLanguage, vatRate);
             default -> throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ประเภทรายการไม่ถูกต้อง: " + lineType);
         };
     }
 
     private NewItem buildTileItem(ItemInput input, Integer rowNumber, String priceMode,
-                                  BigDecimal vatRate) {
+                                  String documentLanguage, BigDecimal vatRate) {
+        // Owner decision 2026-09-13: SPECIAL_SQM on an ENGLISH document — the rep's USD/sqm IS the
+        // printed Unit price and Net price, the quantity is boxes × sqm/box, and there is no VAT to
+        // take out. Every Thai path below is untouched when this is false.
+        boolean perSqm = WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode);
         // Fetched ONCE and threaded through both #resolveSqmPerPiece AND the NewItem below --
         // #resolveSqmPerPiece used to run this same catalog lookup on its own; now the catalogue's
         // width_mm/height_mm also ride along so DealQuotationLines#sizeLine can print the face size
@@ -979,14 +998,23 @@ public class DealQuotationService {
         CatalogSqmBasis catalogBasis = resolveCatalogBasis(input);
         BigDecimal sqmPerPiece = resolveSqmPerPiece(input, catalogBasis);
         if (rowNumber != null) {
-            requireItemComplete(rowNumber, input, sqmPerPiece);
+            requireItemComplete(rowNumber, input, sqmPerPiece, perSqm);
+        }
+        if (perSqm) {
+            // Never a silent pieces fallback: without both box figures there is no sqm quantity.
+            // Checked on the lenient preview path too — there is no honest number to preview.
+            requireBoxDataForPerSqm(input, rowNumber);
         }
         WastageCalculator.Result result;
         try {
             result = WastageCalculator.calculate(new WastageCalculator.Input(
                 sqmPerPiece, input.quantityMode(), input.areaSqm(), input.piecesInput(),
-                input.wastageMode(), input.wastageValue(), input.piecesPerBox(), input.unitPrice(),
-                input.discountPct()));
+                input.wastageMode(), input.wastageValue(), input.piecesPerBox(),
+                // English per-sqm: the rep's USD/sqm stands in for the per-piece list price — the
+                // money below is recomputed from the sqm quantity, so only the PIECE results of
+                // this call are used.
+                perSqm ? input.specialPriceSqm() : input.unitPrice(),
+                perSqm ? null : input.discountPct()));
         } catch (IllegalArgumentException | ArithmeticException e) {
             // ArithmeticException alongside IllegalArgumentException: BigDecimal#intValueExact
             // (piecesPerBox/ceiling conversions inside WastageCalculator) throws it for a value
@@ -1002,7 +1030,21 @@ public class DealQuotationService {
         BigDecimal netUnitPrice = result.netUnitPrice();
         BigDecimal discountPct = input.discountPct();
         BigDecimal specialPriceSqm = null;
-        if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
+        BigDecimal unitPrice = input.unitPrice();
+        BigDecimal perSqmLineAmount = null;
+        if (perSqm) {
+            specialPriceSqm = money2(input.specialPriceSqm());
+            unitPrice = specialPriceSqm;
+            netUnitPrice = specialPriceSqm;
+            discountPct = null;
+            BigDecimal qtySqm;
+            try {
+                qtySqm = WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox());
+            } catch (IllegalArgumentException e) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+            }
+            perSqmLineAmount = money2(qtySqm.multiply(specialPriceSqm));
+        } else if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
             specialPriceSqm = input.specialPriceSqm();
             try {
                 netUnitPrice = WastageCalculator.netPerPieceFromSpecialSqm(specialPriceSqm, sqmPerPiece);
@@ -1016,9 +1058,11 @@ public class DealQuotationService {
             netUnitPrice = money2(input.directNetPrice());
             discountPct = null;
         }
-        BigDecimal lineAmount = WastageCalculator.PRICE_MODE_NET.equals(priceMode)
-            ? result.lineAmount()
-            : money2(netUnitPrice.multiply(BigDecimal.valueOf(result.piecesFinal())));
+        BigDecimal lineAmount = perSqm
+            ? perSqmLineAmount
+            : WastageCalculator.PRICE_MODE_NET.equals(priceMode)
+                ? result.lineAmount()
+                : money2(netUnitPrice.multiply(BigDecimal.valueOf(result.piecesFinal())));
 
         BigDecimal vat = money2(lineAmount.multiply(vatRate));
         BigDecimal lineTotal = lineAmount.add(vat);
@@ -1031,14 +1075,18 @@ public class DealQuotationService {
             input.quantityMode(), input.areaSqm(), input.piecesInput(),
             input.wastageMode(), input.wastageValue(), input.piecesPerBox(),
             result.piecesBeforeWastage(), result.piecesAfterWastage(), result.piecesFinal(), result.boxes(),
-            input.unitPrice(), discountPct, netUnitPrice, lineAmount,
+            unitPrice, discountPct, netUnitPrice, lineAmount,
             vat, lineTotal,
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             descriptionLine,
-            WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()), "แผ่น",
+            // qty stays the PIECE count on every tile row (the read path's piecesFinal); the sqm
+            // quantity is derived from boxes × sqm_per_box when printed (DealQuotationLines#tilePrint).
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()),
+            perSqm ? DealQuotationLines.TILE_UNIT_SQM : "แผ่น",
             specialPriceSqm, null, null,
             catalogBasis == null ? null : catalogBasis.widthMm(),
-            catalogBasis == null ? null : catalogBasis.heightMm());
+            catalogBasis == null ? null : catalogBasis.heightMm(),
+            input.sqmPerBox());
     }
 
     /**
@@ -1133,7 +1181,13 @@ public class DealQuotationService {
 
     /** v3b: {@code vatRate} is the SOURCE document's, so a revision of an English quotation copies
      * 0.00 VAT rows rather than re-stamping 7% onto them. */
-    private NewItem toNewItemFromDto(DealQuotationItemDto item, BigDecimal vatRate) {
+    private NewItem toNewItemFromDto(DealQuotationItemDto item, BigDecimal vatRate, String documentLanguage) {
+        // An English TILE row's DTO prints a TRANSLATED unit ("PCS"/"SQM") and, in per-sqm, a
+        // quantity in SQUARE METRES — neither is what the qty/raw_unit columns store (the piece
+        // count and the write path's own unit). Copying them verbatim would store an area in the
+        // piece-count column. Thai rows copy exactly what they always copied.
+        boolean englishTile = WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage)
+            && WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
         BigDecimal vat = money2(item.lineAmount().multiply(vatRate));
         BigDecimal lineTotal = item.lineAmount().add(vat);
         return new NewItem(
@@ -1151,11 +1205,15 @@ public class DealQuotationService {
             // not a recalculation, so an already-approved ส่วนลดพิเศษ figure is carried across
             // rather than re-derived (re-deriving would silently move the number if the parent had
             // been saved under an older rule).
-            item.lineType(), item.quantity(), item.unit(),
+            item.lineType(),
+            englishTile ? BigDecimal.valueOf(item.piecesFinal()) : item.quantity(),
+            englishTile ? (DealQuotationLines.TILE_UNIT_SQM.equals(item.unit()) ? DealQuotationLines.TILE_UNIT_SQM : "แผ่น")
+                : item.unit(),
             item.specialPriceSqm(), item.adjustmentPct(), item.adjustmentDeadline(),
             // Transient render-only fields (see NewItem#catalogWidthMm) -- this NewItem is bound
             // for insertDraft, never for #toItemDto, so there is nothing here to carry through.
-            null, null);
+            null, null,
+            item.sqmPerBox());
     }
 
     // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
@@ -1233,6 +1291,19 @@ public class DealQuotationService {
         return null;
     }
 
+    /** Owner decision 2026-09-13: an English per-sqm row needs BOTH box figures — its quantity is
+     * boxes × sqm/box, and there is deliberately no pieces fallback. A rep-facing Thai 400. */
+    private void requireBoxDataForPerSqm(ItemInput input, Integer rowNumber) {
+        List<String> missing = new ArrayList<>();
+        if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("แผ่น/กล่อง");
+        if (input.sqmPerBox() == null || input.sqmPerBox().signum() <= 0) missing.add("ตร.ม./กล่อง");
+        if (!missing.isEmpty()) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where
+                + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ " + String.join(" และ ", missing));
+        }
+    }
+
     /**
      * <b>Type-aware price validation</b> — quotation v3, and the replacement for the
      * {@code @NotNull @DecimalMin("0.01")} that {@code ItemInput.unitPrice} used to carry.
@@ -1263,7 +1334,7 @@ public class DealQuotationService {
      * lost their {@code @NotBlank} for the same S2/S3 reason (a PLAIN row has neither).
      */
     private void requirePriceValidForType(ItemInput input, String lineType, String priceMode,
-                                          Integer rowNumber) {
+                                          String documentLanguage, Integer rowNumber) {
         String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
         if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
             // ⚠️ v3, review fix F2: a supplied unitPrice on an ADJUSTMENT row is IGNORED, not
@@ -1285,6 +1356,21 @@ public class DealQuotationService {
             }
             if (hasFlat && input.adjustmentAmount().signum() <= 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, where + "ส่วนลดพิเศษต้องมากกว่าศูนย์");
+            }
+            return;
+        }
+        boolean perSqm = WastageCalculator.LINE_TYPE_TILE.equals(lineType)
+            && WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode);
+        if (perSqm) {
+            // English per-sqm: the USD/sqm IS the unit price — no per-piece list price is asked for.
+            if (input.specialPriceSqm() == null || input.specialPriceSqm().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาต่อ ตร.ม. (USD) ต้องมากกว่าศูนย์");
+            }
+            if (isBlank(input.quantityMode())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, where + "กรุณาระบุรูปแบบจำนวน");
+            }
+            if (isBlank(input.wastageMode())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, where + "กรุณาระบุรูปแบบเผื่อ");
             }
             return;
         }
@@ -1314,7 +1400,8 @@ public class DealQuotationService {
     /** Item completeness rule — see {@link #buildItem(ItemInput, Integer)}'s own Javadoc. Collects
      * EVERY missing/invalid field before throwing (not just the first) so one 400 tells the rep
      * everything wrong with the row, not a one-at-a-time guessing game. */
-    private void requireItemComplete(int rowNumber, ItemInput input, BigDecimal resolvedSqmPerPiece) {
+    private void requireItemComplete(int rowNumber, ItemInput input, BigDecimal resolvedSqmPerPiece,
+                                     boolean perSqm) {
         List<String> missing = new ArrayList<>();
         if (isBlank(input.model())) missing.add("รุ่น");
         if (isBlank(input.color())) missing.add("สี");
@@ -1323,7 +1410,12 @@ public class DealQuotationService {
         if (input.thicknessMm() == null || input.thicknessMm().signum() <= 0) missing.add("ความหนา");
         if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
         if (resolvedSqmPerPiece == null || resolvedSqmPerPiece.signum() <= 0) missing.add("ตร.ม./แผ่น");
-        if (input.unitPrice() == null || input.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
+        if (perSqm) {
+            if (input.sqmPerBox() == null || input.sqmPerBox().signum() <= 0) missing.add("ตร.ม./กล่อง");
+            if (input.specialPriceSqm() == null || input.specialPriceSqm().signum() <= 0) missing.add("ราคาต่อ ตร.ม.");
+        } else if (input.unitPrice() == null || input.unitPrice().signum() <= 0) {
+            missing.add("ราคาต่อหน่วย");
+        }
         if (!hasQuantity(input.quantityMode(), input.areaSqm(), input.piecesInput())) missing.add("จำนวน");
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1334,7 +1426,7 @@ public class DealQuotationService {
     /** Same rule as {@link #requireItemComplete}, over an already-stored (post-derivation) row —
      * used only by {@link #submit}'s defensive re-check. {@code seq} is the item's own printed
      * row number, so the message names the same row the rep sees on screen. */
-    private void requireStoredItemComplete(DealQuotationItemDto item) {
+    private void requireStoredItemComplete(DealQuotationItemDto item, boolean perSqm) {
         // v3: the tile completeness rule applies to TILE rows only — a PLAIN row has no
         // รุ่น/สี/ผิว/ขนาด/ความหนา/แผ่นต่อกล่อง to be missing, and an ADJUSTMENT row has neither
         // those nor a rep-typed price. Running the tile checks over them would make every
@@ -1352,6 +1444,7 @@ public class DealQuotationService {
         if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (item.unitPrice() == null || item.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
+        if (perSqm && (item.sqmPerBox() == null || item.sqmPerBox().signum() <= 0)) missing.add("ตร.ม./กล่อง");
         if (!hasQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1393,28 +1486,41 @@ public class DealQuotationService {
     /** Stateless preview shape (id=0, seq=0) for {@link #calculateLine} — no DB round trip. Must
      * stay in lockstep with {@code DealQuotationRepository#mapItem}, which builds the same DTO from
      * a stored row; the editor's live preview and the saved document have to agree line-for-line. */
-    private DealQuotationItemDto toItemDto(long id, int seq, NewItem item) {
+    private DealQuotationItemDto toItemDto(long id, int seq, NewItem item, String documentLanguage, String priceMode) {
         // v3: via WastageCalculator, not an inline reciprocal — see #piecesPerSqm's Javadoc.
         BigDecimal piecesPerSqm = item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
             ? WastageCalculator.piecesPerSqm(item.sqmPerPiece()) : null;
         boolean tile = WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
-        String sizeLine = tile ? DealQuotationLines.sizeLine(item.sizeText(), item.thicknessMm(),
+        String sizeLine = tile ? DealQuotationLines.sizeLine(documentLanguage, item.sizeText(), item.thicknessMm(),
             item.catalogWidthMm(), item.catalogHeightMm()) : null;
-        String calculationLine = tile
-            ? DealQuotationLines.calculationLine(item.quantityMode(), item.areaSqm(), piecesPerSqm,
-                item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
-                item.piecesPerBox())
+        // The SAME decision DealQuotationRepository#mapItemColumns makes for a stored row.
+        DealQuotationLines.TilePrint print = tile
+            ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
+                piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
+                item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(), item.specialPriceSqm())
             : null;
+        // A tile's description is recomposed in the document's language, exactly as the read path
+        // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.
+        String descriptionLine = tile
+            ? DealQuotationLines.descriptionLine(documentLanguage, item.model(), item.color(), item.texture(),
+                item.productCode(), item.sizeText(), item.thicknessMm())
+            : WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())
+                ? DealQuotationLines.printedAdjustmentDescription(documentLanguage, item.descriptionLine(),
+                    item.adjustmentPct(), item.adjustmentDeadline())
+                : item.descriptionLine();
         return new DealQuotationItemDto(id, seq, item.locationLabel(), item.catalogPriceId(), item.productCode(),
             item.brand(), item.model(), item.color(), item.texture(), item.sizeText(), item.thicknessMm(),
             item.sqmPerPiece(), item.quantityMode(), item.areaSqm(), item.piecesInput(), item.wastageMode(),
             item.wastageValue(), item.piecesPerBox(), item.unitPrice(), item.discountPct(), item.originCountry(),
             item.leadTimeMinDays(), item.leadTimeMaxDays(), item.itemNotes(),
             piecesPerSqm, item.piecesBeforeWastage(), item.piecesAfterWastage(), item.piecesFinal(), item.boxes(),
-            item.netUnitPrice(), item.lineAmount(), item.descriptionLine(), sizeLine, calculationLine,
-            item.lineType(), item.quantity(), item.unit(), item.specialPriceSqm(), item.adjustmentPct(),
-            item.adjustmentDeadline(), DealQuotationLines.specialPriceLine(item.specialPriceSqm()),
-            DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()));
+            item.netUnitPrice(), item.lineAmount(), descriptionLine, sizeLine,
+            print == null ? null : print.calculationLine(),
+            item.lineType(), print == null ? item.quantity() : print.quantity(),
+            print == null ? item.unit() : print.unit(), item.specialPriceSqm(), item.adjustmentPct(),
+            item.adjustmentDeadline(), print == null ? null : print.subLine(),
+            DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()))
+            .withSqmPerBox(item.sqmPerBox());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

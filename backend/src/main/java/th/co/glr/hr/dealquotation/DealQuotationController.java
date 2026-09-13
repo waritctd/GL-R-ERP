@@ -103,9 +103,13 @@ public class DealQuotationController {
     }
 
     @PostMapping("/deal-quotations/calculate-line")
-    Map<String, DealQuotationItemDto> calculateLine(@Valid @RequestBody ItemInput input, HttpSession session) {
+    Map<String, DealQuotationItemDto> calculateLine(@Valid @RequestBody ItemInput input,
+                                                    // Owner decision 2026-09-13 (B): optional; blank = TH.
+                                                    @RequestParam(name = "documentLanguage", required = false)
+                                                    String documentLanguage,
+                                                    HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("item", quotations.calculateLine(input, user));
+        return Map.of("item", quotations.calculateLine(input, documentLanguage, user));
     }
 
     @PostMapping("/deal-quotations/{id}/submit")

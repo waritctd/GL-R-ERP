@@ -23,9 +23,9 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * class, there is no more adaptation into the legacy {@code TicketDto}/{@code QuotationDto}
  * shapes — this builds the real model directly.
  *
- * <p>A pure function: no DB access. The approver's signature bytes are a live
- * {@code hr.employee_signature} read, so the caller ({@code DealQuotationService}) resolves them
- * and passes the bytes in.
+ * <p>A pure function: no DB access. The approver's signature bytes are a DB read (the V175
+ * snapshot frozen at approval), so the caller ({@code DealQuotationService}) resolves them and
+ * passes the bytes in.
  */
 public final class DealQuotationRenderAdapter {
     private DealQuotationRenderAdapter() {}
@@ -117,7 +117,7 @@ public final class DealQuotationRenderAdapter {
 
         List<RenderItem> items = quotation.items().stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq()))
-            .map(item -> toRenderItem(item, quotation.priceMode(), itemPictures))
+            .map(item -> toRenderItem(item, quotation.priceMode(), english, itemPictures))
             .toList();
 
         // Owner feedback pass 1 (2026-09-10): slot 4 = the ผู้สั่งซื้อ snapshot (F2); the dates row =
@@ -158,7 +158,7 @@ public final class DealQuotationRenderAdapter {
      * is byte-identical to the previous expression for every pre-v3 document; an ADJUSTMENT row
      * carries −1 and a NULL unit, which the renderer prints as an EMPTY unit cell.
      */
-    private static RenderItem toRenderItem(DealQuotationItemDto item, String priceMode,
+    private static RenderItem toRenderItem(DealQuotationItemDto item, String priceMode, boolean english,
                                            java.util.Map<Long, DealQuotationRepository.PictureImage> itemPictures) {
         List<String> lines = new ArrayList<>();
         lines.add(item.descriptionLine());
@@ -175,10 +175,14 @@ public final class DealQuotationRenderAdapter {
             ? itemPictures.get(item.id()) : null;
         QuotationRenderModel.ItemPicture picture = stored == null ? null
             : new QuotationRenderModel.ItemPicture(stored.image(), stored.mimeType(), item.picturePlacement());
+        // Owner decision 2026-09-13: the English per-sqm Qty prints to 2dp (72.00, 56.43).
+        boolean perSqmRow = english && WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)
+            && DealQuotationLines.TILE_UNIT_SQM.equals(item.unit())
+            && (item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType()));
         return new RenderItem(
             item.locationLabel(), lines,
-            item.quantity(), printedUnit(item), item.unitPrice(), discountLabel(item, priceMode),
-            item.netUnitPrice(), item.lineAmount(), picture);
+            item.quantity(), printedUnit(item, english), item.unitPrice(), discountLabel(item, priceMode, english),
+            item.netUnitPrice(), item.lineAmount(), picture, perSqmRow ? QTY_FORMAT_SQM : null);
     }
 
     /**
@@ -188,13 +192,17 @@ public final class DealQuotationRenderAdapter {
      * all (raw_unit NULL), and the owner's ส่วนลดพิเศษ line prints a BLANK หน่วย — so a non-tile
      * row's missing unit is mapped to "" here, never passed through as null.
      */
-    private static String printedUnit(DealQuotationItemDto item) {
+    static final String QTY_FORMAT_SQM = "#,##0.00";
+
+    private static String printedUnit(DealQuotationItemDto item, boolean english) {
         boolean tile = item.lineType() == null
             || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
         if (item.unit() != null) {
             return item.unit();
         }
-        return tile ? "แผ่น" : "";
+        // Owner ruling 2026-09-13 (1): a tile with no unit prints "PCS" on the English form.
+        return tile ? DealQuotationLines.tileUnit(english
+            ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH) : "";
     }
 
     /**
@@ -213,7 +221,11 @@ public final class DealQuotationRenderAdapter {
      * row carrying one. Spotted by rendering her document back and comparing it against the original;
      * the document is the authority here, not the inference.
      */
-    private static String discountLabel(DealQuotationItemDto item, String priceMode) {
+    private static String discountLabel(DealQuotationItemDto item, String priceMode, boolean english) {
+        // English: "Special", never "พิเศษ" — the English form carries no Thai in its item table.
+        // The SAME word QuotationDocumentView prints on screen (quotationMeta#documentDiscountLabel),
+        // so the page and the PDF agree.
+        String special = english ? "Special" : "พิเศษ";
         BigDecimal pct = item.discountPct();
         if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
             return "";
@@ -222,12 +234,14 @@ public final class DealQuotationRenderAdapter {
             || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
         if (tile) {
             if (WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode)) {
-                return "พิเศษ";
+                // Owner decision 2026-09-13: an English per-sqm row prints "Net" — the USD/sqm IS
+                // the net, as her QN6900933 shows. Thai keeps พิเศษ.
+                return english ? "Net" : special;
             }
             if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)) {
                 boolean differs = item.unitPrice() != null && item.netUnitPrice() != null
                     && item.unitPrice().compareTo(item.netUnitPrice()) != 0;
-                return differs ? "พิเศษ" : "Net";
+                return differs ? special : "Net";
             }
         }
         return (pct == null || pct.signum() == 0) ? "Net" : formatPct(pct) + "%";

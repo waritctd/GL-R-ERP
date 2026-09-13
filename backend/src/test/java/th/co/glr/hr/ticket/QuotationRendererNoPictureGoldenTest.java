@@ -115,7 +115,12 @@ class QuotationRendererNoPictureGoldenTest {
             "one-page-scaled", "7bd39413de1df940753bccad20de0baff575cb73a403a0ad2f120cd9d611dd2b",
             "paginated", "50d979cb59c89188b9a113ba5d810d386cb2a31aac3666391aa8de9bb8f1b047",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
-            "english", "9e5d8eb285008332f3c128ec8743c21b8242c13aa50c19694c949fe6c04a04dd",
+            // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
+            // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
+            // sits directly under the table box. The regenerated english.txt differs from its prior
+            // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
+            // borderless styles shift; the four Thai fixtures are byte-identical.
+            "english", "2398815b1a4e73995195bf910ca36a22c81158df18c31a899252d97e14319766",
             "legacy-shape", "0eeb95aac63791149d8e230de304554126e91ee8ceca66c833cd8912fce4a6f2");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),

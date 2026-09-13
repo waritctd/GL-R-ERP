@@ -427,8 +427,11 @@ export function sqmPerPieceFromPiecesPerSqm(piecesPerSqm) {
 // ราคาพิเศษ, DIRECT_NET needs the net per piece and treats the list price as optional (a blank one
 // is sent as the net itself, which prints "Net" — see itemInputFromRow). A PLAIN row is validated
 // by validatePlainItem instead; an ADJUSTMENT row never reaches here (it lives in its own list).
-export function validateQuotationItem(item, priceMode = 'NET') {
+export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH') {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
+  // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price, and the quantity
+  // needs both box figures — DealQuotationService#requireItemComplete's perSqm branch.
+  const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   const errors = {};
   if (!item?.model?.trim()) errors.model = 'กรุณาระบุรุ่น';
   if (!item?.color?.trim()) errors.color = 'กรุณาระบุสี';
@@ -444,12 +447,17 @@ export function validateQuotationItem(item, priceMode = 'NET') {
     if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
       errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
     }
-  } else if (!(Number(item?.unitPrice) > 0)) {
+  } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
     errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง/แผ่น' : 'กรุณาระบุราคา/หน่วย';
   }
   if (priceMode === 'SPECIAL_SQM') {
-    if (!(Number(item?.specialPriceSqm) > 0)) errors.specialPriceSqm = 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
-    else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    if (!(Number(item?.specialPriceSqm) > 0)) {
+      errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
+    } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+  }
+  if (perSqm) {
+    if (!(Number(item?.sqmPerBox) > 0)) errors.sqmPerBox = 'กรุณาระบุ ตร.ม./กล่อง';
+    else if (!withinDecimals(item.sqmPerBox, 6)) errors.sqmPerBox = 'ทศนิยมได้ไม่เกิน 6 ตำแหน่ง';
   }
   if (item?.quantityMode === 'PIECES') {
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
@@ -465,16 +473,16 @@ export function validateQuotationItem(item, priceMode = 'NET') {
 // in the order the rep will actually scan the row.
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
-  'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
+  'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
   'adjustmentPct', 'adjustmentAmount',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
-  sqmPerPiece: 'แผ่น/ตร.ม.', piecesPerBox: 'แผ่น/กล่อง', unitPrice: 'ราคา/หน่วย',
+  sqmPerPiece: 'แผ่น/ตร.ม.', piecesPerBox: 'แผ่น/กล่อง', sqmPerBox: 'ตร.ม./กล่อง', unitPrice: 'ราคา/หน่วย',
   areaSqm: 'จำนวน (พื้นที่)', piecesInput: 'จำนวน (แผ่น)',
   // v3
   description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',
-  specialPriceSqm: 'ราคาพิเศษ', directNetPrice: 'ราคาสุทธิ/แผ่น',
+  specialPriceSqm: 'ราคาต่อ ตร.ม.', directNetPrice: 'ราคาสุทธิ/แผ่น',
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
 };
 
@@ -530,19 +538,89 @@ export const PRICE_MODE_OPTIONS = [
   { code: 'DIRECT_NET', label: 'ราคาสุทธิต่อแผ่น', hint: 'กรอกราคาสุทธิต่อแผ่นตรง ๆ' },
 ];
 
-/**
- * The tile price modes a document in `documentLanguage` may use. SPECIAL_SQM is a Thai-market
- * concept (a VAT-INCLUSIVE บาท/ตร.ม. price divided back out by 1.07), and the English form carries
- * no VAT, so DealQuotationService#requirePriceModeAvailableInLanguage refuses it there with a 400.
- * Not offering it is the UI half of that rule, never a substitute for it.
- */
-export function availablePriceModes(documentLanguage) {
-  return PRICE_MODE_OPTIONS.filter((opt) => !(documentLanguage === 'EN' && opt.code === 'SPECIAL_SQM'));
+/** Owner decision 2026-09-13: on an ENGLISH document SPECIAL_SQM is a USD price per square metre
+ * with no VAT, and the printed quantity is square metres = boxes × ตร.ม./กล่อง — the same mode code
+ * (WastageCalculator#isEnglishPerSqm), so only its label and hint change with the language. */
+const PRICE_MODE_OPTION_EN_PER_SQM = {
+  code: 'SPECIAL_SQM', label: 'ราคา USD/ตร.ม.',
+  hint: 'กรอกราคาต่อ ตร.ม. เป็น USD (ไม่มี VAT) · พิมพ์จำนวนเป็น ตร.ม. = จำนวนกล่อง × ตร.ม./กล่อง',
+};
+
+/** SPECIAL_SQM on an English document — DealQuotationService's per-sqm branch. */
+export function isEnglishPerSqm(priceMode, documentLanguage) {
+  return documentLanguage === 'EN' && priceMode === 'SPECIAL_SQM';
 }
 
 /**
- * What a language switch does to the price mode. A document already in SPECIAL_SQM that becomes
- * English is MOVED to DIRECT_NET — and `moved` is true so the caller says so out loud, rather than
+ * The tile price modes a document in `documentLanguage` may use. Every mode is available in both
+ * languages since the owner's 2026-09-13 decision; on English, SPECIAL_SQM carries its USD/ตร.ม.
+ * label (see PRICE_MODE_OPTION_EN_PER_SQM).
+ */
+export function availablePriceModes(documentLanguage) {
+  return PRICE_MODE_OPTIONS.map((opt) => (documentLanguage === 'EN' && opt.code === 'SPECIAL_SQM'
+    ? PRICE_MODE_OPTION_EN_PER_SQM : opt));
+}
+
+/**
+ * Owner ruling 2026-09-13, superseding the per-sqm-only rule of the same day: "Clear all prices on
+ * switch." A TH↔EN switch changes the CURRENCY every typed amount is in (and, for SPECIAL_SQM, its
+ * VAT meaning), and the editor has no exchange rate — so every currency amount the rep typed is
+ * cleared to `null` (the null-on-clear convention, never '') for them to re-enter, in EVERY price
+ * mode, together with the money derived from it:
+ *   - TILE: unitPrice (ราคาตั้ง/แผ่น), directNetPrice, specialPriceSqm
+ *   - PLAIN: unitPrice
+ *   - ADJUSTMENT entered as a FLAT amount: adjustmentAmount
+ *   - every row's derived netUnitPrice / lineAmount / specialPriceLine (and an adjustment's echoed
+ *     unitPrice, which is the same figure)
+ * KEPT — nothing here is money: discountPct, a PERCENTAGE adjustment's adjustmentPct, quantities,
+ * areas, sqmPerPiece / sqmPerBox / piecesPerBox, wastage, descriptions, units, deadlines.
+ *
+ * ⚠️ An EDITOR rule only. The server accepts whatever a PUT carries — it cannot tell a re-typed
+ * price from a stale one — so nothing here is server-enforced.
+ */
+export function rowsWithPricesCleared(rows) {
+  const derived = { netUnitPrice: null, lineAmount: null };
+  return (rows ?? []).map((row) => {
+    const type = lineTypeOf(row);
+    if (type === LINE_TYPE_ADJUSTMENT) {
+      return {
+        ...row, ...derived, unitPrice: null,
+        adjustmentAmount: row.adjustmentKind === 'AMOUNT' || (row.adjustmentKind == null && row.adjustmentPct == null)
+          ? null : row.adjustmentAmount,
+      };
+    }
+    if (type === LINE_TYPE_PLAIN) return { ...row, ...derived, unitPrice: null };
+    return {
+      ...row, ...derived, unitPrice: null, directNetPrice: null, specialPriceSqm: null, specialPriceLine: null,
+    };
+  });
+}
+
+/**
+ * Whether a row carries the price its mode needs, so the editor's live preview has something honest
+ * to show. calculate-line infers the price mode FROM THE ROW (it has no quotation), so previewing a
+ * row whose own mode's price is blank would come back priced under ANOTHER mode (a ราคาพิเศษ row with
+ * no ราคาพิเศษ is priced as NET off its list price) — a plausible number for a price nobody typed.
+ * A DIRECT_NET row needs only its net (the list price is optional there); a Thai SPECIAL_SQM row
+ * needs both its list price and its ราคาพิเศษ; the English per-sqm row needs its USD/ตร.ม.
+ */
+export function rowHasPriceForPreview(row, priceMode = 'NET', documentLanguage = 'TH') {
+  const present = (value) => value !== '' && value != null;
+  const type = lineTypeOf(row);
+  if (type === LINE_TYPE_ADJUSTMENT) return true;
+  if (type === LINE_TYPE_PLAIN) return present(row?.unitPrice);
+  if (priceMode === 'DIRECT_NET') return present(row?.directNetPrice);
+  if (priceMode === 'SPECIAL_SQM') {
+    return present(row?.specialPriceSqm) && (isEnglishPerSqm(priceMode, documentLanguage) || present(row?.unitPrice));
+  }
+  return present(row?.unitPrice);
+}
+
+/**
+ * What a language switch does to the price mode. Since the owner's 2026-09-13 decision no mode is
+ * unavailable in either language, so this never moves one today; it stays the single place that
+ * would, should a pairing ever be withdrawn again. Historically: a document in SPECIAL_SQM that
+ * became English was MOVED to DIRECT_NET — and `moved` is true so the caller says so out loud, rather than
  * the mode changing silently under the rep (the brief's own words: "with a clear message rather
  * than silently"). DIRECT_NET, not NET, because it is the mode that still lets the rep state a net
  * per piece, which is what a ราคาพิเศษ document was expressing.
@@ -609,17 +687,32 @@ function formatPlainNumber(value) {
  * line read identically. A flat adjustment with the rep's own wording keeps that wording, exactly
  * as the service does.
  */
-export function adjustmentDescriptionPreview(adjustment) {
+export function adjustmentDescriptionPreview(adjustment, documentLanguage = 'TH') {
   if (adjustment?.adjustmentKind === 'AMOUNT' && adjustment?.description?.trim()) {
     return adjustment.description.trim();
   }
   const pct = adjustment?.adjustmentKind === 'AMOUNT' ? null : adjustment?.adjustmentPct;
-  const head = `ส่วนลดพิเศษ${pct !== null && pct !== undefined && pct !== '' ? ` ${formatPlainNumber(pct)}%` : ''}`;
+  const pctText = pct !== null && pct !== undefined && pct !== '' ? ` ${formatPlainNumber(pct)}%` : '';
   const deadline = adjustment?.adjustmentDeadline;
-  if (!deadline || !/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return head;
+  const validDeadline = deadline && /^\d{4}-\d{2}-\d{2}$/.test(deadline);
+  // Owner ruling 2026-09-13 (4) — DealQuotationLines#adjustmentDescription's English form:
+  // "Special discount 3% for orders placed by July 31, 2026" (month name, Gregorian year).
+  if (documentLanguage === 'EN') {
+    const head = `Special discount${pctText}`;
+    if (!validDeadline) return head;
+    const [year, month, day] = deadline.split('-').map(Number);
+    return `${head} for orders placed by ${ENGLISH_MONTHS[month - 1]} ${day}, ${year}`;
+  }
+  const head = `ส่วนลดพิเศษ${pctText}`;
+  if (!validDeadline) return head;
   const [year, month, day] = deadline.split('-').map(Number);
   return `${head} สำหรับการสั่งซื้อภายใน ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year + 543}`;
 }
+
+// A literal list rather than Intl/toLocaleDateString: the backend pins Locale.US, and a browser
+// locale must not be able to print a Thai or Buddhist-era month on the English preview.
+const ENGLISH_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+  'September', 'October', 'November', 'December'];
 
 /**
  * A client-side ESTIMATE of a ส่วนลดพิเศษ row's magnitude, shown only while the editor holds unsaved
@@ -655,7 +748,8 @@ export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') 
   if (type === LINE_TYPE_ADJUSTMENT) return '';
   const special = documentLanguage === 'EN' ? 'Special' : 'พิเศษ';
   if (type === LINE_TYPE_TILE) {
-    if (priceMode === 'SPECIAL_SQM') return special;
+    // English per-sqm prints "Net": the USD/sqm IS the net (her QN6900933) — renderer's discountLabel.
+    if (priceMode === 'SPECIAL_SQM') return documentLanguage === 'EN' ? 'Net' : special;
     if (priceMode === 'DIRECT_NET') {
       const differs = item.unitPrice != null && item.netUnitPrice != null
         && Number(item.unitPrice) !== Number(item.netUnitPrice);

@@ -293,6 +293,40 @@ public final class WastageCalculator {
         }
     }
 
+    /**
+     * Owner decision 2026-09-13 ("Option A") — an ENGLISH quotation priced per square metre. True
+     * exactly for {@code SPECIAL_SQM} on an {@code EN} document; the Thai {@code SPECIAL_SQM}
+     * (a VAT-inclusive baht/ตร.ม. price turned into a per-piece net by
+     * {@link #netPerPieceFromSpecialSqm}) is untouched by everything this flag switches on.
+     *
+     * <p>The same mode code is reused on purpose: the rep states ONE price per square metre in
+     * both, the price lives in the same {@code special_price_sqm} column, and — as with the VAT —
+     * what that price MEANS follows the document's language ({@link #vatRateFor}). A distinct
+     * code would have had to widen {@code chk_quotation_price_mode} (V168) for no gain.
+     */
+    public static boolean isEnglishPerSqm(String documentLanguage, String priceMode) {
+        return DOCUMENT_LANGUAGE_EN.equals(documentLanguage) && PRICE_MODE_SPECIAL_SQM.equals(priceMode);
+    }
+
+    /**
+     * The English per-sqm printed quantity: {@code round2(boxes × sqmPerBox)} — the supplier's
+     * stated box area times the box count {@link #calculate} already rounded up to. Her QN6900933:
+     * 120 × 0.6 = 72.00, 30 × 0.6 = 18.00, 114 × 0.495 = 56.43. There is deliberately no fallback
+     * to pieces × sqm/piece: that reproduces neither 72.00 (71.64) nor the owner's rule.
+     *
+     * @throws IllegalArgumentException when {@code boxes} is null (no pieces-per-box, so no box
+     *     rounding happened) or {@code sqmPerBox} is missing or not positive.
+     */
+    public static BigDecimal sqmQuantityFromBoxes(Integer boxes, BigDecimal sqmPerBox) {
+        if (boxes == null || boxes < 0) {
+            throw new IllegalArgumentException("boxes is required for a per-sqm quantity, got: " + boxes);
+        }
+        if (sqmPerBox == null || sqmPerBox.signum() <= 0) {
+            throw new IllegalArgumentException("sqmPerBox must be positive, got: " + sqmPerBox);
+        }
+        return round2(BigDecimal.valueOf(boxes).multiply(sqmPerBox));
+    }
+
     public static BigDecimal subtotal(List<BigDecimal> lineAmounts) {
         BigDecimal sum = BigDecimal.ZERO;
         for (BigDecimal amount : lineAmounts) {
