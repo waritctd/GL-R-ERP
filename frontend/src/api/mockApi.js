@@ -5118,7 +5118,10 @@ function buildDealQuotationDto(row) {
     documentLanguage: row.documentLanguage || 'TH',
     ...dealQuotationTotals(row.items, row.documentLanguage || 'TH'),
     currency: row.currency ?? (row.documentLanguage === 'EN' ? 'USD' : 'THB'),
-    approverHasSignature: row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById)),
+    // Mirrors DealQuotationRepository#baseSelect (V175): frozen at approval, live only for a row
+    // with no snapshot (seed rows approved before this mock tracked one).
+    approverHasSignature: row.approverSignatureSnapshot
+      ?? (row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById))),
     items: row.items.map((item) => ({ ...item })),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -12103,6 +12106,8 @@ export const api = {
       row.docStatus = 'APPROVED';
       row.approvedById = user.employeeId ?? null;
       row.approvedByName = user.name;
+      // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve).
+      row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
       row.approvedAt = now;
       row.approvalDecidedAt = now;
       row.approvalDecidedBy = user.employeeId ?? null;
