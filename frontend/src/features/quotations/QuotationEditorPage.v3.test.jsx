@@ -74,10 +74,8 @@ function draft(overrides = {}) {
     contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล', contactPhone: '086-222-3333', contactEmail: 'nattapong@fashionisland.co.th',
     // unitCode non-blank in the SHARED fixture (owner ruling 2026-09-14: designer is NOT
     // required, but its checklist warning renders from the very first commit -- unlike the
-    // address warning, it does not wait on the ticket/quotation queries to resolve). A blank
-    // default here raced that warning's early appearance against CustomerDetailsFields' own
-    // customer-record re-sync effect and flaked "ที่อยู่ is editable on an existing draft" below;
-    // per-test overrides still exercise the blank-designer path where that matters.
+    // address warning, it does not wait on the ticket/quotation queries to resolve). Per-test
+    // overrides still exercise the blank-designer path where that matters.
     projectName: 'โครงการ A', deptCode: null, unitCode: 'A001', offerDate: '2026-09-01', depositPercent: 30,
     remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 30, validityDate: null, customerNotes: null,
     priceMode: 'NET', documentLanguage: 'TH', subtotalAmount: 48450, vatAmount: 3391.5, grandTotal: 51841.5,
@@ -349,13 +347,7 @@ describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () =
   it('ที่อยู่ is editable on an existing draft: saved on blur, and the draft is re-saved so the document carries it', async () => {
     api.customers.update.mockResolvedValue({ customer: { ...CUSTOMER, address: '1 ถนนพระราม 9' } });
     renderEditor('/quotations/5');
-    // Wait on the ที่อยู่ warning ITSELF, not just the checklist-warnings container: the
-    // container can now paint a beat earlier on the designer warning alone (present from the
-    // very first render — terms.unitCode starts blank until the quotation load seeds it), and
-    // that quotation load is also what CustomerDetailsFields' own customer-record resync effect
-    // is waiting on. Synchronizing on the generic container raced typing into ที่อยู่ against
-    // that resync firing late and wiping it.
-    await screen.findByText('ยังไม่ได้กรอกที่อยู่ลูกค้า');
+    await screen.findByTestId('checklist-warnings');
     const address = document.getElementById('deal-customer-address');
     fireEvent.change(address, { target: { value: '1 ถนนพระราม 9' } });
     fireEvent.blur(address);
