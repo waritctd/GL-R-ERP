@@ -79,8 +79,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const filteredProjects = trimmedProjectSearch
     ? projectOptions.filter((p) => p.name.toLowerCase().includes(trimmedProjectSearch))
     : projectOptions;
-  // filteredProjects.length is one past the last real row: the "+ เพิ่มโครงการใหม่" row that
-  // always renders last in the popup.
+  // The first keyboard row is always "+ เพิ่มโครงการใหม่", followed by the real projects.
   const projectRowCount = filteredProjects.length + 1;
 
   function openProjectDropdown() {
@@ -120,10 +119,10 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     } else if (e.key === 'Enter') {
       if (!projectOpen || projectActiveIndex === -1) return;
       e.preventDefault();
-      if (projectActiveIndex === filteredProjects.length) {
+      if (projectActiveIndex === 0) {
         openNewProjectFromDropdown();
       } else {
-        selectProject(filteredProjects[projectActiveIndex]);
+        selectProject(filteredProjects[projectActiveIndex - 1]);
       }
     } else if (e.key === 'Escape' && projectOpen) {
       e.preventDefault();
@@ -281,6 +280,23 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               aria-label="ผลการค้นหาลูกค้า"
               className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
             >
+              <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    // Keep the name the rep already typed in the search box when opening the
+                    // create form, so adding a new customer does not require retyping it.
+                    setNewCustomer((p) => ({ ...p, name: customerSearch.trim() }));
+                    setShowNewCustomer(true);
+                    setCustomerOpen(false);
+                  }}
+                >
+                  <Icon name="plus" size={13} />
+                  เพิ่มลูกค้าใหม่
+                </button>
+              </li>
               {customerLoading ? <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังค้นหา…</li> : null}
               {!customerLoading && customerResults.length === 0 ? (
                 <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบข้อมูล</li>
@@ -301,24 +317,6 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                   </button>
                 </li>
               ))}
-              <li className="border-t border-border-subtle bg-surface-muted">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    // F3 fix: seed the add-customer panel's name from what the rep already typed
-                    // into the typeahead, instead of always opening on emptyNewCustomer()'s ''
-                    // and making them retype a name they just typed to get here.
-                    setNewCustomer((p) => ({ ...p, name: customerSearch.trim() }));
-                    setShowNewCustomer(true);
-                    setCustomerOpen(false);
-                  }}
-                >
-                  <Icon name="plus" size={13} />
-                  เพิ่มลูกค้าใหม่
-                </button>
-              </li>
             </ul>
           ) : null}
         </div>
@@ -346,7 +344,9 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                 aria-expanded={projectOpen}
                 aria-controls="project-typeahead-list"
                 aria-autocomplete="list"
-                aria-activedescendant={projectOpen && projectActiveIndex >= 0 ? `project-option-${projectActiveIndex}` : undefined}
+                aria-activedescendant={projectOpen && projectActiveIndex >= 0
+                  ? (projectActiveIndex === 0 ? 'project-new-option' : `project-option-${projectActiveIndex}`)
+                  : undefined}
                 placeholder={customer ? (projectsLoading ? 'กำลังโหลด…' : 'พิมพ์ค้นหาโครงการ…') : 'เลือกลูกค้าก่อน'}
                 value={projectSearch}
                 onChange={(e) => { setProjectSearch(e.target.value); setProjectActiveIndex(-1); openProjectDropdown(); }}
@@ -363,6 +363,20 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               aria-label="ผลการค้นหาโครงการ"
               className="absolute z-10 mt-1 max-h-64 w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
             >
+              <li className="sticky top-0 z-10 border-b border-border-subtle bg-surface-muted">
+                <button
+                  type="button"
+                  id="project-new-option"
+                  role="option"
+                  aria-selected={projectActiveIndex === 0}
+                  className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link"
+                  onMouseEnter={() => setProjectActiveIndex(0)}
+                  onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
+                >
+                  <Icon name="plus" size={13} />
+                  เพิ่มโครงการใหม่
+                </button>
+              </li>
               {projectsLoading ? <li role="presentation" className="px-3 py-2 text-xs text-text-muted">กำลังโหลด…</li> : null}
               {!projectsLoading && filteredProjects.length === 0 ? (
                 <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบโครงการ</li>
@@ -371,31 +385,17 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
                 <li key={p.id} role="presentation">
                   <button
                     type="button"
-                    id={`project-option-${idx}`}
+                    id={`project-option-${idx + 1}`}
                     role="option"
-                    aria-selected={idx === projectActiveIndex}
-                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx === projectActiveIndex ? 'bg-surface-hover' : ''}`}
-                    onMouseEnter={() => setProjectActiveIndex(idx)}
+                    aria-selected={idx + 1 === projectActiveIndex}
+                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-surface-hover ${idx + 1 === projectActiveIndex ? 'bg-surface-hover' : ''}`}
+                    onMouseEnter={() => setProjectActiveIndex(idx + 1)}
                     onMouseDown={(e) => { e.preventDefault(); selectProject(p); }}
                   >
                     {p.name}
                   </button>
                 </li>
               ))}
-              <li className="border-t border-border-subtle bg-surface-muted">
-                <button
-                  type="button"
-                  id={`project-option-${filteredProjects.length}`}
-                  role="option"
-                  aria-selected={filteredProjects.length === projectActiveIndex}
-                  className={`flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-bold text-link ${filteredProjects.length === projectActiveIndex ? 'bg-surface-hover' : ''}`}
-                  onMouseEnter={() => setProjectActiveIndex(filteredProjects.length)}
-                  onMouseDown={(e) => { e.preventDefault(); openNewProjectFromDropdown(); }}
-                >
-                  <Icon name="plus" size={13} />
-                  เพิ่มโครงการใหม่
-                </button>
-              </li>
             </ul>
           ) : null}
         </div>

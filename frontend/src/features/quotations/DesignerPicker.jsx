@@ -1,20 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
-import { Icon } from '../../components/common/Icon.jsx';
 
 /**
- * ผู้ออกแบบ (designer) picker for the quotation editor's D.Co. field (owner ask, 2026-09-12).
- * Picking a designer fills the adjacent "หน่วยงาน" / D.Co. input (`sales.quotation.unit_code`)
- * with that designer's CODE ONLY -- see this file's own {@link resolveDesignerHint} for the other
- * half of the requirement.
+ * ผู้ออกแบบ (designer) picker for the quotation editor's combined designer/D.Co. field. Picking a
+ * designer displays NAME + CODE to the user, while the parent receives the CODE ONLY for saving.
  *
  * 🚨 THE NAME IS CONFIDENTIAL ("เป็นความลับ") AND MUST NEVER REACH A PRINTED DOCUMENT. This
  * component only ever calls `onSelectCode(code)` -- it never hands the parent a name, and the
- * parent (QuotationEditorPage) writes that code into the SAME free-text `terms.unitCode` state a
- * rep could always type into by hand. The name is used HERE ONLY, to search and to show which
- * designer a code currently resolves to; see DesignerDto's backend Javadoc for the structural
- * half of this guarantee (there is nowhere in the render path for a name to travel through even by
- * accident).
+ * parent (QuotationEditorPage) writes that code into `terms.unitCode`. The name is used HERE ONLY,
+ * to search and to show which designer a code currently resolves to; see DesignerDto's backend
+ * Javadoc for the structural half of this guarantee (there is nowhere in the render path for a
+ * name to travel through even by accident).
  *
  * Interaction mirrors DealCustomerCard's โครงการ combobox -- the standard ARIA 1.2 pattern (input
  * `role="combobox"`, `aria-expanded`/`aria-controls`/`aria-autocomplete="list"`/
@@ -25,12 +21,15 @@ import { Icon } from '../../components/common/Icon.jsx';
  * approach. This is deliberately the ONE extra combobox variant CLAUDE.md's "do not build a third
  * variant" note allows: it reuses BOTH existing patterns' mechanics rather than inventing new ones.
  *
- * This is a SEARCH-AND-FILL assistant, not a controlled value holder -- unlike the ลูกค้า/โครงการ
- * pickers, it does not own "the current designer" as a chip. `sales.designer` is read-only from
- * this app, so there is no create-new-designer affordance either. The rep may still type a D.Co.
- * by hand directly into the existing input; this widget only ever offers to fill it faster.
+ * The designer is OPTIONAL (owner ruling 2026-09-14 -- the backend blankToNull's unit_code and
+ * never required it) and CLEARABLE: typing the box down to blank and leaving it (blur) clears a
+ * previously-picked code back to '', but only when the rep actually edited the text -- a plain
+ * focus-then-blur, or an Enter/click pick followed by blur, never clears. A `value` the directory
+ * does not resolve (a legacy code, or a lookup that failed) is not an error state here: closed, the
+ * picker shows that raw code as-is rather than going blank, and reopening seeds the search box with
+ * it so the rep can search onward from it.
  */
-export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix = 'designer-picker' }) {
+export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix = 'designer-picker', label = 'ค้นหาผู้ออกแบบ' }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -38,6 +37,10 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   const [activeIndex, setActiveIndex] = useState(-1);
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
+  // Whether the rep has typed into the box since it was last opened or a designer was last
+  // selected — the signal that distinguishes "cleared on purpose" (blur below) from a plain
+  // focus-then-blur or an Enter/click pick that also leaves `search` blank.
+  const editedRef = useRef(false);
 
   const hint = useDesignerHint(value);
 
@@ -65,14 +68,36 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   function openDropdown() {
     if (disabled) return;
     setOpen(true);
-    debouncedSearch(search);
+    editedRef.current = false;
+    // Seed from the current code whenever there is one — not only once the directory has
+    // resolved it to a name — so reopening a legacy/unresolved code still searches onward from
+    // it instead of starting blank.
+    const trimmedValue = (value ?? '').trim();
+    const query = trimmedValue ? value : search;
+    if (trimmedValue) setSearch(value);
+    debouncedSearch(query);
   }
 
   function selectDesigner(d) {
     onSelectCode(d.code);
     setSearch('');
     setResults([]);
+    editedRef.current = false;
     closeDropdown();
+  }
+
+  // Blur commits a deliberate clear: the rep edited the box (not just opened and left it, and not
+  // just picked a result) and left it blank while a code was set. Anything else -- a plain
+  // focus/blur, or an Enter/click selection whose own reset already zeroed `editedRef` -- leaves
+  // `value` exactly as it was.
+  function handleBlur() {
+    setTimeout(() => {
+      if (editedRef.current && !search.trim() && (value ?? '').trim()) {
+        editedRef.current = false;
+        onSelectCode('');
+      }
+      closeDropdown();
+    }, 150);
   }
 
   function handleKeyDown(e) {
@@ -100,7 +125,7 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   return (
     <div className="relative">
       <label className="m-0 block" htmlFor={idPrefix}>
-        <span className="mb-1 block text-xs">ค้นหาผู้ออกแบบ</span>
+        <span className="mb-1 block text-xs">{label}</span>
         <input
           id={idPrefix}
           role="combobox"
@@ -111,22 +136,16 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
           aria-autocomplete="list"
           aria-activedescendant={open && activeIndex >= 0 ? `${idPrefix}-option-${activeIndex}` : undefined}
           placeholder="พิมพ์รหัสหรือชื่อผู้ออกแบบ…"
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setActiveIndex(-1); setOpen(true); debouncedSearch(e.target.value); }}
+          value={open ? search : closedDisplayValue(hint, value)}
+          onChange={(e) => {
+            editedRef.current = true;
+            setSearch(e.target.value); setActiveIndex(-1); setOpen(true); debouncedSearch(e.target.value);
+          }}
           onFocus={openDropdown}
-          onBlur={() => setTimeout(closeDropdown, 150)}
+          onBlur={handleBlur}
           onKeyDown={handleKeyDown}
         />
       </label>
-      {/* The resolved NAME is shown here ONLY, as a hint for the rep -- never written into any
-          field that reaches the document. Covers both "just picked" (search cleared, code just
-          landed in the sibling input) and "reopened an old quotation whose unit_code already names
-          a designer, active or not" (DesignerRepository.findByCode resolves either). */}
-      {!open && hint ? (
-        <span className="mt-1 block text-2xs text-text-muted" data-testid={`${idPrefix}-hint`}>
-          <Icon name="info" size={11} /> {hint.active ? hint.name : `${hint.name} (ยกเลิกแล้ว)`}
-        </span>
-      ) : null}
       {open ? (
         <ul
           id={`${idPrefix}-list`}
@@ -158,6 +177,17 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
       ) : null}
     </div>
   );
+}
+
+/**
+ * What the closed field shows: the resolved name + code (with a cancelled-designer suffix, since
+ * `useDesignerHint` resolves ANY status), or -- when there is a code but the directory has not
+ * resolved it (a legacy code, or a lookup that failed) -- the raw code rather than an empty field,
+ * or '' when there is no code at all.
+ */
+function closedDisplayValue(hint, value) {
+  if (hint) return `${hint.name} (${value})${hint.active === false ? ' · ยกเลิกแล้ว' : ''}`;
+  return value || '';
 }
 
 /**

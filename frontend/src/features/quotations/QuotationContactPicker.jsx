@@ -137,10 +137,10 @@ export function QuotationContactPicker({
           }}
         >
           <option value="">{customerId ? (loading ? 'กำลังโหลด…' : '- เลือกผู้สั่งซื้อ -') : 'เลือกลูกค้าก่อน'}</option>
+          {customerId && !disabled ? <option value="__new__">+ เพิ่มผู้สั่งซื้อใหม่</option> : null}
           {renderedOptions.map((c) => (
             <option key={c.id} value={c.id}>{contactDisplayName(c)}</option>
           ))}
-          {customerId && !disabled ? <option value="__new__">+ เพิ่มผู้สั่งซื้อใหม่</option> : null}
         </select>
         {/* The ผู้สั่งซื้อ's own โทร./อีเมล — prefilled from the contact record the moment one is
             picked (a repeat customer's contacts arrive with them), and shown so a gap is visible

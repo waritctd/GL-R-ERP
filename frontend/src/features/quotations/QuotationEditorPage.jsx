@@ -28,7 +28,7 @@ import {
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
-import { DesignerPicker } from './DesignerPicker.jsx';
+import { QuotationDealFields } from './QuotationDealFields.jsx';
 import { QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
@@ -707,6 +707,8 @@ export function QuotationEditorPage({ user, showToast }) {
     projectName: checklistProjectName,
     contact,
     contactFieldId: isInlineCreate ? 'deal-contact' : 'quotation-contact',
+    terms,
+    designerFieldId: `${isInlineCreate ? 'inline-quotation' : 'quotation'}-designer-picker`,
     items,
     itemErrorsByRow,
     adjustments,
@@ -715,7 +717,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
     priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
-  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, terms, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
@@ -1204,20 +1206,6 @@ export function QuotationEditorPage({ user, showToast }) {
                 <Button variant="secondary" disabled={downloading === 'xlsx'} onClick={() => handleDownload('xlsx')}>ดาวน์โหลด Excel</Button>
               </>
             ) : null}
-            {isEditable ? (
-              <Button
-                variant="secondary"
-                loading={saving}
-                // #S2: disabled while ส่งขออนุมัติ is running its own pre-save PUT too -- a manual
-                // save firing at the same moment would be the exact race this fix removes, just
-                // from the other button.
-                disabled={hasValidationErrors || submitMutation.isPending}
-                title={hasValidationErrors ? validationErrors.join(' ') : undefined}
-                onClick={handleSaveDraft}
-              >
-                บันทึกร่าง
-              </Button>
-            ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
               <Button
                 variant="primary"
@@ -1279,20 +1267,25 @@ export function QuotationEditorPage({ user, showToast }) {
             // Owner ask 2026-09-10: no ticket exists yet -- ลูกค้า/โครงการ/ผู้ติดต่อ/ช่องทาง are
             // picked (or created) right here instead of the read-only summary below, which has
             // nothing to summarize until the first บันทึกร่าง mints the ticket.
-            <DealCustomerCard
-              value={{ ...dealForm, contact }}
-              onChange={updateDealForm}
-              // Gated on showValidationSummary for the same reason as the checklist itself: a
-              // pristine inline-create page must not open with ลูกค้า and โครงการ already flagged
-              // red. Once anything is touched (or an existing draft is loaded) they behave as
-              // before.
-              errors={{
-                customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
-                project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
-                contact: contactError,
-              }}
-              showToast={showToast}
-            />
+            <>
+              <DealCustomerCard
+                value={{ ...dealForm, contact }}
+                onChange={updateDealForm}
+                errors={{
+                  customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
+                  project: showValidationSummary && dealForm.customer && !dealForm.project ? 'กรุณาเลือกโครงการ' : undefined,
+                  contact: contactError,
+                }}
+                showToast={showToast}
+              />
+              <Panel title="ข้อมูลลูกค้าและผู้ขาย">
+                <QuotationDealFields
+                  terms={terms}
+                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                  idPrefix="inline-quotation"
+                />
+              </Panel>
+            </>
           ) : (
             <Panel title="ข้อมูลลูกค้าและผู้ขาย">
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
@@ -1335,23 +1328,10 @@ export function QuotationEditorPage({ user, showToast }) {
                   showToast={showToast}
                   idPrefix="quotation-contact"
                 />
-                <FormField label="ฝ่าย" htmlFor="deptCode">
-                  <input id="deptCode" value={terms.deptCode} onChange={(e) => { setTerms((t) => ({ ...t, deptCode: e.target.value })); setDirty(true); }} />
-                </FormField>
-                <FormField
-                  label="หน่วยงาน"
-                  htmlFor="unitCode"
-                  hint="D.Co. — พิมพ์รหัสเองได้ หรือค้นหาผู้ออกแบบด้านล่างเพื่อกรอกรหัสอัตโนมัติ (ชื่อผู้ออกแบบไม่แสดงในเอกสาร)"
-                >
-                  <input id="unitCode" value={terms.unitCode} onChange={(e) => { setTerms((t) => ({ ...t, unitCode: e.target.value })); setDirty(true); }} />
-                </FormField>
-                {/* Owner ask, 2026-09-12: pick a ผู้ออกแบบ and its CODE fills the D.Co. field
-                    above automatically. The name is confidential and never leaves this picker --
-                    see DesignerPicker's own doc for the full guarantee. */}
-                <DesignerPicker
-                  value={terms.unitCode}
-                  onSelectCode={(code) => { setTerms((t) => ({ ...t, unitCode: code })); setDirty(true); }}
-                  idPrefix="quotation-designer-picker"
+                <QuotationDealFields
+                  terms={terms}
+                  onChange={(patch) => { setTerms((current) => ({ ...current, ...patch })); setDirty(true); }}
+                  idPrefix="quotation"
                 />
               </div>
             </Panel>
@@ -1728,6 +1708,27 @@ export function QuotationEditorPage({ user, showToast }) {
               </p>
             ) : null}
           </Panel>
+
+          {isEditable ? (
+            // `justify-stretch` has no effect on a flex MAIN axis item's own size (it governs the
+            // CROSS axis) -- on mobile:flex-row this left the button small and left-aligned. The
+            // button itself needs `mobile:w-full` to actually fill the bar.
+            <div className="flex justify-end rounded-md border border-border-muted bg-surface p-4">
+              <Button
+                variant="secondary"
+                className="mobile:w-full"
+                loading={saving}
+                // #S2: disabled while ส่งขออนุมัติ is running its own pre-save PUT too -- a manual
+                // save firing at the same moment would be the exact race this fix removes, just
+                // from the other button.
+                disabled={hasValidationErrors || submitMutation.isPending}
+                title={hasValidationErrors ? validationErrors.join(' ') : undefined}
+                onClick={handleSaveDraft}
+              >
+                บันทึกร่าง
+              </Button>
+            </div>
+          ) : null}
         </>
       )}
 

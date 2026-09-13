@@ -9,6 +9,7 @@ import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
 
 function editsFrom(customer) {
   return {
+    name: customer?.name ?? '',
     taxId: customer?.taxId ?? '',
     phone: customer?.phone ?? '',
     address: customer?.address ?? '',
@@ -58,8 +59,8 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   }
 
   useEffect(() => {
-    setEdits({ taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' });
-  }, [customer?.id, customer?.taxId, customer?.phone, customer?.address]);
+    setEdits({ name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' });
+  }, [customer?.id, customer?.name, customer?.taxId, customer?.phone, customer?.address]);
 
   /**
    * Persists ONE field on blur. Sends only that field, never the whole record: the endpoint has
@@ -74,6 +75,15 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     // An address keeps its internal line breaks (it is printed as typed); only the ends are trimmed.
     const next = (edits[field] ?? '').trim();
     if (next === previous.trim()) return; // untouched (or re-typed identically) — no request at all
+    // The name is not optional (CustomerController#update's requireNotBlankIfPresent 400s on a
+    // blank name) — refuse locally with the backend's own wording rather than round-trip
+    // a request that can only fail, and put the previous (non-blank) name back so the field is
+    // never left empty on screen.
+    if (field === 'name' && next === '') {
+      setEdits((prev) => ({ ...prev, name: previous }));
+      showToast?.('error', 'กรุณาระบุชื่อลูกค้า');
+      return;
+    }
     const restore = customer;
     setSavingField(field);
     onChange({ ...customer, [field]: next || null });
@@ -94,6 +104,17 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const hint = 'แก้ไขได้ บันทึกกลับไปที่ข้อมูลลูกค้าอัตโนมัติ ใช้ต่อได้ในใบเสนอราคาถัดไป';
   return (
     <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1" data-testid="customer-details">
+      <FormField label="ชื่อลูกค้า" htmlFor={QUOTATION_FIELD_IDS.customerName}>
+        <input
+          id={QUOTATION_FIELD_IDS.customerName}
+          value={edits.name}
+          maxLength={200}
+          disabled={disabled || savingField === 'name'}
+          onChange={(e) => setEdits((prev) => ({ ...prev, name: e.target.value }))}
+          onBlur={() => saveField('name')}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        />
+      </FormField>
       <FormField label="เลขที่ผู้เสียภาษี" htmlFor={QUOTATION_FIELD_IDS.customerTaxId} hint={hint}>
         <input
           id={QUOTATION_FIELD_IDS.customerTaxId}
