@@ -70,6 +70,10 @@ public class CustomerController {
         DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and
         // violates NOT NULL; coalesce so a create that omits branch succeeds (mirrors the mock).
+        if (structured(req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())) {
+            return Map.of("customer", customers.createStructured(req.name(), req.taxId(), branchOrDefault(req.branch()), req.phone(),
+                req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode()));
+        }
         return Map.of("customer", customers.create(req.name(), req.taxId(), req.address(), branchOrDefault(req.branch()), req.phone()));
     }
 
@@ -100,8 +104,10 @@ public class CustomerController {
         DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         requireNotBlankIfPresent(req.name(), "กรุณาระบุชื่อลูกค้า");
         requireNotBlankIfPresent(req.branch(), "กรุณาระบุสาขา");
-        CustomerDto updated = customers
-            .update(customerId, req.name(), req.taxId(), req.address(), req.branch(), req.phone())
+        CustomerDto updated = (structured(req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())
+            ? customers.updateStructured(customerId, req.name(), req.taxId(), req.branch(), req.phone(),
+                req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())
+            : customers.update(customerId, req.name(), req.taxId(), req.address(), req.branch(), req.phone()))
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบลูกค้ารายนี้"));
         return Map.of("customer", updated);
     }
@@ -112,6 +118,10 @@ public class CustomerController {
         if (value != null && value.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, message);
         }
+    }
+
+    private static boolean structured(String... fields) {
+        return java.util.Arrays.stream(fields).anyMatch(java.util.Objects::nonNull);
     }
 
     private static final String DEFAULT_BRANCH = "สำนักงานใหญ่";
@@ -156,7 +166,12 @@ public class CustomerController {
         @Size(max = 20)  String taxId,
         @Size(max = 2000) String address,
         @Size(max = 100) String branch,
-        @Size(max = 50)  String phone
+        @Size(max = 50)  String phone,
+        @Size(max = 1500) String addressLine,
+        @Size(max = 2) String provinceCode,
+        @Size(max = 4) String districtCode,
+        @Size(max = 6) String subdistrictCode,
+        @Size(max = 5) String postalCode
     ) {}
 
     /** Every field optional — see {@link #update}: null means "leave it alone". The @Size caps
@@ -166,7 +181,12 @@ public class CustomerController {
         @Size(max = 20)  String taxId,
         @Size(max = 2000) String address,
         @Size(max = 100) String branch,
-        @Size(max = 50)  String phone
+        @Size(max = 50)  String phone,
+        @Size(max = 1500) String addressLine,
+        @Size(max = 2) String provinceCode,
+        @Size(max = 4) String districtCode,
+        @Size(max = 6) String subdistrictCode,
+        @Size(max = 5) String postalCode
     ) {}
 
     record CreateContactRequest(
@@ -174,7 +194,7 @@ public class CustomerController {
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
         @Email @Size(max = 200) String email,
-        @Size(max = 50)  String phone
+        @Size(max = 50) String phone
     ) {}
 
     record CreateProjectRequest(@NotBlank @Size(max = 200) String name) {}

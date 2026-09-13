@@ -1,6 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
+import { Modal } from '../../components/common/Modal.jsx';
+import { Button } from '../../components/common/Button.jsx';
+import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../locations/ThaiAddressFields.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
 
@@ -40,6 +43,20 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const [edits, setEdits] = useState(() => editsFrom(customer));
   const [savingField, setSavingField] = useState(null);
   const queryClient = useQueryClient();
+  const [addressEdit, setAddressEdit] = useState(null);
+  async function saveAddress() {
+    if (!completeThaiAddress(addressEdit)) return;
+    setSavingField('address');
+    try {
+      const res = await api.customers.update(customer.id, addressEdit);
+      onChange(res.customer);
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      setAddressEdit(null);
+    } catch (error) {
+      showToast?.('error', error.message || 'บันทึกที่อยู่ไม่สำเร็จ');
+    } finally { setSavingField(null); }
+  }
+
   useEffect(() => {
     setEdits({ taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' });
   }, [customer?.id, customer?.taxId, customer?.phone, customer?.address]);
@@ -113,10 +130,24 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
             placeholder="เลขที่ ถนน แขวง/ตำบล เขต/อำเภอ จังหวัด รหัสไปรษณีย์"
             maxLength={2000}
             disabled={disabled || savingField === 'address'}
+            readOnly={Boolean(customer?.provinceCode)}
             onChange={(e) => setEdits((prev) => ({ ...prev, address: e.target.value }))}
             onBlur={() => saveField('address')}
           />
         </FormField>
+        <Button variant="text" disabled={disabled || Boolean(savingField)} onClick={() => {
+          const draft = emptyThaiAddress();
+          Object.keys(draft).forEach((key) => { draft[key] = customer[key] ?? ''; });
+          setAddressEdit(draft);
+        }}>แก้ไขที่อยู่แบบแยกจังหวัด</Button>
+        {addressEdit ? <Modal title="แก้ไขที่อยู่ลูกค้า" onClose={() => { if (!savingField) setAddressEdit(null); }}>
+          {!customer.provinceCode && customer.address ? <p className="mb-3 whitespace-pre-wrap text-sm text-text-muted">ที่อยู่เดิม: {customer.address}</p> : null}
+          <ThaiAddressFields value={addressEdit} onChange={(patch) => setAddressEdit((prev) => ({ ...prev, ...patch }))} disabled={Boolean(savingField)} />
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button disabled={!completeThaiAddress(addressEdit) || Boolean(savingField)} loading={savingField === 'address'} onClick={saveAddress}>บันทึกที่อยู่</Button>
+            <Button variant="secondary" disabled={Boolean(savingField)} onClick={() => setAddressEdit(null)}>ยกเลิก</Button>
+          </div>
+        </Modal> : null}
       </div>
     </div>
   );
