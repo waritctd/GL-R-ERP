@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 
 export function contactDisplayName(contact) {
@@ -93,6 +94,13 @@ export function QuotationContactPicker({
     if (match) onResolve(match);
   }, [options, selectedId, value, onResolve]);
 
+  function closeNewContact() {
+    if (saving) return;
+    setShowNew(false);
+    setNewContact(emptyNewContact());
+    setSameAsCustomer(false);
+  }
+
   async function handleCreate() {
     if (!customerId || !newContact.firstName.trim()) return;
     setSaving(true);
@@ -156,8 +164,7 @@ export function QuotationContactPicker({
       </FormField>
 
       {showNew && customerId ? (
-        <div className="col-span-full mt-1 flex flex-col gap-2 rounded-md border border-info-border bg-info-row-active p-3">
-          <p className="m-0 text-xs font-bold text-info">เพิ่มผู้สั่งซื้อใหม่</p>
+        <Modal title="เพิ่มผู้สั่งซื้อใหม่" onClose={closeNewContact}>
           {customerName ? (
             <label className="m-0 flex items-center gap-1.5 text-2xs">
               <input
@@ -168,7 +175,7 @@ export function QuotationContactPicker({
               ใช้ชื่อเดียวกับลูกค้า ({customerName})
             </label>
           ) : null}
-          <div className="grid grid-cols-4 gap-2 tablet:grid-cols-2 mobile:grid-cols-1">
+          <div className="mt-3 grid grid-cols-2 gap-3 mobile:grid-cols-1">
             <label className="m-0">
               <span className="text-2xs">ชื่อ *</span>
               <input
@@ -204,15 +211,15 @@ export function QuotationContactPicker({
               />
             </label>
           </div>
-          <div className="mt-1 flex gap-2">
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button variant="primary" size="sm" loading={saving} disabled={!newContact.firstName.trim() || saving} onClick={handleCreate}>
               เพิ่มผู้สั่งซื้อ
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setShowNew(false); setNewContact(emptyNewContact()); setSameAsCustomer(false); }}>
+            <Button variant="secondary" size="sm" disabled={saving} onClick={closeNewContact}>
               ยกเลิก
             </Button>
           </div>
-        </div>
+        </Modal>
       ) : null}
     </>
   );
