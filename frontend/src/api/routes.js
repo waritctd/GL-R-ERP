@@ -217,6 +217,11 @@ export const API_ROUTES = {
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
     // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteSend.
   },
+  locations: {
+    provinces: '/api/locations/provinces',
+    districts: (provinceCode) => `/api/locations/provinces/${provinceCode}/districts`,
+    subdistricts: (districtCode) => `/api/locations/districts/${districtCode}/subdistricts`,
+  },
   customers: {
     create: '/api/customers',
     // PUT /api/customers/{id} — a PATCH-shaped update on a PUT verb: a field the body omits is
