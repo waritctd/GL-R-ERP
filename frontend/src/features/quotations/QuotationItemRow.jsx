@@ -8,7 +8,7 @@ import {
   LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
-  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm,
+  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -114,12 +114,16 @@ export function QuotationItemRow({
   // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
   // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
   priceMode = 'NET', currency = 'THB',
+  // Owner decision 2026-09-13: the document's language — SPECIAL_SQM on English is a USD/ตร.ม. price
+  // whose quantity is boxes × ตร.ม./กล่อง, so the row asks for that instead of a list price per piece.
+  documentLanguage = 'TH',
   // Extension point for per-item PICTURES (GLA-75 — being built on another branch, not merged).
   // A render prop rather than an upload control here, so that branch can slot its uploader and
   // thumbnail under the row's notes without re-plumbing this component: `(item, index) => node`.
   // Unused today, which renders nothing.
   renderMedia = null,
 }) {
+  const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
@@ -227,6 +231,11 @@ export function QuotationItemRow({
       catalogSqmPerPiece: resolvedSqmPerPiece,
       catalogPriceUnit: cat.priceUnit ?? null,
       piecesPerBox: cat.pcsPerBox ?? item.piecesPerBox ?? null,
+      // V176: the supplier-stated ตร.ม./กล่อง, which an English per-sqm row prints its quantity from.
+      // NEVER from a per_linear_m row (its sqm_per_box column holds LINEAR METRES, V153), and never
+      // inherited from a previous pick: a box area belongs to its own product, and a stale one would
+      // silently misprice every box of the new one. A missing figure stays blank for the rep.
+      sqmPerBox: cat.priceUnit === PRICE_UNIT_PER_LINEAR_M ? null : (cat.sqmPerBox ?? null),
       originCountry,
       ...(originCountry && originCountry !== item.originCountry ? defaultLeadTimeForOrigin(originCountry) : {}),
     });
@@ -588,19 +597,21 @@ export function QuotationItemRow({
             />
           </FormField>
         ) : null}
-        <FormField
-          label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
-          htmlFor={`price-${index}`}
-          required={priceMode !== 'DIRECT_NET'}
-          hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
-          error={errors.unitPrice}
-        >
-          <input
-            id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
-            value={item.unitPrice ?? ''}
-            onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-          />
-        </FormField>
+        {perSqm ? null : (
+          <FormField
+            label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
+            htmlFor={`price-${index}`}
+            required={priceMode !== 'DIRECT_NET'}
+            hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+            error={errors.unitPrice}
+          >
+            <input
+              id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
+              value={item.unitPrice ?? ''}
+              onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+            />
+          </FormField>
+        )}
         {priceMode === 'NET' ? (
           <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
             <input
@@ -610,7 +621,7 @@ export function QuotationItemRow({
             />
           </FormField>
         ) : null}
-        {priceMode === 'SPECIAL_SQM' ? (
+        {priceMode === 'SPECIAL_SQM' && !perSqm ? (
           <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
             <input
               id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -625,6 +636,34 @@ export function QuotationItemRow({
                   : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
             </span>
           </FormField>
+        ) : null}
+        {perSqm ? (
+          <>
+            {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
+                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง — both computed by the
+                server (calculate-line), never here. */}
+            <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+              <input
+                id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
+                value={item.specialPriceSqm ?? ''}
+                onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+              />
+              <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+                ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง
+              </span>
+            </FormField>
+            <FormField
+              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} required error={errors.sqmPerBox}
+              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้)"
+            >
+              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''. */}
+              <input
+                id={`sqm-box-${index}`} type="number" step="0.000001" min="0" disabled={readOnly}
+                value={item.sqmPerBox ?? ''}
+                onChange={(e) => patch({ sqmPerBox: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </FormField>
+          </>
         ) : null}
         <FormField label="ประเทศต้นทาง" htmlFor={`origin-${index}`}>
           <select id={`origin-${index}`} disabled={readOnly} value={item.originCountry ?? ''} onChange={(e) => onOriginChange(e.target.value)}>
@@ -681,7 +720,7 @@ export function QuotationItemRow({
  * a present specialPriceSqm means SPECIAL_SQM, a present directNetPrice means DIRECT_NET. A stale
  * ราคาพิเศษ left on a row in NET mode would make the live preview price it as ราคาพิเศษ.
  */
-export function itemInputFromRow(item, priceMode = 'NET') {
+export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH') {
   const type = lineTypeOf(item);
   if (type === LINE_TYPE_PLAIN) {
     return {
@@ -711,7 +750,10 @@ export function itemInputFromRow(item, priceMode = 'NET') {
     // DIRECT_NET: a blank ราคาตั้ง is sent as the net itself — one field typed instead of two,
     // and DealQuotationRenderAdapter#discountLabel then prints "Net" because the two are equal,
     // which is the honest reading of "the rep only has a net price".
-    unitPrice: priceMode === 'DIRECT_NET' && unitPrice == null ? directNet : unitPrice,
+    // English per-sqm: the USD/ตร.ม. IS the unit price (the server substitutes it anyway).
+    unitPrice: isEnglishPerSqm(priceMode, documentLanguage)
+      ? (item.specialPriceSqm === '' || item.specialPriceSqm == null ? null : Number(item.specialPriceSqm))
+      : priceMode === 'DIRECT_NET' && unitPrice == null ? directNet : unitPrice,
     // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
     // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
     discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
@@ -758,6 +800,7 @@ function tileInputFromRow(item) {
     wastageMode: item.wastageMode ?? 'NONE',
     wastageValue: item.wastageValue ?? 0,
     piecesPerBox: item.piecesPerBox === '' ? null : item.piecesPerBox,
+    sqmPerBox: item.sqmPerBox === '' || item.sqmPerBox == null ? null : Number(item.sqmPerBox),
     unitPrice: item.unitPrice === '' ? null : item.unitPrice,
     discountPct: item.discountPct ?? 0,
     originCountry: item.originCountry || null,
@@ -791,6 +834,7 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     specialPriceSqm: '', directNetPrice: '',
     locationLabel: '', catalogPriceId: null, productCode: '',
     brand: '', model: '', color: '', texture: '', sizeText: '', thicknessMm: null, sqmPerPiece: null,
+    sqmPerBox: null,
     // แผ่น/ตร.ม. provenance -- UI-only (see tileInputFromRow's explicit field list; none of these
     // travel to the server). `piecesPerSqmDisplay: null` rather than `''` so the field's own
     // fallback (derive from `sqmPerPiece`) kicks in for a row that has never had the reciprocal

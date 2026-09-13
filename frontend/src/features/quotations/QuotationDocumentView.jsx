@@ -31,12 +31,17 @@ const DOC_LABELS = {
 /** "184 แผ่น", "85 Bags", "1 JOB" — and "-1" with an EMPTY unit for a ส่วนลดพิเศษ row, exactly as
  * her QN6900704-2 prints it. `quantity`/`unit` are the v3 per-row fields; a pre-v3 DTO (or fixture)
  * without them falls back to the tile's own piecesFinal/แผ่น, which is what they always meant. */
-function quantityCell(item) {
+function quantityCell(item, language = 'TH') {
   const type = lineTypeOf(item);
+  // An English per-sqm row's quantity is square metres the SERVER computes (boxes × ตร.ม./กล่อง).
+  // Where it is absent (mock mode never computes it) print "-", never the piece count under "SQM".
+  if (item.unit === 'SQM' && item.quantity == null) return '-';
   const quantity = item.quantity ?? item.piecesFinal;
   const shown = quantity == null ? '-' : Number(quantity).toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (type === LINE_TYPE_ADJUSTMENT) return shown;
-  const unit = item.unit ?? (type === LINE_TYPE_TILE ? 'แผ่น' : '');
+  // The server already sends "PCS" on an English tile row (DealQuotationLines#printedTileUnit);
+  // this is only the fallback for a DTO without a unit, and it follows the document too.
+  const unit = item.unit ?? (type === LINE_TYPE_TILE ? (language === 'EN' ? 'PCS' : 'แผ่น') : '');
   return unit ? `${shown} ${unit}` : shown;
 }
 
@@ -202,7 +207,7 @@ export function QuotationDocumentView({ quotation }) {
                 คงเหลือ and a NEGATIVE เป็นเงิน — her QN6900704-2, and what the server already
                 stores (quantity -1 × a positive net IS the negative amount), so nothing here is
                 special-cased beyond the two empty cells. */}
-            <span data-label={labels.quantity} className="tabular-nums text-right">{quantityCell(item)}</span>
+            <span data-label={labels.quantity} className="tabular-nums text-right">{quantityCell(item, language)}</span>
             <span data-label={labels.unitPrice} className="tabular-nums text-right">{money(item.unitPrice)}</span>
             <span data-label={labels.discount} className="tabular-nums text-right">{documentDiscountLabel(item, quotation.priceMode, language)}</span>
             <span data-label={labels.net} className="tabular-nums text-right">{money(item.netUnitPrice)}</span>

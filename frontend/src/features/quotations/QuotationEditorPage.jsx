@@ -20,7 +20,7 @@ import {
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   estimateAdjustmentAmount, formatQuotationMoney, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
-  lineTypeOf, priceModeForLanguage, validateAdjustment, vatRateForLanguage,
+  lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
@@ -371,17 +371,30 @@ export function QuotationEditorPage({ user, showToast }) {
     // shape anyway.
     const currentItem = items.find((it) => it.clientId === clientId);
     if (!currentItem) return; // row was removed (e.g. by a fast double-click on ลบรายการ)
-    scheduleCalc(clientId, { ...currentItem, ...patch }, docSettings.priceMode);
+    scheduleCalc(clientId, { ...currentItem, ...patch }, docSettings.priceMode, docSettings.documentLanguage);
   }
 
   /** The debounced calculate-line call for one row, in the QUOTATION's price mode (which decides
    * which mode-specific price itemInputFromRow sends — see its ⚠️ note). Split out of updateItem so
    * a price-mode switch can re-preview every tile row through the exact same path. */
-  function scheduleCalc(clientId, target, priceMode) {
+  function scheduleCalc(clientId, target, priceMode, documentLanguage) {
     clearTimeout(calcTimers.current[clientId]);
     const seq = (calcSeq.current[clientId] = (calcSeq.current[clientId] ?? 0) + 1);
+    // A row missing the price its mode needs has nothing honest to preview (quotationMeta
+    // #rowHasPriceForPreview: calculate-line infers the mode FROM THE ROW, so it would come back
+    // priced under another mode). Show no money until the rep types the price — which is also what
+    // keeps the rows cleared by a language switch (owner ruling 2026-09-13, "Clear all prices on
+    // switch") from reappearing with a stale figure in the row or the totals.
+    if (!rowHasPriceForPreview(target, priceMode, documentLanguage)) {
+      setItems((cur) => cur.map((it) => (
+        it.clientId === clientId ? { ...it, netUnitPrice: null, lineAmount: null, calcPending: false } : it
+      )));
+      return;
+    }
     calcTimers.current[clientId] = setTimeout(() => {
-      api.dealQuotations.calculateLine(itemInputFromRow(target, priceMode))
+      // Owner decision 2026-09-13 (B): the preview is computed in the DOCUMENT's language, so its
+      // lines (and, on English per-sqm, its quantity) are what the saved document will print.
+      api.dealQuotations.calculateLine(itemInputFromRow(target, priceMode, documentLanguage), documentLanguage)
         .then((res) => {
           // A newer edit (and therefore a newer, still-in-flight or already-settled request)
           // superseded this one while it was on the wire -- discard rather than let an older,
@@ -411,8 +424,10 @@ export function QuotationEditorPage({ user, showToast }) {
    * carries the net already on screen into ราคาสุทธิ/แผ่น when moving INTO DIRECT_NET — the rep
    * typed nothing and the figure does not change, which is the least-typing reading of "I want to
    * state the net directly". Never done across a currency change (see changeLanguage). */
-  function applyPriceMode(priceMode, { prefill = true } = {}) {
-    const next = items.map((it) => {
+  function applyPriceMode(priceMode, {
+    prefill = true, documentLanguage = docSettings.documentLanguage, clearPrices = false,
+  } = {}) {
+    const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
       const carried = prefill && priceMode === 'DIRECT_NET'
         && (it.directNetPrice === '' || it.directNetPrice == null) && it.netUnitPrice != null
@@ -423,7 +438,7 @@ export function QuotationEditorPage({ user, showToast }) {
     });
     setItems(next);
     setDirty(true);
-    next.filter((it) => lineTypeOf(it) === LINE_TYPE_TILE).forEach((it) => scheduleCalc(it.clientId, it, priceMode));
+    next.filter((it) => lineTypeOf(it) === LINE_TYPE_TILE).forEach((it) => scheduleCalc(it.clientId, it, priceMode, documentLanguage));
   }
 
   function changePriceMode(priceMode) {
@@ -441,20 +456,26 @@ export function QuotationEditorPage({ user, showToast }) {
   function changeLanguage(documentLanguage) {
     if (documentLanguage === docSettings.documentLanguage) return;
     const { priceMode, moved } = priceModeForLanguage(docSettings.priceMode, documentLanguage);
-    const currency = currencyForLanguage(documentLanguage);
-    const priced = items.some((it) => Number(it.unitPrice) > 0 || Number(it.directNetPrice) > 0 || Number(it.specialPriceSqm) > 0)
-      || adjustments.some((a) => a.adjustmentKind === 'AMOUNT' && Number(a.adjustmentAmount) > 0);
-    const notices = [];
+    // Owner ruling 2026-09-13, "Clear all prices on switch": the editor has no exchange rate, so no
+    // typed amount is carried into the new currency as the same number — every currency amount, in
+    // EVERY price mode, is cleared (quotationMeta#rowsWithPricesCleared) and the rep re-enters it.
+    // Percentages, quantities and box figures are kept. An EDITOR rule: the server cannot tell a
+    // re-typed price from a stale one and accepts what the PUT carries.
+    const notices = [
+      documentLanguage === 'EN'
+        ? 'เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็น USD (ไม่มี VAT)'
+        : 'เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็นบาท',
+    ];
     if (moved) {
       notices.push('เอกสารภาษาอังกฤษใช้ "ราคาพิเศษ บาท/ตร.ม." ไม่ได้ (ราคานั้นรวม VAT แต่เอกสารภาษาอังกฤษไม่มี VAT) — เปลี่ยนวิธีกรอกราคาเป็น "ราคาสุทธิต่อแผ่น" ให้แล้ว กรุณากรอกราคาสุทธิของทุกรายการ');
-    }
-    if (priced) {
-      notices.push(`สกุลเงินเปลี่ยนเป็น ${currency} — ราคาที่กรอกไว้จะพิมพ์เป็น ${currency} ตามตัวเลขเดิม (ระบบไม่แปลงค่าเงินให้) กรุณาตรวจราคาทุกรายการ`);
     }
     setDocSettings({ priceMode, documentLanguage });
     setSettingsNotice(notices.length ? notices.join(' · ') : null);
     setDirty(true);
-    if (priceMode !== docSettings.priceMode) applyPriceMode(priceMode, { prefill: false });
+    // Every price is cleared (above), and every tile row is re-previewed in the NEW language (owner
+    // decision 2026-09-13, B) — which, with its price now blank, shows no money until re-entered.
+    setAdjustments((cur) => rowsWithPricesCleared(cur));
+    applyPriceMode(priceMode, { prefill: false, documentLanguage, clearPrices: true });
   }
 
   // ── ส่วนลดพิเศษ rows (v3 S3) ──────────────────────────────────────────────────────────────
@@ -653,8 +674,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // below AND each row's inline hints (QuotationItemRow's `errors` prop) read off the exact same
   // computation -- never two independent checks that could disagree about the same row.
   const itemErrorsByRow = useMemo(
-    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode)),
-    [items, docSettings.priceMode],
+    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode, docSettings.documentLanguage)),
+    [items, docSettings.priceMode, docSettings.documentLanguage],
   );
   const adjustmentErrorsByRow = useMemo(() => adjustments.map((a) => validateAdjustment(a)), [adjustments]);
 
@@ -691,10 +712,9 @@ export function QuotationEditorPage({ user, showToast }) {
     adjustments,
     adjustmentErrorsByRow,
     duplicateGroupIndex,
-    // v3b, wrong-way-round: the settings control never OFFERS this pairing (availablePriceModes)
-    // and changeLanguage moves a document off it — this keeps it unsaveable if some other path
-    // (a stale state, a future control) ever reaches it. The server 400s it regardless.
-    priceModeLanguageConflict: docSettings.documentLanguage === 'EN' && docSettings.priceMode === 'SPECIAL_SQM',
+    // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
+    // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
+    priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
@@ -749,7 +769,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // the server would put them anyway, so the order sent is the order printed.
     items: [
       ...items.map((item) => ({
-        ...itemInputFromRow(item, docSettings.priceMode),
+        ...itemInputFromRow(item, docSettings.priceMode, docSettings.documentLanguage),
         locationLabel: (labelByGroupId.get(item.groupId) || '').trim() || null,
       })),
       ...adjustments.map(adjustmentInputFromRow),
@@ -1494,6 +1514,7 @@ export function QuotationEditorPage({ user, showToast }) {
                           return (
                             <QuotationItemRow
                               priceMode={docSettings.priceMode}
+                              documentLanguage={docSettings.documentLanguage}
                               currency={currency}
                               key={item.clientId}
                               item={item}
@@ -1533,7 +1554,7 @@ export function QuotationEditorPage({ user, showToast }) {
                           currency={currency}
                           errors={touchedRowIds.has(adjustment.clientId) ? adjustmentErrorsByRow[adjIndex] : EMPTY_ITEM_ERRORS}
                           amount={saved ? Math.abs(Number(saved.lineAmount)) : adjustmentEstimates[adjIndex]}
-                          description={saved ? saved.descriptionLine : adjustmentDescriptionPreview(adjustment)}
+                          description={saved ? saved.descriptionLine : adjustmentDescriptionPreview(adjustment, docSettings.documentLanguage)}
                           estimated={!saved}
                           onChange={(patch) => {
                             setTouchedRowIds((prev) => (prev.has(adjustment.clientId) ? prev : new Set(prev).add(adjustment.clientId)));

@@ -298,4 +298,270 @@ class DealQuotationLinesTest {
             new BigDecimal("2.50"), LocalDate.of(2026, 7, 31)))
             .isEqualTo("ส่วนลดพิเศษ 2.5% สำหรับการสั่งซื้อภายใน 31/07/2569");
     }
+
+    // ── owner ruling 2026-09-13: the ENGLISH document's item lines ─────────────────────────────
+
+    private static final String EN = WastageCalculator.DOCUMENT_LANGUAGE_EN;
+    private static final String TH = WastageCalculator.DOCUMENT_LANGUAGE_TH;
+    private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
+
+    /** The owner-approved preview, BIOARCH example, all three lines verbatim. */
+    @Test
+    void english_ownerApprovedBioarchPreview_allThreeLinesVerbatim() {
+        assertThat(DealQuotationLines.descriptionLine(EN, "BIOARCH", "BARGE GRIGIA", "ONDULATO", "APGBBK15",
+            "200x305", new BigDecimal("9")))
+            .isEqualTo("Tile Model BIOARCH Color BARGE GRIGIA Finish ONDULATO No.APGBBK15");
+        assertThat(DealQuotationLines.sizeLine(EN, "200x305", new BigDecimal("9"),
+            new BigDecimal("200"), new BigDecimal("305")))
+            .isEqualTo("Size 20 cm x 30.5 cm x 9 mm (approx.)");
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_AREA,
+            new BigDecimal("300"), new BigDecimal("16.39"), 4917, WastageCalculator.WASTAGE_MODE_PERCENT,
+            new BigDecimal("5"), 5180, 20))
+            .isEqualTo("(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes"
+                + " = 5,180 pcs) (20 pcs/box)");
+    }
+
+    @Test
+    void english_piecesQuantityMode_piecesWastage() {
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            200, WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("10"), 220, 20))
+            .isEqualTo("(Quantity 200 pcs + 10 pcs allowance, rounded up to full boxes = 220 pcs) (20 pcs/box)");
+    }
+
+    @Test
+    void english_noPiecesPerBox_dropsTheRoundingClauseAndTheBoxTail() {
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_AREA,
+            new BigDecimal("10"), new BigDecimal("2"), 20, WastageCalculator.WASTAGE_MODE_PERCENT,
+            new BigDecimal("10"), 22, null))
+            .isEqualTo("(Area 10 sqm @ 2 pcs/sqm = 20 pcs + 10% allowance = 22 pcs)");
+    }
+
+    @Test
+    void english_zeroOrNoneWastage_printsNoAllowanceClause() {
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            100, WastageCalculator.WASTAGE_MODE_PIECES, BigDecimal.ZERO, 108, 12))
+            .isEqualTo("(Quantity 100 pcs, rounded up to full boxes = 108 pcs) (12 pcs/box)");
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null))
+            .isEqualTo("(Quantity 1,500 pcs = 1,500 pcs)");
+    }
+
+    /** No thickness: the size goes INLINE between Finish and No., exactly like the Thai line. */
+    @Test
+    void english_noThickness_sizeInline_andNoSeparateSizeRow() {
+        assertThat(DealQuotationLines.descriptionLine(EN, "Reverso Cement", "Grigio", "Matt", "BS66R13GP",
+            "60x60", null))
+            .isEqualTo("Tile Model Reverso Cement Color Grigio Finish Matt Size 60x60 cm. No.BS66R13GP");
+        assertThat(DealQuotationLines.descriptionLine(EN, "Reverso Cement", null, null, null, "600x1200 mm", null))
+            .isEqualTo("Tile Model Reverso Cement Size 600x1200 mm");
+        assertThat(DealQuotationLines.sizeLine(EN, "60x60", null, null, null)).isNull();
+    }
+
+    @Test
+    void english_sizeLine_fallbacksMirrorTheThaiOnes() {
+        assertThat(DealQuotationLines.sizeLine(EN, "60x60", new BigDecimal("10"), null, null))
+            .isEqualTo("Size 60x60 x 10 mm (approx.)");
+        assertThat(DealQuotationLines.sizeLine(EN, null, new BigDecimal("10"), null, null))
+            .isEqualTo("Size 10 mm (approx.)");
+    }
+
+    @Test
+    void english_tileUnitIsPCS_andOnlyTheThaiTileUnitIsTranslatedOnRead() {
+        assertThat(DealQuotationLines.tileUnit(EN)).isEqualTo("PCS");
+        assertThat(DealQuotationLines.tileUnit(TH)).isEqualTo("แผ่น");
+        assertThat(DealQuotationLines.printedTileUnit(EN, "แผ่น")).isEqualTo("PCS");
+        assertThat(DealQuotationLines.printedTileUnit(EN, null)).isEqualTo("PCS");
+        assertThat(DealQuotationLines.printedTileUnit(EN, "SQM")).isEqualTo("SQM");
+        // Thai: the stored value, null included, passed straight through.
+        assertThat(DealQuotationLines.printedTileUnit(TH, "แผ่น")).isEqualTo("แผ่น");
+        assertThat(DealQuotationLines.printedTileUnit(TH, null)).isNull();
+        assertThat(DealQuotationLines.printedTileUnit(null, "แผ่น")).isEqualTo("แผ่น");
+    }
+
+    /** Ruling 4, verbatim: Gregorian year, month name spelled out. */
+    @Test
+    void english_adjustmentDescription_ownerWording() {
+        assertThat(DealQuotationLines.adjustmentDescription(EN, new BigDecimal("3"), LocalDate.of(2026, 7, 31)))
+            .isEqualTo("Special discount 3% for orders placed by July 31, 2026");
+        assertThat(DealQuotationLines.adjustmentDescription(EN, new BigDecimal("3"), null))
+            .isEqualTo("Special discount 3%");
+        assertThat(DealQuotationLines.adjustmentDescription(EN, new BigDecimal("2.50"), LocalDate.of(2026, 1, 5)))
+            .isEqualTo("Special discount 2.5% for orders placed by January 5, 2026");
+        assertThat(DealQuotationLines.adjustmentDescription(EN, null, null)).isEqualTo("Special discount");
+    }
+
+    /** The month name must not follow the JVM's default locale. */
+    @Test
+    void english_adjustmentDescription_isNotLocalisedByAThaiDefaultLocale() {
+        java.util.Locale previous = java.util.Locale.getDefault();
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("th-TH-u-ca-buddhist"));
+            assertThat(DealQuotationLines.adjustmentDescription(EN, new BigDecimal("3"), LocalDate.of(2026, 7, 31)))
+                .isEqualTo("Special discount 3% for orders placed by July 31, 2026");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    /** Read-time resolution of a STORED (Thai, write-time) adjustment description. */
+    @Test
+    void printedAdjustmentDescription_englishRederives_thaiPassesTheStoredTextThrough() {
+        LocalDate deadline = LocalDate.of(2026, 7, 31);
+        String storedPct = "ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569";
+        assertThat(DealQuotationLines.printedAdjustmentDescription(EN, storedPct, new BigDecimal("3"), deadline))
+            .isEqualTo("Special discount 3% for orders placed by July 31, 2026");
+        // A flat adjustment whose stored text is the system's own Thai composition.
+        assertThat(DealQuotationLines.printedAdjustmentDescription(EN,
+            "ส่วนลดพิเศษ สำหรับการสั่งซื้อภายใน 31/07/2569", null, deadline))
+            .isEqualTo("Special discount for orders placed by July 31, 2026");
+        assertThat(DealQuotationLines.printedAdjustmentDescription(EN, "ส่วนลดพิเศษ", null, null))
+            .isEqualTo("Special discount");
+        // A flat adjustment with the rep's OWN wording is printed as typed.
+        assertThat(DealQuotationLines.printedAdjustmentDescription(EN, "Loyalty rebate", null, deadline))
+            .isEqualTo("Loyalty rebate");
+        // Thai: whatever was stored, untouched.
+        assertThat(DealQuotationLines.printedAdjustmentDescription(TH, storedPct, new BigDecimal("3"), deadline))
+            .isEqualTo(storedPct);
+        assertThat(DealQuotationLines.printedAdjustmentDescription(null, "anything", new BigDecimal("3"), deadline))
+            .isEqualTo("anything");
+    }
+
+    @Test
+    void english_specialPriceLine_isNeverPrinted() {
+        assertThat(DealQuotationLines.specialPriceLine(EN, new BigDecimal("1350"))).isNull();
+    }
+
+    /** No Thai character in ANY English line variant. */
+    @Test
+    void english_noVariantContainsAThaiCharacter() {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (BigDecimal thickness : new BigDecimal[] {null, new BigDecimal("9")}) {
+            lines.add(DealQuotationLines.descriptionLine(EN, "M", "C", "T", "P", "60x60", thickness));
+            lines.add(DealQuotationLines.sizeLine(EN, "60x60", thickness, new BigDecimal("600"), new BigDecimal("600")));
+        }
+        for (String quantityMode : new String[] {WastageCalculator.QUANTITY_MODE_AREA, WastageCalculator.QUANTITY_MODE_PIECES}) {
+            for (String wastageMode : new String[] {WastageCalculator.WASTAGE_MODE_PERCENT,
+                    WastageCalculator.WASTAGE_MODE_PIECES, WastageCalculator.WASTAGE_MODE_NONE}) {
+                for (Integer box : new Integer[] {null, 20}) {
+                    lines.add(DealQuotationLines.calculationLine(EN, quantityMode, BigDecimal.TEN, BigDecimal.TWO,
+                        20, wastageMode, BigDecimal.ONE, 40, box));
+                }
+            }
+        }
+        lines.add(DealQuotationLines.adjustmentDescription(EN, BigDecimal.ONE, LocalDate.of(2026, 7, 31)));
+        lines.add(DealQuotationLines.tileUnit(EN));
+        assertThat(lines).allSatisfy(line -> {
+            if (line != null) assertThat(THAI.matcher(line).find()).as(line).isFalse();
+        });
+    }
+
+    /**
+     * ⚠️ The Thai regression: every language-aware overload called with TH (and with null) returns
+     * EXACTLY what the pre-existing Thai-only method returns, across the variant matrix. The legacy
+     * methods' own expected strings above are unchanged by this branch.
+     */
+    @Test
+    void thai_languageAwareOverloadsAreByteIdenticalToTheLegacyMethods() {
+        for (String lang : new String[] {TH, null, "XX"}) {
+            for (BigDecimal thickness : new BigDecimal[] {null, new BigDecimal("9")}) {
+                assertThat(DealQuotationLines.descriptionLine(lang, "M", "C", "T", "P", "60x60", thickness))
+                    .isEqualTo(DealQuotationLines.descriptionLine("M", "C", "T", "P", "60x60", thickness));
+                assertThat(DealQuotationLines.sizeLine(lang, "60x60", thickness, new BigDecimal("600"), null))
+                    .isEqualTo(DealQuotationLines.sizeLine("60x60", thickness, new BigDecimal("600"), null));
+            }
+            for (String quantityMode : new String[] {WastageCalculator.QUANTITY_MODE_AREA, WastageCalculator.QUANTITY_MODE_PIECES}) {
+                for (String wastageMode : new String[] {WastageCalculator.WASTAGE_MODE_PERCENT,
+                        WastageCalculator.WASTAGE_MODE_PIECES, WastageCalculator.WASTAGE_MODE_NONE}) {
+                    for (Integer box : new Integer[] {null, 20}) {
+                        assertThat(DealQuotationLines.calculationLine(lang, quantityMode, new BigDecimal("1200"),
+                                new BigDecimal("16.39"), 4917, wastageMode, new BigDecimal("5"), 5180, box))
+                            .isEqualTo(DealQuotationLines.calculationLine(quantityMode, new BigDecimal("1200"),
+                                new BigDecimal("16.39"), 4917, wastageMode, new BigDecimal("5"), 5180, box));
+                    }
+                }
+            }
+            assertThat(DealQuotationLines.specialPriceLine(lang, new BigDecimal("1350")))
+                .isEqualTo(DealQuotationLines.specialPriceLine(new BigDecimal("1350")));
+            assertThat(DealQuotationLines.adjustmentDescription(lang, new BigDecimal("3"), LocalDate.of(2026, 7, 31)))
+                .isEqualTo(DealQuotationLines.adjustmentDescription(new BigDecimal("3"), LocalDate.of(2026, 7, 31)));
+        }
+    }
+
+    // ── owner decision 2026-09-13: the English per-sqm row ──────────────────────────────────────
+
+    /** Her QN6900933's sub-lines, verbatim: trailing zeros dropped, the stated precision kept. */
+    @Test
+    void boxLine_matchesQN6900933() {
+        assertThat(DealQuotationLines.boxLine(28, new BigDecimal("0.6"))).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
+        assertThat(DealQuotationLines.boxLine(60, new BigDecimal("0.600000"))).isEqualTo("(1 box = 60 pcs = 0.6 sqm)");
+        assertThat(DealQuotationLines.boxLine(66, new BigDecimal("0.495000"))).isEqualTo("(1 box = 66 pcs = 0.495 sqm)");
+        assertThat(DealQuotationLines.boxLine(1000, new BigDecimal("1.44"))).isEqualTo("(1 box = 1,000 pcs = 1.44 sqm)");
+        assertThat(DealQuotationLines.boxLine(null, new BigDecimal("0.6"))).isNull();
+        assertThat(DealQuotationLines.boxLine(28, null)).isNull();
+    }
+
+    @Test
+    void tilePrint_englishPerSqm_areaMode() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("300"), new BigDecimal("16.39"), 4917,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 20, 259, new BigDecimal("0.61"),
+            new BigDecimal("5180"), "SQM", new BigDecimal("10.00"));
+        assertThat(p.calculationLine()).isEqualTo(
+            "(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs = 259 boxes)");
+        assertThat(p.subLine()).isEqualTo("(1 box = 20 pcs = 0.61 sqm)");
+        assertThat(p.quantity()).isEqualByComparingTo("157.99");
+        assertThat(p.unit()).isEqualTo("SQM");
+    }
+
+    @Test
+    void tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 3360, WastageCalculator.WASTAGE_MODE_NONE, null,
+            3360, 28, 120, new BigDecimal("0.6"), new BigDecimal("3360"), "SQM", new BigDecimal("64.00"));
+        assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
+        assertThat(p.subLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
+        assertThat(p.quantity()).isEqualByComparingTo("72.00");
+        assertThat(DealQuotationLines.tilePrint(EN, "SPECIAL_SQM", WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+                10, WastageCalculator.WASTAGE_MODE_NONE, null, 28, 28, 1, new BigDecimal("0.6"), BigDecimal.TEN,
+                "SQM", BigDecimal.ONE).calculationLine())
+            .isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 28 pcs = 1 box)");
+    }
+
+    /** English NET/DIRECT_NET: pieces, PCS, the ordinary English line — sqmPerBox is ignored. */
+    @Test
+    void tilePrint_englishOtherModes_printPiecesEvenWithBoxData() {
+        for (String mode : new String[] {"NET", "DIRECT_NET"}) {
+            DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, mode,
+                WastageCalculator.QUANTITY_MODE_PIECES, null, null, 3360, WastageCalculator.WASTAGE_MODE_NONE, null,
+                3360, 28, 120, new BigDecimal("0.6"), new BigDecimal("3360"), "แผ่น", null);
+            assertThat(p.quantity()).isEqualByComparingTo("3360");
+            assertThat(p.unit()).isEqualTo("PCS");
+            assertThat(p.subLine()).isNull();
+            assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs) (28 pcs/box)");
+        }
+    }
+
+    /** ⚠️ Thai SPECIAL_SQM with a sqm/box on the row: byte-identical to the legacy methods. */
+    @Test
+    void tilePrint_thaiSpecialSqm_isByteIdenticalToTheLegacyPrint_evenWithBoxData() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(TH, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("87"), new BigDecimal("2.78"), 242,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4, 67, new BigDecimal("1.44"),
+            new BigDecimal("268"), "แผ่น", new BigDecimal("1350"));
+        assertThat(p.calculationLine()).isEqualTo(DealQuotationLines.calculationLine(WastageCalculator.QUANTITY_MODE_AREA,
+            new BigDecimal("87"), new BigDecimal("2.78"), 242, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4));
+        assertThat(p.quantity()).isEqualByComparingTo("268");
+        assertThat(p.unit()).isEqualTo("แผ่น");
+        assertThat(p.subLine()).isEqualTo(DealQuotationLines.specialPriceLine(new BigDecimal("1350")));
+    }
+
+    /** A hand-edited English per-sqm row with no box data prints pieces — it never invents an area. */
+    @Test
+    void tilePrint_englishPerSqmWithoutBoxData_printsPieces() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
+            10, null, null, null, BigDecimal.TEN, "SQM", new BigDecimal("64"));
+        assertThat(p.quantity()).isEqualByComparingTo("10");
+        assertThat(p.subLine()).isNull();
+    }
 }

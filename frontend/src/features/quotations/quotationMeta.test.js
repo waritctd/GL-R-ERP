@@ -601,14 +601,68 @@ describe('v3/v3b document settings', () => {
     expect(meta.availablePriceModes('TH').map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
   });
 
-  it('does NOT offer SPECIAL_SQM on an English document (the server 400s it)', () => {
-    expect(meta.availablePriceModes('EN').map((o) => o.code)).toEqual(['NET', 'DIRECT_NET']);
+  it('offers SPECIAL_SQM on an English document as a USD/ตร.ม. price (owner decision 2026-09-13)', () => {
+    const en = meta.availablePriceModes('EN');
+    expect(en.map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
+    expect(en.find((o) => o.code === 'SPECIAL_SQM').label).toBe('ราคา USD/ตร.ม.');
+    expect(en.find((o) => o.code === 'SPECIAL_SQM').hint).toMatch(/USD.*ไม่มี VAT.*กล่อง × ตร\.ม\.\/กล่อง/);
+    // Thai keeps its own label, untouched.
+    expect(meta.availablePriceModes('TH').find((o) => o.code === 'SPECIAL_SQM').label).toBe('ราคาพิเศษ บาท/ตร.ม.');
   });
 
-  it('moves a SPECIAL_SQM document to DIRECT_NET on English, and reports that it moved', () => {
-    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'EN')).toEqual({ priceMode: 'DIRECT_NET', moved: true });
+  it('rowsWithPricesCleared clears EVERY currency amount to null (not \'\') — and keeps every non-money value', () => {
+    const tileRow = {
+      lineType: 'TILE', unitPrice: 64, directNetPrice: 500, specialPriceSqm: 64, discountPct: 5, sqmPerBox: 0.6,
+      piecesPerBox: 28, areaSqm: 20, piecesInput: 3360, wastageValue: 5, sqmPerPiece: 0.36,
+      netUnitPrice: 64, lineAmount: 4608, specialPriceLine: '(1 box = 28 pcs = 0.6 sqm)',
+    };
+    const plain = { lineType: 'PLAIN', unitPrice: 800, quantity: 1, unit: 'JOB', discountPct: 10, netUnitPrice: 720, lineAmount: 720 };
+    const flat = { lineType: 'ADJUSTMENT', adjustmentKind: 'AMOUNT', adjustmentAmount: 55, adjustmentPct: null, unitPrice: 55, netUnitPrice: 55, lineAmount: -55, description: 'Rebate' };
+    const pct = { lineType: 'ADJUSTMENT', adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentAmount: '', adjustmentDeadline: '2026-07-31', unitPrice: 139.29, netUnitPrice: 139.29, lineAmount: -139.29 };
+    const [t, p, f, a] = meta.rowsWithPricesCleared([tileRow, plain, flat, pct]);
+    for (const key of ['unitPrice', 'directNetPrice', 'specialPriceSqm', 'netUnitPrice', 'lineAmount', 'specialPriceLine']) {
+      expect(t[key], `tile ${key}`).toBeNull();
+    }
+    expect(t).toMatchObject({ discountPct: 5, sqmPerBox: 0.6, piecesPerBox: 28, areaSqm: 20, piecesInput: 3360, wastageValue: 5, sqmPerPiece: 0.36 });
+    expect(p.unitPrice).toBeNull();
+    expect(p.netUnitPrice).toBeNull();
+    expect(p.lineAmount).toBeNull();
+    expect(p).toMatchObject({ quantity: 1, unit: 'JOB', discountPct: 10 });
+    expect(f.adjustmentAmount).toBeNull();
+    expect(f.lineAmount).toBeNull();
+    expect(f.description).toBe('Rebate');
+    // A PERCENTAGE adjustment keeps its percent (not money) and loses only the derived figures.
+    expect(a).toMatchObject({ adjustmentPct: 3, adjustmentAmount: '', adjustmentDeadline: '2026-07-31' });
+    expect(a.lineAmount).toBeNull();
+    // A pre-V168 row with no lineType is a TILE.
+    expect(meta.rowsWithPricesCleared([{ unitPrice: 790 }])[0].unitPrice).toBeNull();
+  });
+
+  it('rowHasPriceForPreview asks for the price each mode actually needs', () => {
+    expect(meta.rowHasPriceForPreview({ unitPrice: 850 }, 'NET')).toBe(true);
+    expect(meta.rowHasPriceForPreview({ unitPrice: null }, 'NET')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ unitPrice: '' }, 'NET')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ unitPrice: null, directNetPrice: 500 }, 'DIRECT_NET')).toBe(true);
+    expect(meta.rowHasPriceForPreview({ unitPrice: 850, directNetPrice: null }, 'DIRECT_NET')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ unitPrice: 850, specialPriceSqm: 1350 }, 'SPECIAL_SQM', 'TH')).toBe(true);
+    expect(meta.rowHasPriceForPreview({ unitPrice: null, specialPriceSqm: 1350 }, 'SPECIAL_SQM', 'TH')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ unitPrice: 850, specialPriceSqm: null }, 'SPECIAL_SQM', 'TH')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ unitPrice: null, specialPriceSqm: 64 }, 'SPECIAL_SQM', 'EN')).toBe(true);
+    expect(meta.rowHasPriceForPreview({ lineType: 'PLAIN', unitPrice: null }, 'SPECIAL_SQM')).toBe(false);
+    expect(meta.rowHasPriceForPreview({ lineType: 'PLAIN', unitPrice: 3500 }, 'NET')).toBe(true);
+  });
+
+  it('a language switch no longer moves any price mode', () => {
+    expect(meta.priceModeForLanguage('SPECIAL_SQM', 'EN')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
     expect(meta.priceModeForLanguage('NET', 'EN')).toEqual({ priceMode: 'NET', moved: false });
     expect(meta.priceModeForLanguage('SPECIAL_SQM', 'TH')).toEqual({ priceMode: 'SPECIAL_SQM', moved: false });
+    expect(meta.priceModeForLanguage('BOGUS', 'EN')).toEqual({ priceMode: 'DIRECT_NET', moved: true });
+  });
+
+  it('isEnglishPerSqm is exactly SPECIAL_SQM on English', () => {
+    expect(meta.isEnglishPerSqm('SPECIAL_SQM', 'EN')).toBe(true);
+    expect(meta.isEnglishPerSqm('SPECIAL_SQM', 'TH')).toBe(false);
+    expect(meta.isEnglishPerSqm('NET', 'EN')).toBe(false);
   });
 
   it('derives the currency and the VAT rate from the language alone', () => {
@@ -630,9 +684,10 @@ describe('v3 row labels and derivations', () => {
     expect(meta.documentDiscountLabel({ lineType: 'ADJUSTMENT', discountPct: 5 }, 'NET')).toBe('');
   });
 
-  it('prints พิเศษ for a SPECIAL_SQM tile, and Special on English', () => {
+  it('prints พิเศษ for a SPECIAL_SQM tile, and Net for the English per-sqm row (the USD/sqm IS the net)', () => {
     expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'TH')).toBe('พิเศษ');
-    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'EN')).toBe('Special');
+    expect(meta.documentDiscountLabel({ lineType: 'TILE' }, 'SPECIAL_SQM', 'EN')).toBe('Net');
+    expect(meta.documentDiscountLabel({ lineType: 'TILE', unitPrice: 600, netUnitPrice: 500 }, 'DIRECT_NET', 'EN')).toBe('Special');
   });
 
   it('prints Net for a DIRECT_NET tile whose net equals its list price, พิเศษ when it differs', () => {
@@ -643,6 +698,25 @@ describe('v3 row labels and derivations', () => {
   it('prints N% or Net for a PLAIN row from its own discount', () => {
     expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 0 }, 'SPECIAL_SQM')).toBe('Net');
     expect(meta.documentDiscountLabel({ lineType: 'PLAIN', discountPct: 5 }, 'NET')).toBe('5%');
+  });
+
+  it('composes the ENGLISH discount preview with a month name and a Gregorian year (owner ruling 2026-09-13)', () => {
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' }, 'EN'))
+      .toBe('Special discount 3% for orders placed by July 31, 2026');
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 2.5, adjustmentDeadline: '2026-01-05' }, 'EN'))
+      .toBe('Special discount 2.5% for orders placed by January 5, 2026');
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '' }, 'EN'))
+      .toBe('Special discount 3%');
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', adjustmentPct: 9 }, 'EN')).toBe('Special discount');
+    // A rep's own wording on a flat adjustment is kept, in either language.
+    expect(meta.adjustmentDescriptionPreview({ adjustmentKind: 'AMOUNT', description: 'Loyalty rebate' }, 'EN'))
+      .toBe('Loyalty rebate');
+  });
+
+  it('keeps the Thai preview when the language is TH or omitted', () => {
+    const adjustment = { adjustmentKind: 'PERCENT', adjustmentPct: 3, adjustmentDeadline: '2026-07-31' };
+    expect(meta.adjustmentDescriptionPreview(adjustment, 'TH')).toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
+    expect(meta.adjustmentDescriptionPreview(adjustment)).toBe('ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569');
   });
 
   it('composes the ส่วนลดพิเศษ preview with a zero-padded BE date, as the owner\'s QN6900704-2 prints it', () => {
@@ -671,6 +745,18 @@ describe('v3 row validation', () => {
     model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
     piecesPerBox: 3, sqmPerPiece: 0.36, unitPrice: 850, quantityMode: 'AREA', areaSqm: 20,
   };
+
+  it('English per-sqm needs the USD/ตร.ม. and ตร.ม./กล่อง — and NOT a list price per piece', () => {
+    const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
+    expect(meta.validateQuotationItem(perSqm, 'SPECIAL_SQM', 'EN')).toEqual({});
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({ sqmPerBox: 'กรุณาระบุ ตร.ม./กล่อง' });
+    expect(meta.validateQuotationItem({ ...perSqm, specialPriceSqm: '' }, 'SPECIAL_SQM', 'EN')).toEqual({ specialPriceSqm: 'กรุณาระบุราคา (USD/ตร.ม.)' });
+    expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
+    // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง/แผ่น' });
+    expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
+  });
 
   it('SPECIAL_SQM needs the ราคาพิเศษ — and still the list price, which the server requires on every tile row', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: '' }, 'SPECIAL_SQM')).toEqual({ specialPriceSqm: 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)' });

@@ -315,7 +315,8 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   test('refusals: every one the editor avoids offering is a real 400 from the service', async () => {
     const create = (overrides) => apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId, overrides));
     const refusals = [
-      ['ราคาพิเศษ on an English document', { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [tile({ specialPriceSqm: 1350 })] }, 'ราคาพิเศษ'],
+      // Owner decision 2026-09-13: English per-sqm IS allowed now — but never without box data.
+      ['an English per-sqm row with no ตร.ม./กล่อง', { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [tile({ specialPriceSqm: 64, sqmPerBox: null })] }, 'ตร.ม./กล่อง'],
       ['a ส่วนลดพิเศษ larger than the rows above it', { items: [tile(), adjustment({ adjustmentPct: null, adjustmentAmount: 99999999 })] }, 'ติดลบ'],
       ['a ส่วนลดพิเศษ that is both a percent and an amount', { items: [tile(), adjustment({ adjustmentAmount: 100 })] }, 'อย่างใดอย่างหนึ่ง'],
       ['a quotation that is ONLY a ส่วนลดพิเศษ', { items: [adjustment()] }, 'ส่วนลดพิเศษ'],
@@ -327,13 +328,14 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
       expect((await response.json()).message, what).toContain(fragment);
     }
 
-    // Moving a stored ราคาพิเศษ document to English WITHOUT also moving its mode (a PUT that omits
-    // priceMode keeps the stored one) is refused too — which is why the editor moves it, and says so.
+    // Moving a stored ราคาพิเศษ document to English keeps SPECIAL_SQM (a PUT that omits priceMode keeps
+    // the stored one), which on English is per-sqm — refused here because its rows carry no ตร.ม./กล่อง.
     const before = await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json();
     const move = await apiWrite(sessions.sales, 'put', `/api/deal-quotations/${thaiId}`, draftBody(contactId, {
       documentLanguage: 'EN', items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350 }), plain, adjustment()],
     }));
-    expect(move.status(), 'EN on a SPECIAL_SQM document must be refused').toBe(400);
+    expect(move.status(), 'EN per-sqm without box data must be refused').toBe(400);
+    expect((await move.json()).message).toContain('ตร.ม./กล่อง');
     const after = await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json();
     expect(after.quotation.documentLanguage, 'a refused PUT must change nothing').toBe('TH');
     expect(after.quotation.grandTotal).toBe(before.quotation.grandTotal);

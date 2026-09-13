@@ -471,7 +471,9 @@ public class QuotationRenderer {
                 // continuity check). Give every title cell its own bottom rule; on page 1 it
                 // coincides with row 8's top rule, so nothing is double-drawn.
                 closeItemTableBorders(sh, TITLE_ROW, TITLE_ROW);
-                sh.getFooter().setCenter("หน้า &P/&N");
+                // The page counter follows the document: "Page 2/3" on the English form, never
+                // the Thai "หน้า" (spotted on the owner-ruling 2026-09-13 English render).
+                sh.getFooter().setCenter(english ? "Page &P/&N" : "หน้า &P/&N");
                 // layout-spec §6: "never split an item's lines, the remark block, or the signature
                 // block across pages". LOW's own note here used to record a REVERTED attempt at
                 // this (an unconditional break right before LABELS_ROW landed INSIDE the approver
@@ -667,6 +669,8 @@ public class QuotationRenderer {
         // H1: local to this render call — see #underlinedStyle's Javadoc for why this can never
         // again be a field on this @Component singleton.
         Map<Short, CellStyle> underlineCache = new HashMap<>();
+        // Per render call, like underlineCache (this class is a Spring singleton — see H1 below).
+        Map<String, CellStyle> qtyFormatCache = new HashMap<>();
         for (int i = 0; i < items.size(); i++) {
             RenderItem item = items.get(i);
             ItemLayout layout = layouts.get(i);
@@ -688,7 +692,8 @@ public class QuotationRenderer {
 
             int firstRow = r;
             ensureRowStyle(sh, r, proto);
-            fillItemMainRow(sh, r, showSeq ? seq : -1, physicalLines.isEmpty() ? "" : physicalLines.get(0), item);
+            fillItemMainRow(sh, r, showSeq ? seq : -1, physicalLines.isEmpty() ? "" : physicalLines.get(0), item,
+                qtyFormatCache);
             r++;
 
             for (int l = 1; l < physicalLines.size(); l++) {
@@ -810,11 +815,29 @@ public class QuotationRenderer {
         return style;
     }
 
-    private void fillItemMainRow(Sheet sh, int r, int seq, String firstLine, RenderItem item) {
+    private void fillItemMainRow(Sheet sh, int r, int seq, String firstLine, RenderItem item,
+                                 Map<String, CellStyle> qtyFormatCache) {
         if (seq > 0) setNum(sh, r, 0, seq); else clearCell(sh, r, 0); // A: sequence
         setStr(sh, r, 1, firstLine != null ? firstLine : ""); // B: description (first physical line)
         BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
         setNum(sh, r, 2, qty.doubleValue());                              // C: qty
+        if (item.qtyFormat() != null) {
+            // Owner decision 2026-09-13: the English per-sqm quantity is square metres to 2dp. The
+            // template's C column is a whole-number format, which printed 56.43 as "56" — beside a
+            // 3,611.52 amount that no longer multiplies out. Only rows that ask for it get a cloned
+            // style; every other row keeps the template's own cell style untouched.
+            Cell qtyCell = getOrKeep(sh, r, 2);
+            CellStyle base = qtyCell.getCellStyle();
+            String key = base.getIndex() + ":" + item.qtyFormat();
+            CellStyle formatted = qtyFormatCache.get(key);
+            if (formatted == null) {
+                formatted = sh.getWorkbook().createCellStyle();
+                formatted.cloneStyleFrom(base);
+                formatted.setDataFormat(sh.getWorkbook().createDataFormat().getFormat(item.qtyFormat()));
+                qtyFormatCache.put(key, formatted);
+            }
+            qtyCell.setCellStyle(formatted);
+        }
         // Quotation v3: a NULL unit still falls back to "แผ่น" (no caller has ever passed null,
         // so nothing changes for them), but an EXPLICITLY EMPTY unit now prints an empty cell.
         // That distinction is what the ADJUSTMENT row needs: the owner's ส่วนลดพิเศษ line carries
@@ -940,6 +963,46 @@ public class QuotationRenderer {
         mergeIfAbsent(sh, totalRow, totalRow, 4, SALES_LINE_COL);
         setRightAligned(sh, totalRow, 4, EN_GRAND_TOTAL_PREFIX + " (" + currency + ")");
         setNum(sh, totalRow, VALUE_COL, subtotal.doubleValue());
+
+        // Owner ruling 2026-09-13 (2): the two emptied rows must not PRINT at all. Clearing their
+        // content (above) left the template's own cell borders behind, so column I showed two
+        // empty bordered boxes between the table and Grand Total. Both samples put Grand Total
+        // directly under the table box, so the rows are removed from the printed page: every
+        // border on them is stripped and they are collapsed to zero height. Zero height rather
+        // than Sheet#shiftRows, deliberately — every row index computed before this point (the
+        // signature block written next, the print area, the page breaks #insertNoSplitPageBreaks
+        // already set) stays valid, and a hidden row is honoured by both engines (LibreOffice, and
+        // SheetPlan reads a zero-height row as 0 twips for the Chromium path).
+        hideRowWithoutBorders(sh, subtotalRow);
+        hideRowWithoutBorders(sh, vatRow);
+    }
+
+    /** Blanks every cell A..I of {@code rowIdx}, strips all four borders from each (cloning the
+     * cell's style so the shared template style other rows use is untouched), and collapses the
+     * row to zero height. English totals only — see {@link #applyEnglishTotals}. */
+    private void hideRowWithoutBorders(Sheet sh, int rowIdx) {
+        Row row = sh.getRow(rowIdx);
+        if (row == null) return;
+        Workbook wb = sh.getWorkbook();
+        Map<Short, CellStyle> cache = new HashMap<>();
+        for (int c = 0; c <= VALUE_COL; c++) {
+            Cell cell = row.getCell(c);
+            if (cell == null) continue;
+            cell.setBlank();
+            CellStyle src = cell.getCellStyle();
+            CellStyle borderless = cache.get(src.getIndex());
+            if (borderless == null) {
+                borderless = wb.createCellStyle();
+                borderless.cloneStyleFrom(src);
+                borderless.setBorderTop(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+                borderless.setBorderRight(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+                borderless.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+                borderless.setBorderLeft(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+                cache.put(src.getIndex(), borderless);
+            }
+            cell.setCellStyle(borderless);
+        }
+        row.setZeroHeight(true);
     }
 
     /**

@@ -197,8 +197,34 @@ public final class DealQuotationDtos {
          * a draft save that sends this item's {@code id} back (see
          * {@code DealQuotationRequests.ItemInput#id}) — only an item saved without its id (new, or
          * one whose id was foreign/stale/a duplicate) gets a new id and therefore a new URL. */
-        String pictureUrl
+        String pictureUrl,
+        /** V176 — the supplier-stated square metres per box (TILE rows; null when unknown). An
+         * ENGLISH per-sqm quotation's {@code quantity} is {@code boxes × sqmPerBox} (2dp). */
+        BigDecimal sqmPerBox
     ) {
+        /** The pre-V176 canonical shape (no {@link #sqmPerBox}). */
+        public DealQuotationItemDto(
+            long id, int seq, String locationLabel, Long catalogPriceId, String productCode,
+            String brand, String model, String color, String texture, String sizeText,
+            BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm,
+            Integer piecesInput, String wastageMode, BigDecimal wastageValue, Integer piecesPerBox,
+            BigDecimal unitPrice, BigDecimal discountPct, String originCountry,
+            Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            BigDecimal piecesPerSqm, int piecesBeforeWastage, int piecesAfterWastage, int piecesFinal,
+            Integer boxes, BigDecimal netUnitPrice, BigDecimal lineAmount,
+            String descriptionLine, String sizeLine, String calculationLine,
+            String lineType, BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+            BigDecimal adjustmentPct, LocalDate adjustmentDeadline, String specialPriceLine,
+            BigDecimal adjustmentAmount, boolean hasPicture, String picturePlacement, String pictureUrl) {
+            this(id, seq, locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes,
+                piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice,
+                lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity, unit,
+                specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, null);
+        }
+
         /** The pre-GLA-75 shape — no picture. Kept so existing call sites (the calculate-line
          * preview and many test fixtures) compile unchanged; same device as
          * {@code DealQuotationRequests.ItemInput}'s legacy constructor. */
@@ -221,7 +247,18 @@ public final class DealQuotationDtos {
                 piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice,
                 lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity, unit,
                 specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
-                false, null, null);
+                false, null, null, null);
+        }
+
+        /** This item carrying {@code value} as its {@link #sqmPerBox} (repository/preview paths). */
+        public DealQuotationItemDto withSqmPerBox(BigDecimal value) {
+            return new DealQuotationItemDto(id, seq, locationLabel, catalogPriceId, productCode, brand, model,
+                color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
+                wastageMode, wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
+                boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
+                unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
+                hasPicture, picturePlacement, pictureUrl, value);
         }
 
         /** This item with its picture fields set from the stored link (repository read path). */
@@ -234,7 +271,7 @@ public final class DealQuotationDtos {
                 boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, calculationLine, lineType, quantity,
                 unit, specialPriceSqm, adjustmentPct, adjustmentDeadline, specialPriceLine, adjustmentAmount,
                 has, has ? placement : null,
-                has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null);
+                has ? "/api/deal-quotations/" + quotationId + "/items/" + id + "/picture" : null, sqmPerBox);
         }
     }
 }

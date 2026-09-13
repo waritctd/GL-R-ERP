@@ -4840,7 +4840,7 @@ function dealQuotationRevisionNumber(baseNumber, revisionNo) {
  * Every field the real ItemDto adds on top of ItemInput is still populated, so the UI has
  * something to bind to; only the NUMBERS are a placeholder.
  */
-function computeDealQuotationLine(input = {}) {
+function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const sqmPerPiece = Number(input.sqmPerPiece) || 0;
   const piecesPerSqm = sqmPerPiece > 0 ? round2(1 / sqmPerPiece) : null;
   const quantityMode = input.quantityMode === 'PIECES' ? 'PIECES' : 'AREA';
@@ -4867,23 +4867,32 @@ function computeDealQuotationLine(input = {}) {
   const netUnitPrice = round2(unitPrice * (1 - discountPct / 100));
   const lineAmount = round2(piecesFinal * netUnitPrice);
 
+  // Owner ruling 2026-09-13: an ENGLISH document's lines are English — the PHRASING mirrors
+  // DealQuotationLines' English overloads (its numbers stay this stub's placeholders, as before).
+  const en = documentLanguage === 'EN';
   const descriptionLine = [
-    'กระเบื้อง',
-    input.model ? `รุ่น ${input.model}` : null,
-    input.color ? `สี ${input.color}` : null,
-    input.texture ? `ผิว ${input.texture}` : null,
+    en ? 'Tile' : 'กระเบื้อง',
+    input.model ? `${en ? 'Model' : 'รุ่น'} ${input.model}` : null,
+    input.color ? `${en ? 'Color' : 'สี'} ${input.color}` : null,
+    input.texture ? `${en ? 'Finish' : 'ผิว'} ${input.texture}` : null,
     input.productCode ? `No.${input.productCode}` : null,
   ].filter(Boolean).join(' ');
   const sizeLine = input.sizeText
-    ? `ขนาด ${input.sizeText}${input.thicknessMm != null ? `x${input.thicknessMm}` : ''} cm. (ขนาดโดยประมาณ)`
+    ? `${en ? 'Size' : 'ขนาด'} ${input.sizeText}${input.thicknessMm != null ? `x${input.thicknessMm}` : ''} cm. ${en ? '(approx.)' : '(ขนาดโดยประมาณ)'}`
     : '';
   const wastageText = wastageMode === 'NONE'
     ? ''
-    : wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`;
-  const qtyText = quantityMode === 'PIECES'
-    ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`
-    : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`;
-  const boxText = piecesPerBox > 0 ? ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)` : '';
+    : en
+      ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} pcs allowance`)
+      : (wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`);
+  const qtyText = en
+    ? (quantityMode === 'PIECES'
+      ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`
+      : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`)
+    : (quantityMode === 'PIECES'
+      ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`
+      : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`);
+  const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;
 
   return {
@@ -4933,7 +4942,7 @@ function inferMockPriceMode(input) {
   return 'NET';
 }
 
-function computeDealQuotationV3Line(input = {}, priceMode = 'NET') {
+function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLanguage = 'TH') {
   const lineType = dealQuotationLineType(input);
   const v3Nulls = {
     specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
@@ -4964,13 +4973,33 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET') {
       descriptionLine: adjustmentDescriptionPreview({
         adjustmentKind: flat ? 'AMOUNT' : 'PERCENT', adjustmentPct: input.adjustmentPct,
         adjustmentDeadline: input.adjustmentDeadline, description: input.description,
-      }),
+      }, documentLanguage),
       sizeLine: null,
       calculationLine: flat ? null : MOCK_NOT_COMPUTED,
     };
   }
-  const tile = computeDealQuotationLine(input);
-  const common = { ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: 'แผ่น' };
+  const tile = computeDealQuotationLine(input, documentLanguage);
+  const common = {
+    ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: documentLanguage === 'EN' ? 'PCS' : 'แผ่น',
+  };
+  if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
+    // English per-sqm — the RULE is mirrored (no box data → 400, never a pieces fallback), the
+    // quantity/amount MATH is not (boxes × ตร.ม./กล่อง is the server's; null here, and said so).
+    const missing = [];
+    if (!(Number(input.piecesPerBox) >= 1)) missing.push('แผ่น/กล่อง');
+    if (!(Number(input.sqmPerBox) > 0)) missing.push('ตร.ม./กล่อง');
+    if (missing.length) {
+      fail(`ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ ${missing.join(' และ ')}`, 400);
+    }
+    const price = input.specialPriceSqm == null ? null : round2(Number(input.specialPriceSqm));
+    return {
+      ...common,
+      specialPriceSqm: price, discountPct: null, unitPrice: price, netUnitPrice: price,
+      unit: 'SQM', quantity: null, lineAmount: null,
+      calculationLine: `${tile.calculationLine} ${MOCK_NOT_COMPUTED}`,
+      specialPriceLine: `(1 box = ${Number(input.piecesPerBox).toLocaleString('en-US')} pcs = ${Number(input.sqmPerBox)} sqm)`,
+    };
+  }
   if (priceMode === 'SPECIAL_SQM') {
     return {
       ...common,
@@ -5001,12 +5030,12 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET') {
 // computeDealQuotationV3Line(...) rather than before: that function's PLAIN/ADJUSTMENT branches
 // spread `...input` (which carries whatever `id` the CLIENT sent, including `null` for a brand-new
 // row), and spreading before it would let that client value silently clobber the id decided here.
-function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = null) {
+function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = null, documentLanguage = 'TH') {
   const requestedId = input?.id != null ? Number(input.id) : null;
   const id = existingIds && requestedId != null && existingIds.has(requestedId)
     ? requestedId
     : mockDealQuotationItemSeq++;
-  return { ...computeDealQuotationV3Line(input, priceMode), id, seq };
+  return { ...computeDealQuotationV3Line(input, priceMode, documentLanguage), id, seq };
 }
 
 /** DealQuotationService's v3/v3b write-path rules, in the order the service applies them. Returns
@@ -5023,9 +5052,8 @@ function resolveDealQuotationV3Header(payload, current = null) {
   if (currency !== expectedCurrency) {
     fail(`สกุลเงิน ${currency} ใช้กับเอกสารภาษา ${documentLanguage} ไม่ได้ (ต้องเป็น ${expectedCurrency})`, 400);
   }
-  if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
-    fail('ราคาพิเศษ (บาท/ตร.ม. รวมภาษี) ใช้กับเอกสารภาษาอังกฤษไม่ได้ เนื่องจากเอกสารภาษาอังกฤษไม่มีภาษีมูลค่าเพิ่ม กรุณาเลือกราคาสุทธิต่อแผ่นแทน', 400);
-  }
+  // (The SPECIAL_SQM-on-English refusal is gone — owner decision 2026-09-13; see
+  // DealQuotationService's per-sqm branch and computeDealQuotationV3Line below.)
   return { priceMode, documentLanguage, currency };
 }
 
@@ -5033,7 +5061,7 @@ function resolveDealQuotationV3Header(payload, current = null) {
  * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
  * and a document whose total goes negative is refused — checked only where the mock KNOWS the
  * total (every adjustment flat); a percentage adjustment is not computed here at all. */
-function buildDealQuotationItems(inputs, priceMode, existingItems = null) {
+function buildDealQuotationItems(inputs, priceMode, existingItems = null, documentLanguage = 'TH') {
   const list = inputs ?? [];
   if (list.length === 0) fail('ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ', 400);
   const products = list.filter((it) => dealQuotationLineType(it) !== 'ADJUSTMENT');
@@ -5051,7 +5079,7 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null) {
   // can be recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow.
   // null on create, where nothing exists yet.
   const existingIds = existingItems ? new Set(existingItems.map((it) => it.id)) : null;
-  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode, existingIds));
+  const items = [...products, ...adjustments].map((item, index) => buildDealQuotationItemRow(item, index + 1, priceMode, existingIds, documentLanguage));
   const known = items.every((it) => it.lineAmount != null);
   if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
     fail('ยอดรวมหลังหักส่วนลดพิเศษติดลบ กรุณาตรวจสอบส่วนลดพิเศษ', 400);
@@ -11978,7 +12006,7 @@ export const api = {
       const contactSnapshot = resolveDealQuotationContact(ticket, payload);
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
-      const items = buildDealQuotationItems(payload.items, header.priceMode);
+      const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
       const row = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
@@ -12036,7 +12064,7 @@ export const api = {
       requireDealQuotationEditable(row);
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
-      const items = buildDealQuotationItems(payload.items, header.priceMode, row.items);
+      const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -12065,11 +12093,13 @@ export const api = {
     // Stateless preview -- same STUB calc `create`/`update` apply per line, run against one item
     // input with nothing persisted. See computeDealQuotationLine's own warning: this is a demo
     // placeholder, not WastageCalculator.
-    async calculateLine(payload = {}) {
+    async calculateLine(payload = {}, documentLanguage = 'TH') {
       requireSession();
       // v3: no quotation, so the mode is inferred FROM THE ROW, as DealQuotationService does; an
       // ADJUSTMENT previews with no base (the service passes ZERO) — here, with no number at all.
-      return delay({ item: { id: 0, seq: 0, ...computeDealQuotationV3Line(payload ?? {}, inferMockPriceMode(payload)) } });
+      const language = String(documentLanguage || 'TH').toUpperCase();
+      if (!['TH', 'EN'].includes(language)) fail(`ภาษาเอกสารไม่ถูกต้อง: ${language}`, 400);
+      return delay({ item: { id: 0, seq: 0, ...computeDealQuotationV3Line(payload ?? {}, inferMockPriceMode(payload), language) } });
     },
 
     async submit(id, payload = {}) {
