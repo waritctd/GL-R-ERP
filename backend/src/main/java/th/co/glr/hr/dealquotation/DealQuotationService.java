@@ -621,12 +621,25 @@ public class DealQuotationService {
         return toRenderModel(quotation);
     }
 
-    /** Resolves the approver's signature bytes (a live {@code hr.employee_signature} read — never
-     * cached) and hands everything to the adapter, which is otherwise a pure function. */
+    /** Resolves the approver's signature bytes and hands everything to the adapter, which is
+     * otherwise a pure function.
+     *
+     * <p>V175 (owner ruling 2026-09-13, "already-sent quotations never change afterwards"): the
+     * bytes come from the snapshot frozen at approval — {@link DealQuotationRepository#approve}
+     * writes it in the same statement as the status change — and NEVER from the live
+     * {@code hr.employee_signature} row when a snapshot exists, even one with no image (the
+     * approver had none on file then, so the document stays unsigned). The live read below is only
+     * a defensive fallback for an approved row with no snapshot (V175's backfill, owner ruling
+     * 2026-09-13 "Freeze them unsigned.", gives every pre-V175 approval one); a DRAFT/PENDING
+     * row has {@code approvedById == null} and so gets no signature either way. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;
-        if (quotation.approverHasSignature() && quotation.approvedById() != null) {
+        var snapshot = quotations.findApproverSignatureSnapshot(quotation.id());
+        if (snapshot.isPresent()) {
+            signaturePng = snapshot.get().image();
+            signatureMime = snapshot.get().mimeType();
+        } else if (quotation.approverHasSignature() && quotation.approvedById() != null) {
             var signature = signatures.find(quotation.approvedById());
             if (signature.isPresent()) {
                 signaturePng = signature.get().image();

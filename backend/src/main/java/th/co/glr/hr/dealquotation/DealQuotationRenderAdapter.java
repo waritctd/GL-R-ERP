@@ -23,9 +23,9 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * class, there is no more adaptation into the legacy {@code TicketDto}/{@code QuotationDto}
  * shapes — this builds the real model directly.
  *
- * <p>A pure function: no DB access. The approver's signature bytes are a live
- * {@code hr.employee_signature} read, so the caller ({@code DealQuotationService}) resolves them
- * and passes the bytes in.
+ * <p>A pure function: no DB access. The approver's signature bytes are a DB read (the V175
+ * snapshot frozen at approval), so the caller ({@code DealQuotationService}) resolves them and
+ * passes the bytes in.
  */
 public final class DealQuotationRenderAdapter {
     private DealQuotationRenderAdapter() {}

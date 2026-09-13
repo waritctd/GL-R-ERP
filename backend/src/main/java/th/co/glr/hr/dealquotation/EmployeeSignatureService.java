@@ -72,6 +72,18 @@ public class EmployeeSignatureService {
         // shared check QuotationRenderer uses, HERE, so a bad upload is rejected with an
         // actionable message instead of being accepted and quietly dropped from a customer
         // document later.
+        //
+        // Pixel-dimension cap FIRST, from the header only: MAX_BYTES bounds the FILE, not the
+        // pixels, and a flat 8000x8000 PNG is ~250 KB but decodes (plus the ARGB copy below) to
+        // hundreds of MB — enough to OOM a 512 MB instance. Same cap and header reader the item
+        // picture upload uses. An unreadable header falls through to the decode check's message.
+        int[] headerSize = QuotationItemPictures.headerDimensions(bytes);
+        if (headerSize != null && (headerSize[0] > QuotationItemPictures.MAX_DIMENSION_PX
+                || headerSize[1] > QuotationItemPictures.MAX_DIMENSION_PX)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รูปลายเซ็นมีขนาดใหญ่เกินไป (ด้านยาวสุดไม่เกิน " + QuotationItemPictures.MAX_DIMENSION_PX
+                    + " พิกเซล) กรุณาย่อขนาดรูปแล้วอัปโหลดใหม่");
+        }
         BufferedImage decoded = ImageDecodability.decode(bytes);
         if (decoded == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -80,7 +92,8 @@ public class EmployeeSignatureService {
         // Re-encode to a canonical 8-bit PNG rather than storing the original bytes verbatim:
         // this repairs decodable-but-atypical files (16-bit depth, odd color types, an
         // interlaced/APNG, a CMYK-but-decodable JPEG) so every later reader of
-        // hr.employee_signature sees one predictable format instead of having to guess.
+        // hr.employee_signature sees one predictable format instead of having to guess. The image is
+        // also cropped to its ink (see #trimToInk); an image with no ink at all is rejected with 400.
         byte[] canonicalPng = encodeCanonicalPng(decoded);
         if (canonicalPng.length > MAX_BYTES) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไฟล์ลายเซ็นมีขนาดใหญ่เกินไป (สูงสุด 1 MB)");
@@ -113,14 +126,106 @@ public class EmployeeSignatureService {
         } finally {
             g.dispose();
         }
+        BufferedImage trimmed = trimToInk(argb);
+        if (trimmed == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ไม่พบลายเซ็นในรูปภาพนี้ (รูปว่างเปล่าหรือโปร่งใสทั้งหมด) กรุณาอัปโหลดรูปที่มีลายเซ็น");
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
-            ImageIO.write(argb, "png", out);
+            ImageIO.write(trimmed, "png", out);
         } catch (IOException e) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่สามารถแปลงไฟล์รูปภาพนี้เป็น PNG ได้ กรุณาบันทึกเป็น PNG หรือ JPEG มาตรฐานแล้วอัปโหลดใหม่");
         }
         return out.toByteArray();
+    }
+
+    // ── Trim to the ink (owner-approved 2026-09-13) ───────────────────────────────────────────
+    // The renderer scales the WHOLE image frame into the ผู้อนุมัติ slot
+    // (QuotationRenderer#placeSignaturePicture), so empty transparent canvas around the ink shrinks
+    // the ink and floats it above the rule: the owner's real 2021x810 PNG has ink in only ~32% x 20%
+    // of it and printed ~4x1 mm, ~2 mm above the line. Cropping to the ink at UPLOAD time fixes that
+    // in both PDF engines without touching the renderer. Signatures already stored are NOT
+    // re-processed (production has none); re-uploading one applies the trim.
+
+    /** A pixel of a transparency-bearing image counts as ink when its alpha is ABOVE this (0-255).
+     * 32 (~12.5%) sits above the faint anti-alias halo / eraser dust a scan or export leaves behind
+     * (typically single-digit to ~20 alpha, invisible in print) yet far below the core of any real
+     * stroke: even a 1 px anti-aliased hairline has pixels at roughly 50% alpha or more. Faint pixels
+     * INSIDE the ink's bounding box are copied through untouched; only the box is decided by this. */
+    static final int INK_ALPHA_THRESHOLD = 32;
+
+    /** The same cut for a fully OPAQUE image (a JPEG, or a PNG on a white background): a pixel is ink
+     * when its darkest channel is more than this far below white, i.e. {@code 255 - min(r,g,b) > 32}.
+     * Chosen to mirror {@link #INK_ALPHA_THRESHOLD}; it ignores JPEG ringing and paper-white noise
+     * (≥ ~235) while still counting pale-coloured ink. It can only ever REMOVE near-white border, never
+     * a dark pixel, so the worst case (a grey scanned background) is simply "no trim". */
+    static final int INK_DARKNESS_THRESHOLD = 32;
+
+    /** Uniform transparent margin around the ink, so anti-aliased stroke ends are never flush with the
+     * picture frame: 2% of the ink's longer side, at least 2 px. Small enough not to reintroduce the
+     * float the trim removes (the owner's ~648x165 ink gets 13 px). */
+    static final double TRIM_MARGIN_FRACTION = 0.02;
+    static final int TRIM_MARGIN_MIN_PX = 2;
+
+    /**
+     * Crops {@code argb} to the bounding box of its ink pixels plus a uniform transparent margin.
+     * "Ink" is decided by alpha when ANY pixel is not fully opaque, otherwise by darkness (see the two
+     * thresholds above). Returns {@code null} when there is no ink at all (a fully transparent or
+     * blank white image), which {@link #upload} rejects with 400 rather than storing.
+     */
+    static BufferedImage trimToInk(BufferedImage argb) {
+        int w = argb.getWidth();
+        int h = argb.getHeight();
+        // Scanned one row at a time rather than materialising a full w*h int[] — keeps the upload's
+        // peak memory to the decoded image and its ARGB copy.
+        int[] row = new int[w];
+        boolean hasTransparency = false;
+        for (int y = 0; y < h && !hasTransparency; y++) {
+            argb.getRGB(0, y, w, 1, row, 0, w);
+            for (int p : row) {
+                if ((p >>> 24) < 255) {
+                    hasTransparency = true;
+                    break;
+                }
+            }
+        }
+        int minX = w;
+        int minY = h;
+        int maxX = -1;
+        int maxY = -1;
+        for (int y = 0; y < h; y++) {
+            argb.getRGB(0, y, w, 1, row, 0, w);
+            for (int x = 0; x < w; x++) {
+                if (isInk(row[x], hasTransparency)) {
+                    minX = Math.min(minX, x);
+                    maxX = Math.max(maxX, x);
+                    minY = Math.min(minY, y);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+        }
+        if (maxX < 0) {
+            return null;
+        }
+        int inkW = maxX - minX + 1;
+        int inkH = maxY - minY + 1;
+        int margin = Math.max(TRIM_MARGIN_MIN_PX,
+            (int) Math.round(Math.max(inkW, inkH) * TRIM_MARGIN_FRACTION));
+        BufferedImage out = new BufferedImage(inkW + 2 * margin, inkH + 2 * margin, BufferedImage.TYPE_INT_ARGB);
+        out.setRGB(margin, margin, inkW, inkH, argb.getRGB(minX, minY, inkW, inkH, null, 0, inkW), 0, inkW);
+        return out;
+    }
+
+    private static boolean isInk(int argbPixel, boolean byAlpha) {
+        if (byAlpha) {
+            return (argbPixel >>> 24) > INK_ALPHA_THRESHOLD;
+        }
+        int r = (argbPixel >> 16) & 0xFF;
+        int g = (argbPixel >> 8) & 0xFF;
+        int b = argbPixel & 0xFF;
+        return 255 - Math.min(r, Math.min(g, b)) > INK_DARKNESS_THRESHOLD;
     }
 
     public SignatureImage get(long employeeId, UserPrincipal actor) {

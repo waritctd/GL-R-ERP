@@ -514,14 +514,40 @@ public class DealQuotationRepository {
             """, new MapSqlParameterSource().addValue("id", quotationId).addValue("actorId", actorId));
     }
 
-    /** Compare-and-set PENDING_APPROVAL -> APPROVED. */
+    /**
+     * Compare-and-set PENDING_APPROVAL -> APPROVED, and — in the SAME statement — the V175 approver
+     * snapshot (owner ruling 2026-09-13, "already-sent quotations never change afterwards"): the
+     * approver's Thai/English names and signature bytes as they are at this instant. A data-modifying
+     * CTE rather than two statements, so the pair is atomic even with no surrounding transaction:
+     * the INSERT only sees the row the UPDATE actually won, and a lost compare-and-set inserts
+     * nothing. No signature on file stores NULL image + mime with the names still frozen. Returns
+     * the snapshot rowcount, which equals the UPDATE's (both LEFT JOINs keep the row).
+     */
     public int approve(long quotationId, long approverId, String note, LocalDate validityDate) {
         return jdbc.update("""
-            UPDATE sales.quotation
-               SET doc_status = 'APPROVED', approved_at = now(), approved_by = :approverId,
-                   approval_decided_at = now(), approval_decided_by = :approverId,
-                   approval_note = :note, validity_date = :validityDate, updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+            WITH approved AS (
+                UPDATE sales.quotation
+                   SET doc_status = 'APPROVED', approved_at = now(), approved_by = :approverId,
+                       approval_decided_at = now(), approval_decided_by = :approverId,
+                       approval_note = :note, validity_date = :validityDate, updated_at = now()
+                 WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+                RETURNING quotation_id, approved_by
+            )
+            INSERT INTO sales.quotation_approver_snapshot
+                (quotation_id, approver_id, approver_name_th, approver_name_en,
+                 signature_mime_type, signature_image, snapshotted_at)
+            SELECT a.quotation_id, a.approved_by,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''),
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_en, e.last_name_en)), ''),
+                   es.mime_type, es.image, now()
+              FROM approved a
+              LEFT JOIN hr.employee e            ON e.employee_id  = a.approved_by
+              LEFT JOIN hr.employee_signature es ON es.employee_id = a.approved_by
+            ON CONFLICT (quotation_id) DO UPDATE
+                SET approver_id = EXCLUDED.approver_id, approver_name_th = EXCLUDED.approver_name_th,
+                    approver_name_en = EXCLUDED.approver_name_en,
+                    signature_mime_type = EXCLUDED.signature_mime_type,
+                    signature_image = EXCLUDED.signature_image, snapshotted_at = EXCLUDED.snapshotted_at
             """,
             new MapSqlParameterSource().addValue("id", quotationId).addValue("approverId", approverId)
                 .addValue("note", note).addValue("validityDate", validityDate));
@@ -554,6 +580,22 @@ public class DealQuotationRepository {
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
             """, Map.of("id", quotationId));
+    }
+
+    /** The V175 approver signature snapshot. {@code mimeType}/{@code image} are both null when the
+     * approver had no signature on file at approval — which is still a TAKEN snapshot. */
+    public record ApproverSignatureSnapshot(String mimeType, byte[] image) {}
+
+    /** Present iff the V175 snapshot row exists for this quotation (i.e. it was approved on or
+     * after V175, or backfilled); empty means "no snapshot taken", NOT "no signature". */
+    public Optional<ApproverSignatureSnapshot> findApproverSignatureSnapshot(long quotationId) {
+        List<ApproverSignatureSnapshot> rows = jdbc.query("""
+            SELECT signature_mime_type, signature_image
+              FROM sales.quotation_approver_snapshot WHERE quotation_id = :id
+            """, Map.of("id", quotationId),
+            (rs, rowNum) -> new ApproverSignatureSnapshot(
+                rs.getString("signature_mime_type"), rs.getBytes("signature_image")));
+        return rows.stream().findFirst();
     }
 
     public record RepInfo(String name, String phone) {}
@@ -777,8 +819,16 @@ public class DealQuotationRepository {
                    NULLIF(TRIM(CONCAT_WS(' ', rep.first_name_en, rep.last_name_en)), '') AS sales_rep_name_en,
                    rep.phone AS sales_rep_phone,
                    q.submitted_at, q.approved_by,
-                   NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '') AS approved_by_name,
-                   NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_en, ap.last_name_en)), '') AS approved_by_name_en,
+                   -- V175: an approved quotation prints the approver AS THEY WERE AT APPROVAL. The
+                   -- live hr.employee / hr.employee_signature values are only a defensive fallback
+                   -- for a row with no snapshot (V175's backfill gives every pre-V175 approval
+                   -- one); DRAFT/PENDING rows have approved_by NULL, so both are NULL.
+                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_th
+                        ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_th, ap.last_name_th)), '')
+                   END AS approved_by_name,
+                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.approver_name_en
+                        ELSE NULLIF(TRIM(CONCAT_WS(' ', ap.first_name_en, ap.last_name_en)), '')
+                   END AS approved_by_name_en,
                    q.approved_at, q.approval_note,
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
@@ -786,12 +836,14 @@ public class DealQuotationRepository {
                    q.credit_days, q.validity_days, q.validity_date, q.customer_notes, q.price_mode,
                    q.document_language,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
-                   EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
-                       AS approver_has_signature
+                   CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
+                        ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
+                   END AS approver_has_signature
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
+              LEFT JOIN sales.quotation_approver_snapshot aps ON aps.quotation_id = q.quotation_id
             """;
     }
 
