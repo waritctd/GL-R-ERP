@@ -173,9 +173,10 @@ describe('DealCustomerCard', () => {
 
       fireEvent.keyDown(field, { key: 'ArrowDown' });
       fireEvent.keyDown(field, { key: 'ArrowDown' });
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
       fireEvent.keyDown(field, { key: 'Enter' });
 
-      // Second row (index 1) is Siam Paragon -- picking it replaces the input with a chip.
+      // The first keyboard row is เพิ่มโครงการใหม่; the third row is Siam Paragon.
       await waitFor(() => expect(screen.getByText(projectB.name)).not.toBeNull());
       expect(screen.queryByLabelText(/^โครงการ/)).toBeNull();
     });

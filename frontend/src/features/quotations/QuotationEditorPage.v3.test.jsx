@@ -72,7 +72,11 @@ function draft(overrides = {}) {
     approvalNote: null, quotationDate: '2026-09-11',
     customerName: CUSTOMER.name, customerAddress: null, customerTaxId: CUSTOMER.taxId, customerPhone: CUSTOMER.phone,
     contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล', contactPhone: '086-222-3333', contactEmail: 'nattapong@fashionisland.co.th',
-    projectName: 'โครงการ A', deptCode: null, unitCode: null, offerDate: '2026-09-01', depositPercent: 30,
+    // unitCode non-blank in the SHARED fixture (owner ruling 2026-09-14: designer is NOT
+    // required, but its checklist warning renders from the very first commit -- unlike the
+    // address warning, it does not wait on the ticket/quotation queries to resolve). Per-test
+    // overrides still exercise the blank-designer path where that matters.
+    projectName: 'โครงการ A', deptCode: null, unitCode: 'A001', offerDate: '2026-09-01', depositPercent: 30,
     remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 30, validityDate: null, customerNotes: null,
     priceMode: 'NET', documentLanguage: 'TH', subtotalAmount: 48450, vatAmount: 3391.5, grandTotal: 51841.5,
     currency: 'THB', approverHasSignature: false, items: [TILE_ITEM],

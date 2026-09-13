@@ -24,9 +24,8 @@ function Harness({ initial = '' }) {
   return <DesignerPicker value={code} onSelectCode={setCode} idPrefix="dp" />;
 }
 
-// Owner ask (2026-09-12): picking a ผู้ออกแบบ fills D.Co. with the CODE only; the name is
-// confidential ("เป็นความลับ") and exists in this picker purely to search and to display who a
-// code currently resolves to.
+// Owner ask (2026-09-14): the picker displays designer NAME + CODE in one field, while the
+// consuming quotation state receives the CODE only.
 describe('DesignerPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,10 +45,12 @@ describe('DesignerPicker', () => {
     const option = await screen.findByRole('option', { name: /ABACUS DESIGN/ });
     fireEvent.mouseDown(option);
 
-    // The consuming field is a plain string (unit_code) — asserting it equals the bare code is
-    // the frontend half of "the name must never print": there is nowhere downstream for the name
-    // to leak from once this call carries only the code.
-    await waitFor(() => expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe(''));
+    // The consuming field is a plain string (unit_code) — asserting the closed field shows the
+    // bare CODE (not the name) right after picking, before getByCode's own hint lookup has even
+    // resolved (it rejects by default in this file's beforeEach), is the frontend half of "the
+    // name must never print": there is nowhere downstream for the name to leak from once this
+    // call carries only the code, and the raw-code fallback proves it without waiting on a hint.
+    await waitFor(() => expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe('A001'));
   });
 
   it('search results never render inactive designers is enforced server-side; the client renders whatever the search endpoint returns', async () => {
@@ -63,16 +64,66 @@ describe('DesignerPicker', () => {
     expect(await screen.findByText('ไม่พบผู้ออกแบบ')).not.toBeNull();
   });
 
-  it('shows the resolved name as a hint only, for an existing unit_code — never as the field value', async () => {
+  it('shows the resolved designer name and code together, flagged ยกเลิกแล้ว, for a cancelled unit_code', async () => {
     api.designers.getByCode.mockResolvedValue({ code: 'A060', name: 'ABACUS DESIGN CO.,LTD (เดิม)', active: false });
     render(<Harness initial="A060" />);
 
-    const hint = await screen.findByTestId('dp-hint');
-    expect(hint.textContent).toContain('ABACUS DESIGN CO.,LTD (เดิม)');
-    expect(hint.textContent).toContain('ยกเลิกแล้ว');
-    // The hint is display-only text, not a form control's value — nothing here writes the name
-    // anywhere a save could pick it up.
-    expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe('');
+    await waitFor(() => expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value)
+      .toBe('ABACUS DESIGN CO.,LTD (เดิม) (A060) · ยกเลิกแล้ว'));
+  });
+
+  it('a code the directory does not resolve (unknown, or the lookup failed) shows the raw code rather than going blank', async () => {
+    api.designers.getByCode.mockRejectedValue(new Error('not found'));
+    render(<Harness initial="Z999" />);
+
+    // getByCode already rejects by default (beforeEach) — this just asserts the closed field
+    // never blanks out a code the directory cannot explain.
+    await waitFor(() => expect(api.designers.getByCode).toHaveBeenCalledWith('Z999'));
+    expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe('Z999');
+  });
+
+  it('typing the box down to blank and blurring clears a previously-picked code', async () => {
+    api.designers.getByCode.mockResolvedValue({ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true });
+    render(<Harness initial="A001" />);
+    const input = screen.getByLabelText('ค้นหาผู้ออกแบบ');
+    await waitFor(() => expect(input.value).toBe('ABACUS DESIGN CO.,LTD (A001)'));
+
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(input.value).toBe(''));
+  });
+
+  // Wrong-way-round: neither of these leaves `search` non-blank on its own, so a clear-on-blank
+  // guard with no "did the rep actually type" check would wipe the code in both cases too.
+  it('does NOT clear after an Enter selection followed by blur', async () => {
+    api.designers.search.mockResolvedValue({ items: [{ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true }] });
+    api.designers.getByCode.mockResolvedValue({ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true });
+    render(<Harness />);
+    const input = screen.getByLabelText('ค้นหาผู้ออกแบบ');
+    fireEvent.focus(input);
+    await screen.findByRole('option', { name: /ABACUS DESIGN/ });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input.value).toBe('ABACUS DESIGN CO.,LTD (A001)'));
+
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(input.value).toBe('ABACUS DESIGN CO.,LTD (A001)'));
+  });
+
+  it('does NOT clear after a plain focus followed by blur, with no typing', async () => {
+    api.designers.getByCode.mockResolvedValue({ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true });
+    api.designers.search.mockResolvedValue({ items: [] });
+    render(<Harness initial="A001" />);
+    const input = screen.getByLabelText('ค้นหาผู้ออกแบบ');
+    await waitFor(() => expect(input.value).toBe('ABACUS DESIGN CO.,LTD (A001)'));
+
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(input.value).toBe('ABACUS DESIGN CO.,LTD (A001)'));
   });
 
   it('keyboard: ArrowDown opens and highlights, Enter selects the highlighted designer', async () => {
@@ -93,7 +144,9 @@ describe('DesignerPicker', () => {
     expect(screen.getByRole('option', { name: /DEVELOPMENT DESIGN STUDIO/ }).getAttribute('aria-selected')).toBe('true');
 
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(input.value).toBe(''));
+    // The closed field shows the picked CODE right away (raw-code fallback, getByCode rejects by
+    // default), not the name and not blank.
+    await waitFor(() => expect(input.value).toBe('D002'));
   });
 
   it('Escape closes the dropdown without selecting anything', async () => {
