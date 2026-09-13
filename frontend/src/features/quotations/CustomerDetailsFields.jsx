@@ -1,11 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../locations/ThaiAddressFields.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
+
+const EDIT_FIELDS = ['name', 'taxId', 'phone', 'address'];
 
 function editsFrom(customer) {
   return {
@@ -38,18 +40,35 @@ function editsFrom(customer) {
  */
 export function CustomerDetailsFields({ customer, onChange, showToast, disabled = false }) {
   // Own local state rather than editing `customer` on every keystroke, so a half-typed value never
-  // becomes what a save would snapshot. Re-seeded whenever the underlying record changes —
-  // including from a save's own response, which is what makes the update "verified" rather than
-  // merely optimistic.
+  // becomes what a save would snapshot. Re-seeded per FIELD whenever the underlying record changes
+  // — including from a save's own response, which is what makes the update "verified" rather than
+  // merely optimistic — but only for a field this component itself last seeded and the rep has not
+  // since edited. `customer` is QuotationEditorPage's `summaryCustomer`, which can swap from the
+  // quotation's frozen snapshot to the live customer-record query mid-session; without the
+  // last-seeded check that resync silently overwrote whatever the rep had typed but not yet
+  // blurred.
   const [edits, setEdits] = useState(() => editsFrom(customer));
   const [savingField, setSavingField] = useState(null);
   const queryClient = useQueryClient();
   const [addressEdit, setAddressEdit] = useState(null);
+  // What this component itself last put into each field (the record's value, or a save's own
+  // in-flight/rolled-back value) — the baseline a field is compared against to tell "still what we
+  // seeded" (safe to re-seed) from "the rep typed something else" (leave it alone). `id` tracks
+  // which customer that baseline belongs to.
+  const lastSeededRef = useRef({ id: customer?.id, ...editsFrom(customer) });
+
   async function saveAddress() {
     if (!completeThaiAddress(addressEdit)) return;
     setSavingField('address');
     try {
       const res = await api.customers.update(customer.id, addressEdit);
+      // The structured-address modal is the authoritative source for ที่อยู่ once used — apply its
+      // result to the field directly (and mark it clean) rather than relying on the dirty check
+      // above, since the free-text ที่อยู่ field may have been left dirty from typing before the
+      // modal was ever opened.
+      const nextAddress = res.customer?.address ?? '';
+      setEdits((prev) => ({ ...prev, address: nextAddress }));
+      lastSeededRef.current = { ...lastSeededRef.current, address: nextAddress };
       onChange(res.customer);
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       setAddressEdit(null);
@@ -59,7 +78,26 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   }
 
   useEffect(() => {
-    setEdits({ name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' });
+    // Read fields directly (not via `editsFrom(customer)`) so eslint's exhaustive-deps rule can
+    // verify this against the deps array below field by field, same as the deps themselves.
+    const record = { name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' };
+    // Snapshot the OLD baseline before reassigning the ref below. `setEdits`'s updater runs
+    // asynchronously (whenever React processes the queued update) — by then `lastSeededRef.current`
+    // has already been reassigned to the NEW record a few lines down, so reading `.current` from
+    // inside the updater would compare against the wrong baseline. Closing over this snapshot
+    // instead keeps the comparison correct regardless of when React actually calls the updater.
+    const wasSeeded = lastSeededRef.current;
+    const idChanged = customer?.id !== wasSeeded.id;
+    setEdits((prev) => {
+      if (idChanged) return record; // a different customer — the rep's dirty text belonged to the old one
+      const merged = { ...prev };
+      for (const field of EDIT_FIELDS) {
+        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record
+        // else: the rep has typed something else since it was seeded — keep their text
+      }
+      return merged;
+    });
+    lastSeededRef.current = { id: customer?.id, ...record };
   }, [customer?.id, customer?.name, customer?.taxId, customer?.phone, customer?.address]);
 
   /**
@@ -81,11 +119,22 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     // never left empty on screen.
     if (field === 'name' && next === '') {
       setEdits((prev) => ({ ...prev, name: previous }));
+      lastSeededRef.current = { ...lastSeededRef.current, name: previous };
       showToast?.('error', 'กรุณาระบุชื่อลูกค้า');
       return;
     }
     const restore = customer;
     setSavingField(field);
+    // Mark this field clean — both the ref AND the displayed text — at `next` (the value being
+    // sent) BEFORE the optimistic onChange below. `next` is `edits[field]` trimmed, so a rep who
+    // left whitespace at the ends needs the display normalised to match too, or it would never
+    // again equal what the ref/record hold and would read as "still dirty" forever. Marking both
+    // like this is what lets the record-resync effect above — which compares `edits[field]`
+    // against this ref to tell a rep's own dirty edit from a value this component put there
+    // itself — treat the optimistic update, and then the server's own response (even normalised
+    // differently, e.g. a reformatted taxId), as safe to apply.
+    lastSeededRef.current = { ...lastSeededRef.current, [field]: next };
+    setEdits((prev) => ({ ...prev, [field]: next }));
     onChange({ ...customer, [field]: next || null });
     try {
       const res = await api.customers.update(customer.id, { [field]: next });
@@ -95,6 +144,7 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     } catch (error) {
       onChange(restore);
       setEdits((prev) => ({ ...prev, [field]: previous }));
+      lastSeededRef.current = { ...lastSeededRef.current, [field]: previous };
       showToast?.('error', error.message || 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
     } finally {
       setSavingField(null);
