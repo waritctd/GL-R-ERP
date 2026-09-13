@@ -462,7 +462,7 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
 
   test.afterAll(async () => { await disposeSessions(sessions); });
 
-  test('a sales rep fills the missing ที่อยู่ from the editor, sees the ราคาพิเศษ net, and English hides ราคาพิเศษ', async ({ page }) => {
+  test('a sales rep fills the missing ที่อยู่ from the editor, sees the ราคาพิเศษ net, and English keeps the per-sqm mode as USD/ตร.ม. with every price cleared', async ({ page }) => {
     const { loginAs } = await import('./helpers/auth.js');
     await loginAs(page, 'sales');
     await page.goto(`/quotations/${quotationId}`);
@@ -495,13 +495,24 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await page.locator('#special-0').fill('1800');
     await expect(page.getByTestId('special-net-0')).toHaveText('= สุทธิ ฿1,210.25/แผ่น (ก่อน VAT)');
 
-    // English: ราคาพิเศษ is not offered, and the move off it is announced.
+    // English (owner decisions 2026-09-13): the per-sqm mode is KEPT — on English it is the USD/ตร.ม.
+    // price, so the Thai-labelled button is gone and its English label is the pressed one — and
+    // "Clear all prices on switch": the baht figure is never carried into USD as the same number.
     await page.getByRole('group', { name: 'ภาษาเอกสาร' }).getByRole('button', { name: /English/ }).click();
     await expect(modes.getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).toHaveCount(0);
-    await expect(modes.getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByText(/เอกสารภาษาอังกฤษใช้ "ราคาพิเศษ บาท\/ตร\.ม\." ไม่ได้/)).toBeVisible();
-    // The net is not carried across the currency change: the row now blocks until it is stated.
-    await expect(page.getByTestId('checklist-blocking')).toContainText('ขาด ราคาสุทธิ/แผ่น');
+    await expect(modes.getByRole('button', { name: 'ราคา USD/ตร.ม.' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByText('เปลี่ยนภาษาเอกสาร: ล้างราคาทั้งหมดแล้ว — กรุณากรอกราคาใหม่เป็น USD (ไม่มี VAT)')).toBeVisible();
+    await expect(page.locator('#special-0')).toHaveValue('');
+    await expect.poll(() => page.$$eval('input', (els) => els.map((el) => el.value))).not.toContain('1800');
+    await expect(page.locator('body')).not.toContainText('1,210.25');
+    // Nothing is previewed or saveable until the USD/ตร.ม. and the ตร.ม./กล่อง are both stated.
+    await expect(page.getByTestId('checklist-blocking')).toContainText('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeDisabled();
+
+    // Re-entering both clears the block — against the REAL service's English per-sqm preview.
+    await page.locator('#special-0').fill('64');
+    await page.locator('#sqm-box-0').fill('0.6');
+    await expect(page.getByTestId('checklist-blocking')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
   });
 });
