@@ -804,12 +804,19 @@ describe('buildQuotationChecklist', () => {
       ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'designer']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
   });
 
   it('is empty for a complete quotation', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
+  });
+
+  it('WARNS (does not block) when a designer has not been selected, and passes when the saved code exists', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '' } });
+    expect(blocking(entries)).toEqual([]);
+    expect(entries).toEqual([{ check: 'designer', message: 'ยังไม่ได้เลือกผู้ออกแบบ', targetId: 'quotation-designer-picker', blocking: false }]);
+    expect(meta.buildQuotationChecklist({ ...complete, terms: { unitCode: 'A001' } })).toEqual([]);
   });
 
   it('BLOCKS on a missing ผู้สั่งซื้อ, with the backend\'s own wording, and targets the picker', () => {
