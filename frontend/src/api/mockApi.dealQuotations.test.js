@@ -420,6 +420,39 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(revision3.parentQuotationId).toBe(revision2.id);
   });
 
+  /** Opus review nit (2026-09-15): mintDealQuotationRevision used to compute
+   * `parent.revisionNo + 1` directly -- only correct while `parent` is the HIGHEST revision
+   * minted off this base. Once the middle revision is CANCELLED and the original resubmitted a
+   * SECOND time, that formula recomputes the SAME "-2" the cancelled row already used, instead
+   * of the "-3" DealQuotationRepository#nextRevisionNo's real MAX-based query would mint. */
+  it('submit after rejection: a cancelled sibling revision still counts toward the next number', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const base = created.quotation.number.replace(/-\d+$/, '');
+    const originalId = created.quotation.id;
+
+    await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(originalId, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision2 } = await api.dealQuotations.submit(originalId);
+    expect(revision2.number).toBe(`${base}-2`);
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
+
+    // revision2 is DRAFT again -- cancel it instead of resubmitting it, freeing the original
+    // (originalId) to be resubmitted a SECOND time (hasOpenRevision no longer sees an open child).
+    await api.auth.login(salesUser);
+    await api.dealQuotations.cancel(revision2.id, {});
+
+    // Must not collide with revision2's already-used -2.
+    const { quotation: revision3 } = await api.dealQuotations.submit(originalId);
+    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.number).not.toBe(revision2.number);
+  });
+
   it('needsRework=true also selects a DRAFT revision in progress (the owner\'s second sense of แก้)', async () => {
     await api.auth.login(salesUser);
     const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });

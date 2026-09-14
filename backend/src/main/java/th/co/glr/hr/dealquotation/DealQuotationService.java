@@ -560,8 +560,31 @@ public class DealQuotationService {
         // The customer's last approved document stays valid until a REVISION actually reaches
         // APPROVED — see the class Javadoc's status-machine note. Only fires for a revision (a
         // first-ever quotation has no parent).
-        if (approved.parentQuotationId() != null) {
-            quotations.supersede(approved.parentQuotationId());
+        //
+        // Opus review (2026-09-15): walks the WHOLE ancestry chain, not just the immediate
+        // parent. The single-hop version only ever superseded approved.parentQuotationId()
+        // itself, so a SECOND (or later) reject/resubmit cycle left every ancestor ABOVE the
+        // immediate parent stranded in DRAFT forever once THIS approval landed -- proven by a
+        // real-DB probe: reject A -> resubmit mints B -> reject B -> resubmit mints C -> approve
+        // C left A in DRAFT permanently (parent_quotation_id chains straight through B, which
+        // this approval DOES supersede, but nothing ever walked past B to A). Two consequences
+        // that made this a required fix, not a nit: (1) A sits in the rep's "ฉบับแก้" bucket
+        // forever on a deal whose quotation is already approved -- NEEDS_REWORK_PREDICATE keeps
+        // matching it (still DRAFT, approval_note still set) and hasOpenRevision stops blocking
+        // it the moment B leaves DRAFT/PENDING_APPROVAL, so nothing ever clears it; (2) the rep
+        // can then resubmit A, and approving THAT mints a second, independently-APPROVED
+        // quotation on the same ticket alongside C, with neither superseding the other --
+        // contradicting the owner's own constraint that a rejected row's eventual fate is
+        // SUPERSEDED. Each hop is its own compare-and-set (supersede()'s WHERE already guards
+        // against a non-APPROVED/DRAFT row), so walking past an already-terminal ancestor
+        // (already SUPERSEDED from a sibling branch, or CANCELLED) is a safe no-op -- and the
+        // loop terminates at the first-ever quotation in the chain, whose parentQuotationId is
+        // null by construction.
+        Long ancestorId = approved.parentQuotationId();
+        while (ancestorId != null) {
+            DealQuotationDto ancestor = requireQuotation(ancestorId);
+            quotations.supersede(ancestorId);
+            ancestorId = ancestor.parentQuotationId();
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);

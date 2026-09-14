@@ -523,6 +523,53 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revision3.parentQuotationId()).isEqualTo(rejected2.id());
     }
 
+    /** Opus review (2026-09-15), REQUIRED: {@code approve}'s supersede used to walk only ONE hop
+     * up {@code parent_quotation_id}, so a SECOND (or later) reject/resubmit cycle left every
+     * ancestor ABOVE the immediate parent stranded in DRAFT forever the moment the FINAL revision
+     * was approved -- proven against real Postgres by a since-removed probe. Continues the exact
+     * chain {@link #submit_afterRejection_numberingChainsThroughMultipleRejectCycles} builds
+     * (created -> reject -> revision2 -> reject -> revision3) one step further: approves
+     * revision3 and asserts EVERY ancestor in the chain is SUPERSEDED, not just revision2 (the
+     * immediate parent) -- and that the whole chain has therefore left the "ฉบับแก้" bucket,
+     * which is exactly the symptom ("A sits in the rep's ฉบับแก้ bucket forever on a deal whose
+     * quotation is already approved") the missing walk produced. */
+    @Test
+    void approve_supersedesEveryAncestorInAMultiCycleRejectChain_notJustTheImmediateParent() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        long originalId = created.id();
+
+        DealQuotationDto submitted1 = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected1 = quotationService.reject(submitted1.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revision2 = quotationService.submit(rejected1.id(), salesActor);
+        long revision2Id = revision2.id();
+
+        DealQuotationDto rejected2 = quotationService.reject(revision2.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revision3 = quotationService.submit(rejected2.id(), salesActor);
+
+        // Before approval: both ancestors still sit in ฉบับแก้ (needsRework), same as ever.
+        assertThat(quotationService.search(null, true, salesActor)).extracting(DealQuotationDto::id)
+            .contains(originalId, revision2Id);
+
+        quotationService.approve(revision3.id(), new ApproveRequest(null), salesManagerActor);
+
+        // The IMMEDIATE parent (revision2) -- already covered by
+        // theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved, re-asserted here as
+        // part of the SAME chain this test is actually about.
+        assertThat(quotationService.get(revision2Id, salesActor).docStatus())
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+        // The GRANDPARENT (the original) -- THIS is what the single-hop version left stranded.
+        assertThat(quotationService.get(originalId, salesActor).docStatus())
+            .as("the original must ALSO become SUPERSEDED, not stay DRAFT forever")
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+
+        // Neither ancestor is reachable through ฉบับแก้ any more -- the whole chain retired.
+        assertThat(quotationService.search(null, true, salesActor)).extracting(DealQuotationDto::id)
+            .doesNotContain(originalId, revision2Id);
+    }
+
     /** LOW: reject() used to skip the existence check and go straight to the compare-and-set
      * UPDATE, so a missing id and a wrong-status id were indistinguishable (both 409) — unlike
      * approve/submit/cancel/update, which all 404 first. */

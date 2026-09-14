@@ -766,11 +766,19 @@ public class DealQuotationRepository {
     }
 
     /**
-     * The "แก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a reason
-     * ({@code approval_note}, cleared again on the next submit) OR a revision still in progress
-     * ({@code parent_quotation_id}). ONE definition, shared by {@link #search}'s
-     * {@code needsRework} filter and {@link #counts} so the tab's count can never disagree with
-     * the rows the tab lists.
+     * The "ฉบับแก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a
+     * reason ({@code approval_note}) OR a revision still in progress ({@code parent_quotation_id}).
+     * ONE definition, shared by {@link #search}'s {@code needsRework} filter and {@link #counts}
+     * so the tab's count can never disagree with the rows the tab lists.
+     *
+     * <p>Opus review (2026-09-15): this used to say {@code approval_note} is "cleared again on
+     * the next submit" — true before that same day's owner clarification, false after it.
+     * {@code DealQuotationService#submit}'s resubmit-after-rejection path now mints a REVISION of
+     * a rejected row instead of resubmitting it, and deliberately leaves the rejected row's own
+     * {@code approval_note} untouched — a permanent record of why that number was retired — so a
+     * rejected row stays in this bucket until {@code approve}'s ancestor walk finally supersedes
+     * it (see that method's own Javadoc for why a single-hop supersede left multi-cycle chains
+     * stranded here forever).
      */
     private static final String NEEDS_REWORK_PREDICATE =
         "(q.doc_status = 'DRAFT' AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))";

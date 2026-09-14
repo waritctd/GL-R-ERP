@@ -4878,10 +4878,27 @@ function hasOpenDealQuotationRevision(parentId) {
 // as the real DealQuotationService#insertRevisionCopyOf. Returns the new row WITHOUT pushing it
 // -- the caller decides when (submit()'s branch pushes then immediately submits it; createRevision
 // just pushes it as a DRAFT).
+// Opus review nit (2026-09-15): mirrors DealQuotationRepository#nextRevisionNo's own Javadoc --
+// "NOT source.revisionNo() + 1". mintDealQuotationRevision used to compute
+// `parent.revisionNo + 1` directly, which is only correct while `parent` is always the HIGHEST
+// revision minted off this base -- true for an ordinary createRevision() chain, but NOT once a
+// row can be resubmitted-as-revision, cancelled, and its OWN parent resubmitted again: reject A
+// -> resubmit mints A's child B (revisionNo 2) -> reject B -> cancel B -> resubmit A AGAIN would
+// recompute `A.revisionNo + 1` = 2 a second time, colliding with B's already-used "-2" number,
+// where the real backend's MAX-based query correctly mints "-3". Scans every row sharing this
+// base number REGARDLESS of status (matching the real query's lack of a status filter) so a
+// cancelled sibling's number still counts as "used".
+function nextMockDealQuotationRevisionNo(ticketId, base) {
+  const max = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (q.number === base || q.number.startsWith(`${base}-`)))
+    .reduce((m, q) => Math.max(m, q.revisionNo ?? 0), 0);
+  return max + 1;
+}
+
 function mintDealQuotationRevision(parent, user) {
   const now = new Date().toISOString();
-  const revisionNo = parent.revisionNo + 1;
   const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
+  const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
   return {
     ...structuredClone(parent),
     id: mockDealQuotationSeq++,
