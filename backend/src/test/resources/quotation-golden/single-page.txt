@@ -69,7 +69,7 @@ row 4 h=405
   c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
   c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 5 h=405
-  c1 STRING style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
+  c1 STRING style=161 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
   c2 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c3 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c4 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -97,7 +97,7 @@ row 6 h=405
   c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
 row 7 h=405
   c0 BLANK style=78 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=161 b=NONE/NONE/THIN/NONE font=15 wrap=false al=CENTER : "Project  : Showroom V2 Project"
+  c1 STRING style=162 b=NONE/NONE/THIN/NONE font=15 wrap=false al=CENTER : "Project  : Showroom V2 Project"
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=79 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=84 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -123,7 +123,7 @@ row 8 h=405
   c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
 row 9 h=465
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=169 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องน้ำชั้น 1"
+  c1 STRING style=170 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องน้ำชั้น 1"
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -187,7 +187,7 @@ row 13 h=450
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 14 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=169 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องครัว"
+  c1 STRING style=170 b=NONE/NONE/THIN/NONE font=40 wrap=false al=LEFT : "ห้องครัว"
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -295,13 +295,13 @@ row 22 h=450
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 23 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=162 b=THIN/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "หมายเหตุ"
-  c2 BLANK style=163 b=THIN/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
-  c3 BLANK style=164 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c4 BLANK style=165 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
-  c5 BLANK style=166 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c6 BLANK style=167 b=THIN/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
-  c7 BLANK style=168 b=THIN/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c1 STRING style=163 b=THIN/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "หมายเหตุ"
+  c2 BLANK style=164 b=THIN/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=165 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=166 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=167 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=168 b=THIN/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=169 b=THIN/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
   c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
   c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -442,7 +442,7 @@ row 35 h=450
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 36 h=450
   c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
-  c2 STRING style=170 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น"
+  c2 STRING style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น"
   c3 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c4 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c5 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -464,7 +464,7 @@ row 37 h=405
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 38 h=405
-  c0 STRING style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "ผู้พิมพ์_________________________พนักงานขาย____________________ผู้จัดการฝ่ายขาย_________________ผู้สั่งซื้อ_________________________"
+  c0 STRING style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "ผู้พิมพ์_________________________พนักงานขาย____________________ผู้จัดการฝ่ายขาย_________________ผู้สั่งซื้อ_________________________"
   c1 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -477,7 +477,7 @@ row 38 h=405
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=143 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 39 h=405
-  c0 STRING style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
+  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -490,7 +490,7 @@ row 39 h=405
   c10 BLANK style=121 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 40 h=405
-  c0 STRING style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               วันที่ 10/9/2569                              วันที่ 10/9/2569                              วันที่ 11/9/2569                       วันที่........./........./.........        "
+  c0 STRING style=174 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               วันที่ 10/9/2569                              วันที่ 10/9/2569                              วันที่ 11/9/2569                       วันที่........./........./.........        "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
