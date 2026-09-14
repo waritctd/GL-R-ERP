@@ -496,7 +496,13 @@ export function sqmPerPieceFromSizeCm(sizeText) {
 // ราคาพิเศษ, DIRECT_NET needs the net per piece and treats the list price as optional (a blank one
 // is sent as the net itself, which prints "Net" — see itemInputFromRow). A PLAIN row is validated
 // by validatePlainItem instead; an ADJUSTMENT row never reaches here (it lives in its own list).
-export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH') {
+//
+// `requireLeadTime` (owner feedback #7, 2026-09-14) is OFF by default deliberately: a draft may
+// still be saved with no lead time (DealQuotationService#submit is the only backend gate), so the
+// checklist that blocks บันทึกร่าง/ส่งขออนุมัติ alike (buildQuotationChecklist's `itemErrorsByRow`)
+// must keep calling this with the default. Only a SUBMIT-specific caller passes `true` — see
+// QuotationEditorPage's own `submitItemErrorsByRow`.
+export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH', { requireLeadTime = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price, and the quantity
   // needs both box figures — DealQuotationService#requireItemComplete's perSqm branch.
@@ -533,6 +539,11 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   } else if (!(Number(item?.areaSqm) > 0)) {
     errors.areaSqm = 'กรุณาระบุพื้นที่ (ตร.ม.)';
   }
+  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+  // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
+  if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
+    errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
+  }
   return errors;
 }
 
@@ -543,7 +554,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
-  'adjustmentPct', 'adjustmentAmount',
+  'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
@@ -553,6 +564,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',
   specialPriceSqm: 'ราคาต่อ ตร.ม.', directNetPrice: 'ราคาสุทธิ/แผ่น',
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
+  // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
+  leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -968,6 +981,8 @@ const ITEM_FIELD_ID_PREFIX = {
     model: 'model', color: 'color', texture: 'texture', sizeText: 'size', thicknessMm: 'thickness',
     sqmPerPiece: 'sqm', piecesPerBox: 'ppb', unitPrice: 'price', specialPriceSqm: 'special',
     directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
+    // Matches QuotationItemRow's `lead-${index}` input id.
+    leadTimeMinDays: 'lead',
   },
   PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },

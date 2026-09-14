@@ -425,6 +425,7 @@ public class DealQuotationService {
         for (DealQuotationItemDto item : quotation.items()) {
             requireStoredItemComplete(item, perSqm);
         }
+        requireEveryTileItemHasALeadTime(quotation.items());
         int rows = quotations.submit(id, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงส่งขออนุมัติไม่ได้");
@@ -1510,6 +1511,31 @@ public class DealQuotationService {
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + rowNumber + ": ขาด " + String.join(", ", missing));
+        }
+    }
+
+    /**
+     * Owner feedback #7 (2026-09-14): a deliberate sales-workflow rule change, submit-only. Every
+     * TILE row ({@code lineType} null or {@link WastageCalculator#LINE_TYPE_TILE}) must carry both
+     * {@code leadTimeMinDays} and {@code leadTimeMaxDays} before the document can be submitted for
+     * approval — the printed remark 3 used to fall back to a China/Thailand default that was wrong
+     * for most real shipments; that default is now a visible blank instead (see
+     * {@code DealQuotationRenderAdapter#LINE3_FALLBACK}), so a rep must actually enter a lead time
+     * rather than let the document print a plausible-looking but false one. PLAIN and ADJUSTMENT
+     * rows are exempt — neither has a lead-time concept (freight/consumables/a ส่วนลดพิเศษ line
+     * cannot "arrive"). A DRAFT may still be saved with no lead times; this gate is submit only.
+     */
+    private void requireEveryTileItemHasALeadTime(List<DealQuotationItemDto> items) {
+        List<String> missingSeqs = new ArrayList<>();
+        for (DealQuotationItemDto item : items) {
+            boolean tile = item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+            if (tile && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
+                missingSeqs.add(String.valueOf(item.seq()));
+            }
+        }
+        if (!missingSeqs.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ " + String.join(", ", missingSeqs));
         }
     }
 

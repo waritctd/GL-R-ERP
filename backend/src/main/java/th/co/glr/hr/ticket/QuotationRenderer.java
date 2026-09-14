@@ -834,8 +834,12 @@ public class QuotationRenderer {
     private List<String> wrapDescriptionLines(List<String> lines, int budget) {
         List<String> out = new ArrayList<>();
         for (String line : lines) {
-            if (line != null && line.length() > budget) {
-                out.addAll(wrapToWidth(line, budget));
+            // Owner feedback #3 (2026-09-14): measure by VISIBLE length, not String.length() — see
+            // #visibleLength's Javadoc for why 62 still tripped on a line with only 59 real visible
+            // characters. This is the ITEM path only; #writeRemarks' legacy 3-line path keeps
+            // calling #wrapToWidth directly with String.length(), untouched.
+            if (line != null && visibleLength(line) > budget) {
+                out.addAll(wrapItemLineToWidth(line, budget));
             } else {
                 out.add(line);
             }
@@ -1301,6 +1305,76 @@ public class QuotationRenderer {
         return lines.isEmpty() ? List.of(text) : lines;
     }
 
+    // A boundary between two parenthesised groups: a ")" followed by whitespace followed by "(" —
+    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
+    // Owner feedback #3 (2026-09-14): {@link #wrapItemLineToWidth} prefers to break HERE, so a
+    // group like "(บรรจุ N แผ่น/กล่อง)" moves to the next physical row whole rather than splitting
+    // its own words across two rows.
+    private static final java.util.regex.Pattern PAREN_GROUP_BOUNDARY =
+        java.util.regex.Pattern.compile("(?<=\\))\\s+(?=\\()");
+
+    /**
+     * Owner feedback #3 (2026-09-14): wraps ONE over-budget item description/calculation line for
+     * {@link #wrapDescriptionLines} — the ITEM path only. {@link #wrapToWidth} (the legacy remark
+     * continuation-row path, called directly from {@link #writeRemarks}) is UNTOUCHED and stays
+     * measured by {@code String.length()}; this is deliberately its own method rather than a
+     * shared one with a width-function parameter threaded through, so the legacy path can never
+     * accidentally pick up the visible-width measurement.
+     *
+     * <p>Prefers breaking at a {@link #PAREN_GROUP_BOUNDARY} — packing whole parenthesised groups
+     * onto each physical line — so a group like "(บรรจุ 4 แผ่น/กล่อง)" moves to the next row intact
+     * instead of splitting across rows the way the old character-length wrap did (the bug this
+     * fixes: "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
+     * a plain greedy word wrap ({@link #wrapGreedyByVisibleWidth}) only for a single group that by
+     * itself is longer than the budget, or for a line with no parenthesised groups at all.
+     */
+    List<String> wrapItemLineToWidth(String line, int maxVisibleChars) {
+        String[] groups = PAREN_GROUP_BOUNDARY.split(line);
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String group : groups) {
+            String candidate = current.length() == 0 ? group : current + " " + group;
+            if (visibleLength(candidate) <= maxVisibleChars) {
+                current = new StringBuilder(candidate);
+                continue;
+            }
+            if (current.length() > 0) {
+                result.add(current.toString());
+                current = new StringBuilder();
+            }
+            if (visibleLength(group) <= maxVisibleChars) {
+                current = new StringBuilder(group);
+            } else {
+                result.addAll(wrapGreedyByVisibleWidth(group, maxVisibleChars));
+            }
+        }
+        if (current.length() > 0) {
+            result.add(current.toString());
+        }
+        return result.isEmpty() ? List.of(line) : result;
+    }
+
+    /** The item-path twin of {@link #wrapToWidth} — same plain greedy word-wrap at whitespace,
+     * never splitting a single word, but measured by {@link #visibleLength} rather than
+     * {@code String.length()}. {@link #wrapToWidth} itself stays untouched (byte-identical) for
+     * the legacy remark continuation-row path. */
+    List<String> wrapGreedyByVisibleWidth(String text, int maxVisibleChars) {
+        List<String> lines = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String word : text.trim().split("\\s+")) {
+            if (word.isEmpty()) continue;
+            String candidate = current.length() == 0 ? word : current + " " + word;
+            if (visibleLength(candidate) > maxVisibleChars && current.length() > 0) {
+                lines.add(current.toString());
+                current = new StringBuilder(word);
+            } else {
+                current = new StringBuilder(candidate);
+            }
+        }
+        if (current.length() > 0) lines.add(current.toString());
+        return lines.isEmpty() ? List.of(text) : lines;
+    }
+
     // layout-spec §5, REBUILT: columns cannot be split into even quarters (B alone is ~55% of the
     // page), so S1/S2/S3 are each laid out as ONE merged A:I cell — positioned by TEXT, the way the
     // template's OWN original row 44 did it ("ผู้พิมพ์____ พนักงานขาย____ ผู้จัดการฝ่ายขาย____
@@ -1578,8 +1652,9 @@ public class QuotationRenderer {
     /** Counts Thai-combining-mark-aware "character units" (every code point counts as 1 EXCEPT a
      * {@link #THAI_COMBINING_MARK}, which stacks on the previous base character and costs 0) — the
      * layout-spec §5 fallback estimate, used only when {@link #textWidthPx} can't get real AWT font
-     * metrics. */
-    private int textUnits(String s) {
+     * metrics. Static: uses no instance state, and owner feedback #3 (2026-09-14, see
+     * {@link #visibleLength}) reuses it from the item-wrap path below. */
+    private static int textUnits(String s) {
         if (s == null || s.isEmpty()) return 0;
         int units = 0;
         int i = 0;
@@ -1589,6 +1664,27 @@ public class QuotationRenderer {
             if (!THAI_COMBINING_MARK.matcher(new String(Character.toChars(cp))).matches()) units++;
         }
         return units;
+    }
+
+    /**
+     * Owner feedback #3 (2026-09-14): the number of code points in {@code s} that occupy their own
+     * glyph slot — {@code s.codePointCount()} EXCLUDING a {@link #THAI_COMBINING_MARK} (tone marks
+     * and vowel signs U+0E31, U+0E34-U+0E3A, U+0E47-U+0E4E, which stack on the preceding base
+     * character and have zero advance width). {@code String.length()} overcounts a Thai line by
+     * roughly its combining-mark count, which is why {@link #REMARK_LINE_CHAR_BUDGET} = 62 still
+     * wrapped a calculation line measured at 66 {@code length()} but only 59 VISIBLE characters —
+     * on the real PDF that line's first wrapped segment used ~359px of column B's ~527px text
+     * width, i.e. roughly 73 visible characters actually fit and 62 is conservative.
+     *
+     * <p>An alias for {@link #textUnits} — same computation, same Thai ranges — kept as its own
+     * package-private static method (with its own unit test) because it now has a SECOND caller
+     * with a different reason to exist: {@link #wrapDescriptionLines}'s item path, which needs the
+     * visible width rather than {@code String.length()} for its wrap DECISION and inside its own
+     * wrap. {@link #wrapToWidth} (the legacy remark continuation-row path) is untouched and keeps
+     * measuring with {@code String.length()} — see that method's own Javadoc.
+     */
+    static int visibleLength(String s) {
+        return textUnits(s);
     }
 
     /** S1's left/underscore padding: appends {@code label} + enough '_' (at {@code underscorePx}

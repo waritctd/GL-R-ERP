@@ -707,6 +707,29 @@ export function QuotationEditorPage({ user, showToast }) {
   );
   const adjustmentErrorsByRow = useMemo(() => adjustments.map((a) => validateAdjustment(a)), [adjustments]);
 
+  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+  // — SUBMIT only, deliberately a SEPARATE array from `itemErrorsByRow` above rather than the same
+  // one with `requireLeadTime` always on: `itemErrorsByRow` feeds `buildQuotationChecklist`, whose
+  // blocking set gates บันทึกร่าง too, and a draft must still save with no lead time (only submit
+  // is refused server-side). `index` here is the printed "รายการที่" number the same way
+  // buildUpsertPayload sends `items` — tiles in document order, adjustments always last.
+  const submitItemErrorsByRow = useMemo(
+    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode, docSettings.documentLanguage,
+      { requireLeadTime: true })),
+    [items, docSettings.priceMode, docSettings.documentLanguage],
+  );
+  const missingLeadTimeSeqs = useMemo(
+    () => submitItemErrorsByRow
+      .map((errors, index) => (errors.leadTimeMinDays ? index + 1 : null))
+      .filter((seq) => seq != null),
+    [submitItemErrorsByRow],
+  );
+  const hasMissingLeadTimes = missingLeadTimeSeqs.length > 0;
+  // The EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses, so a rep
+  // sees the same sentence whether the client or the server catches it.
+  const leadTimeBlockMessage = hasMissingLeadTimes
+    ? `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}` : null;
+
   // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
   // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
   // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
@@ -1250,8 +1273,8 @@ export function QuotationEditorPage({ user, showToast }) {
                 // handleInlineCreate — the same three `saving` already covers), so a rep cannot
                 // open the confirm dialog and submit while an autosave the dialog hasn't had a
                 // chance to suppress yet is still on the wire.
-                disabled={hasValidationErrors || saving}
-                title={hasValidationErrors ? validationErrors.join(' ') : undefined}
+                disabled={hasValidationErrors || hasMissingLeadTimes || saving}
+                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? undefined)}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
                 ส่งขออนุมัติ
@@ -1539,7 +1562,11 @@ export function QuotationEditorPage({ user, showToast }) {
                               groupId={group.groupId}
                               locationGroups={groups}
                               recentPicks={recentPicks}
-                              errors={touchedRowIds.has(item.clientId) ? itemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
+                              // #7: `submitItemErrorsByRow` is `itemErrorsByRow` PLUS the lead-time
+                              // check — a strict superset — so the row's own inline hints highlight
+                              // a missing lead time too, without that check feeding the (blocking)
+                              // checklist itemErrorsByRow otherwise drives.
+                              errors={touchedRowIds.has(item.clientId) ? submitItemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
                               onChange={(patch) => updateItem(item.clientId, patch)}
                               onRemove={() => removeItem(item.clientId)}
                               onMove={(targetGroupId) => moveItemToGroup(item.clientId, targetGroupId)}
@@ -1821,7 +1848,11 @@ export function QuotationEditorPage({ user, showToast }) {
               <Button
                 variant="primary"
                 loading={submitMutation.isPending}
-                disabled={saving}
+                // #7: defensive — the opening button above is already disabled while
+                // `hasMissingLeadTimes`, so this only matters if an edit made mid-dialog removed a
+                // lead time the rep had entered.
+                disabled={saving || hasMissingLeadTimes}
+                title={leadTimeBlockMessage ?? undefined}
                 onClick={() => submitMutation.mutate()}
               >
                 ส่งขออนุมัติ
@@ -1830,6 +1861,14 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          {/* #7: unlike checklistWarnings below, this ONE genuinely blocks — the opening button is
+              disabled while it is true, so this only shows if the dialog was already open when a
+              concurrent edit removed a lead time. */}
+          {leadTimeBlockMessage ? (
+            <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
+              {leadTimeBlockMessage}
+            </p>
+          ) : null}
           {/* The optional gaps, restated at the moment of sending — never a blocker (see
               QUOTATION_BLOCKING_CHECKS), but the last chance to notice the document will print
               without them. */}

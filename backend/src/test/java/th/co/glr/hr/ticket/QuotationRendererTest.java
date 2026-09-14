@@ -232,6 +232,85 @@ class QuotationRendererTest {
         }
     }
 
+    // ── item #3 (2026-09-14): visible-length measurement and item-path wrap ────────────────
+
+    @Test
+    void visibleLength_excludesThaiCombiningMarksButCountsEveryOtherCodePoint() {
+        // Plain ASCII: every char counts, exactly like String.length().
+        assertThat(QuotationRenderer.visibleLength("hello")).isEqualTo(5);
+        // The production line itself: String.length() 66, visible 59 (measured on the real PDF —
+        // see #visibleLength's own Javadoc).
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        assertThat(calcLine.length()).isEqualTo(66);
+        assertThat(QuotationRenderer.visibleLength(calcLine)).isEqualTo(59);
+    }
+
+    @Test
+    void visibleLength_ofNullOrEmptyIsZero() {
+        assertThat(QuotationRenderer.visibleLength(null)).isEqualTo(0);
+        assertThat(QuotationRenderer.visibleLength("")).isEqualTo(0);
+    }
+
+    /** The exact bug: at the OLD String.length() budget of 62, this 66-length/59-visible line used
+     * to wrap into "(บรรจุ 4" / "แผ่น/กล่อง)". At visible length 59 <= 62 it must not wrap at all. */
+    @Test
+    void wrapItemLineToWidth_aLineUnderTheVisibleBudget_isNotSplit() {
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        assertThat(renderer.wrapItemLineToWidth(calcLine, 62)).containsExactly(calcLine);
+    }
+
+    /** Genuinely over budget: prefers the ")"/"(" boundary between parenthesised groups, so the
+     * second group moves WHOLE to the next line rather than splitting its own words. The budget is
+     * DERIVED from the first group's own measured width (never a guessed magic number) — just
+     * enough for group 1 alone, not for the whole line. */
+    @Test
+    void wrapItemLineToWidth_overBudget_breaksAtParentheticalGroupBoundary() {
+        String group1 = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น)";
+        String group2 = "(บรรจุ 4 แผ่น/กล่อง)";
+        String line = group1 + " " + group2;
+        int budget = QuotationRenderer.visibleLength(group1) + 5;
+        assertThat(QuotationRenderer.visibleLength(line)).isGreaterThan(budget);
+
+        List<String> wrapped = renderer.wrapItemLineToWidth(line, budget);
+        assertThat(wrapped).containsExactly(group1, group2);
+        // Every wrapped line individually fits the budget, and re-joining them (with the single
+        // space the boundary regex consumed) reproduces the original text losslessly.
+        wrapped.forEach(l -> assertThat(QuotationRenderer.visibleLength(l)).isLessThanOrEqualTo(budget));
+        assertThat(String.join(" ", wrapped)).isEqualTo(line);
+    }
+
+    /** A single group longer than the budget by itself has no boundary to break at, so it falls
+     * back to the plain greedy word wrap -- never splitting a single word, and every word here is
+     * individually well under the budget so the wrap actually has somewhere to break. */
+    @Test
+    void wrapItemLineToWidth_aSingleOverBudgetGroup_fallsBackToGreedyWordWrap() {
+        String line = "(Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel)";
+        List<String> wrapped = renderer.wrapItemLineToWidth(line, 15);
+        assertThat(wrapped.size()).isGreaterThan(1);
+        wrapped.forEach(l -> assertThat(QuotationRenderer.visibleLength(l)).isLessThanOrEqualTo(15)
+            .withFailMessage("wrapped line too wide: %s", l));
+        assertThat(String.join(" ", wrapped)).isEqualTo(line);
+    }
+
+    /** A line with no parenthesised groups at all (plain prose) has no boundary to prefer, so it
+     * falls straight to the greedy word wrap too. */
+    @Test
+    void wrapItemLineToWidth_aLineWithNoParenGroups_fallsBackToGreedyWordWrap() {
+        String line = "Super Extra Premium Glazed Porcelain Large Format Tile with Anti-Slip Coating";
+        List<String> wrapped = renderer.wrapItemLineToWidth(line, 30);
+        assertThat(wrapped.size()).isGreaterThan(1);
+        wrapped.forEach(l -> assertThat(QuotationRenderer.visibleLength(l)).isLessThanOrEqualTo(30));
+        assertThat(String.join(" ", wrapped)).isEqualTo(line);
+    }
+
+    @Test
+    void wrapGreedyByVisibleWidth_neverSplitsASingleWordEvenIfItAloneExceedsTheBudget() {
+        String line = "supercalifragilisticexpialidocious short";
+        List<String> wrapped = renderer.wrapGreedyByVisibleWidth(line, 10);
+        assertThat(wrapped.get(0)).isEqualTo("supercalifragilisticexpialidocious");
+        assertThat(wrapped.get(1)).isEqualTo("short");
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────
 
     private String strip(byte[] pdf) throws Exception {

@@ -53,12 +53,16 @@ const CONTACTS = [
 ];
 
 // A COMPLETE stored tile row (validateQuotationItem finds nothing missing) in the full v3 DTO shape.
+// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
+// TILE row with neither) -- this shared fixture backs most of this file's ส่งขออนุมัติ-enabled
+// assertions, which have nothing to do with lead time; the dedicated describe block below is
+// where a row with NO lead time is exercised on purpose.
 const TILE_ITEM = {
   id: 101, seq: 1, lineType: 'TILE', locationLabel: null, catalogPriceId: null, productCode: null,
   brand: 'Marazzi', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
   sqmPerPiece: 0.36, quantityMode: 'AREA', areaSqm: 20, piecesInput: null, wastageMode: 'PERCENT',
   wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0, originCountry: null,
-  leadTimeMinDays: null, leadTimeMaxDays: null, itemNotes: null,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45, itemNotes: null,
   piecesPerSqm: 2.78, piecesBeforeWastage: 56, piecesAfterWastage: 56, piecesFinal: 57, boxes: 19,
   netUnitPrice: 850, lineAmount: 48450, descriptionLine: 'Trilogy Ash', sizeLine: '60x60', calculationLine: '(calc)',
   quantity: 57, unit: 'แผ่น', specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
@@ -262,6 +266,89 @@ describe('v3/v3b document settings', () => {
     await waitFor(() => expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)'));
     const sent = api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
     expect(sent).toMatchObject({ lineType: 'TILE', specialPriceSqm: 1350, directNetPrice: null, discountPct: null });
+  });
+});
+
+// Owner feedback #7 (2026-09-14): submit now requires a lead time on every TILE row — a deliberate
+// sales-workflow rule change, SUBMIT only (a draft still saves with none). Mirrors
+// DealQuotationService#requireEveryTileItemHasALeadTime.
+describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
+  const byId = (id) => document.getElementById(id);
+
+  it('a TILE row with no lead time BLOCKS ส่งขออนุมัติ, naming the item, but บันทึกร่าง stays enabled', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: null, leadTimeMaxDays: null }] }),
+    });
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1');
+    // The SAME rule the server enforces at submit is not a draft-completeness rule -- บันทึกร่าง
+    // must stay clickable with no lead time typed anywhere.
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
+  });
+
+  it('typing both lead-time numbers clears the block', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: null, leadTimeMaxDays: null }] }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+
+    fireEvent.change(byId('lead-0'), { target: { value: '30' } });
+    fireEvent.change(byId('lead-max-0'), { target: { value: '45' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
+  });
+
+  it('a HALF-filled lead time (only min, or only max) still blocks', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: 30, leadTimeMaxDays: null }] }),
+    });
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(true);
+  });
+
+  it('multiple rows missing a lead time are ALL named, comma-separated, by their own item number', async () => {
+    const PLAIN_ITEM = {
+      id: 102, seq: 2, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1,
+      unit: 'งาน', unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
+    };
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        items: [
+          { ...TILE_ITEM, seq: 1, leadTimeMinDays: null, leadTimeMaxDays: null },
+          PLAIN_ITEM, // #7: PLAIN is exempt -- never named, and never counted as item 3 itself.
+          { ...TILE_ITEM, id: 105, seq: 3, leadTimeMinDays: null, leadTimeMaxDays: null },
+        ],
+      }),
+    });
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1, 3');
+  });
+
+  it('a PLAIN-only document with no TILE row at all never blocks on lead time', async () => {
+    const PLAIN_ITEM = {
+      id: 102, seq: 1, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1,
+      unit: 'งาน', unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
+    };
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [PLAIN_ITEM] }) });
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(false);
+  });
+
+  it('the row itself shows an inline hint on an existing draft (already "touched" on load)', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ items: [{ ...TILE_ITEM, leadTimeMinDays: null, leadTimeMaxDays: null }] }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+
+    expect(screen.getByText('กรุณาระบุระยะเวลานำเข้า (วัน)')).not.toBeNull();
   });
 });
 

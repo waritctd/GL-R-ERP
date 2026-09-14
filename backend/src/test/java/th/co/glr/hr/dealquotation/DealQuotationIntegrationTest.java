@@ -608,6 +608,78 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รุ่น");
     }
 
+    // ── item #7 (2026-09-14): submit requires a lead time on every TILE row ────────────────
+
+    /** A deliberate sales-workflow rule change (owner feedback #7): submit now refuses a TILE row
+     * with no lead time, naming the offending row's OWN printed number -- a draft may still be
+     * saved with one missing (create/update do not enforce this at all). */
+    @Test
+    void submit_rejectsATileItemWithNoLeadTime_namingTheItemNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMissing(ItemInputBuilder::withNoLeadTime))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า")
+            .hasMessageContaining("รายการที่ 1");
+    }
+
+    /** Multiple offending rows are named together, comma-separated, by their OWN seq numbers --
+     * not just "something is wrong". */
+    @Test
+    void submit_rejectsMultipleTileItemsWithNoLeadTime_namingEveryItemNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                itemMissing(ItemInputBuilder::withNoLeadTime),
+                itemMissing(ItemInputBuilder::withNoLeadTime))),
+            salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 2, 3")
+            // Item 1 (sampleItem) HAS a lead time -- it must not be named alongside the two that don't.
+            .satisfies(e -> assertThat(((ApiException) e).getMessage()).doesNotContain("รายการที่ 1,"));
+    }
+
+    /** Wrong-way-round twin of the rejection above: PLAIN and ADJUSTMENT rows are EXEMPT -- neither
+     * has a lead-time concept at all (freight/consumables/a ส่วนลดพิเศษ line cannot "arrive"), so a
+     * document made of a TILE row (with a lead time) plus PLAIN/ADJUSTMENT rows with none still
+     * submits. */
+    @Test
+    void submit_stillAcceptsPlainAndAdjustmentRowsWithNoLeadTime() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
+    /** Defence-in-depth twin of {@link #submit_reChecksStoredItems_incompleteRowIsBadRequest}: the
+     * lead-time gate also re-checks the STORED rows, not just what create/update most recently
+     * wrote -- proven by nulling it out straight through the repository, the way a pre-#7 row
+     * would exist. */
+    @Test
+    void submit_reChecksStoredItems_missingLeadTimeIsBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        jdbc.update("""
+            UPDATE sales.quotation_item SET lead_time_min_days = NULL, lead_time_max_days = NULL
+             WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
@@ -646,6 +718,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withPiecesPerBox(Integer v) { piecesPerBox = v; return this; }
         ItemInputBuilder withUnitPrice(BigDecimal v) { unitPrice = v; return this; }
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
+        // #7 (2026-09-14): submit's new lead-time requirement.
+        ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,

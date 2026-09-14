@@ -129,6 +129,152 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
     }
 
+    // ── item #1 (2026-09-14): "คุณ" prefix / contact-customer dedupe / organisation detection ──
+
+    /** Bug fix: production printed "เรียน คุณบริษัท นันทวัน จำกัด   /   บริษัท นันทวัน จำกัด" because
+     * the contact snapshot WAS the customer name, and this branch prefixed "คุณ" and duplicated it
+     * unconditionally. Once the contact equals the customer (after collapsing whitespace), the
+     * contact part must be omitted entirely -- no duplicate, no "/". */
+    @Test
+    void thaiDocument_attnLine_omitsTheContactPartWhenItIsTheSameAsTheCustomerName() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("บริษัท นันทวัน จำกัด", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("บริษัท นันทวัน จำกัด");
+    }
+
+    /** Same dedupe, tolerant of whitespace-only differences ("trimmed, internal whitespace
+     * collapsed") -- a contact typed with extra spaces must still count as the same name. */
+    @Test
+    void thaiDocument_attnLine_dedupeToleratesWhitespaceDifferences() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("  บริษัท   นันทวัน  จำกัด ", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("บริษัท นันทวัน จำกัด");
+    }
+
+    /** Opus review nit (2026-09-14): a trailing "."/"," typo must not defeat the dedupe either --
+     * the duplicate-name bug this whole fix targets is exactly this kind of near-miss, not a
+     * genuinely different name. */
+    @Test
+    void thaiDocument_attnLine_dedupeToleratesATrailingFullStopOrComma() {
+        QuotationRenderModel trailingStop = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("บริษัท นันทวัน จำกัด.", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(trailingStop.attnLine()).isEqualTo("บริษัท นันทวัน จำกัด");
+
+        QuotationRenderModel trailingComma = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("บริษัท นันทวัน จำกัด,", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(trailingComma.attnLine()).isEqualTo("บริษัท นันทวัน จำกัด");
+    }
+
+    /** A genuine PERSON contact still gets "คุณ" and the "/"-separated customer name, exactly as
+     * before -- the fix must not remove this for the common case. */
+    @Test
+    void thaiDocument_attnLine_prefixesKhunForAPersonContactDistinctFromTheCustomer() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("ธนพล ใจดี", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท นันทวัน จำกัด");
+    }
+
+    /** A contact recorded as ITS OWN organisation (distinct from the customer name -- e.g. a
+     * different group-company contact) survives the dedupe but must not read "คุณ" in front of it. */
+    @Test
+    void thaiDocument_attnLine_omitsKhunForAnOrganisationContactDistinctFromTheCustomer() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("บริษัท นันทวัน สาขา 2 จำกัด", "บริษัท นันทวัน จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("บริษัท นันทวัน สาขา 2 จำกัด   /   บริษัท นันทวัน จำกัด");
+    }
+
+    /** The English mirror: dedupe applies the same way, but "คุณ" never appears at all -- the
+     * English form never prefixed it in the first place. */
+    @Test
+    void englishDocument_attnLine_dedupesTheContactPartButNeverPrefixesKhun() {
+        QuotationRenderModel same = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("Nantawan Co., Ltd.", "Nantawan Co., Ltd.", WastageCalculator.DOCUMENT_LANGUAGE_EN),
+            null, null);
+        assertThat(same.attnLine()).isEqualTo("Nantawan Co., Ltd.");
+
+        QuotationRenderModel differs = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("Mr. Somchai", "Nantawan Co., Ltd.", WastageCalculator.DOCUMENT_LANGUAGE_EN),
+            null, null);
+        assertThat(differs.attnLine()).isEqualTo("Mr. Somchai   /   Nantawan Co., Ltd.");
+        assertThat(differs.attnLine()).doesNotContain("คุณ");
+    }
+
+    // ── item #1: the package-private helpers directly ───────────────────────────────────────
+
+    @Test
+    void looksLikeOrganisation_detectsLeadingThaiEntityMarkers() {
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("บริษัท นันทวัน จำกัด")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("หจก. รุ่งเรืองค้าไม้")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("ร้านทองไทย")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("โรงพยาบาลกรุงเทพ")).isTrue();
+    }
+
+    @Test
+    void looksLikeOrganisation_detectsATrailingMarkerWithNoLeadingPrefix() {
+        // "นันทวัน จำกัด" has no บริษัท/หจก/etc. prefix at all -- only the trailing จำกัด marks it.
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("นันทวัน จำกัด")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Siam Tiles (Thailand) (มหาชน)")).isTrue();
+    }
+
+    @Test
+    void looksLikeOrganisation_detectsEnglishCompanySuffixesCaseInsensitively() {
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Nantawan Co., Ltd.")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("nantawan co.,ltd")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Blue Lagoon Company")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Ocean Trading LIMITED")).isTrue();
+        // " inc" (a leading space, no period required) matches as soon as it is preceded by a
+        // space anywhere in the name -- both spellings below carry one.
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Aisha Resorts Inc")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Aisha Resorts, Inc.")).isTrue();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Blue Lagoon LLC")).isTrue();
+    }
+
+    @Test
+    void looksLikeOrganisation_aPersonsNameIsNeverAnOrganisation() {
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("ธนพล ใจดี")).isFalse();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Ms. Aisha Rahman")).isFalse();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation(null)).isFalse();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("   ")).isFalse();
+    }
+
+    /** Opus review nit (2026-09-14): "inc"/"llc" are matched with \b word boundaries specifically
+     * so a person's name that merely CONTAINS those letters is never misread as an organisation --
+     * a bare substring check ("Somchai INchana" contains " inc") would have failed this. */
+    @Test
+    void looksLikeOrganisation_doesNotFalsePositiveOnASurnameContainingAMarkerAsASubstring() {
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Somchai Inchana")).isFalse();
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("John Hollcroft")).isFalse();
+        // The genuine word-boundary case still fires either side of punctuation.
+        assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Somchai, Inc.")).isTrue();
+    }
+
+    @Test
+    void printContactPart_falseWhenContactIsBlankOrEqualsTheCustomerName() {
+        assertThat(DealQuotationRenderAdapter.printContactPart(null, "บริษัท นันทวัน จำกัด")).isFalse();
+        assertThat(DealQuotationRenderAdapter.printContactPart("   ", "บริษัท นันทวัน จำกัด")).isFalse();
+        assertThat(DealQuotationRenderAdapter.printContactPart("บริษัท นันทวัน จำกัด", "บริษัท นันทวัน จำกัด")).isFalse();
+        // Case-insensitive too -- an English name typed in different casing is still the same name.
+        assertThat(DealQuotationRenderAdapter.printContactPart("NANTAWAN CO., LTD.", "Nantawan Co., Ltd.")).isFalse();
+    }
+
+    @Test
+    void printContactPart_trueWhenContactDiffersFromTheCustomerName() {
+        assertThat(DealQuotationRenderAdapter.printContactPart("ธนพล ใจดี", "บริษัท นันทวัน จำกัด")).isTrue();
+    }
+
+    private DealQuotationDto quotationWithContact(String contactName, String customerName, String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), customerName, null, null, null,
+            9L, contactName, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
+
     private DealQuotationDto quotationWithCustomer(String customerAddress, String customerPhone) {
         return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
             1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
@@ -212,6 +358,104 @@ class DealQuotationRenderAdapterV3Test {
         QuotationRenderModel without = model(WastageCalculator.PRICE_MODE_NET, List.of());
         assertThat(sumAmounts(withAdjustment)).isEqualByComparingTo("-37198.21"); // 1000.00 - 38198.21
         assertThat(sumAmounts(without)).isEqualByComparingTo("1000.00");
+    }
+
+    // ── item #7 (2026-09-14): Thai remark 3 -- per-item lead-time grouping ──────────────────
+
+    /** ALWAYS the per-item form now (owner feedback #7), even for a single item/group -- the old
+     * "3.กำหนดส่งมอบสินค้า : ..." header word is also gone. */
+    @Test
+    void leadTime_aSingleItem_printsThePerItemFormEvenForOneGroup() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(30, 45)));
+        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 30-45 วัน");
+    }
+
+    /** Consecutive items sharing the same (min, max) are grouped into one "รายการที่ 1-2" range. */
+    @Test
+    void leadTime_consecutiveItemsWithTheSameRangeAreGrouped() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(
+            tileWithLeadTime(75, 90), tileWithLeadTime(75, 90), tileWithLeadTime(30, 45)));
+        assertThat(m.remarkLines().get(2))
+            .isEqualTo("3.ระยะเวลานำเข้า : รายการที่ 1-2 ประมาณ 75-90 วัน  รายการที่ 3 ประมาณ 30-45 วัน");
+    }
+
+    /** The SAME range on non-consecutive items must NOT be merged across the different range
+     * between them -- grouping is about consecutive SEQUENCE, not about matching values anywhere
+     * in the document. */
+    @Test
+    void leadTime_theSameRangeOnNonConsecutiveItemsIsNotGrouped() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(
+            tileWithLeadTime(30, 45), tileWithLeadTime(75, 90), tileWithLeadTime(30, 45)));
+        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 30-45 วัน  "
+            + "รายการที่ 2 ประมาณ 75-90 วัน  รายการที่ 3 ประมาณ 30-45 วัน");
+    }
+
+    /** min == max collapses to "ประมาณ {n} วัน" -- no pointless "30-30 วัน". */
+    @Test
+    void leadTime_anExactLeadTime_collapsesToOneNumber() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(30, 30)));
+        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 30 วัน");
+    }
+
+    /** Different items keep their DIFFERENT ranges as separate groups -- the base case grouping
+     * must not collapse to. */
+    @Test
+    void leadTime_differentRangesStaySeparateGroups() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(
+            tileWithLeadTime(10, 20), tileWithLeadTime(40, 50)));
+        assertThat(m.remarkLines().get(2)).isEqualTo(
+            "3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 10-20 วัน  รายการที่ 2 ประมาณ 40-50 วัน");
+    }
+
+    /** No item carries a lead time at all -- the (2026-09-14) fallback: a visible blank, no
+     * country, no stock wording. */
+    @Test
+    void leadTime_noItemHasOne_printsTheBlankFallback() {
+        QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(null, null)));
+        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : ประมาณ ...... วัน");
+    }
+
+    // ── item #3 (2026-09-14): a calculation line that is 66 String.length() chars but only 59
+    // VISIBLE ones must not wrap at budget 62 -- see QuotationRenderer#visibleLength's Javadoc for
+    // the measured figures. Through the REAL adapter and REAL renderer, per the task's own ask. ─
+
+    /** Production printed this exact calculation line split across two rows -- "(บรรจุ 4" on the
+     * head row and "แผ่น/กล่อง)" alone on a continuation row. It must now land on ONE row, intact,
+     * and the NEXT item's own description (not a leftover fragment of this one) must follow
+     * immediately -- proving the row accounting agrees with what actually got written. */
+    @Test
+    void tileItem_withTheProductionCalculationLine_landsOnOneRow_notSplitAcrossTwo() throws Exception {
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        Sheet sheet = render(WastageCalculator.PRICE_MODE_NET,
+            List.of(tileWithCalculationLine(calcLine), tileWithLeadTime(30, 45)));
+        // Item 1: description (row 9), size (row 10), calculation (row 11) -- exactly 3 rows, no
+        // 4th continuation row for the calculation line.
+        assertThat(sheet.getRow(ITEM_START_ROW + 2).getCell(1).getStringCellValue()).isEqualTo(calcLine);
+        // Item 2 starts immediately at row 12 with ITS OWN description line -- not a fragment like
+        // "แผ่น/กล่อง)" left over from a still-broken wrap of item 1's calculation line.
+        assertThat(sheet.getRow(ITEM_START_ROW + 3).getCell(1).getStringCellValue()).isEqualTo("กระเบื้อง รุ่น A");
+    }
+
+    private DealQuotationItemDto tileWithCalculationLine(String calculationLine) {
+        return new DealQuotationItemDto(1L, 1, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, null, new BigDecimal("100.00"), null,
+            null, null, null, null,
+            new BigDecimal("2.78"), 10, 10, 10, null, new BigDecimal("100.00"), new BigDecimal("1000.00"),
+            "กระเบื้อง รุ่น A", "ขนาด 60x60x2 cm.", calculationLine,
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "แผ่น", null, null, null,
+            DealQuotationLines.specialPriceLine(null), null);
+    }
+
+    private DealQuotationItemDto tileWithLeadTime(Integer minDays, Integer maxDays) {
+        return new DealQuotationItemDto(1L, 1, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, null, new BigDecimal("100.00"), null,
+            null, minDays, maxDays, null,
+            new BigDecimal("2.78"), 10, 10, 10, null, new BigDecimal("100.00"), new BigDecimal("1000.00"),
+            "กระเบื้อง รุ่น A", "ขนาด 60x60x2 cm.", "(จำนวน 10 แผ่น)",
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "แผ่น", null, null, null,
+            DealQuotationLines.specialPriceLine(null), null);
     }
 
     // ── fixtures ───────────────────────────────────────────────────────────────────────────

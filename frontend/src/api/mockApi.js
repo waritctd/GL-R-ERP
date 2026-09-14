@@ -12179,6 +12179,15 @@ export const api = {
       if (row.validityMode === 'DATE' && row.validityUntil && row.validityUntil < bangkokTodayIso()) {
         fail('วันที่ยืนราคาผ่านไปแล้ว', 400);
       }
+      // Owner feedback #7 (2026-09-14). Mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+      // -- submit only, exactly like the ผู้สั่งซื้อ check above; a DRAFT may still be saved with no
+      // lead time. PLAIN/ADJUSTMENT rows are exempt, same as the Java side.
+      const missingLeadTimeSeqs = row.items
+        .filter((it) => (it.lineType ?? 'TILE') === 'TILE' && (it.leadTimeMinDays == null || it.leadTimeMaxDays == null))
+        .map((it) => it.seq);
+      if (missingLeadTimeSeqs.length > 0) {
+        fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}`, 400);
+      }
       const now = new Date().toISOString();
       row.docStatus = 'PENDING_APPROVAL';
       row.submittedAt = now;

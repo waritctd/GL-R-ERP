@@ -818,7 +818,14 @@ export function QuotationItemRow({
             {ORIGIN_COUNTRY_OPTIONS.map((opt) => <option key={opt.code} value={opt.code}>{opt.label}</option>)}
           </select>
         </FormField>
-        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`}>
+        {/* #7 (2026-09-14): the CHECK is submit-only (QuotationEditorPage's `submitItemErrorsByRow`
+            requires a lead time; `itemErrorsByRow`, which gates saving a draft, does not) — but
+            the HINT is not submit-gated. `errors.leadTimeMinDays` arrives as soon as this row is
+            `touched` (QuotationEditorPage.jsx's touchedRowIds — set on load for an existing
+            draft, or on first edit for a new row), same as every other field's error here. Opus
+            review (2026-09-14): a prior version of this comment claimed the hint only appears
+            after a submit attempt, which is false and contradicted the row's own test. */}
+        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`} error={errors.leadTimeMinDays}>
           <div className="flex items-center gap-1.5">
             <input
               id={`lead-${index}`} type="number" disabled={readOnly} className="w-16"

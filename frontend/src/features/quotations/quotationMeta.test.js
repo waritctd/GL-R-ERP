@@ -401,6 +401,39 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       ['areaSqm', 'color', 'model', 'piecesPerBox', 'sizeText', 'sqmPerPiece', 'texture', 'thicknessMm', 'unitPrice'].sort(),
     );
   });
+
+  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+  // -- SUBMIT-only. `requireLeadTime` defaults to OFF specifically so a draft may still be saved
+  // with no lead time; only a caller that explicitly opts in (QuotationEditorPage's
+  // `submitItemErrorsByRow`) sees it.
+  describe('requireLeadTime option (owner feedback #7, 2026-09-14)', () => {
+    it('is never flagged by default, even with no lead time at all', () => {
+      const item = completeItem({ leadTimeMinDays: null, leadTimeMaxDays: null });
+      expect(validateQuotationItem(item)).toEqual({});
+    });
+
+    it('flags a missing lead time only when explicitly required', () => {
+      const item = completeItem({ leadTimeMinDays: null, leadTimeMaxDays: null });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
+    });
+
+    it('a partially-filled lead time (only one of the two numbers) is still flagged', () => {
+      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: null });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'กรุณาระบุระยะเวลานำเข้า (วัน)' });
+    });
+
+    it('a fully-filled lead time passes even when required', () => {
+      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: 45 });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+    });
+
+    it('a zero lead time (an exact same-day range) is a valid value, not a missing one', () => {
+      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 0 });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+    });
+  });
 });
 
 // Owner feedback 2026-09-12: the editor shows/accepts แผ่น/ตร.ม. (pieces per sqm) while the wire
