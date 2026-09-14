@@ -103,6 +103,12 @@ function emptyTerms(defaults = null) {
     // quotation always starts with "(ค่าเริ่มต้น)" — use the real names.
     printedByDisplayId: '',
     salesRepDisplayId: '',
+    // Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be
+    // able to correct it"): a brand-new /quotations/new visit has no ticket yet either, so this
+    // starts blank same as everything else here -- the ?ticket= path below fills it from the
+    // deal's own project name instead of leaving a rep looking at an empty box for a project the
+    // deal already has.
+    projectName: '',
   };
 }
 
@@ -363,6 +369,7 @@ export function QuotationEditorPage({ user, showToast }) {
         // V179: null (the DTO's own default) reads as "(ค่าเริ่มต้น)" — the select's own empty option.
         printedByDisplayId: quotation.printedByDisplayId ?? '',
         salesRepDisplayId: quotation.salesRepDisplayId ?? '',
+        projectName: quotation.projectName ?? '',
       });
       setDirty(false);
       setInitializedFor(key);
@@ -371,7 +378,7 @@ export function QuotationEditorPage({ user, showToast }) {
       setAdjustments([]);
       setDocSettings(defaultDocSettings());
       setGroups([{ groupId: newLocationGroupId(), label: '' }]);
-      setTerms(emptyTerms(storedDefaults));
+      setTerms({ ...emptyTerms(storedDefaults), projectName: ticket?.projectName ?? '' });
       setTouchedRowIds(new Set());
       setDirty(false);
       setInitializedFor(key);
@@ -379,7 +386,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // setDirty is a useCallback with an empty dep list (stable identity forever), so listing it
     // here can never cause an extra run of this effect -- it only satisfies exhaustive-deps now
     // that setDirty is no longer the raw, hook-recognised useState setter.
-  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty]);
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty, ticket]);
 
   // ผู้สั่งซื้อ prefill on the `?ticket=` path (F2: "With `?ticket=`, prefill from the deal's
   // contact, changeable"). Deliberately its OWN effect, not a branch of the seeding effect above.
@@ -846,6 +853,10 @@ export function QuotationEditorPage({ user, showToast }) {
     // own value, null included, so there is no ambiguity between "omitted" and "cleared".
     printedByDisplayId: terms.printedByDisplayId === '' ? null : Number(terms.printedByDisplayId),
     salesRepDisplayId: terms.salesRepDisplayId === '' ? null : Number(terms.salesRepDisplayId),
+    // Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be
+    // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
+    // explicitly, blank included, same discipline as customerNotes just above.
+    projectName: terms.projectName || null,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -1385,8 +1396,34 @@ export function QuotationEditorPage({ user, showToast }) {
             <Panel title="ข้อมูลลูกค้าและผู้ขาย">
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName ?? '-'}</strong></div>
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span><strong>{projectName ?? '-'}</strong></div>
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span><strong>{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</strong></div>
+                {/* Owner feedback 2026-09-14 ("sometimes there's a typo ... they should be able to
+                    correct it") — was static text; now a real field on `terms`, same as every
+                    other เงื่อนไข input, saved on the next draft save. */}
+                <FormField label="โครงการ" htmlFor="projectNameCard">
+                  <input
+                    id="projectNameCard"
+                    value={terms.projectName}
+                    maxLength={200}
+                    onChange={(e) => { setTerms((t) => ({ ...t, projectName: e.target.value })); setDirty(true); }}
+                  />
+                </FormField>
+                {/* V179: the SAME salesRepDisplayId select as the เงื่อนไข panel below (owner,
+                    2026-09-14: "keep both") — a distinct DOM id ("...Card") since a page may not
+                    repeat an id, both bound to the one `terms.salesRepDisplayId`, so picking a
+                    value in either place updates both. The phone shown here still comes from the
+                    last SAVED override (salesRepPhone) — the options list carries no phone, so an
+                    unsaved selection cannot preview one; it appears on the next successful save. */}
+                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard">
+                  <select
+                    id="salesRepDisplayIdCard"
+                    value={terms.salesRepDisplayId}
+                    disabled={displayNameOptionsQuery.isLoading}
+                    onChange={(e) => { setTerms((t) => ({ ...t, salesRepDisplayId: e.target.value })); setDirty(true); }}
+                  >
+                    <option value="">{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</option>
+                    {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </FormField>
                 {/* Hidden when the viewer cannot open the deal page — under the release lock
                     (owner, 2026-09-11) a sales rep reaches /quotations but not /tickets, and a
                     link straight to the access-denied page is worse than no link. */}

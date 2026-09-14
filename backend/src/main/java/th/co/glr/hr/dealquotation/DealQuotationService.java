@@ -192,7 +192,11 @@ public class DealQuotationService {
             customerSnapshot.name(), customerSnapshot.address(),
             customerSnapshot.taxId(), customerSnapshot.phone(),
             contact,
-            ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
+            // Owner feedback 2026-09-14: a request-supplied projectName (even blank, to clear it)
+            // wins; null (a caller that never sends the field at all) falls back to the deal's own
+            // project name, exactly as this line unconditionally did before projectName existed.
+            request.projectName() != null ? blankToNull(request.projectName()) : ticket.projectName(),
+            blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
@@ -362,7 +366,13 @@ public class DealQuotationService {
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal,
-            printedByDisplayId, salesRepDisplayId);
+            printedByDisplayId, salesRepDisplayId,
+            // Owner feedback 2026-09-14 — a genuinely editable header field now (see this request
+            // field's own Javadoc): the editor always sends its CURRENT value, so, same as
+            // printedByDisplayId/salesRepDisplayId just above, there is no "missing keeps stored"
+            // case — blankToNull(null) clears it, exactly like every other free-text header field
+            // on this same call (customerNotes, deptCode, unitCode).
+            blankToNull(request.projectName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }

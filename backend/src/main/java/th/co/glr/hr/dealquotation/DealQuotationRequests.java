@@ -275,8 +275,36 @@ public final class DealQuotationRequests {
          * means "use the real name".
          */
         Long salesRepDisplayId,
+        /**
+         * Owner feedback 2026-09-14: "sometimes there's a typo in the ... project so they should
+         * be able to correct it". Was write-once at CREATE (always {@code ticket.projectName()},
+         * never updatable) — now a genuinely editable header field, same "no missing-keeps-stored"
+         * discipline as {@link #printedByDisplayId}/{@link #salesRepDisplayId} just above: the
+         * editor always sends its current value (blank included), so a null here is a real
+         * request to CLEAR it, not "leave alone". {@code null} on CREATE falls back to the deal's
+         * own {@code ticket.projectName()} (today's behaviour, for any caller that does not send
+         * this field at all — see {@code DealQuotationService#create}).
+         */
+        @Size(max = 200) String projectName,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-projectName shape — kept so every existing construction site (tests, mostly)
+         * compiles unchanged. Defaults to null, which on create falls back to the ticket's own
+         * project name (today's behaviour for every one of those fixtures) and on update would
+         * clear it — but nothing pre-existing calls update() through this overload with a
+         * genuinely different project already stored, so that edge is theoretical here. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, null, items);
+        }
+
         /** The pre-V179 shape (no display-name override fields) — kept so every existing
          * construction site (tests, mostly) compiles unchanged. Defaults both to null, which
          * means "use the real name" — today's behaviour for every one of those fixtures. */

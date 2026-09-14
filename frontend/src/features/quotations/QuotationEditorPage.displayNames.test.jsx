@@ -174,4 +174,51 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe(''));
     expect(screen.getByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeTruthy();
   });
+
+  // Owner feedback 2026-09-14 ("keep both, add inline edit here too"): the card's own
+  // salesRepDisplayIdCard select is a SECOND control over the SAME terms.salesRepDisplayId the
+  // เงื่อนไข panel's own salesRepDisplayId select drives -- picking a value in either one must move
+  // the other.
+  it('the card select and the เงื่อนไข select stay in sync (either one moves the other)', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('salesRepDisplayIdCard')).toBeTruthy());
+    expect(byId('salesRepDisplayIdCard').value).toBe('');
+    expect(byId('salesRepDisplayId').value).toBe('');
+
+    fireEvent.change(byId('salesRepDisplayIdCard'), { target: { value: '9' } });
+    expect(byId('salesRepDisplayId').value).toBe('9'); // moved by the CARD's own select
+
+    fireEvent.change(byId('salesRepDisplayId'), { target: { value: '4' } });
+    expect(byId('salesRepDisplayIdCard').value).toBe('4'); // moved by the เงื่อนไข select
+  });
+});
+
+// Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be able
+// to correct it") -- โครงการ was static text on this same card; now a real, saved field.
+describe('QuotationEditorPage — โครงการ is editable on the summary card', () => {
+  it('pre-fills from the quotation and sends an edit in the save payload', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
+
+    fireEvent.change(byId('projectNameCard'), { target: { value: 'Associates By Choice' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.projectName).toBe('Associates By Choice');
+  });
+
+  it('a blank projectName sends null, not the empty string', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
+
+    fireEvent.change(byId('projectNameCard'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.projectName).toBeNull();
+  });
 });

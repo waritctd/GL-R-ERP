@@ -1015,6 +1015,44 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(switched.contactName()).isEqualTo("สมหญิง ใจดี");
     }
 
+    // ── owner feedback 2026-09-14: โครงการ (project name) is now editable, not write-once ──────
+
+    /** Every OTHER test in this class omits {@code projectName} entirely (the oldest legacy
+     * constructor shapes) and still passes -- that already proves the create-time fallback to
+     * {@code ticket.projectName()} is unbroken. This pins the other half: an EXPLICIT value wins. */
+    @Test
+    void create_withAnExplicitProjectName_usesItInsteadOfTheTickets() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการทดสอบ A", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.projectName()).isEqualTo("โครงการทดสอบ A");
+    }
+
+    @Test
+    void update_correctsATypoInTheProjectName_andRoundTripsOnRead() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("ABC", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto corrected = quotationService.update(created.id(),
+            upsertRequestWithProjectName("Associates By Choice", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(corrected.projectName()).isEqualTo("Associates By Choice");
+
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.projectName()).isEqualTo("Associates By Choice");
+    }
+
+    /** No "missing keeps stored" for this field (unlike priceMode/documentLanguage/validityMode):
+     * the editor always sends its current value, blank included, so a blank is a deliberate clear
+     * -- same discipline as customerNotes/deptCode/unitCode on the same call. */
+    @Test
+    void update_withABlankProjectName_clearsIt() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการเดิม", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto cleared = quotationService.update(created.id(),
+            upsertRequestWithProjectName("", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(cleared.projectName()).isNull();
+    }
+
     /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
      * Reproduced by blanking the snapshot straight in the DB. */
     @Test
@@ -2545,6 +2583,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", priceMode, items);
+    }
+
+    /** The full canonical constructor, for the one field (projectName) none of this class's other
+     * helpers thread through. Every other field left at its "use the default" value. */
+    private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */

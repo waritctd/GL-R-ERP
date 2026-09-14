@@ -7,10 +7,11 @@ import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../loc
 import { FormField } from '../../components/common/FormField.jsx';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
 
-const EDIT_FIELDS = ['taxId', 'phone', 'address'];
+const EDIT_FIELDS = ['name', 'taxId', 'phone', 'address'];
 
 function editsFrom(customer) {
   return {
+    name: customer?.name ?? '',
     taxId: customer?.taxId ?? '',
     phone: customer?.phone ?? '',
     address: customer?.address ?? '',
@@ -18,8 +19,8 @@ function editsFrom(customer) {
 }
 
 /**
- * The SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่, editable in place and saved back to the
- * customer master on blur (PUT /api/customers/{id}).
+ * The SELECTED customer's ชื่อ / เลขที่ผู้เสียภาษี / โทร. / ที่อยู่, editable in place and saved back
+ * to the customer master on blur (PUT /api/customers/{id}).
  *
  * History: F7 (owner, 2026-09-10) made tax id and phone editable inside DealCustomerCard. The owner
  * then asked (2026-09-11) for "a way for the sales to fill in the customer address" and for the
@@ -29,10 +30,17 @@ function editsFrom(customer) {
  * needs them on the `?ticket=` and existing-draft paths where that card is not rendered — one
  * component, not a pasted twin that a later fix would miss.
  *
- * All three stay OPTIONAL (a customer without a tax id is still quotable — F7). The document
- * snapshots these columns on every DRAFT save (DealQuotationService#update re-reads the live
- * customer), so the caller marks the quotation dirty after a save here; that next save is what
- * carries the correction onto the printed page.
+ * `name` added (owner feedback, 2026-09-14 — "sometimes there's a typo in the name so they should
+ * be able to correct it"): `PUT /api/customers/{id}` already accepted it (`UpdateCustomerRequest
+ * .name`, `CustomerController#update`), it was just never surfaced here — unlike the other three,
+ * the backend refuses a BLANK name (400 "กรุณาระบุชื่อลูกค้า", NOT NULL column), which `saveField`'s
+ * existing generic error handling already covers correctly (restores the previous value, shows the
+ * server's own message) with no special-casing needed.
+ *
+ * taxId/phone/address stay OPTIONAL (a customer without a tax id is still quotable — F7). The
+ * document snapshots all four columns on every DRAFT save (DealQuotationService#update re-reads
+ * the live customer), so the caller marks the quotation dirty after a save here; that next save is
+ * what carries the correction onto the printed page.
  *
  * Contract: `customer` is the record (or a stand-in carrying `id`); `onChange(next)` receives the
  * record the SERVER says it stored (optimistic first, rolled back on refusal).
@@ -79,7 +87,10 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   useEffect(() => {
     // Read fields directly (not via `editsFrom(customer)`) so eslint's exhaustive-deps rule can
     // verify this against the deps array below field by field, same as the deps themselves.
-    const record = { taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' };
+    const record = {
+      name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '',
+      address: customer?.address ?? '',
+    };
     // Snapshot the OLD baseline before reassigning the ref below. `setEdits`'s updater runs
     // asynchronously (whenever React processes the queued update) — by then `lastSeededRef.current`
     // has already been reassigned to the NEW record a few lines down, so reading `.current` from
@@ -97,7 +108,7 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
       return merged;
     });
     lastSeededRef.current = { id: customer?.id, ...record };
-  }, [customer?.id, customer?.taxId, customer?.phone, customer?.address]);
+  }, [customer?.id, customer?.name, customer?.taxId, customer?.phone, customer?.address]);
 
   /**
    * Persists ONE field on blur. Sends only that field, never the whole record: the endpoint has
@@ -143,7 +154,25 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const hint = 'แก้ไขได้ บันทึกกลับไปที่ข้อมูลลูกค้าอัตโนมัติ ใช้ต่อได้ในใบเสนอราคาถัดไป';
   return (
     <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1" data-testid="customer-details">
-      <FormField label="เลขที่ผู้เสียภาษี" htmlFor={QUOTATION_FIELD_IDS.customerTaxId} hint={hint}>
+      {/* Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able
+          to correct it" — a plain rename of the customer MASTER record (not a different customer,
+          not a deal reassignment), same PUT the other three fields already use. 200 = Update
+          CustomerRequest's @Size; the server 400s a blank ("กรุณาระบุชื่อลูกค้า") rather than
+          letting a NOT NULL column violation surface. */}
+      <div className="col-span-full">
+        <FormField label="ชื่อลูกค้า" htmlFor={QUOTATION_FIELD_IDS.customerName} hint={hint}>
+          <input
+            id={QUOTATION_FIELD_IDS.customerName}
+            value={edits.name}
+            maxLength={200}
+            disabled={disabled || savingField === 'name'}
+            onChange={(e) => setEdits((prev) => ({ ...prev, name: e.target.value }))}
+            onBlur={() => saveField('name')}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          />
+        </FormField>
+      </div>
+      <FormField label="เลขที่ผู้เสียภาษี" htmlFor={QUOTATION_FIELD_IDS.customerTaxId}>
         <input
           id={QUOTATION_FIELD_IDS.customerTaxId}
           value={edits.taxId}
