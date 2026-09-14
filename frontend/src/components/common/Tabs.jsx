@@ -40,6 +40,47 @@ export function Tabs({ items, value, onChange, ariaLabel, idPrefix, onSurface = 
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
+  // Dev-only, no-op in production (import.meta.env.DEV is a Vite build-time constant, so this
+  // branch is dead code in a prod build even though it isn't stripped from the source). Catches a
+  // real incident: a caller shipped `items: [{ value: 'x', label }]` instead of `{ id: 'x', label }`
+  // — this component reads `item.id` everywhere (onClick/onChange/selected-state/keyboard nav),
+  // never `value` or `key` (other shared components, OverflowMenu/WorklistFilters, use `key`; ~77
+  // select/radio arrays elsewhere use `value` — three conventions, nothing used to guard against
+  // picking the wrong one for THIS component). With `id: undefined` on every item, every tab
+  // rendered with the same DOM id, never showed aria-selected, was unreachable by keyboard, and
+  // crashed the whole page on the first click — undetected for ~2 weeks because the page had no
+  // component test and was excluded from e2e. This turns that into an immediate, loud dev-console
+  // failure at first render instead of a silent, delayed crash on click.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+
+    const missing = items.filter((item) => item.id == null);
+    if (missing.length > 0) {
+      console.error(
+        `Tabs: ${missing.length} of ${items.length} item(s) passed to <Tabs items={...}> ` +
+        `(idPrefix="${idPrefix}") are missing an \`id\`: ${missing.map((item) => JSON.stringify(item.label ?? item)).join(', ')}. ` +
+        'Tabs reads item.id for onClick/onChange/selected-state/keyboard navigation — not `value` ' +
+        'or `key`. Every item without an id will render id: undefined, share one DOM id with every ' +
+        'other such item, never show as selected, be unreachable by keyboard, and crash on click.',
+      );
+    }
+
+    const seenIds = new Set();
+    const duplicateIds = new Set();
+    for (const item of items) {
+      if (item.id == null) continue;
+      if (seenIds.has(item.id)) duplicateIds.add(item.id);
+      seenIds.add(item.id);
+    }
+    if (duplicateIds.size > 0) {
+      console.error(
+        `Tabs: duplicate id(s) [${[...duplicateIds].join(', ')}] in items passed to <Tabs items={...}> ` +
+        `(idPrefix="${idPrefix}"). Each item's id must be unique — duplicates break the DOM key, ` +
+        'aria-controls, and selected-state matching the same way a missing id does.',
+      );
+    }
+  }, [items, idPrefix]);
+
   const updateScrollAffordance = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
