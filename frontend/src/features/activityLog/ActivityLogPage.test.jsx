@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActivityLogPage, TABS } from './ActivityLogPage.jsx';
+import { ActivityLogPage, TABS, formatDateTime, formatTime } from './ActivityLogPage.jsx';
 import { api } from '../../api/index.js';
 
 // Tab id -> the api.activityLog method it drives (ActivityLogPage.jsx's QUERIES map). Kept
@@ -42,6 +42,46 @@ function renderPage() {
   );
 }
 
+// formatTime backs summary's firstSeen/lastSeen columns, formatDateTime backs every other tab's
+// `at` column. Unit-tested directly (rather than only through a rendered tab) so this coverage
+// does not depend on tab-switching working.
+describe('formatTime / formatDateTime', () => {
+  // Regression coverage for the invalid-date crash: these used to only guard `!value`, so a
+  // non-empty value that doesn't parse to a real date left `new Date(value)` an Invalid Date, and
+  // Intl.DateTimeFormat#format threw a RangeError. Because that throw happens DURING RENDER inside
+  // a DataTable column (not inside a promise), react-query's isError never sees it — it propagates
+  // to the route-level ErrorBoundary and crashes the ENTIRE page, the same failure class as the
+  // Tabs.jsx id/value bug fixed on fix/activity-log-page-load-failure.
+  it.each([
+    ['a non-empty string that is not a date', 'not-a-real-date'],
+    ['a malformed ISO-ish string', '2026-13-45T99:99:99'],
+    ['an empty object (what a misconfigured ObjectMapper could emit for OffsetDateTime)', {}],
+  ])('formatTime returns "-" instead of throwing for %s', (_label, value) => {
+    expect(() => formatTime(value)).not.toThrow();
+    expect(formatTime(value)).toBe('-');
+  });
+
+  it.each([
+    ['a non-empty string that is not a date', 'not-a-real-date'],
+    ['a malformed ISO-ish string', '2026-13-45T99:99:99'],
+  ])('formatDateTime returns "-" instead of throwing for %s', (_label, value) => {
+    expect(() => formatDateTime(value)).not.toThrow();
+    expect(formatDateTime(value)).toBe('-');
+  });
+
+  it('still formats a genuinely valid date (guard does not over-fire)', () => {
+    expect(formatTime('2026-09-15T09:30:00+07:00')).not.toBe('-');
+    expect(formatDateTime('2026-09-15T09:30:00+07:00')).not.toBe('-');
+  });
+
+  it('still returns "-" for null/undefined/empty string, as before', () => {
+    expect(formatTime(null)).toBe('-');
+    expect(formatTime(undefined)).toBe('-');
+    expect(formatTime('')).toBe('-');
+    expect(formatDateTime(null)).toBe('-');
+  });
+});
+
 describe('ActivityLogPage', () => {
   beforeEach(() => {
     // Each vi.fn() lives in the module-level vi.mock factory, so call counts survive across
@@ -72,5 +112,28 @@ describe('ActivityLogPage', () => {
     expect(tab.getAttribute('aria-selected')).toBe('true');
     const method = METHOD_BY_TAB_ID[tabItem.id];
     await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
+  });
+
+  it('renders a summary row with valid data without crashing', async () => {
+    api.activityLog.summary.mockResolvedValue([
+      { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 3, firstSeen: '2026-09-15T09:00:00+07:00', lastSeen: '2026-09-15T10:00:00+07:00' },
+    ]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText('ทดสอบ (EMP-1)')).toBeTruthy());
+  });
+
+  // End-to-end proof that a malformed row from the real endpoint no longer crashes the page — the
+  // summary tab is the default tab, reachable without depending on the tab-switching test above.
+  it('renders "-" instead of crashing the page when a summary row has an unparseable firstSeen', async () => {
+    api.activityLog.summary.mockResolvedValue([
+      { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 1, firstSeen: 'not-a-real-date', lastSeen: null },
+    ]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('ทดสอบ (EMP-1)')).toBeTruthy());
+    // The malformed firstSeen and the null lastSeen both fall back to '-' — two cells, proving the
+    // page rendered past both instead of throwing on the first one.
+    expect(screen.getAllByText('-')).toHaveLength(2);
   });
 });

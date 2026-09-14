@@ -47,18 +47,37 @@ function todayInBangkok() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
-function formatTime(value) {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat('th-TH', {
-    timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).format(new Date(value));
+// `!value` alone is not enough: a non-empty value that doesn't parse to a real date (a malformed
+// timestamp, or an OffsetDateTime serialized wrong by a misconfigured ObjectMapper — this repo has
+// hit exactly that before, see hand-wired-controller-it-objectmapper-instant) leaves `new Date(...)`
+// an Invalid Date. Intl.DateTimeFormat#format then throws RangeError synchronously, during render,
+// inside a DataTable column — not inside a promise, so react-query's isError never sees it. It
+// propagates straight to the route-level ErrorBoundary, which replaces the ENTIRE page for every
+// tab. Same failure class as the Tabs.jsx id/value mismatch fixed on
+// fix/activity-log-page-load-failure; this closes the other trigger for it.
+function isValidDate(date) {
+  return !Number.isNaN(date.getTime());
 }
 
-function formatDateTime(value) {
+// Exported (only) so ActivityLogPage.test.jsx can unit-test the invalid-date guard directly,
+// independent of which tab renders it — formatTime backs summary's firstSeen/lastSeen,
+// formatDateTime backs every other tab's `at` column.
+export function formatTime(value) {
   if (!value) return '-';
+  const date = new Date(value);
+  if (!isValidDate(date)) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(date);
+}
+
+export function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (!isValidDate(date)) return '-';
   return new Intl.DateTimeFormat('th-TH', {
     timeZone: 'Asia/Bangkok', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function personLabel(row) {
