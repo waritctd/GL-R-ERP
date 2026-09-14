@@ -317,7 +317,15 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(counts.needsRework).toBe(rework.items.length);
   });
 
-  it('needsRework=true selects a rejected DRAFT, and stops selecting it once resubmitted', async () => {
+  it('needsRework=true selects a rejected DRAFT permanently -- resubmitting mints a NEW revision, it does not leave แก้', async () => {
+    // Owner clarification (2026-09-15): submit() on a rejected draft now mints a revision of
+    // ITSELF (DealQuotationService#submit's own status-machine comment) instead of resubmitting
+    // the SAME row -- so the rejected row's own approvalNote is no longer cleared "on the next
+    // submit"; it stays a permanent record of why THAT number was retired, and the row stays แก้
+    // until it is finally SUPERSEDED (once its new revision reaches APPROVED, not before). This
+    // test used to pin "cleared on the next submit, leaves แก้ immediately" -- that behaviour is
+    // exactly what this owner clarification supersedes; see `mintDealQuotationRevision` in
+    // mockApi.js.
     await api.auth.login(salesUser);
     const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     const id = created.quotation.id;
@@ -334,10 +342,82 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     rework = await api.dealQuotations.list({ needsRework: true });
     expect(rework.items.some((q) => q.id === id)).toBe(true);
 
-    // "cleared on the next submit" -- so the row leaves แก้ the moment it goes back for approval.
-    await api.dealQuotations.submit(id);
+    // Resubmitting mints a NEW revision (a different id) and leaves the REJECTED row's own note
+    // untouched -- it stays in แก้, the new revision does not join it (PENDING_APPROVAL is not แก้).
+    const { quotation: revision } = await api.dealQuotations.submit(id);
+    expect(revision.id).not.toBe(id);
+    expect(revision.docStatus).toBe('PENDING_APPROVAL');
+
     rework = await api.dealQuotations.list({ needsRework: true });
-    expect(rework.items.some((q) => q.id === id)).toBe(false);
+    // The rejected row itself stays แก้ until superseded.
+    expect(rework.items.some((q) => q.id === id)).toBe(true);
+    expect(rework.items.some((q) => q.id === revision.id)).toBe(false);
+  });
+
+  /** Mirrors DealQuotationRepository#supersede's own widened WHERE clause -- a DRAFT (rejected)
+   * parent becomes SUPERSEDED the SAME way and at the SAME time an APPROVED parent already does:
+   * only once its OWN revision reaches APPROVED, not before. */
+  it('submit after rejection: the rejected row becomes SUPERSEDED only once the revision is approved', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const id = created.quotation.id;
+    await api.dealQuotations.submit(id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(id, { reason: 'แก้ราคา' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.submit(id);
+
+    // Not yet -- the revision itself hasn't been approved.
+    let rejected = (await api.dealQuotations.get(id)).quotation;
+    expect(rejected.docStatus).toBe('DRAFT');
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(revision.id, {});
+
+    rejected = (await api.dealQuotations.get(id)).quotation;
+    expect(rejected.docStatus).toBe('SUPERSEDED');
+  });
+
+  /** Mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap on "ส่งใหม่" must
+   * not silently mint two revisions of the same rejected draft. */
+  it('submit after rejection: resubmitting the SAME rejected row twice is a 409, not a second revision', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const id = created.quotation.id;
+    await api.dealQuotations.submit(id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(id, { reason: 'แก้ราคา' });
+
+    await api.auth.login(salesUser);
+    await api.dealQuotations.submit(id);
+
+    await expect(api.dealQuotations.submit(id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles -- never
+   * "{base}-1-2-3" -- the mock's own mirror of
+   * DealQuotationIntegrationTest#submit_afterRejection_numberingChainsThroughMultipleRejectCycles. */
+  it('submit after rejection: numbering chains through multiple reject cycles', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const base = created.quotation.number.replace(/-\d+$/, '');
+
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(created.quotation.id, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision2 } = await api.dealQuotations.submit(created.quotation.id);
+    expect(revision2.number).toBe(`${base}-2`);
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision3 } = await api.dealQuotations.submit(revision2.id);
+    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.parentQuotationId).toBe(revision2.id);
   });
 
   it('needsRework=true also selects a DRAFT revision in progress (the owner\'s second sense of แก้)', async () => {

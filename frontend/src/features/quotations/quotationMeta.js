@@ -21,11 +21,21 @@
 // APPROVED -> (revise) -> a NEW DRAFT child; the parent becomes SUPERSEDED only once THAT child is
 // itself APPROVED (not before -- the customer's last approved document stays valid until
 // replaced). Editing is DRAFT-only.
+//
+// Owner clarification (2026-09-15): ตีกลับ ITSELF never renumbers -- the reject edge above is
+// the WHOLE of "DRAFT -> (reject+reason) -> DRAFT", same row/number. Renumbering happens one step
+// LATER, the next time submit() runs on that now-rejected DRAFT (approvalNote != null): it mints
+// a revision of ITSELF instead of resubmitting the same row, exactly the same "new DRAFT child;
+// parent -> SUPERSEDED once the child reaches APPROVED, not before" shape the APPROVED/(revise)
+// edge already has -- just reached from a DRAFT parent instead of an APPROVED one. Hence DRAFT's
+// own SUPERSEDED edge below (mirrors DealQuotationRepository#supersede's own WHERE clause, widened
+// the same way and for the same reason).
 export const DEAL_QUOTATION_TRANSITIONS = {
-  DRAFT: ['PENDING_APPROVAL', 'CANCELLED'],
+  DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
   PENDING_APPROVAL: ['APPROVED', 'DRAFT'],
-  // The APPROVED -> SUPERSEDED edge is the side effect of a child revision being approved, not a
-  // status a caller ever requests directly (there is no "supersede" endpoint in the plan).
+  // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being
+  // approved, not a status a caller ever requests directly (there is no "supersede" endpoint in
+  // the plan).
   APPROVED: ['SUPERSEDED'],
   SUPERSEDED: [],
   CANCELLED: [],

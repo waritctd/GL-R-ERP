@@ -354,14 +354,173 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto rejected = quotationService.reject(submitted.id(),
             new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
 
+        // ตีกลับ ITSELF never renumbers -- SAME row, SAME number, back to DRAFT with the reason
+        // recorded as its note (owner clarification 2026-09-15, this class's own header comment).
+        assertThat(rejected.id()).isEqualTo(created.id());
+        assertThat(rejected.number()).isEqualTo(created.number());
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(rejected.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
         assertThat(notifications.findByEmployeeId(salesRepId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_REJECTED") && n.message().contains("ราคาผิดพลาด"));
+    }
 
-        // A rejected-then-resubmitted draft clears the stale note.
+    // ── owner clarification (2026-09-15): resubmitting a ตีกลับ'd draft mints a NEW revision ──
+    //
+    // "ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (this row, this number, back to DRAFT) — but resubmitting
+    // it, once sales has fixed it, ออกใบใหม่ เลขเปลี่ยน (a new row/number), the SAME way revising
+    // an already-APPROVED document always has." reject() itself is unchanged (see the test above);
+    // everything below pins what submit() now does to a DRAFT that carries a rejection.
+
+    /** The core new behaviour: submit() on a rejected draft mints a revision of it instead of
+     * flipping the SAME row to PENDING_APPROVAL -- new id, new number ({base}-{n+1}, exactly the
+     * numbering scheme #createRevision already uses), parent = the rejected row, and the REJECTED
+     * row itself is left exactly as reject() put it (still DRAFT, its approval_note untouched --
+     * a permanent record of why THAT number was retired, not cleared the way a same-row resubmit
+     * used to clear it). */
+    @Test
+    void submit_afterRejection_mintsANewRevision_notTheSameRow() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
+
         DealQuotationDto resubmitted = quotationService.submit(rejected.id(), salesActor);
-        assertThat(resubmitted.approvalNote()).isNull();
+
+        assertThat(resubmitted.id()).as("a NEW row, not the rejected one").isNotEqualTo(rejected.id());
+        assertThat(resubmitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(resubmitted.parentQuotationId()).isEqualTo(rejected.id());
+        assertThat(resubmitted.revisionNo()).isEqualTo(rejected.revisionNo() + 1);
+        String base = DealQuotationRepository.baseNumber(rejected.number(), rejected.revisionNo());
+        assertThat(resubmitted.number()).isEqualTo(base + "-" + resubmitted.revisionNo());
+        assertThat(resubmitted.number()).as("a genuinely different number").isNotEqualTo(rejected.number());
+
+        // The rejected row itself: untouched by this call -- still DRAFT, still carrying the SAME
+        // reason it always did (not cleared, unlike the old same-row-resubmit behaviour this
+        // supersedes).
+        DealQuotationDto rejectedReread = quotationService.get(rejected.id(), salesActor);
+        assertThat(rejectedReread.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(rejectedReread.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
+    }
+
+    /** Mirrors {@link #approve_supersedesParentOnlyWhenRevisionItselfReachesApproved} exactly, for
+     * a DRAFT (rejected) parent instead of an APPROVED one -- the SAME timing rule
+     * ({@code DealQuotationRepository#supersede}'s own Javadoc), now reachable from a second
+     * starting status. */
+    @Test
+    void submit_afterRejection_theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.submit(rejected.id(), salesActor);
+        // Still DRAFT, not yet SUPERSEDED -- the revision itself hasn't been approved yet.
+        assertThat(quotationService.get(rejected.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.DRAFT);
+
+        quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(quotationService.get(rejected.id(), salesActor).docStatus())
+            .as("only NOW, once the revision itself reaches APPROVED")
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    /** Mirrors {@link #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash}
+     * -- the SAME {@code hasOpenRevision} guard, reached from submit()'s new branch instead of
+     * {@code createRevision} directly. A rep double-clicking "ส่งใหม่" (a slow network, an
+     * impatient double-tap) must not either crash on the unique-index violation or silently mint
+     * two revisions of the same rejected draft. */
+    @Test
+    void submit_afterRejection_twiceOnTheSameRejectedRow_secondIs409NotADuplicateKeyCrash() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        DealQuotationDto firstRevision = quotationService.submit(rejected.id(), salesActor);
+        assertThat(firstRevision.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+
+        assertThatThrownBy(() -> quotationService.submit(rejected.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
+    }
+
+    /** The negative space of the new behaviour: a plain first-ever submit (never decided on --
+     * {@code approval_note} is null) must be COMPLETELY untouched -- same row, same number, still
+     * the ordinary DRAFT -> PENDING_APPROVAL compare-and-set. Guards against the new branch's
+     * condition ever being loosened to fire on every DRAFT rather than only a REJECTED one. */
+    @Test
+    void submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.approvalNote()).isNull();
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+
+        assertThat(submitted.id()).isEqualTo(created.id());
+        assertThat(submitted.number()).isEqualTo(created.number());
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(submitted.parentQuotationId()).isNull();
+    }
+
+    /** The revision must copy the rejected draft's CURRENT (edited-after-rejection) data, not a
+     * stale snapshot from before the rework -- the same verbatim-copy contract
+     * {@code createRevision_carriesPriceModeAndEveryRowTypeVerbatim} pins for an ordinary
+     * revision, exercised here through the OTHER path that now shares its copying code. */
+    @Test
+    void submit_afterRejection_copiesTheDraftsPostRejectionEditsVerbatim() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        // Sales fixes the price AFTER the rejection -- the edit reject() itself asked for.
+        DealQuotationDto edited = quotationService.update(rejected.id(),
+            upsertRequest(List.of(sampleItem("250.00", 4))), salesActor);
+        assertThat(edited.items()).hasSize(1);
+
+        DealQuotationDto revision = quotationService.submit(rejected.id(), salesActor);
+
+        // Mutation-check note: item data alone doesn't discriminate "copied into a new revision"
+        // from "the same row, still holding update()'s own edit" -- both would read identically
+        // here. id/parentQuotationId are what actually pin THIS test to the revision mechanism
+        // specifically (mintsANewRevision_notTheSameRow already covers this more directly, but a
+        // reader of THIS test alone should not be misled into thinking it proves that on its own).
+        assertThat(revision.id()).isNotEqualTo(rejected.id());
+        assertThat(revision.parentQuotationId()).isEqualTo(rejected.id());
+        assertThat(revision.items()).hasSize(1);
+        assertThat(revision.items().get(0).unitPrice()).isEqualByComparingTo("250.00");
+        assertThat(revision.items().get(0).quantity()).isEqualByComparingTo("4");
+    }
+
+    /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles, the
+     * same way {@link #revisionNumbering_chainsOffTheOriginalBaseNumber_notTheImmediateParent}
+     * already pins for ordinary approve-then-revise cycles -- never "{base}-1-2-3" and never
+     * colliding with a fresh quotation's own "{base}-1". */
+    @Test
+    void submit_afterRejection_numberingChainsThroughMultipleRejectCycles() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String base = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
+
+        DealQuotationDto submitted1 = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected1 = quotationService.reject(submitted1.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revision2 = quotationService.submit(rejected1.id(), salesActor);
+        assertThat(revision2.number()).isEqualTo(base + "-2");
+
+        DealQuotationDto rejected2 = quotationService.reject(revision2.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revision3 = quotationService.submit(rejected2.id(), salesActor);
+        // Must chain off the ORIGINAL base ("QT-...-3"), never off rejected2's own number as if it
+        // were itself a base ("QT-...-2-3").
+        assertThat(revision3.number()).isEqualTo(base + "-3");
+        assertThat(revision3.revisionNo()).isEqualTo(3);
+        assertThat(revision3.parentQuotationId()).isEqualTo(rejected2.id());
     }
 
     /** LOW: reject() used to skip the existence check and go straight to the compare-and-set

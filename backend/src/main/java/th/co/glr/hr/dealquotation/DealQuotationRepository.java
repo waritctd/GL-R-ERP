@@ -628,13 +628,29 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** Compare-and-set APPROVED -> SUPERSEDED — only called once the CHILD revision itself reaches
-     * APPROVED (see {@code DealQuotationService#approve}); the parent stays a valid, live APPROVED
-     * document until then. */
+    /** Compare-and-set the parent -> SUPERSEDED — only called once the CHILD revision itself
+     * reaches APPROVED (see {@code DealQuotationService#approve}'s
+     * {@code parentQuotationId() != null} call). Two starting statuses, matching this repository's
+     * two ways a revision gets minted:
+     * <ul>
+     *   <li>{@code APPROVED} — an ordinary revision of an already-approved document
+     *       ({@code DealQuotationService#createRevision}); the parent stays a valid, live APPROVED
+     *       document until the child actually replaces it, not before.</li>
+     *   <li>{@code DRAFT} — owner clarification (2026-09-15): a revision minted by resubmitting a
+     *       ตีกลับ'd draft ({@code DealQuotationService#submitAsRevisionOfRejected}). That parent
+     *       was never a live, sent document (it was rejected, never approved), so there is no
+     *       "still valid until replaced" concern to preserve — but it still only becomes
+     *       SUPERSEDED once its own child is actually approved, the SAME timing as the APPROVED
+     *       case, for the same reason: a child that itself gets rejected must not have already
+     *       retired the row it was trying to replace.</li>
+     * </ul>
+     * A parent in any OTHER status (CANCELLED, SUPERSEDED already, itself PENDING_APPROVAL — none
+     * reachable while it has an open child, per {@code #hasOpenRevision}) matches neither branch
+     * and this simply no-ops (0 rows), which is the safe outcome either way. */
     public int supersede(long quotationId) {
         return jdbc.update("""
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED', 'DRAFT')
             """, Map.of("id", quotationId));
     }
 

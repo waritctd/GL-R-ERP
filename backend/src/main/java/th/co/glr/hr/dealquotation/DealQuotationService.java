@@ -419,6 +419,17 @@ public class DealQuotationService {
     //                 DRAFT -> (cancel) -> CANCELLED
     //                 APPROVED -> (revise) -> new DRAFT child; parent -> SUPERSEDED once the
     //                             CHILD reaches APPROVED (not before).
+    //
+    // Owner clarification (2026-09-15): ตีกลับ ITSELF never renumbers -- reject() above is the
+    // WHOLE of "DRAFT -> (reject+reason) -> DRAFT", same row, same number, exactly as drawn. The
+    // renumbering happens one step later, the NEXT time #submit runs on that now-rejected DRAFT:
+    //     DRAFT (with a prior rejection, i.e. approval_note != null) -> (submit) ->
+    //         new DRAFT revision (parent = the rejected row) -> PENDING_APPROVAL immediately;
+    //         parent -> SUPERSEDED once THIS revision reaches APPROVED (not before) -- the
+    //         IDENTICAL rule and mechanism the APPROVED/(revise) row above already uses, just with
+    //         a DRAFT parent instead of an APPROVED one (see DealQuotationRepository#supersede).
+    // One sentence: ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted); resubmitting ที่ถูกตีกลับ
+    // = ออกใบใหม่ เลขเปลี่ยน, the same way a revision of an approved document always has.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
@@ -453,6 +464,51 @@ public class DealQuotationService {
             requireStoredItemComplete(item, perSqm);
         }
         requireEveryTileItemHasALeadTime(quotation.items());
+        // Owner clarification (2026-09-15): ตีกลับ (reject) itself never renumbers -- reject()
+        // sends the SAME row back to DRAFT with a reason (see the class's own status-machine
+        // comment above). But once sales fixes it and resubmits, THIS submit is what should mint
+        // a new number: "ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted) · then ออกใบใหม่ เลข
+        // เปลี่ยน on the next submit." A DRAFT carrying a PRIOR rejection decision --
+        // approval_note IS NOT NULL, the EXACT signal DealQuotationRepository#NEEDS_REWORK_PREDICATE
+        // already keys the list page's "แก้" bucket on -- resubmits as a NEW revision of itself
+        // rather than reusing its own row, done as one atomic step so no caller can observe (or
+        // race against) an un-submitted intermediate child, exactly as if the rep had called
+        // #createRevision then #submit on the result by hand. A first-ever submit (approval_note
+        // is null -- never yet decided on) is untouched: same row, same number, as always.
+        if (QuotationStatus.DRAFT.equals(quotation.docStatus()) && quotation.approvalNote() != null) {
+            return submitAsRevisionOfRejected(quotation, actor);
+        }
+        return submitDraftRow(id, actor);
+    }
+
+    /**
+     * The resubmit-after-rejection half of {@link #submit}'s branch above: mints a revision of
+     * {@code rejected} the SAME way {@link #createRevision} does (shared
+     * {@link #insertRevisionCopyOf}, same {@link #requireNoOpenRevision} lock/guard), then submits
+     * THAT new row via the ordinary {@link #submitDraftRow} -- so the parent (still whatever
+     * status it already was, DRAFT) becomes {@code SUPERSEDED} the SAME way and at the SAME time
+     * an ordinary revision's parent does: {@link #approve}'s existing
+     * {@code parentQuotationId() != null -> supersede()} call, once THIS child reaches APPROVED,
+     * not before. {@link DealQuotationRepository#supersede} accepts a {@code DRAFT} parent for
+     * exactly this reason (widened alongside {@code APPROVED}, which is all it needed before this
+     * feature).
+     */
+    private DealQuotationDto submitAsRevisionOfRejected(DealQuotationDto rejected, UserPrincipal actor) {
+        requireNoOpenRevision(rejected);
+        long revisionId = insertRevisionCopyOf(rejected, actor);
+        String revisionNumber = requireQuotation(revisionId).number();
+        tickets.addEvent(rejected.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED,
+            null, null,
+            "สร้างใบเสนอราคาฉบับแก้ไข " + revisionNumber + " จาก " + rejected.number()
+                + " ที่ถูกตีกลับ — " + rejected.approvalNote());
+        return submitDraftRow(revisionId, actor);
+    }
+
+    /** The actual DRAFT -> PENDING_APPROVAL compare-and-set, its ticket event and its
+     * notification -- shared by an ordinary first-time submit ({@code id} is the row the caller
+     * named) and {@link #submitAsRevisionOfRejected} (where {@code id} is the freshly-minted
+     * revision, not the row {@link #submit} was originally called with). */
+    private DealQuotationDto submitDraftRow(long id, UserPrincipal actor) {
         int rows = quotations.submit(id, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงส่งขออนุมัติไม่ได้");
@@ -560,18 +616,26 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น (ปัจจุบัน: " + source.docStatus() + ")");
         }
-        quotations.lockTicket(source.ticketId());
-        // M3: two concurrent "create a revision" calls on the same APPROVED parent both compute
-        // the SAME deterministic child number ({base}-{revisionNo+1}, from the SAME source row),
-        // and sales.quotation.number is UNIQUE (V6) -- so the second INSERT threw
-        // DuplicateKeyException, surfaced as a bare 500 with no Thai message. The advisory lock
-        // above already serialises callers for this ticket, so the SECOND caller (once it
-        // acquires the lock after the first commits) now observes the first caller's
-        // already-inserted child here and 409s with an intelligible reason instead of racing into
-        // the unique-index violation.
-        if (quotations.hasOpenRevision(source.id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
-        }
+        requireNoOpenRevision(source);
+        long newId = insertRevisionCopyOf(source, actor);
+        DealQuotationDto revision = requireQuotation(newId);
+        tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
+            "สร้างใบเสนอราคาฉบับแก้ไข " + revision.number() + " จาก " + source.number());
+        return revision;
+    }
+
+    /**
+     * The revision-copy step {@link #createRevision} and {@link #submit}'s owner-feedback
+     * (2026-09-15) "resubmit after a ตีกลับ mints a new number" path both need: a new DRAFT child
+     * of {@code source}, every header field copied VERBATIM (see each parameter's own comment
+     * below — unchanged from {@code createRevision}'s original body), its items and item pictures
+     * copied, at the next revision number. Callers are responsible for their OWN precondition (the
+     * two paths gate on different source statuses) and for locking the ticket + checking
+     * {@link DealQuotationRepository#hasOpenRevision} BEFORE calling this — both already-serialised
+     * requirements this method assumes rather than re-does, so it stays a plain insert with no
+     * lock/guard duplicated between the two callers.
+     */
+    private long insertRevisionCopyOf(DealQuotationDto source, UserPrincipal actor) {
         // Works unchanged for BOTH a post-2026-09-11 parent ("QT-2026-0014-1", revisionNo 1 -> base
         // "QT-2026-0014") and a legacy pre-change parent ("QT-2026-0014" bare, revisionNo 1 -> base
         // itself unchanged) -- see DealQuotationRepository#baseNumber's own Javadoc for why one
@@ -616,9 +680,25 @@ public class DealQuotationService {
         // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
         // child's rows point at the parent's (immutable, shared) picture rows, matched by seq.
         quotations.copyPictureLinks(source.id(), newId);
-        tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
-            "สร้างใบเสนอราคาฉบับแก้ไข " + newNumber + " จาก " + source.number());
-        return requireQuotation(newId);
+        return newId;
+    }
+
+    /**
+     * M3: two concurrent callers of {@link #insertRevisionCopyOf} against the SAME source both
+     * compute the SAME deterministic child number ({base}-{revisionNo+1}, from the SAME source
+     * row), and {@code sales.quotation.number} is UNIQUE (V6) -- so the second INSERT threw
+     * DuplicateKeyException, surfaced as a bare 500 with no Thai message. Locking the ticket first
+     * serialises callers for it, so the SECOND caller (once it acquires the lock after the first
+     * commits) then observes the first caller's already-inserted child in
+     * {@link DealQuotationRepository#hasOpenRevision} and 409s with an intelligible reason instead
+     * of racing into the unique-index violation. Shared by {@link #createRevision} and
+     * {@link #submit}'s resubmit-after-rejection path — both mint a revision the same way.
+     */
+    private void requireNoOpenRevision(DealQuotationDto source) {
+        quotations.lockTicket(source.ticketId());
+        if (quotations.hasOpenRevision(source.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

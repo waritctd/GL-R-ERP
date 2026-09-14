@@ -1067,6 +1067,21 @@ export function QuotationEditorPage({ user, showToast }) {
       return api.dealQuotations.submit(id);
     },
     onSuccess: (res) => {
+      // Owner clarification (2026-09-15): submit() on a ตีกลับ'd draft now mints a NEW revision
+      // instead of resubmitting the SAME row (DealQuotationService#submit's own status-machine
+      // comment) -- res.quotation.id can differ from this page's OWN `id` now, where it never
+      // could before. Mirrors reviseMutation's own onSuccess just below (the createRevision
+      // button already had to solve this exact "server minted a different id" case): navigate
+      // there instead of caching the NEW quotation's data under the OLD id's query key, which
+      // would leave the rep looking at this page's stale route while the cache silently disagreed
+      // with it (and a refresh would then re-fetch the OLD, now-superseded-in-waiting row).
+      if (String(res.quotation.id) !== id) {
+        queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+        showToast('success', 'ส่งขออนุมัติแล้ว (ฉบับแก้ไขใหม่ ' + res.quotation.number + ')');
+        setSubmitConfirmOpen(false);
+        navigate(`/quotations/${res.quotation.id}`);
+        return;
+      }
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'ส่งขออนุมัติแล้ว');
