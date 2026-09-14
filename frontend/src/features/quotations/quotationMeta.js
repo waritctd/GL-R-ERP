@@ -404,6 +404,66 @@ export function sqmPerPieceFromPiecesPerSqm(piecesPerSqm) {
   return Math.round((1 / n + Number.EPSILON) * 1e6) / 1e6;
 }
 
+/**
+ * Thai SPECIAL_SQM only: the rep types `unitPrice` as the LIST price PER PIECE, but ราคาพิเศษ is
+ * typed per ตร.ม. INCLUDING VAT, and nothing on the row said which box was which (owner feedback
+ * 2026-09-14 — a rep typed a per-ตร.ม. figure into the per-piece box). This converts the list price
+ * the same way ราคาพิเศษ is already read, so the rep can see the per-ตร.ม. figure to compare against
+ * before typing ราคาพิเศษ: `round2(unitPrice × piecesPerSqm × 1.07)`, reusing
+ * `piecesPerSqmFromSqmPerPiece` above for the reciprocal (1/sqmPerPiece rounded 2dp HALF_UP) rather
+ * than inventing a second one. VAT is hardcoded at 1.07 rather than reading `vatRateForLanguage`
+ * because this helper is only ever called from the Thai SPECIAL_SQM branch (English per-sqm has no
+ * VAT and never calls this). DISPLAY-ONLY: never stored on the item, never sent in the payload, and
+ * never fed into the printed document — see QuotationItemRow's own price-fields comment. `null`
+ * when either input is missing or non-positive, so the caller renders a guidance hint instead.
+ */
+export function listPricePerSqmIncVat(unitPrice, sqmPerPiece) {
+  const price = Number(unitPrice);
+  if (!(price > 0)) return null;
+  const piecesPerSqm = piecesPerSqmFromSqmPerPiece(sqmPerPiece);
+  if (piecesPerSqm == null) return null;
+  return round2(price * piecesPerSqm * 1.07);
+}
+
+// Anchored, case-insensitive: number, separator, number, an optional THIRD `separator number`
+// (thickness, e.g. "60x60x0.9" for a 9mm tile — ignored, never treated as a second dimension pair),
+// then an optional trailing unit. Separators: x / X / × / * with optional surrounding spaces.
+// Numbers: digits with an optional single `.` decimal part. Anything else — a comma anywhere,
+// letters before/between the numbers, only one number — fails the match and yields `null` rather
+// than a guess (a bare "60" or a product-name string like "JOLLY 60x60" must never resolve).
+const SIZE_CM_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)(?:\s*[xX×*]\s*\d+(?:\.\d+)?)?\s*(?:cm|ซม\.?)?\s*$/i;
+
+/**
+ * ขนาด (ซม.) free text → ตร.ม./แผ่น, for the auto-fill-from-size fallback (owner decision
+ * 2026-09-14). A 2026-09-12 ruling ("Do not infer anything") had removed inference from this same
+ * field because the column mixed centimetres and millimetres with no way to tell which a given row
+ * meant. That column is now explicitly labelled ขนาด (ซม.) — the unit is DECLARED by the field, not
+ * guessed by this function, so the 2026-09-12 objection no longer applies to it. This is still only
+ * ever a FALLBACK: a catalogue-resolved `sqmPerPiece` (`resolveTileSqmPerPiece` in
+ * QuotationItemRow.jsx) is never replaced by a size-derived one, and the backend still does not
+ * parse `sizeText` at all — it accepts whatever `sqmPerPiece` the editor sends.
+ *
+ * Reads only "widthXheight" (optionally "widthXheightXthickness", the thickness ignored) with an
+ * optional trailing cm/ซม unit — see SIZE_CM_PATTERN above. Converts cm² → m² (÷ 10000) and rounds
+ * to 6dp, exactly like `sqmPerPieceFromPiecesPerSqm` above (the NUMERIC(10,6) storage precision).
+ *
+ * Returns `null` for a non-positive dimension or a result outside [0.001, 10] m² per piece — the
+ * same sanity bound `WastageCalculator` enforces server-side (MIN_SQM_PER_PIECE / MAX_SQM_PER_PIECE,
+ * WastageCalculator.java:87-88). This is what catches millimetres typed into a field labelled cm:
+ * "600x1200" parses fine as a pair of numbers but yields 72 m²/piece, so it is rejected here rather
+ * than silently handed to the server as a "reasonable" catalogue-scale tile.
+ */
+export function sqmPerPieceFromSizeCm(sizeText) {
+  const match = SIZE_CM_PATTERN.exec(sizeText ?? '');
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!(width > 0) || !(height > 0)) return null;
+  const sqmPerPiece = Math.round(((width * height) / 10000 + Number.EPSILON) * 1e6) / 1e6;
+  if (sqmPerPiece < 0.001 || sqmPerPiece > 10) return null;
+  return sqmPerPiece;
+}
+
 // ── Item completeness (frontend pass 4, owner ruling 2026-09-10) ────────────────────────────────
 // "Autofill as much as possible when the item is in the database; sales can also fill in their own
 // item if it is not in the database, but ALL info about the tile has to be completed." A catalog
@@ -448,7 +508,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
       errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
     }
   } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
-    errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง/แผ่น' : 'กรุณาระบุราคา/หน่วย';
+    errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
   }
   if (priceMode === 'SPECIAL_SQM') {
     if (!(Number(item?.specialPriceSqm) > 0)) {

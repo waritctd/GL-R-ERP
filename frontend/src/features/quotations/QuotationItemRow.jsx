@@ -8,7 +8,8 @@ import {
   LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
-  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm,
+  piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
+  sqmPerPieceFromSizeCm,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -39,7 +40,19 @@ const PRICE_UNIT_PER_LINEAR_M = 'per_linear_m';
  *   c. priceUnit === per_linear_m -- `cat.sqmPerPiece` is LINEAR METRES per piece, not area (see
  *      the constant above). Never computed geometrically either. Returns `null` so the rep enters
  *      it, and the UI says why (see the "ต่อเมตร" hint below).
- *   d. Nothing resolved -- `null`. The field stays exactly as the rep left it; nothing is invented.
+ *
+ * This function itself still returns `null` when none of (a)/(b)/(c) resolve -- it never reads the
+ * free-text ขนาด (ซม.) field, and that stays true. But its CALLERS (the catalogue-pick handler and
+ * the ขนาด onChange handler below) no longer stop there:
+ *
+ *   d. Owner decision 2026-09-14: that field is now explicitly labelled ขนาด (ซม.), so unlike the
+ *      catalogue's own free-text `sizeRaw`, its unit is DECLARED rather than guessed -- the
+ *      objection that killed size-based inference on 2026-09-12 ("Do not infer anything", a column
+ *      mixing cm and mm) does not apply to it. A per_linear_m row is still excluded (that figure is
+ *      linear metres, never area), a resolved (a)/(b) figure is never overwritten by it, and once
+ *      the rep types over the result it stops recalculating. See `sqmPerPieceFromSizeCm` in
+ *      quotationMeta.js for the parser and its own sanity bound. The backend still does not parse
+ *      size at all -- see that function's doc for the WastageCalculator citation.
  */
 export function resolveTileSqmPerPiece(cat) {
   if (cat?.priceUnit === PRICE_UNIT_PER_LINEAR_M) return null;
@@ -89,6 +102,32 @@ export function sizeTextFromCatalog(cat) {
 }
 
 /**
+ * A number input with a trailing, non-interactive unit label rendered inside the field itself
+ * (owner feedback 2026-09-14 -- nothing on the Thai SPECIAL_SQM price boxes said which one was
+ * per piece and which was per ตร.ม., so a rep typed a per-ตร.ม. figure into the per-piece box).
+ * There is no shared adornment component in components/common/ yet -- this mirrors the same
+ * `relative` + `pointer-events-none absolute` suffix pattern already used ad hoc for the ฿ prefix
+ * in TaxAllowanceForm's `MoneyInput` and the search icon in CatalogSearchPage, so it stays local
+ * rather than inventing a second, divergent one. Forwards every prop it doesn't own (including the
+ * `aria-*` attributes FormField clones onto this element when its `id` matches the field's
+ * `htmlFor`) straight onto the real `<input>`, so FormField's automatic aria wiring still reaches
+ * the actual control.
+ */
+function PriceInputWithSuffix({ id, suffix, className, ...inputProps }) {
+  return (
+    <div className="relative">
+      <input id={id} {...inputProps} className={`pr-[4.5rem] ${className ?? ''}`.trim()} />
+      <span
+        className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-2xs font-bold text-text-muted"
+        aria-hidden="true"
+      >
+        {suffix}
+      </span>
+    </div>
+  );
+}
+
+/**
  * One item row of the ใบเสนอราคา editor -- catalog typeahead (autofills, everything stays
  * editable after), quantity mode toggle, wastage segmented control, and the live calculation
  * line the parent keeps up to date via a 300ms-debounced `calculate-line` call (see
@@ -124,6 +163,11 @@ export function QuotationItemRow({
   renderMedia = null,
 }) {
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
+  // Thai SPECIAL_SQM only -- see PriceInputWithSuffix's own comment above for why this exists.
+  // DISPLAY-ONLY: never patched onto `item`, never sent in a payload builder.
+  const listPerSqm = priceMode === 'SPECIAL_SQM' && !perSqm
+    ? listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece)
+    : null;
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
@@ -210,6 +254,16 @@ export function QuotationItemRow({
     // and what lets it explain a per_linear_m row's blank field instead of just failing validation
     // silently.
     const resolvedSqmPerPiece = resolveTileSqmPerPiece(cat);
+    const newSizeText = sizeTextFromCatalog(cat);
+    // ขนาด (ซม.) fallback for a catalogue pick that itself resolves nothing (rule (d) in
+    // resolveTileSqmPerPiece's own doc above): never for a per_linear_m row (that figure is linear
+    // metres, not area), and never when the rep has already overridden the field by hand -- a fresh
+    // pick that resolves nothing must not clobber a manual entry just because it had nothing to add.
+    const isPickLinearM = cat?.priceUnit === PRICE_UNIT_PER_LINEAR_M;
+    const sizeFallbackSqmPerPiece = resolvedSqmPerPiece == null && !isPickLinearM && item.sqmPerPieceSource !== 'manual'
+      ? sqmPerPieceFromSizeCm(newSizeText)
+      : null;
+    const effectiveSqmPerPiece = resolvedSqmPerPiece ?? sizeFallbackSqmPerPiece ?? item.sqmPerPiece ?? null;
     patch({
       catalogPriceId: cat.priceId ?? null,
       productCode: cat.productCode ?? null,
@@ -217,20 +271,29 @@ export function QuotationItemRow({
       model: cat.collection ?? cat.productName ?? cat.productCode ?? item.model,
       color: cat.color ?? '',
       texture: cat.surface ?? '',
-      sizeText: sizeTextFromCatalog(cat),
+      sizeText: newSizeText,
       thicknessMm: cat.thicknessMm ?? item.thicknessMm ?? null,
-      sqmPerPiece: resolvedSqmPerPiece ?? item.sqmPerPiece ?? null,
-      piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(resolvedSqmPerPiece ?? item.sqmPerPiece) ?? '',
+      sqmPerPiece: effectiveSqmPerPiece,
+      piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(effectiveSqmPerPiece) ?? '',
       // A fresh, real resolution always overwrites a stale "manual" flag from a previous pick --
       // the rep just linked a (possibly new) catalog row and has typed nothing on THIS pick, so
-      // the badge must read "from catalog", not "overridden" left over from before. When nothing
-      // resolves (per_linear_m, or the catalog row itself has no factor), the previous source is
-      // left exactly as it was: a rep's earlier manual entry does not become unexplained just
-      // because this pick had nothing to add, and a still-unset field stays unset (d).
-      sqmPerPieceSource: resolvedSqmPerPiece != null ? 'catalog' : item.sqmPerPieceSource ?? null,
+      // the badge must read "from catalog", not "overridden" left over from before. A resolved
+      // size-derived fallback reads "from size" (rule (d)). When nothing resolves at all
+      // (per_linear_m, or the catalog row itself has no factor and no readable size), the previous
+      // source is left exactly as it was: a rep's earlier manual entry does not become unexplained
+      // just because this pick had nothing to add, and a still-unset field stays unset.
+      sqmPerPieceSource: resolvedSqmPerPiece != null
+        ? 'catalog'
+        : sizeFallbackSqmPerPiece != null
+          ? 'size'
+          : item.sqmPerPieceSource ?? null,
       catalogSqmPerPiece: resolvedSqmPerPiece,
       catalogPriceUnit: cat.priceUnit ?? null,
-      piecesPerBox: cat.pcsPerBox ?? item.piecesPerBox ?? null,
+      // Never inherited from a previous pick, for the same reason as sqmPerBox below: a box count
+      // belongs to its own product. Keeping the old one is how QT-2026-0017 saved 66 แผ่น/กล่อง for
+      // a product whose catalogue says 38 (owner feedback 2026-09-14). A missing figure (684 active
+      // catalogue rows, nearly all Daugres/Bode) stays blank for the rep to type.
+      piecesPerBox: cat.pcsPerBox ?? null,
       // V176: the supplier-stated ตร.ม./กล่อง, which an English per-sqm row prints its quantity from.
       // NEVER from a per_linear_m row (its sqm_per_box column holds LINEAR METRES, V153), and never
       // inherited from a previous pick: a box area belongs to its own product, and a stale one would
@@ -253,25 +316,31 @@ export function QuotationItemRow({
   // somewhere to go, so a single-location quotation carries no dead control.
   const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
 
-  // แผ่น/ตร.ม. status line (owner feedback 2026-09-12) -- one of three mutually exclusive states,
-  // each visibly distinct per the owner's ask that an overridden value read differently from a
-  // resolved one:
+  // แผ่น/ตร.ม. status line (owner feedback 2026-09-12, extended 2026-09-14) -- one of four mutually
+  // exclusive states, each visibly distinct per the owner's ask that an overridden value read
+  // differently from a resolved one:
   //   - a per_linear_m catalog row with nothing entered yet: explain WHY it is blank (resolveTile-
   //     SqmPerPiece's rule (c)) rather than just failing validation silently.
   //   - `sqmPerPieceSource === 'catalog'`: this row's current value is still exactly what the last
-  //     catalog pick resolved (a) -- info tone, badgeCheck icon, matching the row's own "จาก
+  //     catalog pick resolved (a)/(b) -- info tone, badgeCheck icon, matching the row's own "จาก
   //     catalog" badge.
+  //   - `sqmPerPieceSource === 'size'`: computed from ขนาด (ซม.), never from the catalogue (rule
+  //     (d), 2026-09-14 -- see resolveTileSqmPerPiece's own doc and sqmPerPieceFromSizeCm in
+  //     quotationMeta.js) -- info tone like 'catalog' (both are auto-resolved, not overridden), a
+  //     distinct calculator icon so the rep can tell which source it came from.
   //   - `sqmPerPieceSource === 'manual'`: the rep typed over either the resolved value or a blank
   //     field (the owner's "แก้ทับได้") -- warning tone, pencil icon, so it never reads as if the
-  //     catalog vouches for a number the rep chose.
+  //     catalog or the size vouches for a number the rep chose.
   const isLinearMCatalog = Boolean(item.catalogPriceId) && item.catalogPriceUnit === PRICE_UNIT_PER_LINEAR_M;
   const sqmPerPieceStatus = isLinearMCatalog && !(Number(item.sqmPerPiece) > 0)
     ? { tone: 'text-warning', icon: 'info', text: 'สินค้านี้ขายต่อเมตร (per_linear_m) — ตร.ม./แผ่น ในแคตตาล็อกไม่ใช่พื้นที่ กรุณากรอกแผ่น/ตร.ม. เอง' }
     : item.sqmPerPieceSource === 'catalog'
       ? { tone: 'text-info', icon: 'badgeCheck', text: 'คำนวณจาก catalog' }
-      : item.sqmPerPieceSource === 'manual'
-        ? { tone: 'text-warning', icon: 'pencil', text: 'แก้ไขเอง' }
-        : null;
+      : item.sqmPerPieceSource === 'size'
+        ? { tone: 'text-info', icon: 'calculator', text: 'คำนวณจากขนาด' }
+        : item.sqmPerPieceSource === 'manual'
+          ? { tone: 'text-warning', icon: 'pencil', text: 'แก้ไขเอง' }
+          : null;
 
   return (
     <li className="grid gap-3 rounded-md border border-border p-3.5">
@@ -434,7 +503,49 @@ export function QuotationItemRow({
           <input id={`texture-${index}`} disabled={readOnly} value={item.texture ?? ''} onChange={(e) => patch({ texture: e.target.value })} />
         </FormField>
         <FormField label="ขนาด (ซม.)" htmlFor={`size-${index}`} hint="เช่น 60x120" required error={errors.sizeText}>
-          <input id={`size-${index}`} disabled={readOnly} value={item.sizeText ?? ''} onChange={(e) => patch({ sizeText: e.target.value })} />
+          {/* Size-derived แผ่น/ตร.ม. fallback (owner decision 2026-09-14; rule (d) in
+              resolveTileSqmPerPiece's own doc above, and sqmPerPieceFromSizeCm in quotationMeta.js).
+              Only applies when ALL of these hold -- see that comment for why each guard exists:
+                - not read-only (a read-only row never patches anything);
+                - not a per_linear_m catalogue row (that figure is linear metres, never area);
+                - the field has not already been resolved from the catalogue ('catalog') or
+                  overridden by hand ('manual') -- either one wins outright over a typed size;
+                - NOT a value loaded from a saved draft with no recorded source --
+                  `sqmPerPieceSource` is UI-only and never persisted, so a reloaded draft's own
+                  figure must never be silently overwritten just because its provenance did not
+                  survive the reload.
+              When eligible and the new text parses, recompute in the SAME patch as sizeText so the
+              two fields never render one render apart. When eligible but the new text no longer
+              parses AND the current value came from a size (source 'size'), clear it rather than
+              leave a stale figure derived from a size the field no longer shows. */}
+          <input
+            id={`size-${index}`} disabled={readOnly} value={item.sizeText ?? ''}
+            onChange={(e) => {
+              const newSizeText = e.target.value;
+              const sizeFallbackEligible = !readOnly
+                && !isLinearMCatalog
+                && item.sqmPerPieceSource !== 'catalog'
+                && item.sqmPerPieceSource !== 'manual'
+                && !(item.sqmPerPieceSource == null && Number(item.sqmPerPiece) > 0);
+              if (!sizeFallbackEligible) {
+                patch({ sizeText: newSizeText });
+                return;
+              }
+              const computed = sqmPerPieceFromSizeCm(newSizeText);
+              if (computed != null) {
+                patch({
+                  sizeText: newSizeText,
+                  sqmPerPiece: computed,
+                  piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(computed) ?? '',
+                  sqmPerPieceSource: 'size',
+                });
+              } else if (item.sqmPerPieceSource === 'size') {
+                patch({ sizeText: newSizeText, sqmPerPiece: null, piecesPerSqmDisplay: '', sqmPerPieceSource: null });
+              } else {
+                patch({ sizeText: newSizeText });
+              }
+            }}
+          />
         </FormField>
         <FormField label="ความหนา (มม.)" htmlFor={`thickness-${index}`} required error={errors.thicknessMm}>
           <input
@@ -582,9 +693,15 @@ export function QuotationItemRow({
         {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
             "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
             nine documents shares one mode. Each mode asks for exactly what the rep has in hand:
-              NET          ราคา/หน่วย + ส่วนลด %           (unchanged)
-              SPECIAL_SQM  ราคาตั้ง/แผ่น + ราคาพิเศษ บาท/ตร.ม. รวม VAT → net per piece shown live
-              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")
+              NET          ราคา/หน่วย + ส่วนลด %                                      (unchanged)
+              SPECIAL_SQM  ราคาตั้ง (บาท/แผ่น) + ราคาพิเศษ (บาท/ตร.ม. รวม VAT) → net per piece shown
+                           live. Both boxes now carry a trailing unit ("บาท/แผ่น" / "บาท/ตร.ม.") and
+                           ราคาตั้ง shows a live ≈ per-ตร.ม. conversion underneath (owner feedback
+                           2026-09-14 — a rep typed a per-ตร.ม. figure into the per-piece box because
+                           nothing distinguished the two). DISPLAY-ONLY: see PriceInputWithSuffix and
+                           listPricePerSqmIncVat's own comments; the payload and the two typed prices
+                           are unchanged.
+              DIRECT_NET   ราคาสุทธิ/แผ่น + ราคาตั้ง/แผ่น (optional: blank prints "Net")   (unchanged)
             The derived net in SPECIAL_SQM is the SERVER's (calculate-line's netUnitPrice), never
             a JS copy of WastageCalculator#netPerPieceFromSpecialSqm: its rounding order (the 2dp
             reciprocal first) is exactly what a copy would get subtly wrong. */}
@@ -597,20 +714,48 @@ export function QuotationItemRow({
             />
           </FormField>
         ) : null}
+        {/* Thai SPECIAL_SQM's two price boxes carry a trailing unit, which leaves no room for the
+            typed number in a half-width mobile column (97px wide at 375px, 72px of it the unit —
+            measured) — so on mobile each spans the whole row. `contents` keeps NET/DIRECT_NET's
+            grid placement exactly as it was. */}
         {perSqm ? null : (
-          <FormField
-            label={priceMode === 'NET' ? 'ราคา/หน่วย' : 'ราคาตั้ง/แผ่น'}
-            htmlFor={`price-${index}`}
-            required={priceMode !== 'DIRECT_NET'}
-            hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
-            error={errors.unitPrice}
-          >
-            <input
-              id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.unitPrice ?? ''}
-              onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-          </FormField>
+          <div className={priceMode === 'SPECIAL_SQM' ? 'mobile:col-span-2' : 'contents'}>
+            <FormField
+              label={
+                priceMode === 'NET' ? 'ราคา/หน่วย'
+                  : priceMode === 'SPECIAL_SQM' ? 'ราคาตั้ง (บาท/แผ่น)'
+                    : 'ราคาตั้ง/แผ่น'
+              }
+              htmlFor={`price-${index}`}
+              required={priceMode !== 'DIRECT_NET'}
+              hint={priceMode === 'DIRECT_NET' ? 'เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)' : undefined}
+              error={errors.unitPrice}
+            >
+              {priceMode === 'SPECIAL_SQM' ? (
+                <PriceInputWithSuffix
+                  id={`price-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/แผ่น"
+                  value={item.unitPrice ?? ''}
+                  onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+                />
+              ) : (
+                <input
+                  id={`price-${index}`} type="number" step="0.01" disabled={readOnly}
+                  value={item.unitPrice ?? ''}
+                  onChange={(e) => patch({ unitPrice: e.target.value === '' ? '' : Number(e.target.value) })}
+                />
+              )}
+              {priceMode === 'SPECIAL_SQM' ? (
+                <span
+                  className="mt-1 block text-2xs font-bold text-text-muted"
+                  data-testid={`list-per-sqm-${index}`}
+                >
+                  {listPerSqm != null
+                    ? `≈ ${formatQuotationMoney(listPerSqm, 'THB').replace('฿', '')} บาท/ตร.ม. รวม VAT`
+                    : 'กรอกราคาตั้งต่อแผ่น ระบบแปลงเป็นต่อ ตร.ม. ให้'}
+                </span>
+              ) : null}
+            </FormField>
+          </div>
         )}
         {priceMode === 'NET' ? (
           <FormField label="ส่วนลด %" htmlFor={`disc-${index}`}>
@@ -622,20 +767,22 @@ export function QuotationItemRow({
           </FormField>
         ) : null}
         {priceMode === 'SPECIAL_SQM' && !perSqm ? (
-          <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
-            <input
-              id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
-              value={item.specialPriceSqm ?? ''}
-              onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
-            />
-            <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-              {item.calcPending
-                ? 'กำลังคำนวณราคาสุทธิ...'
-                : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
-                  ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
-                  : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
-            </span>
-          </FormField>
+          <div className="mobile:col-span-2">
+            <FormField label="ราคาพิเศษ (บาท/ตร.ม. รวม VAT)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
+              <PriceInputWithSuffix
+                id={`special-${index}`} type="number" step="0.01" disabled={readOnly} suffix="บาท/ตร.ม."
+                value={item.specialPriceSqm ?? ''}
+                onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
+              />
+              <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
+                {item.calcPending
+                  ? 'กำลังคำนวณราคาสุทธิ...'
+                  : item.netUnitPrice != null && Number(item.specialPriceSqm) > 0
+                    ? `= สุทธิ ${formatQuotationMoney(item.netUnitPrice, currency)}/แผ่น (ก่อน VAT)`
+                    : 'ระบบคำนวณราคาสุทธิต่อแผ่นให้'}
+              </span>
+            </FormField>
+          </div>
         ) : null}
         {perSqm ? (
           <>

@@ -256,7 +256,7 @@ describe('v3/v3b document settings', () => {
     // The Thai ราคาพิเศษ needs its list price as well (DealQuotationService#requirePriceValidForType
     // refuses a TILE row without one); until both are typed the editor previews nothing at all —
     // quotationMeta#rowHasPriceForPreview — rather than a figure priced under another mode.
-    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/), { target: { value: '2000' } });
+    fireEvent.change(screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/), { target: { value: '2000' } });
     fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\./), { target: { value: '1350' } });
 
     await waitFor(() => expect(screen.getByTestId('special-net-0').textContent).toBe('= สุทธิ ฿453.84/แผ่น (ก่อน VAT)'));
