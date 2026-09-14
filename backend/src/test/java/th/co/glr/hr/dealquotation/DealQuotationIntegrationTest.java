@@ -982,7 +982,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     //   1. A real DELETE of the referenced customer row: refused by a live FK
     //      (`ticket_customer_id_fkey`) while any ticket still points at it.
     //   2. Nulling `sales.ticket.customer_id` directly: `resolveContact`'s own
-    //      `ticket.customerId() != null && ...` guard (DealQuotationService.java:897) throws
+    //      `ticket.customerId() != null && ...` guard (DealQuotationService.java:896) throws
     //      "กรุณาระบุผู้สั่งซื้อ" before `customerSnapshot` is ever reached, for the SAME reason.
     // So this fallback is unreachable dead-code-safety today, not a live branch -- worth flagging
     // in the PR body rather than forcing a test around it.

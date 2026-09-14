@@ -414,12 +414,19 @@ export function QuotationEditorPage({ user, showToast }) {
   // card's pre-existing plain-text display (`{projectName ?? '-'}`) it replaced. A separate ref,
   // firing once per ticket id once `ticket` genuinely resolves, functionally-updates `terms`
   // instead of racing the main effect's own `setTerms` call.
+  //
+  // Second Opus follow-up nit (2026-09-14): unlike contactSeededForTicket above -- which cannot
+  // be raced, because the contact picker's own candidate list is itself keyed off `ticket` and so
+  // has nothing to pick from until the ticket resolves -- โครงการ is a plain, always-enabled
+  // `<input>`, so a rep who starts typing during the query window could have this effect fire
+  // afterward and clobber it. Guard by checking the CURRENT field value inside the updater, not
+  // just the ref: only seed when the rep hasn't already put something there.
   const projectNameSeededForTicket = useRef(null);
   useEffect(() => {
     if (id || !ticket?.id || projectNameSeededForTicket.current === ticket.id) return;
     projectNameSeededForTicket.current = ticket.id;
     if (ticket.projectName) {
-      setTerms((t) => ({ ...t, projectName: ticket.projectName }));
+      setTerms((t) => (t.projectName ? t : { ...t, projectName: ticket.projectName }));
     }
   }, [id, ticket]);
 

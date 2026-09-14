@@ -156,8 +156,12 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
   // Opus review nit N1 (2026-09-14): before this fix, the "ข้อมูลลูกค้าและผู้ขาย" read-only strip
   // showed the REAL rep (salesRepName/salesRepPhone) under พนักงานขาย even when salesRepDisplayId
   // was set, disagreeing with what QuotationDocumentView's preview and the printed PDF show for
-  // the exact same document.
-  it('the context strip shows the salesRepDisplay override, not the real rep, once one is set', async () => {
+  // the exact same document. That strip is now the editable card select itself (bb5de447), so
+  // this test's own assertion changed with it -- see the corrected name and body below. Second
+  // Opus follow-up nit (2026-09-14): renamed from "the context strip shows the salesRepDisplay
+  // override, not the real rep, once one is set", which described the read-only strip's TEXT this
+  // test no longer checks and had come to overlap the twin-select-sync test further down.
+  it('the เงื่อนไข select and the card select both reflect a saved salesRepDisplay override', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
         salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',

@@ -677,4 +677,22 @@ describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-
     });
     expect(cleared.projectName).toBeNull();
   });
+
+  // Second Opus follow-up nit (2026-09-14): the first pass's update() wrote
+  // `payload.projectName ?? null`, which stores an explicit ""/whitespace-only string AS-IS
+  // instead of clearing it -- diverging from the real DealQuotationService#update's
+  // `blankToNull(request.projectName())` and from this file's own create() two tests above (which
+  // already trims+blanks). An explicitly-blank string reaches update() from
+  // buildUpsertPayload's `terms.projectName || null` only when the field is whitespace-only (a
+  // plain "" is already caught by `||`), so this exercises exactly that gap.
+  it('a whitespace-only projectName on update clears it too, not stored literally', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการเดิม', items: [ONE_ITEM],
+    });
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, {
+      projectName: '   ', items: [ONE_ITEM],
+    });
+    expect(cleared.projectName).toBeNull();
+  });
 });

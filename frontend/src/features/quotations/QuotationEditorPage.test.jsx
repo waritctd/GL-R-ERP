@@ -243,6 +243,21 @@ describe('QuotationEditorPage item calc wiring', () => {
     renderEditor('/quotations/new?ticket=18');
     await waitFor(() => expect(document.getElementById('projectNameCard')?.value).toBe('โครงการ A'));
   });
+
+  // Second Opus follow-up nit (2026-09-14): the reviewer asked whether a rep typing โครงการ
+  // during the ticketQuery window could have this effect clobber it afterward, unlike
+  // contactSeededForTicket (whose own candidate list has nothing to pick from until the ticket
+  // resolves, so it cannot be raced the same way). Tried to build exactly that scenario --
+  // mock ticketQuery to stay pending, assert the field IS rendered and typeable, THEN resolve it --
+  // and hit a wall: this effect only ever runs when `ticket?.id` is set and `!id` (a brand-new
+  // `?ticket=` visit), and on that exact path `isEditable` gates on
+  // `canCreateDealQuotation(user, ticket)` -- the SAME `ticket` this effect waits on. While the
+  // ticket query is pending, the page renders "ไม่มีสิทธิ์สร้างใบเสนอราคา" instead of the form at
+  // all, so โครงการ never exists to type into before the effect's own precondition is satisfied.
+  // No reachable window today -- confirmed by trying, not assumed, the same way R1's fallback
+  // branch was. The defensive `t.projectName ? t : {...}` guard in the effect itself is kept
+  // anyway (harmless, and correct if this page's access gating ever decouples from `ticket` in
+  // the future), but there is nothing here to test without faking that decoupling.
 });
 
 describe('QuotationEditorPage new-quotation authorization (#M2)', () => {

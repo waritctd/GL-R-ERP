@@ -12225,8 +12225,15 @@ export const api = {
         // Opus review fix (2026-09-14): was missing entirely, so editing โครงการ silently never
         // persisted under VITE_USE_MOCKS=true -- CLAUDE.md's "mock omits a field the feature keys
         // on" shape. Same #M7 DIRECT-assignment discipline as every other field in this
-        // Object.assign: no "missing keeps stored", mirrors DealQuotationService#update exactly.
-        projectName: payload.projectName ?? null,
+        // Object.assign: no "missing keeps stored". Second Opus follow-up nit (2026-09-14): the
+        // first pass wrote `payload.projectName ?? null` here, which stores an explicit ""/"   "
+        // as-is instead of clearing it -- diverging from the real DealQuotationService#update's
+        // `blankToNull(request.projectName())` and from `create`'s own handling two blocks above.
+        // Use blankToNullMock, the file's shared top-level helper (mirrors PriceImportService.
+        // blankToNull) -- not the same-named local const inside mockDepositNoticeHeaderAutofill
+        // above, which is out of scope here -- so "" and whitespace-only both clear the field
+        // exactly as they do against the real backend.
+        projectName: blankToNullMock(payload.projectName),
         items,
         updatedAt: new Date().toISOString(),
       });
