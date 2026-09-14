@@ -233,7 +233,17 @@ export function QuotationDocumentView({ quotation }) {
             <span className="block text-2xs font-bold uppercase text-text-muted">ส่วนที่เหลือ</span>
             <strong>{remainderModeLabel(quotation.remainderMode)}{quotation.remainderMode === 'CREDIT' && quotation.creditDays ? ` ${quotation.creditDays} วัน` : ''}</strong>
           </div>
-          <div><span className="block text-2xs font-bold uppercase text-text-muted">ยืนราคา</span><strong>{quotation.validityDays ? `${quotation.validityDays} วัน` : '-'}{quotation.validityDate ? ` (ถึง ${formatThaiDate(quotation.validityDate)})` : ''}</strong></div>
+          {/* V178: DATE mode shows the rep's exact ภายในวันที่ deadline (validityUntil) instead of
+              a day count — same date format (formatThaiDate) the DAYS branch already used for
+              validityDate below it. */}
+          <div>
+            <span className="block text-2xs font-bold uppercase text-text-muted">ยืนราคา</span>
+            <strong>
+              {quotation.validityMode === 'DATE'
+                ? (quotation.validityUntil ? `ถึง ${formatThaiDate(quotation.validityUntil)}` : '-')
+                : `${quotation.validityDays ? `${quotation.validityDays} วัน` : '-'}${quotation.validityDate ? ` (ถึง ${formatThaiDate(quotation.validityDate)})` : ''}`}
+            </strong>
+          </div>
           <div><span className="block text-2xs font-bold uppercase text-text-muted">สถานะ</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge></div>
         </div>
         {quotation.customerNotes ? (

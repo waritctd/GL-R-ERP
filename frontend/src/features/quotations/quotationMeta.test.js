@@ -15,8 +15,12 @@ import {
   defaultLeadTimeForOrigin,
   DEAL_QUOTATION_TRANSITIONS,
   hasDealQuotationGrant,
+  hasSpecialPricing,
   isDealQuotationEditable,
   isDealQuotationReadOnlyViewer,
+  LINE_TYPE_ADJUSTMENT,
+  LINE_TYPE_PLAIN,
+  LINE_TYPE_TILE,
   listPricePerSqmIncVat,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
@@ -990,5 +994,64 @@ describe('joinPresent', () => {
     expect(meta.joinPresent(['คุณธนพล', null, 'a@b.co'])).toBe('คุณธนพล · a@b.co');
     expect(meta.joinPresent(['คุณธนพล', '', '  '])).toBe('คุณธนพล');
     expect(meta.joinPresent([null, undefined])).toBe('');
+  });
+});
+
+// V178 (owner ruling 2026-09-14) — the SAME five rules as
+// th.co.glr.hr.dealquotation.DealQuotationRenderAdapter#hasSpecialPricing's own test class
+// (DealQuotationRenderAdapterV3Test), mirrored here so the editor's toggle and the server's save
+// gate can never disagree about what counts as "special pricing".
+describe('hasSpecialPricing (#V178)', () => {
+  const tile = (overrides = {}) => ({
+    lineType: LINE_TYPE_TILE, unitPrice: 100, netUnitPrice: 100, discountPct: null, ...overrides,
+  });
+  const plain = (overrides = {}) => ({ lineType: LINE_TYPE_PLAIN, discountPct: null, ...overrides });
+  const adjustment = (overrides = {}) => ({ lineType: LINE_TYPE_ADJUSTMENT, ...overrides });
+
+  it('(a) SPECIAL_SQM with a TILE row is true, regardless of discount', () => {
+    expect(hasSpecialPricing('SPECIAL_SQM', [tile()])).toBe(true);
+  });
+
+  it('(b) DIRECT_NET with net below list price is true', () => {
+    expect(hasSpecialPricing('DIRECT_NET', [tile({ unitPrice: 100, netUnitPrice: 85 })])).toBe(true);
+  });
+
+  it('the (b) counter-case: DIRECT_NET with net == list price is false', () => {
+    expect(hasSpecialPricing('DIRECT_NET', [tile({ unitPrice: 100, netUnitPrice: 100 })])).toBe(false);
+  });
+
+  it('(c) NET with a TILE row discountPct > 0 is true', () => {
+    expect(hasSpecialPricing('NET', [tile({ discountPct: 5 })])).toBe(true);
+  });
+
+  it('the (c) counter-case, both shapes: discountPct null, and explicitly zero', () => {
+    expect(hasSpecialPricing('NET', [tile()])).toBe(false);
+    expect(hasSpecialPricing('NET', [tile({ discountPct: 0 })])).toBe(false);
+  });
+
+  it('(d) a PLAIN row with discountPct > 0 is true, regardless of priceMode', () => {
+    expect(hasSpecialPricing('NET', [plain({ discountPct: 10 })])).toBe(true);
+  });
+
+  it('a PLAIN row with no discount is false', () => {
+    expect(hasSpecialPricing('NET', [plain()])).toBe(false);
+  });
+
+  it('(e) an ADJUSTMENT row is true, regardless of price mode or the other rows', () => {
+    expect(hasSpecialPricing('NET', [tile(), adjustment()])).toBe(true);
+  });
+
+  it('no discount anywhere is false — the negative baseline every case above contrasts against', () => {
+    expect(hasSpecialPricing('NET', [tile(), plain()])).toBe(false);
+  });
+
+  it('a null/blank lineType reads as TILE, same as lineTypeOf', () => {
+    expect(hasSpecialPricing('NET', [{ unitPrice: 100, netUnitPrice: 100, discountPct: 7 }])).toBe(true);
+  });
+
+  it('an empty or missing row list is false', () => {
+    expect(hasSpecialPricing('NET', [])).toBe(false);
+    expect(hasSpecialPricing('NET', null)).toBe(false);
+    expect(hasSpecialPricing('NET', undefined)).toBe(false);
   });
 });

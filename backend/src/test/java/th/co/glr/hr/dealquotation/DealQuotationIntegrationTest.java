@@ -1546,6 +1546,167 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // V178 — remark 7's second กำหนดยืนยันราคา variant (an exact validity_until date, gated on
+    // the document having special pricing — owner ruling 2026-09-14).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void create_dateMode_withoutSpecialPricing_isBadRequest() {
+        // DIRECT_NET with net == list price -- no discount anywhere -- refuses DATE mode outright,
+        // before even checking for a date.
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "100.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30));
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_butNoDate_isBadRequest() {
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))), // net < list -- special pricing
+            WastageCalculator.VALIDITY_MODE_DATE, null);
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุวันที่ยืนราคา");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_dateBeforeQuotationDate_isBadRequest() {
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().minusDays(1));
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_roundTripsThroughSaveAndRead() {
+        LocalDate until = LocalDate.now().plusDays(45);
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until);
+        DealQuotationDto created = quotationService.create(ticketId, request, salesActor);
+        assertThat(created.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(created.validityUntil()).isEqualTo(until);
+
+        // Re-read from Postgres, not the returned object.
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(reread.validityUntil()).isEqualTo(until);
+    }
+
+    @Test
+    void update_dateMode_lostSpecialPricing_isBadRequest() {
+        // Created WITH special pricing (net < list) in DATE mode -- fine. The SAME save that
+        // clears the discount (net back to list) while still asking for DATE mode must 400: the
+        // gate is decided from the rows being WRITTEN, not from what was there before.
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30)), salesActor);
+
+        UpsertDealQuotationRequest noLongerSpecial = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "100.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30));
+        assertThatThrownBy(() -> quotationService.update(created.id(), noLongerSpecial, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+    }
+
+    @Test
+    void submit_dateModeValidityAlreadyPast_isBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now()), salesActor);
+        // Time moves on after the draft is saved -- simulate that directly (create/update already
+        // refuse a date before the quotation's OWN date, so a past date cannot reach storage any
+        // other way in one test run).
+        jdbc.update("UPDATE sales.quotation SET validity_until = :d WHERE quotation_id = :id",
+            java.util.Map.of("d", LocalDate.now().minusDays(1), "id", created.id()));
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("วันที่ยืนราคาผ่านไปแล้ว");
+    }
+
+    @Test
+    void approve_dateModeWithSpecialPricing_setsValidityDateToValidityUntil_notApprovalPlusDays() {
+        LocalDate until = LocalDate.now().plusDays(60);
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityDate()).isEqualTo(until);
+        // Wrong-way-round: NOT approvalDate + validityDays (30, the request's own default).
+        assertThat(approved.validityDate())
+            .isNotEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
+    }
+
+    @Test
+    void createRevision_copiesValidityModeAndUntil_verbatim() {
+        LocalDate until = LocalDate.now().plusDays(60);
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(approved.validityUntil()).isEqualTo(until);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        assertThat(revision.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(revision.validityUntil()).isEqualTo(until);
+    }
+
+    @Test
+    void daysMode_behaviourIsUnchanged() {
+        // The default shape every OTHER test in this file already relies on: no validityMode sent
+        // at all normalises to DAYS, validityUntil stays null, and approve keeps computing
+        // approvalDate + validityDays -- see #acceptanceScenario_createUpdateSubmitApprove's own
+        // assertion on this, pinned again here explicitly for V178.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DAYS);
+        assertThat(created.validityUntil()).isNull();
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DAYS);
+        assertThat(approved.validityDate())
+            .isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
+    }
+
+    /** {@code withValidity} — the ONE wither this file's {@code UpsertDealQuotationRequest}
+     * builders lack, added for V178 so every test above can start from an existing request
+     * (built by {@link #upsertRequestWithMode}) and set just the two new fields. */
+    private UpsertDealQuotationRequest withValidity(UpsertDealQuotationRequest base, String validityMode,
+                                                     LocalDate validityUntil) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
+            base.validityDays(), validityMode, validityUntil, base.customerNotes(), base.priceMode(),
+            base.documentLanguage(), base.currency(), base.items());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 

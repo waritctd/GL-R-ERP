@@ -19,12 +19,13 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
-  estimateAdjustmentAmount, formatQuotationMoney, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
+  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
+  VALIDITY_MODE_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
@@ -91,6 +92,10 @@ function emptyTerms(defaults = null) {
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
+    // V178: the MODE remembers (see quotationPrefs.js); validityUntil never does — a brand-new
+    // quotation always starts with no date typed, even when it starts in DATE mode.
+    validityMode: defaults?.validityMode ?? 'DAYS',
+    validityUntil: '',
     customerNotes: '',
   };
 }
@@ -262,6 +267,22 @@ export function QuotationEditorPage({ user, showToast }) {
     if (next) editSeqRef.current += 1;
     setDirtyState(next);
   }, []);
+  // V178 (owner ruling 2026-09-14): ระบุวันที่ is offered only on a document with special
+  // pricing — mirrors DealQuotationRenderAdapter#hasSpecialPricing exactly (quotationMeta.js).
+  const docHasSpecialPricing = useMemo(
+    () => hasSpecialPricing(docSettings.priceMode, [...items, ...adjustments]),
+    [docSettings.priceMode, items, adjustments],
+  );
+  // If a discount is cleared, an adjustment row removed, or the price mode changed so the
+  // document no longer has special pricing WHILE ระบุวันที่ is selected, switch back to
+  // จำนวนวัน automatically — so the next save sends validityMode DAYS rather than 400ing on a
+  // mode the document no longer qualifies for.
+  useEffect(() => {
+    if (!docHasSpecialPricing && terms.validityMode === 'DATE') {
+      setTerms((t) => ({ ...t, validityMode: 'DAYS' }));
+      setDirty(true);
+    }
+  }, [docHasSpecialPricing, terms.validityMode, setDirty]);
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
   // red hints yet. A row seeded from the server (an existing DRAFT the rep reopened) is touched
@@ -317,6 +338,9 @@ export function QuotationEditorPage({ user, showToast }) {
         depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
         remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
         validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
+        // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
+        // server's own read-side default.
+        validityMode: quotation.validityMode ?? 'DAYS', validityUntil: quotation.validityUntil ?? '',
       });
       setDirty(false);
       setInitializedFor(key);
@@ -485,7 +509,11 @@ export function QuotationEditorPage({ user, showToast }) {
     // Prefilled with the ยืนราคา end date, so the normal case — "3% if ordered within the offer
     // period" — is one typed number. Blank when no ยืนราคา is chosen yet; the date is optional.
     const from = quotation?.quotationDate || todayIso();
-    const deadline = terms.validityDays ? addDaysIso(from, Number(terms.validityDays)) : '';
+    // V178: in DATE mode the ยืนราคา end date IS terms.validityUntil already — no arithmetic
+    // needed (and none would be right, since a rep-typed date has no relation to `from`).
+    const deadline = terms.validityMode === 'DATE'
+      ? (terms.validityUntil || '')
+      : (terms.validityDays ? addDaysIso(from, Number(terms.validityDays)) : '');
     const row = emptyAdjustment(deadline);
     setAdjustments((prev) => [...prev, row]);
     setTouchedRowIds((prev) => new Set(prev).add(row.clientId));
@@ -779,6 +807,12 @@ export function QuotationEditorPage({ user, showToast }) {
     remainderMode: terms.remainderMode || null,
     creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
+    // V178: validityDays is ALWAYS sent, in both modes (the days select keeps its last value even
+    // while ระบุวันที่ is showing — see the toggle below) so DAYS mode has a real number to fall
+    // back to the moment the rep switches back, or the moment special pricing is lost and this
+    // editor auto-switches them back (see the effect near the toggle).
+    validityMode: terms.validityMode || null,
+    validityUntil: terms.validityMode === 'DATE' ? (terms.validityUntil || null) : null,
     customerNotes: terms.customerNotes || null,
     // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language
     // (the server refuses any other pairing), sent so the request states what the rep saw.
@@ -865,6 +899,9 @@ export function QuotationEditorPage({ user, showToast }) {
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,
+      // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the
+      // DATE itself never is — see quotationPrefs.js's own comment on DEFAULT_TERM_FIELDS.
+      validityMode: terms.validityMode,
       originCountry: items[items.length - 1]?.originCountry ?? '',
     });
   }
@@ -1678,11 +1715,50 @@ export function QuotationEditorPage({ user, showToast }) {
                   ) : null}
                 </div>
               </FormField>
-              <FormField label="ยืนราคา (วัน)" htmlFor="validityDays">
-                <select id="validityDays" value={terms.validityDays} onChange={(e) => { setTerms((t) => ({ ...t, validityDays: e.target.value })); setDirty(true); }}>
-                  <option value="">-</option>
-                  {VALIDITY_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} วัน</option>)}
-                </select>
+              {/* V178 (owner ruling 2026-09-14): ระบุวันที่ ("กำหนดวันที่ได้") is a SECOND way to
+                  say กำหนดยืนยันราคา, for when a promotion or a factory allocation needs an exact
+                  deadline rather than "N days from now" — but it only makes sense on a document
+                  that HAS special pricing to protect, so the option itself is hidden otherwise
+                  (docHasSpecialPricing, mirrored from the server's own gate). No `htmlFor`, same
+                  reasoning as ส่วนที่เหลือ above: this is a group of controls, not one. */}
+              <FormField label="ยืนราคา">
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ยืนราคา">
+                  {(docHasSpecialPricing ? VALIDITY_MODE_OPTIONS
+                    : VALIDITY_MODE_OPTIONS.filter((opt) => opt.code === 'DAYS')).map((opt) => (
+                    <button
+                      key={opt.code}
+                      type="button"
+                      aria-pressed={terms.validityMode === opt.code}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.validityMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      onClick={() => { setTerms((t) => ({ ...t, validityMode: opt.code })); setDirty(true); }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {terms.validityMode === 'DATE' ? (
+                    <input
+                      id="validityUntil"
+                      aria-label="ยืนราคาถึงวันที่"
+                      type="date"
+                      value={terms.validityUntil}
+                      onChange={(e) => { setTerms((t) => ({ ...t, validityUntil: e.target.value })); setDirty(true); }}
+                    />
+                  ) : (
+                    // จำนวนวัน keeps its OWN select even while ระบุวันที่ shows — the value is
+                    // never cleared on a mode switch (see #buildUpsertPayload's own comment), so
+                    // switching back to จำนวนวัน (by choice, or by the auto-switch effect above)
+                    // always has a real number to fall back to.
+                    // Opus review of V178 (2026-09-14): FormField's <label> is a SIBLING of its
+                    // children (FormField.jsx), not a wrapper — it labels nothing once this
+                    // conditional branch stopped passing htmlFor to FormField itself. Same
+                    // collision as the ส่วนที่เหลือ block above (see that comment): the accessible
+                    // name must NOT start with "จำนวน" or it collides with เครดิต's own field.
+                    <select id="validityDays" aria-label="ยืนราคา (จำนวนวัน)" value={terms.validityDays} onChange={(e) => { setTerms((t) => ({ ...t, validityDays: e.target.value })); setDirty(true); }}>
+                      <option value="">-</option>
+                      {VALIDITY_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} วัน</option>)}
+                    </select>
+                  )}
+                </div>
               </FormField>
             </div>
             <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">

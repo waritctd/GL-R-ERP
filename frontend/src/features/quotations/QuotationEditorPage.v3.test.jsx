@@ -460,3 +460,67 @@ describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () =
     expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('ส่งภายใน 60 วัน');
   });
 });
+
+describe('ยืนราคา — จำนวนวัน / ระบุวันที่ toggle (V178, owner ruling 2026-09-14)', () => {
+  it('ระบุวันที่ is hidden on a document with no special pricing (TILE_ITEM has discountPct 0)', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    const toggle = group('ยืนราคา');
+    expect(within(toggle).getByRole('button', { name: 'จำนวนวัน' })).not.toBeNull();
+    expect(within(toggle).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
+    // The days select still renders (จำนวนวัน is always available).
+    expect(document.getElementById('validityDays')).not.toBeNull();
+  });
+
+  it('ระบุวันที่ is offered on a document WITH special pricing, in DIRECT_NET (2c)', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: 'DIRECT_NET', items: [{ ...TILE_ITEM, unitPrice: 850, netUnitPrice: 700 }] }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    const toggle = group('ยืนราคา');
+    expect(within(toggle).getByRole('button', { name: 'ระบุวันที่' })).not.toBeNull();
+  });
+
+  it('choosing ระบุวันที่ shows a date input and saves validityMode/validityUntil; validityDays is still sent', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, discountPct: 10 }] }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    fireEvent.click(within(group('ยืนราคา')).getByRole('button', { name: 'ระบุวันที่' }));
+
+    const dateInput = screen.getByLabelText('ยืนราคาถึงวันที่');
+    expect(dateInput).not.toBeNull();
+    // The days select is gone from the DOM while DATE mode shows, but its VALUE (30, from the
+    // draft) must still be sent on save — see #buildUpsertPayload's own comment.
+    expect(screen.queryByLabelText('validityDays')).toBeNull();
+    fireEvent.change(dateInput, { target: { value: '2026-12-31' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const payload = api.dealQuotations.update.mock.calls[0][1];
+    expect(payload.validityMode).toBe('DATE');
+    expect(payload.validityUntil).toBe('2026-12-31');
+    expect(payload.validityDays).toBe(30);
+  });
+
+  it('losing special pricing while in ระบุวันที่ mode auto-switches back to จำนวนวัน', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ priceMode: 'NET', items: [{ ...TILE_ITEM, discountPct: 10 }] }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    fireEvent.click(within(group('ยืนราคา')).getByRole('button', { name: 'ระบุวันที่' }));
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่')).not.toBeNull();
+
+    // Clear the discount on the only tile row -- the document no longer has special pricing.
+    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '0' } });
+
+    await waitFor(() => expect(screen.queryByLabelText('ยืนราคาถึงวันที่')).toBeNull());
+    expect(document.getElementById('validityDays')).not.toBeNull();
+    expect(within(group('ยืนราคา')).queryByRole('button', { name: 'ระบุวันที่' })).toBeNull();
+  });
+});

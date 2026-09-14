@@ -551,6 +551,136 @@ class DealQuotationEnglishFormTest {
         }
     }
 
+    // ── V178 — remark 7's second กำหนดยืนยันราคา variant (an exact date, not a day count) ────
+    //
+    // Owner ruling 2026-09-14 (superseding an earlier draft of this rule): the DATE variant is
+    // gated on {@link DealQuotationRenderAdapter#hasSpecialPricing} — it prints ONLY on a
+    // quotation that actually has special pricing (a discount, a ราคาพิเศษ, or a ส่วนลดพิเศษ
+    // adjustment row). A quotation with no discount anywhere must NOT print it, even in DATE mode.
+
+    /** DIRECT_NET with net {@code <} list price (rule b) — the exact case the owner's example
+     * wording describes. Bank layout: DATE mode replaces "4.Price validity : N days …". */
+    @Test
+    void remarks_dateModeValidity_directNetWithDiscount_printsSpecialPriceLine_bankLayout() throws Exception {
+        LocalDate until = LocalDate.of(2026, 10, 31);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(englishQuotation(), List.of(discountedDirectNetTile())),
+            WastageCalculator.PRICE_MODE_DIRECT_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        Sheet sheet = renderLegacyModel(DealQuotationRenderAdapter.toRenderModel(q, null, null, BANK_BLOCK));
+        List<String> remarks = new ArrayList<>();
+        for (int r = 23; r <= 30; r++) remarks.add(str(sheet, r, 1));
+        assertThat(remarks.get(6)).isEqualTo("4.Special price for orders with deposit paid by 31/10/2026; "
+            + "sizes may vary slightly within ISO and TIS tolerances.");
+    }
+
+    /** Same fixture, no-bank layout: DATE mode replaces "5.Price validity : N days …". */
+    @Test
+    void remarks_dateModeValidity_directNetWithDiscount_printsSpecialPriceLine_noBankLayout() throws Exception {
+        LocalDate until = LocalDate.of(2026, 10, 31);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(englishQuotation(), List.of(discountedDirectNetTile())),
+            WastageCalculator.PRICE_MODE_DIRECT_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        Sheet sheet = renderLegacyModel(DealQuotationRenderAdapter.toRenderModel(q, null, null, List.of()));
+        List<String> remarks = new ArrayList<>();
+        for (int r = 23; r <= 30; r++) remarks.add(str(sheet, r, 1));
+        assertThat(remarks.get(4)).isEqualTo("5.Special price for orders with deposit paid by 31/10/2026.");
+    }
+
+    /** DAYS-mode output is byte-identical to before this change, in both layouts — regardless of
+     * special pricing (the gate only ever affects the DATE branch). */
+    @Test
+    void remarks_daysModeValidity_isUnchanged_inBothLayouts() throws Exception {
+        DealQuotationDto q = withValidity(englishQuotation(), WastageCalculator.VALIDITY_MODE_DAYS, null);
+        Sheet bank = renderLegacyModel(DealQuotationRenderAdapter.toRenderModel(q, null, null, BANK_BLOCK));
+        Sheet noBank = renderLegacyModel(DealQuotationRenderAdapter.toRenderModel(q, null, null, List.of()));
+        List<String> bankRemarks = new ArrayList<>();
+        List<String> noBankRemarks = new ArrayList<>();
+        for (int r = 23; r <= 30; r++) {
+            bankRemarks.add(str(bank, r, 1));
+            noBankRemarks.add(str(noBank, r, 1));
+        }
+        assertThat(bankRemarks.get(6)).startsWith("4.Price validity : 30 days").contains("ISO and TIS tolerances");
+        assertThat(noBankRemarks.get(4)).isEqualTo("5.Price validity : 30 days from the date of this quotation.");
+    }
+
+    /** Same 130-character non-wrapping-cell guard as above, now also over the DATE-mode variant
+     * in both layouts — the fixed prose plus a formatted date must still fit. */
+    @Test
+    void everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts_dateMode() throws Exception {
+        LocalDate until = LocalDate.of(2026, 10, 31);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(englishQuotation(), List.of(discountedDirectNetTile())),
+            WastageCalculator.PRICE_MODE_DIRECT_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
+            Sheet sheet = renderLegacyModel(DealQuotationRenderAdapter.toRenderModel(q, null, null, block));
+            List<String> remarks = new ArrayList<>();
+            for (int r = 23; r <= 30; r++) {
+                String line = str(sheet, r, 1);
+                assertThat(line.length()).as("row %d (%s block): %s", r,
+                    block.isEmpty() ? "no" : "with", line).isLessThanOrEqualTo(130);
+                remarks.add(line);
+            }
+            // Opus review (2026-09-14): the length-only loop above passes for a blank row too --
+            // pin the actual 8-real-lines guarantee here as well, the same way
+            // #everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts's DAYS-mode sibling
+            // does not need to (that one is covered by #remarks_daysModeValidity_isUnchanged, but
+            // this DATE-mode fixture had no equivalent non-blank assertion until now).
+            assertThat(remarks).as("%s block", block.isEmpty() ? "no" : "with")
+                .hasSize(8).allMatch(l -> !l.isBlank());
+        }
+    }
+
+    /** Thai twin — DIRECT_NET with net {@code <} list price, remark 7's DATE variant, the owner's
+     * wording verbatim. */
+    @Test
+    void remarks_dateModeValidity_directNetWithDiscount_printsSpecialPriceLine_thai() throws Exception {
+        LocalDate until = LocalDate.of(2026, 9, 30);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(thaiQuotation(), List.of(discountedDirectNetTile())),
+            WastageCalculator.PRICE_MODE_DIRECT_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        Sheet sheet = render(q);
+        // Thai never carries a bank block, so remark 7 is always index 6 -> row 23 + 6 = 29.
+        // Owner wording, verbatim: exactly ONE ASCII space between "วันที่" and the date.
+        assertThat(str(sheet, 29, 1))
+            .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
+    }
+
+    /** SPECIAL_SQM (rule a) — at least one TILE row is ALL rule (a) requires; {@link #tile()}'s
+     * own discountPct (null) is irrelevant. DATE mode prints the DATE line. */
+    @Test
+    void remarks_dateModeValidity_specialSqm_printsSpecialPriceLine() throws Exception {
+        LocalDate until = LocalDate.of(2026, 9, 30);
+        DealQuotationDto q = withPriceModeAndValidity(thaiQuotation(),
+            WastageCalculator.PRICE_MODE_SPECIAL_SQM, WastageCalculator.VALIDITY_MODE_DATE, until);
+        Sheet sheet = render(q);
+        assertThat(str(sheet, 29, 1))
+            .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
+    }
+
+    /** NET, every row at 0% discount, no adjustment row -> NO special pricing. Even a DATE-mode
+     * row (only reachable here by constructing the DTO directly, bypassing
+     * {@code DealQuotationService}'s own create/update refusal) must fall back to the ordinary
+     * days line — the render adapter's OWN gate is what this pins, independent of the service. */
+    @Test
+    void remarks_dateModeValidity_netWithZeroDiscountAndNoAdjustment_fallsBackToDaysLine() throws Exception {
+        LocalDate until = LocalDate.of(2026, 9, 30);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(thaiQuotation(), List.of(netZeroDiscountTile(1))),
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isFalse();
+        Sheet sheet = render(q);
+        assertThat(str(sheet, 29, 1)).isEqualTo("7.กำหนดยืนยันราคา 30 วัน นับจากวันที่ในใบเสนอราคา");
+    }
+
+    /** NET at 0% PLUS an ADJUSTMENT row (rule e) -> DOES have special pricing; the DATE line
+     * renders even though every priced TILE row itself carries no discount. */
+    @Test
+    void remarks_dateModeValidity_netZeroDiscountPlusAdjustmentRow_printsSpecialPriceLine() throws Exception {
+        LocalDate until = LocalDate.of(2026, 9, 30);
+        DealQuotationDto q = withPriceModeAndValidity(
+            withItems(thaiQuotation(), List.of(netZeroDiscountTile(1), adjustmentRow(2))),
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isTrue();
+        Sheet sheet = render(q);
+        assertThat(str(sheet, 29, 1))
+            .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
+    }
+
     /**
      * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row, so line 3 is
      * the fallback. Owner feedback #7 (2026-09-14) REVERSES pass 3 (2026-09-11)'s "จีน 30-45 วัน /
@@ -817,6 +947,32 @@ class DealQuotationEnglishFormTest {
             q.approverHasSignature(), items, q.createdAt(), q.updatedAt());
     }
 
+    /** V178 — this quotation with its validity mode/date set explicitly (the canonical
+     * constructor, since this is the ONE fixture that actually needs {@code validityMode}/
+     * {@code validityUntil} to be non-default). */
+    private DealQuotationDto withValidity(DealQuotationDto q, String validityMode, LocalDate validityUntil) {
+        return withPriceModeAndValidity(q, q.priceMode(), validityMode, validityUntil);
+    }
+
+    /** Same as {@link #withValidity}, plus an explicit {@code priceMode} — remark 7's DATE variant
+     * must print regardless of price mode (owner ruling: not gated on NET/SPECIAL_SQM/DIRECT_NET,
+     * on any item discount, or on an adjustment row existing). */
+    private DealQuotationDto withPriceModeAndValidity(DealQuotationDto q, String priceMode,
+                                                       String validityMode, LocalDate validityUntil) {
+        return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
+            q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(),
+            q.salesRepId(), q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(),
+            q.submittedAt(), q.approvedById(), q.approvedByName(), q.approvedByNameEn(), q.approvedAt(),
+            q.approvalNote(), q.quotationDate(), q.customerName(), q.customerAddress(),
+            q.customerTaxId(), q.customerPhone(), q.contactId(), q.contactName(), q.contactPhone(),
+            q.contactEmail(), q.projectName(), q.deptCode(), q.unitCode(), q.offerDate(),
+            q.depositPercent(), q.remainderMode(), q.creditDays(), q.validityDays(), q.validityDate(),
+            validityMode, validityUntil,
+            q.customerNotes(), priceMode, q.documentLanguage(),
+            q.subtotalAmount(), q.vatAmount(), q.grandTotal(), q.currency(),
+            q.approverHasSignature(), q.items(), q.createdAt(), q.updatedAt());
+    }
+
     /** A PLAIN row: description, 1 lot at 500.00, and — like every real PLAIN row — no lead time. */
     private DealQuotationItemDto plainRow(int seq, String description) {
         return new DealQuotationItemDto((long) seq, seq,
@@ -892,5 +1048,43 @@ class DealQuotationEnglishFormTest {
             // #925's F2 fix (a flat adjustment had no DTO field, so a GET→PUT round-trip of one
             // was a hard 400) and is null on a TILE row.
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
+    }
+
+    /** V178 fixture — a DIRECT_NET tile whose net (85.00) genuinely differs from its list price
+     * (100.00): {@link DealQuotationRenderAdapter#hasSpecialPricing} rule (b). */
+    private DealQuotationItemDto discountedDirectNetTile() {
+        return new DealQuotationItemDto(1L, 1, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), null, null, 30, 45, null,
+            new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("85.00"), new BigDecimal("850.00"),
+            "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
+    }
+
+    /** V178 fixture — a NET tile with {@code discountPct} EXPLICITLY zero (never null), so no
+     * rule counts it as special pricing on its own. */
+    private DealQuotationItemDto netZeroDiscountTile(int seq) {
+        return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), BigDecimal.ZERO, null, 30, 45,
+            null, new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
+            "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
+    }
+
+    /** V178 fixture — a bare ADJUSTMENT (ส่วนลดพิเศษ) row: rule (e) on its own, independent of
+     * every other row's price mode or discount. */
+    private DealQuotationItemDto adjustmentRow(int seq) {
+        BigDecimal adj = new BigDecimal("30.00");
+        LocalDate deadline = LocalDate.of(2026, 9, 20);
+        return new DealQuotationItemDto((long) seq, seq,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            adj, null, null, null, null, null,
+            null, 0, 0, 0, null,
+            adj, adj.negate(),
+            "ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 20/09/2026", null, null,
+            WastageCalculator.LINE_TYPE_ADJUSTMENT, BigDecimal.valueOf(-1), null, null, new BigDecimal("3"),
+            deadline, null, null);
     }
 }

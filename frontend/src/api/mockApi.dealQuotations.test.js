@@ -423,3 +423,130 @@ describe('mock catalog.prices originCountryCode -- owner feedback F1', () => {
     expect(items.every((row) => row.originCountryCode === 'TH')).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// V178 (owner ruling 2026-09-14) — remark 7's second กำหนดยืนยันราคา variant (validityMode DATE).
+// Mirrors DealQuotationService's create/update/submit/approve rules exactly, and reuses the SAME
+// hasSpecialPricing (quotationMeta.js) the editor's own toggle hides/shows against.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('mock dealQuotations -- V178 validityMode DATE', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // net (700) < list (850) -- DIRECT_NET special pricing, rule (b).
+  const DISCOUNTED_DIRECT_NET_ITEM = { ...ONE_ITEM, directNetPrice: 700 };
+
+  function pinToday(iso) {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(`${iso}T09:00:00+07:00`));
+  }
+
+  it('DATE mode without special pricing (net == list, no discount) is refused on create', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2099-01-01',
+      items: [{ ...ONE_ITEM, directNetPrice: 850 }], // net == list -- no special pricing
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ระบุวันที่ยืนราคาได้เฉพาะ') });
+  });
+
+  it('DATE mode with special pricing but no date is refused', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', items: [DISCOUNTED_DIRECT_NET_ITEM],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('กรุณาระบุวันที่ยืนราคา') });
+  });
+
+  it('DATE before the quotation\'s own date is refused', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-09-13',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ต้องไม่ก่อนวันที่ใบเสนอราคา') });
+  });
+
+  it('round-trips validityMode/validityUntil through create -> get', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    expect(created.validityMode).toBe('DATE');
+    expect(created.validityUntil).toBe('2026-10-31');
+
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.validityMode).toBe('DATE');
+    expect(reread.validityUntil).toBe('2026-10-31');
+  });
+
+  it('an update that clears the discount while still requesting DATE mode is refused', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await expect(api.dealQuotations.update(created.id, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [{ ...ONE_ITEM, directNetPrice: 850 }], // net back to list -- no more special pricing
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ระบุวันที่ยืนราคาได้เฉพาะ') });
+  });
+
+  it('submit refuses a validity date that has already passed', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-09-14', // == today, allowed
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    pinToday('2026-09-15'); // time moves on after the draft is saved
+    await expect(api.dealQuotations.submit(created.id)).rejects
+      .toMatchObject({ status: 400, message: expect.stringContaining('วันที่ยืนราคาผ่านไปแล้ว') });
+  });
+
+  it('approve sets validityDate to validityUntil, NOT approvalDate + validityDays', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-12-25', validityDays: 45,
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    expect(approved.validityDate).toBe('2026-12-25');
+    expect(approved.validityDate).not.toBe('2026-10-29'); // 2026-09-14 + 45 days -- the DAYS answer
+  });
+
+  it('createRevision copies validityMode and validityUntil verbatim', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-12-25',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.validityMode).toBe('DATE');
+    expect(revision.validityUntil).toBe('2026-12-25');
+  });
+
+  it('DAYS mode (the default) behaves exactly as before this change', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, { validityDays: 30, items: [ONE_ITEM] });
+    expect(created.validityMode).toBe('DAYS');
+    expect(created.validityUntil).toBeNull();
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    expect(approved.validityMode).toBe('DAYS');
+    expect(approved.validityDate).toBe('2026-10-14'); // 2026-09-14 + validityDays default 30
+  });
+});
