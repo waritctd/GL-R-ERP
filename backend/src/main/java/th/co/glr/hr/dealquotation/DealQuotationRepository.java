@@ -231,6 +231,9 @@ public class DealQuotationRepository {
         // VALIDITY_MODE_* constants and DealQuotationService#requireValidityUntilForMode.
         String validityMode, LocalDate validityUntil,
         String customerNotes, String priceMode, String documentLanguage, String currency,
+        // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
+        // printedByDisplayId/salesRepDisplayId Javadoc. Null on every path that does not set one.
+        Long printedByDisplayId, Long salesRepDisplayId,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
@@ -250,6 +253,7 @@ public class DealQuotationRepository {
                  contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
                  validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
+                 printed_by_display_id, sales_rep_display_id,
                  parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
@@ -258,6 +262,7 @@ public class DealQuotationRepository {
                  :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
                  :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
+                 :printedByDisplayId, :salesRepDisplayId,
                  :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
@@ -293,6 +298,8 @@ public class DealQuotationRepository {
                 // DealQuotationService#resolveCurrency (TH->THB, EN->USD).
                 .addValue("documentLanguage", p.documentLanguage())
                 .addValue("currency", p.currency())
+                .addValue("printedByDisplayId", p.printedByDisplayId())
+                .addValue("salesRepDisplayId", p.salesRepDisplayId())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -498,7 +505,9 @@ public class DealQuotationRepository {
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
                             Integer validityDays, String validityMode, LocalDate validityUntil,
                             String customerNotes, String priceMode,
-                            String documentLanguage, String currency, BigDecimal subtotal) {
+                            String documentLanguage, String currency, BigDecimal subtotal,
+                            // V179 — print-only override; see DealQuotationDtos' Javadoc.
+                            Long printedByDisplayId, Long salesRepDisplayId) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -511,6 +520,7 @@ public class DealQuotationRepository {
                    validity_mode = :validityMode, validity_until = :validityUntil,
                    customer_notes = :customerNotes, price_mode = :priceMode,
                    document_language = :documentLanguage, currency = :currency,
+                   printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
                    total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
@@ -537,6 +547,8 @@ public class DealQuotationRepository {
                 .addValue("priceMode", priceMode)
                 .addValue("documentLanguage", documentLanguage)
                 .addValue("currency", currency)
+                .addValue("printedByDisplayId", printedByDisplayId)
+                .addValue("salesRepDisplayId", salesRepDisplayId)
                 .addValue("subtotal", subtotal));
     }
 
@@ -650,6 +662,64 @@ public class DealQuotationRepository {
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * V179 — who may appear as a ผู้พิมพ์/พนักงานขาย print-name OPTION: the union of (a) active
+     * employees in the sales division ({@code DivisionAccessPolicy.SALES_DIVISION_CODE}, the SAME
+     * population {@code CommissionRepository#findActiveSalesRepOptions} already queries) and (b)
+     * any active employee holding the {@code hr.employee.can_create_quotation} grant (e.g.
+     * ภิญญดา, who is {@code qc} role, not sales division). ONE predicate
+     * ({@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}), shared with
+     * {@link #isEligibleQuotationDisplayName}, so the options list and the create/update
+     * validation can never disagree about who is eligible.
+     */
+    private static final String QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE = """
+        e.is_active AND (
+            EXISTS (SELECT 1 FROM hr.division d WHERE d.division_id = e.division_id
+                      AND LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(d.name_th, '-', 1))))
+                          = :salesDivisionCode)
+            OR e.can_create_quotation
+        )
+        """;
+
+    /** The options list for the ผู้พิมพ์/พนักงานขาย print-name selectors — see
+     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}'s Javadoc for who is included. Same
+     * {@code CommissionRepOptionDto} shape (id + Thai display name) as
+     * {@code CommissionRepository#findActiveSalesRepOptions}, and the same
+     * {@code COALESCE(..., employee_code)} display-name fallback / active-only / order-by-name
+     * pattern — deliberately NOT calling that method directly, since it excludes grant holders
+     * outside the sales division. */
+    public List<th.co.glr.hr.commission.CommissionRepOptionDto> findEligibleQuotationDisplayNameOptions(
+            String salesDivisionCode) {
+        return jdbc.query("""
+            SELECT e.employee_id,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.employee_code)
+                       AS display_name
+              FROM hr.employee e
+             WHERE %s
+             ORDER BY display_name, e.employee_id
+            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
+            new MapSqlParameterSource().addValue("salesDivisionCode", salesDivisionCode),
+            (rs, rowNum) -> new th.co.glr.hr.commission.CommissionRepOptionDto(
+                rs.getLong("employee_id"), rs.getString("display_name")));
+    }
+
+    /** Whether {@code employeeId} is in the SAME eligible union {@link
+     * #findEligibleQuotationDisplayNameOptions} lists — the validation
+     * {@code DealQuotationService#create}/{@code #update} run before accepting a
+     * {@code printedByDisplayId}/{@code salesRepDisplayId}. Shares
+     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE} with that method so the two can never
+     * disagree about who is eligible. */
+    public boolean isEligibleQuotationDisplayName(long employeeId, String salesDivisionCode) {
+        Boolean found = jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM hr.employee e WHERE e.employee_id = :employeeId AND (%s))
+            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("salesDivisionCode", salesDivisionCode),
+            Boolean.class);
+        return Boolean.TRUE.equals(found);
     }
 
     public Optional<DealQuotationDto> findById(long quotationId) {
@@ -891,12 +961,25 @@ public class DealQuotationRepository {
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
-                   END AS approver_has_signature
+                   END AS approver_has_signature,
+                   -- V179: print-only ผู้พิมพ์/พนักงานขาย name override — see DealQuotationDtos'
+                   -- printedByDisplayId/salesRepDisplayId Javadoc. Both LEFT JOINs are null when the
+                   -- column itself is null, which is what lets #mapQuotation fall back to the real
+                   -- createdByName/salesRepName with a plain null check.
+                   q.printed_by_display_id,
+                   NULLIF(TRIM(CONCAT_WS(' ', pbd.first_name_th, pbd.last_name_th)), '') AS printed_by_display_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', pbd.first_name_en, pbd.last_name_en)), '') AS printed_by_display_name_en,
+                   q.sales_rep_display_id,
+                   NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_th, srd.last_name_th)), '') AS sales_rep_display_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_en, srd.last_name_en)), '') AS sales_rep_display_name_en,
+                   srd.phone AS sales_rep_display_phone
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
               LEFT JOIN sales.quotation_approver_snapshot aps ON aps.quotation_id = q.quotation_id
+              LEFT JOIN hr.employee pbd ON pbd.employee_id = q.printed_by_display_id
+              LEFT JOIN hr.employee srd ON srd.employee_id = q.sales_rep_display_id
             """;
     }
 
@@ -979,6 +1062,15 @@ public class DealQuotationRepository {
             grandTotal,
             rs.getString("currency"),
             rs.getBoolean("approver_has_signature"),
+            // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; both null unless the
+            // corresponding column is set (see #baseSelect's LEFT JOINs).
+            nullableLong(rs, "printed_by_display_id"),
+            rs.getString("printed_by_display_name"),
+            rs.getString("printed_by_display_name_en"),
+            nullableLong(rs, "sales_rep_display_id"),
+            rs.getString("sales_rep_display_name"),
+            rs.getString("sales_rep_display_name_en"),
+            rs.getString("sales_rep_display_phone"),
             items,
             createdAt,
             instant(rs, "updated_at")

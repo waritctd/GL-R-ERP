@@ -19,10 +19,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
+import th.co.glr.hr.commission.CommissionRepOptionDto;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -173,6 +175,11 @@ public class DealQuotationService {
         LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
             LocalDate.now(BANGKOK), specialPricing);
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
+        // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
+        // Validated against the SAME eligible union the options endpoint lists, so create can
+        // never persist an id no client could ever have legitimately picked.
+        Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
+        Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -189,7 +196,9 @@ public class DealQuotationService {
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
-            priceMode, documentLanguage, currency, subtotal, null, 1, items));
+            priceMode, documentLanguage, currency,
+            printedByDisplayId, salesRepDisplayId,
+            subtotal, null, 1, items));
         return requireQuotation(id);
     }
 
@@ -333,6 +342,13 @@ public class DealQuotationService {
         boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
         LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
             existing.quotationDate(), specialPricing);
+        // V179 — same validation as #create; a full PUT always carries the payload's own value
+        // (null included), so there is no "missing keeps stored" case to handle here, unlike
+        // priceMode/documentLanguage/validityMode above (those use blank-string-as-sentinel
+        // because a blank string could never be a legitimate value; null IS the legitimate
+        // "use the real name" value for these two Long fields, so it is taken at face value).
+        Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
+        Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -345,7 +361,8 @@ public class DealQuotationService {
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
-            priceMode, documentLanguage, currency, subtotal);
+            priceMode, documentLanguage, currency, subtotal,
+            printedByDisplayId, salesRepDisplayId);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -579,6 +596,11 @@ public class DealQuotationService {
             // NULL to TH), so resolveDocumentLanguage is not needed on this path.
             source.customerNotes(), source.priceMode(), source.documentLanguage(),
             WastageCalculator.defaultCurrencyFor(source.documentLanguage()),
+            // V179 — a revision copies its parent's print-name override VERBATIM, same as every
+            // other header field here; no re-validation (an id valid at the parent's last save
+            // stays whatever it was — this mirrors how the parent's own contact/rep snapshot is
+            // copied without re-checking against a live table).
+            source.printedByDisplayId(), source.salesRepDisplayId(),
             source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
         // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
@@ -1014,6 +1036,42 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา");
         }
         return validityUntil;
+    }
+
+    /**
+     * V179 (owner feedback #4, 2026-09-14) — validates a {@code printedByDisplayId}/
+     * {@code salesRepDisplayId} candidate before it is ever written. Null passes straight through
+     * (it means "use the real name", the default). A non-null id must be in the SAME eligible
+     * union {@link #findQuotationDisplayNameOptions} lists — active AND (a sales-division member
+     * OR a {@code can_create_quotation} grant holder) — checked by
+     * {@link DealQuotationRepository#isEligibleQuotationDisplayName}, which shares its predicate
+     * with the options query so the two can never disagree. Reused by both {@link #create} and
+     * {@link #update} so the rule is defined exactly once.
+     */
+    private Long requireEligibleDisplayEmployeeId(Long employeeId) {
+        if (employeeId == null) {
+            return null;
+        }
+        if (!quotations.isEligibleQuotationDisplayName(employeeId, DivisionAccessPolicy.SALES_DIVISION_CODE)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงานที่เลือกไม่สามารถแสดงเป็นผู้พิมพ์หรือพนักงานขายในใบเสนอราคาได้");
+        }
+        return employeeId;
+    }
+
+    /**
+     * V179 — the option list for the ผู้พิมพ์/พนักงานขาย print-name selectors. Gated the same as
+     * every other quotation WRITE action ({@link #EDIT_ROLES} or the live
+     * {@code can_create_quotation} grant) rather than {@link #requireEditAccess}'s per-deal
+     * ownership rule: this list carries no single deal's context (it backs a dropdown that can be
+     * opened before a specific quotation is even loaded), and every caller who may set the field
+     * on SOME deal is entitled to see who they may choose from.
+     */
+    public List<CommissionRepOptionDto> findQuotationDisplayNameOptions(UserPrincipal actor) {
+        if (!EDIT_ROLES.contains(actor.role()) && !hasQuotationGrant(actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return quotations.findEligibleQuotationDisplayNameOptions(DivisionAccessPolicy.SALES_DIVISION_CODE);
     }
 
     // v3b's requirePriceModeAvailableInLanguage (SPECIAL_SQM refused on English) is GONE — owner

@@ -4727,6 +4727,44 @@ function scopedDealQuotationsFor(user) {
   return mockDealQuotations;
 }
 
+// V179 (owner feedback #4, 2026-09-14) -- ผู้พิมพ์/พนักงานขาย print-name override. Mirrors
+// DealQuotationRepository#isEligibleQuotationDisplayName / #findEligibleQuotationDisplayNameOptions:
+// the union of active sales-division employees and can_create_quotation grant holders. This
+// fixture has no live DivisionAccessPolicy-style derivation (see the `reps()` mock above's own
+// Javadoc for why), so "sales division" is stood in for by `role === 'sales' || role ===
+// 'sales_manager'` -- the SAME substitution that method already makes, for the same reason.
+function mockEligibleQuotationDisplayNameUsers() {
+  return db.users.filter((u) => u.active && (u.role === 'sales' || u.role === 'sales_manager' || u.canCreateQuotation));
+}
+
+function isMockEligibleQuotationDisplayName(id) {
+  return mockEligibleQuotationDisplayNameUsers().some((u) => u.id === Number(id));
+}
+
+// Validates one printedByDisplayId/salesRepDisplayId candidate before it is written -- null
+// passes straight through (means "use the real name", the default); a non-null id must be in the
+// eligible union above or the request is refused with 400. Mirrors
+// DealQuotationService#requireEligibleDisplayEmployeeId, same message string.
+function resolveDealQuotationDisplayId(rawId) {
+  if (rawId == null) return null;
+  const id = Number(rawId);
+  if (!isMockEligibleQuotationDisplayName(id)) {
+    fail('พนักงานที่เลือกไม่สามารถแสดงเป็นผู้พิมพ์หรือพนักงานขายในใบเสนอราคาได้', 400);
+  }
+  return id;
+}
+
+// The display id's name (+phone) snapshot -- looked up FRESH on every read (never frozen), which
+// mirrors DealQuotationRepository#baseSelect's plain LEFT JOIN on printed_by_display_id/
+// sales_rep_display_id (unlike the V175 approver snapshot, this join is not frozen at any point).
+// This fixture's demo employees carry no English names anywhere, so `nameEn` is always null here
+// -- the same as createdByNameEn/salesRepNameEn a few lines below in buildDealQuotationDto.
+function mockDealQuotationDisplayEmployee(id) {
+  if (id == null) return { name: null, nameEn: null, phone: null };
+  const user = db.users.find((u) => u.id === Number(id));
+  return { name: user?.name ?? null, nameEn: null, phone: mockSalesRepPhone(Number(id)) };
+}
+
 // ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
 // Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
 // `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
@@ -5178,6 +5216,16 @@ function buildDealQuotationDto(row) {
     // v3/v3b: never null on the wire — a stored null normalises to NET / TH, as the DTO does.
     priceMode: row.priceMode || 'NET',
     documentLanguage: row.documentLanguage || 'TH',
+    // V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-only name override. Looked
+    // up FRESH from row.printedByDisplayId/row.salesRepDisplayId every read — see
+    // #mockDealQuotationDisplayEmployee's own comment for why this is not a frozen snapshot.
+    printedByDisplayId: row.printedByDisplayId ?? null,
+    printedByDisplayName: mockDealQuotationDisplayEmployee(row.printedByDisplayId).name,
+    printedByDisplayNameEn: mockDealQuotationDisplayEmployee(row.printedByDisplayId).nameEn,
+    salesRepDisplayId: row.salesRepDisplayId ?? null,
+    salesRepDisplayName: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).name,
+    salesRepDisplayNameEn: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).nameEn,
+    salesRepDisplayPhone: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).phone,
     ...dealQuotationTotals(row.items, row.documentLanguage || 'TH'),
     currency: row.currency ?? (row.documentLanguage === 'EN' ? 'USD' : 'THB'),
     // Mirrors DealQuotationRepository#baseSelect (V175): frozen at approval, live only for a row
@@ -12040,6 +12088,21 @@ export const api = {
       });
     },
 
+    // V179 (owner feedback #4, 2026-09-14) — options list for the ผู้พิมพ์/พนักงานขาย print-name
+    // selectors. Gated like every other quotation WRITE action (EDIT_ROLES or the grant), NOT
+    // requireDealQuotationWriteAccess's per-deal ownership rule -- this list carries no single
+    // deal's context. Mirrors DealQuotationService#findQuotationDisplayNameOptions.
+    async displayNameOptions() {
+      const user = requireSession();
+      if (!(user.role === 'sales' || user.role === 'sales_manager' || hasDealQuotationMockGrant(user))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      const items = mockEligibleQuotationDisplayNameUsers()
+        .map((u) => ({ id: u.id, name: u.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th') || a.id - b.id);
+      return delay({ items });
+    },
+
     async get(id) {
       const row = requireDealQuotationRowViewable(id);
       return delay({ quotation: buildDealQuotationDto(row) });
@@ -12098,6 +12161,9 @@ export const api = {
         validityDate: null,
         customerNotes: payload.customerNotes ?? null,
         ...header,
+        // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
+        printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
+        salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
         items,
         createdAt: now, updatedAt: now,
       };
@@ -12142,6 +12208,11 @@ export const api = {
         ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
         ...header,
+        // V179 (owner feedback #4, 2026-09-14) — same DIRECT-assignment discipline as #M7 above:
+        // a full PUT always carries the payload's own value (null included, meaning "use the real
+        // name"), so there is no "missing keeps stored" fallback here either.
+        printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
+        salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
         items,
         updatedAt: new Date().toISOString(),
       });

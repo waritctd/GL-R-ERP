@@ -81,8 +81,10 @@ public final class DealQuotationRenderAdapter {
 
         // The rep's own name follows the document too: her English sample prints
         // "Sales/Jannet T.080-7767707", the same shape as the Thai "Sales/เจนเนต".
-        String salesLine = "Sales/" + nullSafe(displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english))
-            + " T." + nullSafe(quotation.salesRepPhone());
+        // V179 (owner feedback #4, 2026-09-14): salesRepDisplayId overrides BOTH the name and the
+        // phone here — see #salesRepDisplayNameOrReal/#salesRepDisplayPhoneOrReal.
+        String salesLine = "Sales/" + nullSafe(salesRepDisplayNameOrReal(quotation, english))
+            + " T." + nullSafe(salesRepDisplayPhoneOrReal(quotation));
 
         String attnLine;
         String phoneLine;
@@ -157,9 +159,13 @@ public final class DealQuotationRenderAdapter {
         // slot on a customer-facing document is worse than a Thai name on an English page. The
         // ผู้สั่งซื้อ slot is the CUSTOMER's contact, not an employee: there is no English name
         // stored for it anywhere, so it prints the snapshot as typed in either language.
+        // V179 (owner feedback #4, 2026-09-14): printedBy/salesRep each fall back to the display
+        // override when the corresponding *DisplayId is set — see #printedByName/
+        // #salesRepDisplayNameOrReal. approvedBy is untouched: this feature never covers the
+        // approver slot.
         Signatories signatories = new Signatories(
-            displayName(quotation.createdByName(), quotation.createdByNameEn(), english),
-            displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english),
+            printedByName(quotation, english),
+            salesRepDisplayNameOrReal(quotation, english),
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
             blank(quotation.contactName()) ? null : quotation.contactName().trim(),
             approverSignaturePng, approverSignatureMime,
@@ -644,6 +650,38 @@ public final class DealQuotationRenderAdapter {
             return english.trim();
         }
         return thai;
+    }
+
+    // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────
+    // "they should be able to select who to show for ผู้พิมพ์ and พนักงานขาย" — PRINT-ONLY. Each
+    // helper prefers the display-override fields when the corresponding *DisplayId is set, and
+    // otherwise falls back to today's real-name fields, so createdById/salesRepId (deal ownership,
+    // access, commission) never change and every quotation predating this feature (every
+    // *DisplayId null) prints byte-identically to before.
+
+    /** The ผู้พิมพ์ signature-slot name: {@code printedByDisplayName(En)} when
+     * {@code printedByDisplayId} is set, else the real {@code createdByName(En)}. */
+    static String printedByName(DealQuotationDto quotation, boolean english) {
+        if (quotation.printedByDisplayId() != null) {
+            return displayName(quotation.printedByDisplayName(), quotation.printedByDisplayNameEn(), english);
+        }
+        return displayName(quotation.createdByName(), quotation.createdByNameEn(), english);
+    }
+
+    /** The พนักงานขาย signature-slot / header "Sales/{name}" name: {@code salesRepDisplayName(En)}
+     * when {@code salesRepDisplayId} is set, else the real {@code salesRepName(En)}. */
+    static String salesRepDisplayNameOrReal(DealQuotationDto quotation, boolean english) {
+        if (quotation.salesRepDisplayId() != null) {
+            return displayName(quotation.salesRepDisplayName(), quotation.salesRepDisplayNameEn(), english);
+        }
+        return displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english);
+    }
+
+    /** The header "T.{phone}" that pairs with {@link #salesRepDisplayNameOrReal} — the SAME
+     * {@code salesRepDisplayId} decides both, so the printed name and phone can never come from
+     * two different employees. */
+    static String salesRepDisplayPhoneOrReal(DealQuotationDto quotation) {
+        return quotation.salesRepDisplayId() != null ? quotation.salesRepDisplayPhone() : quotation.salesRepPhone();
     }
 
     // LOW: zero-pad dd/mm ("01/09/2569", not "1/9/2569") -- same fix as

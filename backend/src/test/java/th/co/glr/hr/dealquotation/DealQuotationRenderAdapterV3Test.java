@@ -640,4 +640,109 @@ class DealQuotationRenderAdapterV3Test {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
             false, items, Instant.parse("2026-09-11T00:00:00Z"), null);
     }
+
+    // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────
+
+    @Test
+    void printedByName_usesRealCreatedByName_whenDisplayIdIsNull() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "จินตนา", "Jintana", "ชนิดา", "Chanida", "081-111-1111",
+            null, null, null, null, null, null, null);
+        assertThat(DealQuotationRenderAdapter.printedByName(q, false)).isEqualTo("จินตนา");
+        assertThat(DealQuotationRenderAdapter.printedByName(q, true)).isEqualTo("Jintana");
+    }
+
+    /** The owner's own example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา". */
+    @Test
+    void printedByName_usesTheDisplayName_whenDisplayIdIsSet() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            144L, "จินตนา", "Jintana", 200L, "ชนิดา", "Chanida", "081-222-2222");
+        assertThat(DealQuotationRenderAdapter.printedByName(q, false)).isEqualTo("จินตนา");
+        assertThat(DealQuotationRenderAdapter.printedByName(q, true)).isEqualTo("Jintana");
+    }
+
+    @Test
+    void salesRepDisplayNameOrReal_usesRealSalesRepName_whenDisplayIdIsNull() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "จินตนา", "Jintana", "ชนิดา", "Chanida", "081-111-1111",
+            null, null, null, null, null, null, null);
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayNameOrReal(q, false)).isEqualTo("ชนิดา");
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayNameOrReal(q, true)).isEqualTo("Chanida");
+    }
+
+    @Test
+    void salesRepDisplayNameOrReal_usesTheDisplayName_whenDisplayIdIsSet() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            144L, "จินตนา", "Jintana", 200L, "ชนิดา", "Chanida", "081-222-2222");
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayNameOrReal(q, false)).isEqualTo("ชนิดา");
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayNameOrReal(q, true)).isEqualTo("Chanida");
+    }
+
+    /** Both the name AND the phone come from the SAME salesRepDisplayId — never a mix of one
+     * employee's name with another's phone. */
+    @Test
+    void salesRepDisplayPhoneOrReal_pairsWithTheSameEmployeeAsTheDisplayName() {
+        DealQuotationDto withDisplay = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            null, null, null, 200L, "ชนิดา", "Chanida", "081-222-2222");
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayPhoneOrReal(withDisplay)).isEqualTo("081-222-2222");
+
+        DealQuotationDto withoutDisplay = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            null, null, null, null, null, null, null);
+        assertThat(DealQuotationRenderAdapter.salesRepDisplayPhoneOrReal(withoutDisplay)).isEqualTo("081-000-0000");
+    }
+
+    /** English fallback Thai->English (mirrors {@code #displayName}'s own tested behaviour): a
+     * display employee with a blank English name still prints in Thai on the English document,
+     * rather than an empty signature slot. */
+    @Test
+    void printedByName_englishDocument_fallsBackToThai_whenDisplayEnglishNameIsBlank() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            144L, "จินตนา", null, null, null, null, null);
+        assertThat(DealQuotationRenderAdapter.printedByName(q, true))
+            .as("no English name on file for the display employee -- falls back to Thai")
+            .isEqualTo("จินตนา");
+    }
+
+    /** The full model round-trip: the header "Sales/{name} T.{phone}" line and the พนักงานขาย
+     * signature slot both follow salesRepDisplayId. */
+    @Test
+    void toRenderModel_salesLineAndSignatorySalesRep_followTheDisplayOverride() {
+        DealQuotationDto q = quotationWithDisplayNames(
+            "แอดมิน", "Admin", "เซลล์จริง", "RealRep", "081-000-0000",
+            null, null, null, 200L, "ชนิดา", "Chanida", "081-222-2222");
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
+        assertThat(model.salesLine()).isEqualTo("Sales/ชนิดา T.081-222-2222");
+        // Signatories' 2nd positional field is generically named checkedBy, but this adapter uses
+        // that SLOT for พนักงานขาย (the sales rep) — see DealQuotationRenderAdapter's own
+        // Signatories construction.
+        assertThat(model.signatories().checkedBy()).isEqualTo("ชนิดา");
+        // The ผู้พิมพ์ slot and the real ownership are UNTOUCHED by the sales-rep override.
+        assertThat(model.signatories().printedBy()).isEqualTo("แอดมิน");
+    }
+
+    private DealQuotationDto quotationWithDisplayNames(
+            String createdByName, String createdByNameEn,
+            String salesRepName, String salesRepNameEn, String salesRepPhone,
+            Long printedByDisplayId, String printedByDisplayName, String printedByDisplayNameEn,
+            Long salesRepDisplayId, String salesRepDisplayName, String salesRepDisplayNameEn,
+            String salesRepDisplayPhone) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, createdByName, createdByNameEn, 1L, salesRepName, salesRepNameEn, salesRepPhone,
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30,
+            null, null, null, null,
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false,
+            printedByDisplayId, printedByDisplayName, printedByDisplayNameEn,
+            salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
+            List.<DealQuotationItemDto>of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
 }

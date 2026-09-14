@@ -158,6 +158,10 @@ export const queryKeys = {
   dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? '', filters.needsRework ? 'rework' : ''],
   dealQuotationCounts: () => ['dealQuotations', 'counts'],
   dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
+  // V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name selector options.
+  // No parameters: the scope is the caller's own session (sales/sales_manager or the grant), same
+  // as dealQuotationCounts above.
+  dealQuotationDisplayNameOptions: () => ['dealQuotations', 'displayNameOptions'],
   employeeSignature: (employeeId) => ['employeeSignature', employeeId ?? ''],
   // Step 7: Factory Purchase Order and Import Execution.
   // Attendance calendar admin (PR #480's API, this branch's UI). `holidays` is per year-range

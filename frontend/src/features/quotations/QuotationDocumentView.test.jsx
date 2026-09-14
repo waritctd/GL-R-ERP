@@ -430,3 +430,56 @@ describe('QuotationDocumentView — the header lines the document prints (owner,
     expect(queryByTestId('doc-contact')).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-only name override. This
+// preview must show exactly what DealQuotationRenderAdapter actually prints, so these tests mirror
+// DealQuotationRenderAdapterV3Test's own cases one-to-one rather than inventing new ones.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('QuotationDocumentView — V179 ผู้พิมพ์/พนักงานขาย display override', () => {
+  it('with no override, shows the real createdByName/salesRepName+phone (today\'s behaviour)', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      createdByName: 'จินตนา', salesRepName: 'ชนิดา', salesRepPhone: '081-000-0000',
+    })} />);
+    expect(container.textContent).toContain('จินตนา');
+    expect(container.textContent).toContain('ชนิดา');
+    expect(container.textContent).toContain('T.081-000-0000');
+  });
+
+  // The owner's own example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา".
+  it('with both overrides set, shows the DISPLAY names+phone, not the real ones, in both the summary card and the signature block', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      createdByName: 'แอดมิน', salesRepName: 'เซลล์จริง', salesRepPhone: '081-111-1111',
+      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
+      salesRepDisplayId: 200, salesRepDisplayName: 'ชนิดา', salesRepDisplayNameEn: null,
+      salesRepDisplayPhone: '081-222-2222',
+    })} />);
+    expect(container.textContent).toContain('จินตนา');
+    expect(container.textContent).toContain('ชนิดา');
+    expect(container.textContent).toContain('T.081-222-2222');
+    expect(container.textContent).not.toContain('แอดมิน');
+    expect(container.textContent).not.toContain('เซลล์จริง');
+    expect(container.textContent).not.toContain('081-111-1111');
+  });
+
+  it('printedByDisplayId set but salesRepDisplayId not: only ผู้พิมพ์ follows the override', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      createdByName: 'แอดมิน', salesRepName: 'ชนิดา', salesRepPhone: '081-222-2222',
+      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
+    })} />);
+    expect(container.textContent).toContain('จินตนา');
+    expect(container.textContent).not.toContain('แอดมิน');
+    // The real sales rep still prints — this override only ever touches ผู้พิมพ์.
+    expect(container.textContent).toContain('ชนิดา');
+    expect(container.textContent).toContain('T.081-222-2222');
+  });
+
+  it('English document falls back Thai→English when the display employee has no English name', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      documentLanguage: 'EN',
+      printedByDisplayId: 144, printedByDisplayName: 'จินตนา', printedByDisplayNameEn: null,
+    })} />);
+    expect(container.textContent).toContain('Printed by');
+    expect(container.textContent).toContain('จินตนา');
+  });
+});

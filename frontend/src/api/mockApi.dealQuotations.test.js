@@ -550,3 +550,93 @@ describe('mock dealQuotations -- V178 validityMode DATE', () => {
     expect(approved.validityDate).toBe('2026-10-14'); // 2026-09-14 + validityDays default 30
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-name override.
+// demoData.js ids used below: 6 = sales@glr.co.th (ticket 18's owner), 9 = sales.manager@glr.co.th,
+// 4 = employee@glr.co.th (canCreateQuotation grant, role `employee`), 7 = import@glr.co.th
+// (neither sales-shaped role nor grant).
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): mock authz is NOT authoritative — see
+// DealQuotationDisplayNameIntegrationTest for the real-DB evidence.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('mock dealQuotations.displayNameOptions -- V179 eligible union', () => {
+  it('lists sales, sales_manager and the canCreateQuotation grant holder; excludes import', async () => {
+    await api.auth.login(salesUser);
+    const { items } = await api.dealQuotations.displayNameOptions();
+    const ids = items.map((o) => o.id);
+    expect(ids).toEqual(expect.arrayContaining([6, 9, 4]));
+    expect(ids).not.toContain(7);
+  });
+
+  it('a sales_manager may also list the options', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    const { items } = await api.dealQuotations.displayNameOptions();
+    expect(items.length).toBeGreaterThan(0);
+  });
+
+  it('a role with neither a sales-shaped role nor the grant is refused (403)', async () => {
+    await api.auth.login({ role: 'import' });
+    await expect(api.dealQuotations.displayNameOptions())
+      .rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('mock dealQuotations.create/update -- V179 printedByDisplayId/salesRepDisplayId', () => {
+  it('a valid printedByDisplayId/salesRepDisplayId round-trips on create, with names resolved', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    expect(quotation.printedByDisplayId).toBe(4);
+    expect(quotation.salesRepDisplayId).toBe(9);
+    expect(quotation.printedByDisplayName).toBeTruthy();
+    expect(quotation.salesRepDisplayName).toBeTruthy();
+  });
+
+  it('an id outside the eligible union is refused (400) on create', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, { printedByDisplayId: 7, items: [ONE_ITEM] }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('update accepts null to clear a previously-set display override', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, items: [ONE_ITEM],
+    });
+    expect(created.printedByDisplayId).toBe(4);
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, { items: [ONE_ITEM] });
+    expect(cleared.printedByDisplayId).toBeNull();
+  });
+
+  it('update refuses an ineligible id too (400)', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await expect(api.dealQuotations.update(created.id, { salesRepDisplayId: 7, items: [ONE_ITEM] }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  // Wrong-way-round: the display override must never touch the real ownership fields.
+  it('setting salesRepDisplayId does not change the real salesRepId/createdById', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    expect(quotation.salesRepId).toBe(6); // ticket 18's real owner, unchanged
+    expect(quotation.salesRepDisplayId).toBe(9);
+  });
+
+  it('createRevision copies both display ids verbatim', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.printedByDisplayId).toBe(4);
+    expect(revision.salesRepDisplayId).toBe(9);
+  });
+});

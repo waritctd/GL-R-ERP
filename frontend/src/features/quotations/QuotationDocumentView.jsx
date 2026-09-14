@@ -106,6 +106,19 @@ export function QuotationDocumentView({ quotation }) {
   // employee has none on file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the
   // screen never shows an empty slot the paper would have filled.
   const name = (en, th) => (language === 'EN' ? (en || th) : th);
+  // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override. Mirrors
+  // DealQuotationRenderAdapter#printedByName / #salesRepDisplayNameOrReal /
+  // #salesRepDisplayPhoneOrReal exactly, so this "clean document" preview can never show a
+  // different name than what the actual PDF/XLSX prints. Neither createdById/createdByName nor
+  // salesRepId/salesRepName themselves are touched — only which value this VIEW reads.
+  const printedByName = quotation.printedByDisplayId != null
+    ? name(quotation.printedByDisplayNameEn, quotation.printedByDisplayName)
+    : name(quotation.createdByNameEn, quotation.createdByName);
+  const quotedByName = quotation.salesRepDisplayId != null
+    ? name(quotation.salesRepDisplayNameEn, quotation.salesRepDisplayName)
+    : name(quotation.salesRepNameEn, quotation.salesRepName);
+  const quotedByPhone = quotation.salesRepDisplayId != null
+    ? quotation.salesRepDisplayPhone : quotation.salesRepPhone;
   const contactLine = joinPresent([
     quotation.contactName,
     quotation.contactPhone?.trim() ? `โทร. ${quotation.contactPhone.trim()}` : null,
@@ -125,7 +138,7 @@ export function QuotationDocumentView({ quotation }) {
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span>
-            <strong>{quotation.salesRepName ?? '-'}{quotation.salesRepPhone ? ` · T.${quotation.salesRepPhone}` : ''}</strong>
+            <strong>{quotedByName ?? '-'}{quotedByPhone ? ` · T.${quotedByPhone}` : ''}</strong>
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">วันที่เอกสาร</span>
@@ -260,11 +273,11 @@ export function QuotationDocumentView({ quotation }) {
         <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.printedBy}</span>
-            <strong className="block mt-6 border-t border-border pt-2">{name(quotation.createdByNameEn, quotation.createdByName) ?? '-'}</strong>
+            <strong className="block mt-6 border-t border-border pt-2">{printedByName ?? '-'}</strong>
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.quotedBy}</span>
-            <strong className="block mt-6 border-t border-border pt-2">{name(quotation.salesRepNameEn, quotation.salesRepName) ?? '-'}</strong>
+            <strong className="block mt-6 border-t border-border pt-2">{quotedByName ?? '-'}</strong>
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.approvedBy}</span>

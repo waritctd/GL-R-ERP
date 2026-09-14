@@ -257,8 +257,40 @@ public final class DealQuotationRequests {
          */
         @Pattern(regexp = "THB|USD", message = "ต้องเป็น THB หรือ USD")
         String currency,
+        /**
+         * V179 (owner feedback #4, 2026-09-14) — PRINT-ONLY override: when non-null, the ผู้พิมพ์
+         * signature slot prints THIS employee's name instead of the real {@code createdBy}'s. Does
+         * NOT change who created the document, who may edit it, or anything about access/commission.
+         * Must name an active employee in the eligible union (sales-division member OR a
+         * {@code can_create_quotation} grant holder — {@code DealQuotationService}
+         * {@code #requireEligibleDisplayEmployeeId}) or the request is refused with 400. Null (the
+         * default) means "use the real name", i.e. today's behaviour.
+         */
+        Long printedByDisplayId,
+        /**
+         * V179 — PRINT-ONLY override: when non-null, the พนักงานขาย signature slot AND the header
+         * "Sales/{name} T.{phone}" line print THIS employee's name+phone instead of the real
+         * {@code salesRepId}'s. Does NOT change who owns the deal or who earns commission on it.
+         * Same eligibility rule and validation as {@link #printedByDisplayId}. Null (the default)
+         * means "use the real name".
+         */
+        Long salesRepDisplayId,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-V179 shape (no display-name override fields) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults both to null, which
+         * means "use the real name" — today's behaviour for every one of those fixtures. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, null, null, items);
+        }
+
         /** The pre-v3 shape (no {@code priceMode}) — same legacy-constructor device as
          * {@link ItemInput}'s, defaulting the mode to null, which reads as {@code NET}. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
