@@ -24,11 +24,14 @@ import { actionLabel, actionTone } from './actionLabels.js';
  * still gets 403 from all three endpoints.
  */
 
-const TABS = [
-  { value: 'summary', label: 'สรุป' },
-  { value: 'actions', label: 'การดำเนินการ' },
-  { value: 'requests', label: 'คำขอทั้งหมด' },
-  { value: 'system', label: 'ระบบและข้อผิดพลาด' },
+// Tabs.jsx's contract is `items: [{ id, label, ... }]`, not `value` — see PR for the incident
+// this fixed. Exported so ActivityLogPage.test.jsx can drive its tab-switch test off the real
+// array instead of a hardcoded label list.
+export const TABS = [
+  { id: 'summary', label: 'สรุป' },
+  { id: 'actions', label: 'การดำเนินการ' },
+  { id: 'requests', label: 'คำขอทั้งหมด' },
+  { id: 'system', label: 'ระบบและข้อผิดพลาด' },
 ];
 
 const TONE_CLASS = {
