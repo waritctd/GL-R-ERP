@@ -54,7 +54,7 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
 
   it('a THAI ราคาพิเศษ row is unchanged: list price + ราคาพิเศษ, no ตร.ม./กล่อง field', () => {
     renderPerSqm({}, { documentLanguage: 'TH' });
-    expect(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).not.toBeNull();
     expect(screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/)).not.toBeNull();
     expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
   });
@@ -64,9 +64,9 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(screen.queryByLabelText(/^ตร\.ม\.\/กล่อง/)).toBeNull();
   });
 
-  async function pick(cat) {
+  async function pick(cat, rowOverrides = {}) {
     api.catalog.prices.mockImplementation(async (q) => ((q ?? '').includes('Menorca') ? { items: [cat] } : { items: [] }));
-    const { onChange } = renderPerSqm({ sqmPerBox: 9.99 });
+    const { onChange } = renderPerSqm({ sqmPerBox: 9.99, ...rowOverrides });
     fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Menorca' } });
     fireEvent.mouseDown(await waitFor(() => screen.getByRole('option', { name: /Menorca/ }), { timeout: 1000 }));
     return onChange.mock.calls.at(-1)[0];
@@ -77,9 +77,121 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(patch).toMatchObject({ piecesPerBox: 28, sqmPerBox: 0.6 });
   });
 
+  // Owner feedback 2026-09-14 (QT-2026-0017 saved 66 แผ่น/กล่อง; its catalogue row says 38): a pick
+  // takes the NEW product's box count, and a product with none clears the field rather than
+  // keeping the previous product's number.
+  it('a pick whose product has NO box count clears แผ่น/กล่อง instead of keeping the previous product\'s', async () => {
+    const patch = await pick(
+      { priceId: 9, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: null, sqmPerBox: null },
+      { piecesPerBox: 66 },
+    );
+    expect(patch.piecesPerBox).toBeNull();
+  });
+
+  it('a pick replaces a previous product\'s แผ่น/กล่อง with the new product\'s own count', async () => {
+    const patch = await pick(
+      { priceId: 10, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 38, sqmPerBox: null },
+      { piecesPerBox: 66 },
+    );
+    expect(patch.piecesPerBox).toBe(38);
+  });
+
   it('a per_linear_m pick NEVER carries its sqm_per_box (linear metres), nor keeps the old value', async () => {
     const patch = await pick({ priceId: 8, collection: 'Menorca trim', sizeRaw: '7x60', priceUnit: 'per_linear_m', pcsPerBox: 10, sqmPerBox: 6.0 });
     expect(patch.sqmPerBox).toBeNull();
+  });
+});
+
+// Owner feedback 2026-09-14: nothing on the two Thai SPECIAL_SQM price boxes said which one was
+// per piece and which was per ตร.ม., and a rep typed a per-ตร.ม. figure into the per-piece box.
+describe('QuotationItemRow — Thai SPECIAL_SQM ราคาตั้ง suffix + per-ตร.ม. helper (owner feedback 2026-09-14)', () => {
+  function renderThaiSpecial(itemOverrides = {}) {
+    const onChange = vi.fn();
+    const item = { ...emptyQuotationItem(), ...itemOverrides };
+    render(
+      <QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()}
+        priceMode="SPECIAL_SQM" documentLanguage="TH" currency="THB" />,
+    );
+    return { item, onChange };
+  }
+
+  it('labels ราคาตั้ง (บาท/แผ่น), placed BEFORE ราคาพิเศษ (บาท/ตร.ม. รวม VAT) in DOM order', () => {
+    renderThaiSpecial();
+    const priceInput = screen.getByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/);
+    const specialInput = screen.getByLabelText(/^ราคาพิเศษ \(บาท\/ตร\.ม\. รวม VAT\)/);
+    expect(priceInput).not.toBeNull();
+    expect(specialInput).not.toBeNull();
+    expect(priceInput.compareDocumentPosition(specialInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('both price inputs render their trailing unit label', () => {
+    renderThaiSpecial();
+    expect(screen.getByText('บาท/แผ่น')).not.toBeNull();
+    expect(screen.getByText('บาท/ตร.ม.')).not.toBeNull();
+  });
+
+  it('shows a guidance hint under ราคาตั้ง until both unitPrice and sqmPerPiece are present', () => {
+    renderThaiSpecial();
+    expect(screen.getByTestId('list-per-sqm-0').textContent).toBe('กรอกราคาตั้งต่อแผ่น ระบบแปลงเป็นต่อ ตร.ม. ให้');
+  });
+
+  it('1299 ราคาตั้ง at 0.72 ตร.ม./แผ่น shows ≈ 1,932.00 บาท/ตร.ม. รวม VAT underneath', () => {
+    renderThaiSpecial({ unitPrice: 1299, sqmPerPiece: 0.72 });
+    expect(screen.getByTestId('list-per-sqm-0').textContent).toBe('≈ 1,932.00 บาท/ตร.ม. รวม VAT');
+  });
+
+  // Wrong-way-round: the helper line and the new parenthesised label must be ABSENT everywhere
+  // else -- NET, DIRECT_NET, and English per-sqm all keep their unchanged today's rendering.
+  it('NET mode never renders the suffix, the helper line, or the new label', () => {
+    renderRow({ unitPrice: 850 });
+    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
+    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
+    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
+  });
+
+  it('DIRECT_NET mode never renders the suffix, the helper line, or the new label', () => {
+    const onChange = vi.fn();
+    render(
+      <QuotationItemRow item={{ ...emptyQuotationItem(), unitPrice: 850 }} index={0} onChange={onChange} onRemove={vi.fn()}
+        priceMode="DIRECT_NET" documentLanguage="TH" currency="THB" />,
+    );
+    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
+    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
+    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
+    // DIRECT_NET's own list-price label stays exactly as it was.
+    expect(screen.getByLabelText(/^ราคาตั้ง\/แผ่น/)).not.toBeNull();
+  });
+
+  it('English per-sqm mode never renders the suffix, the helper line, or the new label', () => {
+    const onChange = vi.fn();
+    render(
+      <QuotationItemRow item={{ ...emptyQuotationItem(), specialPriceSqm: 64, sqmPerBox: 0.6 }} index={0}
+        onChange={onChange} onRemove={vi.fn()} priceMode="SPECIAL_SQM" documentLanguage="EN" currency="USD" />,
+    );
+    expect(screen.queryByLabelText(/^ราคาตั้ง \(บาท\/แผ่น\)/)).toBeNull();
+    expect(screen.queryByTestId('list-per-sqm-0')).toBeNull();
+    expect(screen.queryByText('บาท/แผ่น')).toBeNull();
+    expect(screen.queryByText('บาท/ตร.ม.')).toBeNull();
+  });
+
+  // DISPLAY-ONLY: the payload the server receives is byte-for-byte what it was before this
+  // change -- no new field, same two typed prices.
+  it('the saved payload for a Thai SPECIAL_SQM row carries no new field', () => {
+    const item = {
+      ...emptyQuotationItem(),
+      model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
+      piecesPerBox: 3, sqmPerPiece: 0.72, unitPrice: 1299, specialPriceSqm: 1932,
+      quantityMode: 'AREA', areaSqm: 20,
+    };
+    const payload = itemInputFromRow(item, 'SPECIAL_SQM', 'TH');
+    expect(payload).toEqual({
+      id: null, locationLabel: null, catalogPriceId: null, productCode: null, brand: null,
+      model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
+      sqmPerPiece: 0.72, quantityMode: 'AREA', areaSqm: 20, piecesInput: null,
+      wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: 3, sqmPerBox: null, unitPrice: 1299,
+      discountPct: null, originCountry: null, leadTimeMinDays: null, leadTimeMaxDays: null,
+      itemNotes: null, lineType: 'TILE', specialPriceSqm: 1932, directNetPrice: null,
+    });
   });
 });
 
@@ -440,6 +552,112 @@ describe('QuotationItemRow — แผ่น/ตร.ม. resolution (resolveTileS
       index={0} onChange={onChange} onRemove={vi.fn()}
     />);
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('16.39');
+  });
+});
+
+// ขนาด (ซม.) → แผ่น/ตร.ม. fallback (owner decision 2026-09-14). A 2026-09-12 ruling had removed
+// size-based inference because the free-text ขนาด column mixed cm and mm with no way to tell which
+// a given row meant; the field is now explicitly labelled ขนาด (ซม.), so its unit is declared rather
+// than guessed. See sqmPerPieceFromSizeCm in quotationMeta.js and resolveTileSqmPerPiece's own doc
+// (rule (d)) above for the full reasoning.
+describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.ม. fallback (owner decision 2026-09-14)', () => {
+  function renderBlank(itemOverrides = {}) {
+    const onChange = vi.fn();
+    const item = { ...emptyQuotationItem(), ...itemOverrides };
+    const view = render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} />);
+    return { item, onChange, ...view };
+  }
+
+  it('typing ขนาด fills แผ่น/ตร.ม. from it and shows "คำนวณจากขนาด"; a later size recalculates it', () => {
+    const { item, onChange, rerender } = renderBlank();
+
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      sizeText: '60x120',
+      sqmPerPiece: 0.72,
+      piecesPerSqmDisplay: 1.39,
+      sqmPerPieceSource: 'size',
+    });
+
+    // Re-render as the parent would after applying the patch, then confirm the badge and the
+    // แผ่น/ตร.ม. field itself reflect it before continuing to the second edit.
+    const patched = { ...item, ...onChange.mock.calls.at(-1)[0] };
+    rerender(<QuotationItemRow item={patched} index={0} onChange={onChange} onRemove={vi.fn()} />);
+    expect(screen.getByTestId('sqm-status-0').textContent).toContain('คำนวณจากขนาด');
+    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('1.39');
+
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x60' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      sizeText: '60x60',
+      sqmPerPiece: 0.36,
+      piecesPerSqmDisplay: 2.78,
+      sqmPerPieceSource: 'size',
+    });
+  });
+
+  it('does not recalculate once the rep has typed over แผ่น/ตร.ม. directly (source manual)', () => {
+    const { onChange } = renderBlank({ sqmPerPiece: 0.5, sqmPerPieceSource: 'manual' });
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
+  });
+
+  it('does not recalculate a catalogue-resolved value (source catalog)', () => {
+    const { onChange } = renderBlank({
+      catalogPriceId: 42, catalogPriceUnit: 'per_piece', sqmPerPiece: 0.135, sqmPerPieceSource: 'catalog',
+    });
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
+  });
+
+  it('never fills แผ่น/ตร.ม. from a size on a per_linear_m catalogue row', () => {
+    const { onChange } = renderBlank({ catalogPriceId: 8, catalogPriceUnit: 'per_linear_m' });
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
+  });
+
+  it('never overwrites a value loaded with sqmPerPiece already set and no recorded source (a reloaded draft)', () => {
+    const { onChange } = renderBlank({ sqmPerPiece: 0.5, sqmPerPieceSource: null });
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
+  });
+
+  it('clears a size-derived value once the size becomes unreadable', () => {
+    const { onChange } = renderBlank({ sqmPerPiece: 0.72, sqmPerPieceSource: 'size', piecesPerSqmDisplay: 1.39 });
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      sizeText: '60x',
+      sqmPerPiece: null,
+      piecesPerSqmDisplay: '',
+      sqmPerPieceSource: null,
+    });
+  });
+
+  it('a catalogue pick whose resolver returns null falls back to the catalogue size text', async () => {
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('NoFactor')
+        // No sqmPerPiece, no widthMm/heightMm -- resolveTileSqmPerPiece resolves nothing, so the
+        // fallback reads sizeTextFromCatalog's own fallback to sizeRaw ("60x120" here, a clean pair).
+        ? { items: [{ priceId: 9, productName: 'NoFactor', priceUnit: 'per_piece', sqmPerPiece: null, sizeRaw: '60x120' }] }
+        : { items: [] }
+    ));
+    const { onChange } = renderBlank();
+
+    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'NoFactor' } });
+    const option = await waitFor(() => screen.getByRole('option', { name: /NoFactor/ }), { timeout: 1000 });
+    fireEvent.mouseDown(option);
+
+    const patch = onChange.mock.calls.at(-1)[0];
+    expect(patch.sizeText).toBe('60x120');
+    expect(patch.sqmPerPiece).toBe(0.72);
+    expect(patch.piecesPerSqmDisplay).toBe(1.39);
+    expect(patch.sqmPerPieceSource).toBe('size');
+  });
+
+  it('the saved payload never carries sqmPerPieceSource (or piecesPerSqmDisplay) -- both are UI-only', () => {
+    const item = { ...emptyQuotationItem(), sqmPerPiece: 0.72, sqmPerPieceSource: 'size', piecesPerSqmDisplay: 1.39 };
+    const payload = itemInputFromRow(item, 'NET', 'TH');
+    expect(payload).not.toHaveProperty('sqmPerPieceSource');
+    expect(payload).not.toHaveProperty('piecesPerSqmDisplay');
   });
 });
 
