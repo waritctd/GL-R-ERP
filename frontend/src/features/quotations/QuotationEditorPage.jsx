@@ -378,7 +378,7 @@ export function QuotationEditorPage({ user, showToast }) {
       setAdjustments([]);
       setDocSettings(defaultDocSettings());
       setGroups([{ groupId: newLocationGroupId(), label: '' }]);
-      setTerms({ ...emptyTerms(storedDefaults), projectName: ticket?.projectName ?? '' });
+      setTerms(emptyTerms(storedDefaults));
       setTouchedRowIds(new Set());
       setDirty(false);
       setInitializedFor(key);
@@ -386,7 +386,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // setDirty is a useCallback with an empty dep list (stable identity forever), so listing it
     // here can never cause an extra run of this effect -- it only satisfies exhaustive-deps now
     // that setDirty is no longer the raw, hook-recognised useState setter.
-  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty, ticket]);
+  }, [id, quotation, effectiveTicketId, initializedFor, storedDefaults, setDirty]);
 
   // ผู้สั่งซื้อ prefill on the `?ticket=` path (F2: "With `?ticket=`, prefill from the deal's
   // contact, changeable"). Deliberately its OWN effect, not a branch of the seeding effect above.
@@ -402,6 +402,24 @@ export function QuotationEditorPage({ user, showToast }) {
     contactSeededForTicket.current = ticket.id;
     if (ticket.contactId) {
       setContact({ id: ticket.contactId, firstName: ticket.contactName ?? '', lastName: '' });
+    }
+  }, [id, ticket]);
+
+  // Opus review fix (2026-09-14): the SAME race the contact-seeding effect above exists to avoid.
+  // The main seeding effect (above) marks `initializedFor` on the FIRST render of a `?ticket=`
+  // visit, before `ticketQuery` has resolved, so seeding `projectName` from `ticket.projectName`
+  // there directly was always seeding from `undefined` and that `initializedFor` guard then made
+  // the ticket dependency inert forever -- verified: a `?ticket=` visit whose deal already HAS a
+  // project name rendered โครงการ EMPTY instead of prefilled, a real regression against this
+  // card's pre-existing plain-text display (`{projectName ?? '-'}`) it replaced. A separate ref,
+  // firing once per ticket id once `ticket` genuinely resolves, functionally-updates `terms`
+  // instead of racing the main effect's own `setTerms` call.
+  const projectNameSeededForTicket = useRef(null);
+  useEffect(() => {
+    if (id || !ticket?.id || projectNameSeededForTicket.current === ticket.id) return;
+    projectNameSeededForTicket.current = ticket.id;
+    if (ticket.projectName) {
+      setTerms((t) => ({ ...t, projectName: ticket.projectName }));
     }
   }, [id, ticket]);
 
@@ -1267,16 +1285,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // (salesRepName in the document context strip).
   const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
   const projectName = quotation?.projectName ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
-  // V179 (Opus review nit, 2026-09-14): mirrors QuotationDocumentView's own
-  // printedByDisplayId/salesRepDisplayId fallback exactly, so this read-only strip can never show
-  // a DIFFERENT พนักงานขาย than the preview and the printed document -- before this, a document
-  // with salesRepDisplayId set would show the real rep here and the override everywhere else.
+  // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
+  // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an
+  // override-AWARE salesRepName/salesRepPhone pair too, used only by the card select's empty
+  // option -- which made that option lie the moment an override was already saved (it showed the
+  // override's own name+phone right next to the choice that turns the override OFF). Both
+  // selects' options now read straight off `quotation.*`/`displayNameOptions` with no
+  // intermediate override-resolved consts.
   const realSalesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
-  const salesRepName = quotation?.salesRepDisplayId != null
-    ? (quotation.salesRepDisplayName || quotation.salesRepDisplayNameEn || realSalesRepName)
-    : realSalesRepName;
-  const salesRepPhone = quotation?.salesRepDisplayId != null
-    ? (quotation.salesRepDisplayPhone ?? null) : (quotation?.salesRepPhone ?? null);
   const wasRejected = quotation?.docStatus === 'DRAFT' && Boolean(quotation?.approvalNote);
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
   // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
@@ -1410,9 +1426,17 @@ export function QuotationEditorPage({ user, showToast }) {
                 {/* V179: the SAME salesRepDisplayId select as the เงื่อนไข panel below (owner,
                     2026-09-14: "keep both") — a distinct DOM id ("...Card") since a page may not
                     repeat an id, both bound to the one `terms.salesRepDisplayId`, so picking a
-                    value in either place updates both. The phone shown here still comes from the
-                    last SAVED override (salesRepPhone) — the options list carries no phone, so an
-                    unsaved selection cannot preview one; it appears on the next successful save. */}
+                    value in either place updates both.
+                    Opus review fix (2026-09-14): the EMPTY option means "use the real name" — its
+                    label must show the REAL rep (realSalesRepName + quotation.salesRepPhone
+                    directly), never whatever override happens to be CURRENTLY saved — an earlier
+                    version read an override-resolved pair here, which made this option lie the
+                    moment an override was set: it showed the override's own name+phone right next
+                    to the choice that turns the override off. The phone shown when an override IS
+                    selected still comes from the last SAVED value (quotation.salesRepDisplayPhone,
+                    read inside buildDealQuotationDto/QuotationDocumentView) — the options list
+                    itself carries no phone, so an unsaved selection cannot preview one; it appears
+                    on the next successful save. */}
                 <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard">
                   <select
                     id="salesRepDisplayIdCard"
@@ -1420,7 +1444,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     disabled={displayNameOptionsQuery.isLoading}
                     onChange={(e) => { setTerms((t) => ({ ...t, salesRepDisplayId: e.target.value })); setDirty(true); }}
                   >
-                    <option value="">{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</option>
+                    <option value="">{realSalesRepName}{quotation?.salesRepPhone ? ` · T.${quotation.salesRepPhone}` : ''}</option>
                     {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                   </select>
                 </FormField>

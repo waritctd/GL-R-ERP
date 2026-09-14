@@ -165,8 +165,27 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     });
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe('9'));
-    expect(screen.getByText('ผู้จัดการ ฝ่ายขาย · T.089-999-9999')).toBeTruthy();
-    expect(screen.queryByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeNull();
+    // The override is what's SELECTED on the card's own twin select too -- not text-matched
+    // (a collapsed <select>'s other <option> labels are still in the DOM and would make a plain
+    // text search meaningless the moment the empty option ALSO carries text, per the fix just
+    // below this test).
+    expect(byId('salesRepDisplayIdCard').value).toBe('9');
+  });
+
+  // Opus review fix (2026-09-14): the card's own select's EMPTY option (value="") means "use the
+  // real name" -- its label must show the REAL rep even when an override is already saved, not
+  // the override itself (which would tell the rep the option that TURNS OFF the override is
+  // somehow the override's own name).
+  it('the card select\'s empty option always labels the REAL rep, even with an override saved', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('salesRepDisplayIdCard')?.value).toBe('9'));
+    const emptyOption = [...byId('salesRepDisplayIdCard').options].find((o) => o.value === '');
+    expect(emptyOption.textContent).toBe('คุณสมหมาย ขายดี · T.081-000-0000');
   });
 
   it('the context strip shows the real rep when no salesRepDisplay override is set', async () => {

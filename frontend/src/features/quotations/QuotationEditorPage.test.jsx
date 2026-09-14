@@ -223,6 +223,26 @@ describe('QuotationEditorPage item calc wiring', () => {
     expect(screen.queryByText('older')).toBeNull();
     expect(priceInput.value).toBe('200');
   });
+
+  // Opus review fix (2026-09-14): โครงการ became an editable card field in the same change that
+  // introduced this regression -- the seeding effect used to try prefilling it from
+  // `ticket.projectName` on the SAME pass that marks the visit "initialized" (before ticketQuery
+  // has resolved), so it always seeded from `undefined` and the guard then made the dependency
+  // inert forever. Mirrors `contactSeededForTicket`'s own dedicated, ticket-id-keyed effect, which
+  // this pins the same way for โครงการ.
+  it('prefills โครงการ from the deal once the ticket resolves, on a brand-new quotation', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: {
+        summary: {
+          id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี',
+          customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', projectName: 'โครงการ A',
+          customerId: 5, contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
+        },
+      },
+    });
+    renderEditor('/quotations/new?ticket=18');
+    await waitFor(() => expect(document.getElementById('projectNameCard')?.value).toBe('โครงการ A'));
+  });
 });
 
 describe('QuotationEditorPage new-quotation authorization (#M2)', () => {
