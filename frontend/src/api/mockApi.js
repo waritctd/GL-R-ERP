@@ -51,6 +51,9 @@ import {
 // in the backend dealquotation/ package once it lands).
 import {
   canTransitionDealQuotation, isDealQuotationNeedingRework, adjustmentDescriptionPreview,
+  // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
+  // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
+  hasSpecialPricing,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -5059,6 +5062,32 @@ function resolveDealQuotationV3Header(payload, current = null) {
   return { priceMode, documentLanguage, currency };
 }
 
+/**
+ * V178 — DealQuotationService#requireValidityUntilForMode, mirrored exactly, same message
+ * strings, same order of checks. `current` is the stored row on UPDATE (a missing
+ * `validityMode` keeps the stored one, same "missing keeps stored" discipline as priceMode/
+ * documentLanguage above); null on CREATE, where missing means DAYS. `quotationDate` is the
+ * quotation's OWN date — today on create, the frozen `current.quotationDate` on update — used
+ * for the "not before the document's own date" refusal. `items` are the rows ABOUT TO BE
+ * WRITTEN (this function's caller always passes the post-`buildDealQuotationItems` list), so
+ * "has special pricing" is decided from what is actually being saved, never from stale state.
+ */
+function resolveDealQuotationValidity(payload, priceMode, items, quotationDate, current = null) {
+  // Opus review (2026-09-14): no .toUpperCase() here — the real @Pattern(regexp = "DAYS|DATE")
+  // rejects lowercase (DealQuotationRequestsValidationTest pins this), so uppercasing here would
+  // make the mock MORE permissive than production, the dangerous direction (CLAUDE.md).
+  const validityMode = String(payload.validityMode || current?.validityMode || 'DAYS');
+  if (!['DAYS', 'DATE'].includes(validityMode)) fail('ต้องเป็น DAYS หรือ DATE', 400);
+  if (validityMode !== 'DATE') return { validityMode, validityUntil: null };
+  if (!hasSpecialPricing(priceMode, items)) {
+    fail('ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด', 400);
+  }
+  const validityUntil = payload.validityUntil || null;
+  if (!validityUntil) fail('กรุณาระบุวันที่ยืนราคา', 400);
+  if (validityUntil < quotationDate) fail('วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา', 400);
+  return { validityMode, validityUntil };
+}
+
 /** DealQuotationService#buildItems' ordering and refusals: ADJUSTMENT rows move LAST (stably),
  * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
  * and a document whose total goes negative is refused — checked only where the mock KNOWS the
@@ -5142,6 +5171,9 @@ function buildDealQuotationDto(row) {
     creditDays: row.creditDays,
     validityDays: row.validityDays,
     validityDate: row.validityDate,
+    // V178: never null on the wire — a stored null normalises to DAYS, as the DTO does.
+    validityMode: row.validityMode || 'DAYS',
+    validityUntil: row.validityUntil ?? null,
     customerNotes: row.customerNotes,
     // v3/v3b: never null on the wire — a stored null normalises to NET / TH, as the DTO does.
     priceMode: row.priceMode || 'NET',
@@ -12022,6 +12054,10 @@ export const api = {
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
+      // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is
+      // set from, so the two can never disagree about "today".
+      const { validityMode, validityUntil } = resolveDealQuotationValidity(
+        payload, header.priceMode, items, now.slice(0, 10));
       const row = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
@@ -12058,6 +12094,7 @@ export const api = {
         remainderMode: payload.remainderMode ?? null,
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
+        validityMode, validityUntil,
         validityDate: null,
         customerNotes: payload.customerNotes ?? null,
         ...header,
@@ -12080,6 +12117,11 @@ export const api = {
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
+      // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems),
+      // same as DealQuotationService#update — a discount cleared on THIS save already refuses
+      // DATE mode here, before anything is persisted.
+      const { validityMode, validityUntil } = resolveDealQuotationValidity(
+        payload, header.priceMode, items, row.quotationDate, row);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -12094,6 +12136,7 @@ export const api = {
         remainderMode: payload.remainderMode ?? null,
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
+        validityMode, validityUntil,
         customerNotes: payload.customerNotes ?? null,
         // F7: re-snapshot the ลูกค้า columns on every DRAFT save — DealQuotationService#update.
         ...mockDealQuotationCustomerSnapshot(ticket),
@@ -12130,6 +12173,12 @@ export const api = {
       // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
       // none, and that document cannot go for approval with an empty signature slot.
       if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
+      // date before the quotation's OWN date, so this is the re-check against TODAY, the last
+      // gate before an approver ever sees the document. Mirrors DealQuotationService#submit.
+      if (row.validityMode === 'DATE' && row.validityUntil && row.validityUntil < bangkokTodayIso()) {
+        fail('วันที่ยืนราคาผ่านไปแล้ว', 400);
+      }
       const now = new Date().toISOString();
       row.docStatus = 'PENDING_APPROVAL';
       row.submittedAt = now;
@@ -12164,7 +12213,14 @@ export const api = {
       // of bug as todayIso() in QuotationEditorPage.jsx (fixed there via utils/format.js's
       // bangkokTodayIso -- this file already had its own copy of the same fix, unrelated import).
       row.quotationDate = bangkokTodayIso();
-      row.validityDate = row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null;
+      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim
+      // (approval never recomputes it); every other case falls back to the existing day-count
+      // rule. Mirrors DealQuotationService#approve exactly, hasSpecialPricing re-checked here
+      // (rather than trusted from `validityMode` alone) for the same defensive reason the real
+      // service does.
+      row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
+        ? row.validityUntil
+        : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
       row.updatedAt = now;
       // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
       // last approved document stays valid until replaced.

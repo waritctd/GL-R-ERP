@@ -54,6 +54,15 @@ public final class WastageCalculator {
     public static final String CURRENCY_THB = "THB";
     public static final String CURRENCY_USD = "USD";
 
+    // ── Owner feedback, กำหนดยืนยันราคา (2026-09-14) — remark 7's second variant ───────────────
+    /** The rep types a whole number of days, counted from the document's own date. Today's
+     * behaviour and the default (every pre-V178 row stores {@code validity_mode = 'DAYS'}). */
+    public static final String VALIDITY_MODE_DAYS = "DAYS";
+    /** The rep types a specific calendar date ("ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่
+     * .../.../....") instead of a day count — for when a promotion or a factory allocation needs
+     * an exact deadline rather than "N days from now". */
+    public static final String VALIDITY_MODE_DATE = "DATE";
+
     /**
      * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
      * thing (ภาษาเอกสาร) and the rest follows. {@code DealQuotationService#resolveCurrency} lets an

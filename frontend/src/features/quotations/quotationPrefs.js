@@ -56,8 +56,14 @@ function writeJson(key, value) {
 // Only the four terms fields a rep repeats deal after deal, plus the ประเทศต้นทาง a new ITEM row
 // starts on. Deliberately NOT remembered: วันที่ (always today), หมายเหตุ (customer-specific),
 // ฝ่าย/หน่วยงาน (deal-specific), and anything money-shaped.
+//
+// V178: `validityMode` joined this list (a rep who always dates their validity keeps starting
+// there) but `validityUntil` NEVER does — a remembered CALENDAR DATE from a previous deal would
+// silently be a date in the past, or simply the wrong one, on every quotation after the first.
 
-const DEFAULT_TERM_FIELDS = ['depositPercent', 'remainderMode', 'creditDays', 'validityDays', 'originCountry'];
+const DEFAULT_TERM_FIELDS = [
+  'depositPercent', 'remainderMode', 'creditDays', 'validityDays', 'validityMode', 'originCountry',
+];
 
 /** `null` when nothing is stored (or storage threw). Never throws. */
 export function readQuotationDefaults(userId) {

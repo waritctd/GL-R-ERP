@@ -42,6 +42,14 @@ describe('quotationPrefs', () => {
     });
   });
 
+  // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the DATE
+  // itself never is — a remembered calendar date would be a date in the past, or simply the
+  // wrong one, on every quotation after the first.
+  it('remembers validityMode but never validityUntil, even when both are passed', () => {
+    writeQuotationDefaults(6, { validityMode: 'DATE', validityUntil: '2026-12-31' });
+    expect(readQuotationDefaults(6)).toEqual({ validityMode: 'DATE' });
+  });
+
   // A shared sales machine is the normal case in this office — two reps on one browser must not
   // inherit each other's terms.
   it('keys defaults per user, so one rep never inherits another\'s', () => {

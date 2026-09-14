@@ -262,6 +262,75 @@ public final class DealQuotationRenderAdapter {
         return (pct == null || pct.signum() == 0) ? "Net" : formatPct(pct) + "%";
     }
 
+    // ── V178 — "has special pricing" (owner ruling 2026-09-14). The ONE shared gate for whether
+    // remark 7's DATE variant may print AND whether DealQuotationService may even SAVE a quotation
+    // in DATE mode — the service calls the NewItem overload below (before anything is written),
+    // this class calls the DTO overload (after a read), and both funnel into #hasSpecialPricingCore
+    // so the rule is defined exactly once. A quotation has special pricing when ANY of:
+    //   a. priceMode SPECIAL_SQM (ราคาพิเศษ บาท/ตร.ม.) and at least one TILE row exists;
+    //   b. priceMode DIRECT_NET (ราคาสุทธิต่อแผ่น) and some TILE row's net differs from its list
+    //      price (the row whose ส่วนลด cell prints พิเศษ, per #discountCellText above);
+    //   c. some TILE row (under any OTHER price mode, i.e. NET) has discountPct > 0;
+    //   d. some PLAIN row has discountPct > 0;
+    //   e. an ADJUSTMENT (ส่วนลดพิเศษ) row exists.
+    // Decided from the DATA, never from the printed discount label: an English per-sqm SPECIAL_SQM
+    // row prints "Net" (see #discountCellText) but rule (a) still counts it as special pricing.
+    // TILE = lineType null or LINE_TYPE_TILE.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /** {@code true} when the SAVED quotation has special pricing. */
+    public static boolean hasSpecialPricing(DealQuotationDto quotation) {
+        return hasSpecialPricingCore(quotation.priceMode(), quotation.items().stream()
+            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice()))
+            .toList());
+    }
+
+    /** Same rule, over the rows about to be WRITTEN — {@code DealQuotationService#create}/{@code
+     * #update} call this so DATE mode is refused BEFORE anything is saved, rather than needing a
+     * round trip through a persisted read. */
+    public static boolean hasSpecialPricingForNewItems(String priceMode,
+                                                        List<DealQuotationRepository.NewItem> items) {
+        return hasSpecialPricingCore(priceMode, items.stream()
+            .map(i -> new PricingRow(i.lineType(), i.unitPrice(), i.discountPct(), i.netUnitPrice()))
+            .toList());
+    }
+
+    private record PricingRow(String lineType, BigDecimal unitPrice, BigDecimal discountPct,
+                              BigDecimal netUnitPrice) {}
+
+    private static boolean hasSpecialPricingCore(String priceMode, List<PricingRow> rows) {
+        boolean specialSqm = WastageCalculator.PRICE_MODE_SPECIAL_SQM.equals(priceMode);
+        boolean directNet = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode);
+        for (PricingRow row : rows) {
+            if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(row.lineType())) {
+                return true; // (e)
+            }
+            if (WastageCalculator.LINE_TYPE_PLAIN.equals(row.lineType())) {
+                if (isPositive(row.discountPct())) {
+                    return true; // (d)
+                }
+                continue;
+            }
+            // TILE (lineType null or LINE_TYPE_TILE)
+            if (specialSqm) {
+                return true; // (a)
+            }
+            if (directNet) {
+                if (row.netUnitPrice() != null && row.unitPrice() != null
+                    && row.netUnitPrice().compareTo(row.unitPrice()) != 0) {
+                    return true; // (b)
+                }
+            } else if (isPositive(row.discountPct())) {
+                return true; // (c)
+            }
+        }
+        return false;
+    }
+
+    private static boolean isPositive(BigDecimal v) {
+        return v != null && v.signum() > 0;
+    }
+
     // ── remarks (8 lines) — docs/sales/quotation-v2-plan.md "Printed lines"; 4/5/6/8 are the template's own
     // fixed text (two rows concatenated where the template splits a sentence across a "head" row
     // and an unnumbered continuation row). ─────────────────────────────────────────────────────
@@ -283,6 +352,12 @@ public final class DealQuotationRenderAdapter {
         "6.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า";
     private static final String LINE8 = "8.เงื่อนไขประกอบใบเสนอราคา ตามเอกสารแนบ";
 
+    /** Remark 7's DATE-mode variant (owner feedback 2026-09-14, verbatim, including the number
+     * prefix and the ONE ASCII space before the date): "ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำ
+     * ภายในวันที่ ..../..../....." */
+    private static final String LINE7_DATE_PREFIX =
+        "7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ ";
+
     private static List<String> remarkLines(DealQuotationDto quotation) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
@@ -290,6 +365,14 @@ public final class DealQuotationRenderAdapter {
             ? "เครดิต " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " วัน"
             : "ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+        // Owner feedback 2026-09-14 (V178) — remark 7's second กำหนดยืนยันราคา variant: a rep may
+        // name an exact calendar date instead of a day count. DAYS-mode output is byte-identical
+        // to before this change; validityUntil is only ever non-null in DATE mode (service-enforced).
+        String line7 = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+            && quotation.validityUntil() != null
+            && hasSpecialPricing(quotation)
+            ? LINE7_DATE_PREFIX + shortThaiDate(quotation.validityUntil())
+            : "7.กำหนดยืนยันราคา " + validityDays + " วัน นับจากวันที่ในใบเสนอราคา";
 
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
@@ -298,7 +381,7 @@ public final class DealQuotationRenderAdapter {
         lines.add(LINE4);
         lines.add(LINE5);
         lines.add(LINE6);
-        lines.add("7.กำหนดยืนยันราคา " + validityDays + " วัน นับจากวันที่ในใบเสนอราคา");
+        lines.add(line7);
         lines.add(LINE8);
         return lines;
     }
@@ -386,6 +469,12 @@ public final class DealQuotationRenderAdapter {
             ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
             : "the balance before or upon delivery";
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+        // V178, English twin of the Thai line7 branch above — same guard, same byte-identical
+        // DAYS-mode output.
+        boolean validityIsDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+            && quotation.validityUntil() != null
+            && hasSpecialPricing(quotation);
+        String validityUntilEn = validityIsDate ? shortEnglishDate(quotation.validityUntil()) : null;
 
         // ⚠️ EXACTLY 8 lines either way — QuotationRenderer#REMARK_HEAD_ROWS has 8 slots and fewer
         // falls back to the legacy 3-line layout, which leaves the template's Thai continuation
@@ -415,14 +504,19 @@ public final class DealQuotationRenderAdapter {
             // every content test green, because the text in the cell was intact. Both are now well
             // inside the 130 that the pre-existing line 1 proves fits in both PDF engines, and
             // DealQuotationEnglishFormTest guards the length of every line in both layouts.
-            lines.add("4.Price validity : " + validityDays + " days from the date of this quotation; "
-                + "sizes may vary slightly within ISO and TIS tolerances.");
+            lines.add(validityIsDate
+                ? "4.Special price for orders with deposit paid by " + validityUntilEn
+                    + "; sizes may vary slightly within ISO and TIS tolerances."
+                : "4.Price validity : " + validityDays + " days from the date of this quotation; "
+                    + "sizes may vary slightly within ISO and TIS tolerances.");
             lines.add("5.Colours may vary slightly between production lots. "
                 + "Goods sold are not returnable or exchangeable.");
         } else {
             lines.add(englishLeadTimeLine(quotation.items()));
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
-            lines.add("5.Price validity : " + validityDays + " days from the date of this quotation.");
+            lines.add(validityIsDate
+                ? "5.Special price for orders with deposit paid by " + validityUntilEn + "."
+                : "5.Price validity : " + validityDays + " days from the date of this quotation.");
             lines.add("6.Actual tile sizes may vary slightly from the sizes stated above, within ISO "
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
