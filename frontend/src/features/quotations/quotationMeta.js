@@ -908,7 +908,6 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
 export const QUOTATION_FIELD_IDS = Object.freeze({
   customer: 'deal-customer',
   project: 'deal-project',
-  customerName: 'deal-customer-name',
   customerAddress: 'deal-customer-address',
   customerTaxId: 'deal-customer-tax-id',
   customerPhone: 'deal-customer-phone',

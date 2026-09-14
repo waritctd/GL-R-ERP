@@ -52,23 +52,6 @@ it('preserves legacy text on cancel, then saves a complete structured address ex
   expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
 });
 
-it('refuses to save a blank ชื่อลูกค้า: restores the previous name and shows the backend\'s own wording, with no request sent', async () => {
-  // api.customers.update is a shared vi.fn() across this file's tests (no clearAllMocks), so this
-  // asserts the call count is UNCHANGED by the blank-name blur, not that it is zero.
-  const callsBefore = api.customers.update.mock.calls.length;
-  const showToast = vi.fn();
-  render(<QueryClientProvider client={new QueryClient()}><Harness showToast={showToast} /></QueryClientProvider>);
-  const name = screen.getByLabelText('ชื่อลูกค้า');
-  expect(name.value).toBe('Test');
-
-  fireEvent.change(name, { target: { value: '   ' } });
-  fireEvent.blur(name);
-
-  expect(api.customers.update).toHaveBeenCalledTimes(callsBefore);
-  expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุชื่อลูกค้า');
-  expect(name.value).toBe('Test');
-});
-
 // Reproduces the resync race: QuotationEditorPage's `summaryCustomer` first renders the
 // quotation's frozen snapshot, then the live customer record query resolves with different
 // values for the SAME customer id. The effect that re-seeds `edits` from every `customer.*`
@@ -85,7 +68,6 @@ it('a dirty edit survives a record refresh for the SAME customer', async () => {
   act(() => { ref.current.setCustomer({ id: 5, name: 'บริษัท เต็มชื่อ จำกัด', taxId: '9999999999999', phone: '02-111-2222', address: 'ข้อความเดิม' }); });
 
   expect(taxId.value).toBe('0105551234567'); // dirty field: kept the rep's typed text
-  expect(screen.getByLabelText('ชื่อลูกค้า').value).toBe('บริษัท เต็มชื่อ จำกัด'); // untouched: took the new record
   expect(screen.getByLabelText('โทร.').value).toBe('02-111-2222'); // untouched: took the new record
 });
 
@@ -101,7 +83,6 @@ it('switching to a DIFFERENT customer discards a dirty edit and resets every fie
   act(() => { ref.current.setCustomer(second); });
 
   expect(taxId.value).toBe('0207778889990'); // the dirty edit belonged to customer 5, not 9 — discarded
-  expect(screen.getByLabelText('ชื่อลูกค้า').value).toBe('ลูกค้าอื่น');
   expect(screen.getByLabelText('โทร.').value).toBe('081-234-5678');
   expect(screen.getByLabelText('ที่อยู่').value).toBe('ที่อยู่ใหม่');
 });
