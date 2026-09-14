@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Assumptions;
@@ -58,6 +59,7 @@ import th.co.glr.hr.ticket.TicketService;
  * customerquotation/CustomerQuotationIntegrationTest} (its own {@code @BeforeEach}/helpers).
  */
 class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
+    private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private TicketRepository tickets;
     private TicketService ticketService;
     private CustomerRepository customers;
@@ -1922,7 +1924,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         UpsertDealQuotationRequest request = withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "100.00"))),
-            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30));
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30));
         assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -1946,7 +1948,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         UpsertDealQuotationRequest request = withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
-            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().minusDays(1));
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).minusDays(1));
         assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -1955,7 +1957,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void create_dateMode_withSpecialPricing_roundTripsThroughSaveAndRead() {
-        LocalDate until = LocalDate.now().plusDays(45);
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(45);
         UpsertDealQuotationRequest request = withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
@@ -1978,12 +1980,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
-            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30)), salesActor);
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30)), salesActor);
 
         UpsertDealQuotationRequest noLongerSpecial = withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "100.00"))),
-            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now().plusDays(30));
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30));
         assertThatThrownBy(() -> quotationService.update(created.id(), noLongerSpecial, salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -1992,15 +1994,17 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void submit_dateModeValidityAlreadyPast_isBadRequest() {
+        // Match the service's business date: UTC CI can be a day behind Bangkok.
+        // Start with a future expiry so crossing midnight during setup cannot reject the draft.
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
-            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now()), salesActor);
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30)), salesActor);
         // Time moves on after the draft is saved -- simulate that directly (create/update already
         // refuse a date before the quotation's OWN date, so a past date cannot reach storage any
         // other way in one test run).
         jdbc.update("UPDATE sales.quotation SET validity_until = :d WHERE quotation_id = :id",
-            java.util.Map.of("d", LocalDate.now().minusDays(1), "id", created.id()));
+            java.util.Map.of("d", LocalDate.now(BANGKOK).minusDays(1), "id", created.id()));
         assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -2009,7 +2013,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void approve_dateModeWithSpecialPricing_setsValidityDateToValidityUntil_notApprovalPlusDays() {
-        LocalDate until = LocalDate.now().plusDays(60);
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(60);
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
@@ -2025,7 +2029,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void createRevision_copiesValidityModeAndUntil_verbatim() {
-        LocalDate until = LocalDate.now().plusDays(60);
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(60);
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
