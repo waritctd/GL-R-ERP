@@ -44,7 +44,11 @@ const DEAL_QUOTATION_STATUS_LABELS = {
   DRAFT: { label: 'ร่าง', tone: 'neutral' },
   PENDING_APPROVAL: { label: 'รออนุมัติ', tone: 'warning' },
   APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-  SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
+  // Owner rewording (2026-09-15): "ถูกแทนที่" read as a state worth its own filter/queue; this
+  // status needs neither (see QuotationListPage.jsx's own "ร่าง and ถูกแทนที่ are deliberately
+  // GONE as tabs" comment -- a superseded document is history) -- "ฉบับที่ไม่ได้ใช้แล้ว" reads as
+  // the plain, unremarkable end state it actually is.
+  SUPERSEDED: { label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' },
   CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
 };
 
@@ -247,7 +251,11 @@ export function originCountryFromCode(originCountryCode) {
 export const DEAL_QUOTATION_STATUS_TABS = [
   { key: 'all', label: 'ทั้งหมด', countKey: 'all', params: {} },
   { key: 'PENDING_APPROVAL', label: 'รออนุมัติ', countKey: 'pendingApproval', params: { status: 'PENDING_APPROVAL' } },
-  { key: 'NEEDS_REWORK', label: 'แก้', countKey: 'needsRework', params: { needsRework: true } },
+  // Owner rewording (2026-09-15): "แก้" -> "ฉบับแก้" -- names the DOCUMENT, not the verb, and
+  // covers both cases this tab bundles: sales แก้ ฉบับที่ถูกอนุมัติแล้ว (a DRAFT revision of an
+  // APPROVED document, in progress) OR ceo ตีกลับแล้วต้องแก้ (a rejected DRAFT). Same
+  // needsRework=true filter, unchanged.
+  { key: 'NEEDS_REWORK', label: 'ฉบับแก้', countKey: 'needsRework', params: { needsRework: true } },
   { key: 'CANCELLED', label: 'ยกเลิก', countKey: 'cancelled', params: { status: 'CANCELLED' } },
   { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: 'APPROVED' } },
 ];

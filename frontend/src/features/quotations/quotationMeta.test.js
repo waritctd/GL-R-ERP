@@ -82,7 +82,7 @@ describe('dealQuotationStatusLabel', () => {
     expect(dealQuotationStatusLabel('DRAFT')).toEqual({ label: 'ร่าง', tone: 'neutral' });
     expect(dealQuotationStatusLabel('PENDING_APPROVAL')).toEqual({ label: 'รออนุมัติ', tone: 'warning' });
     expect(dealQuotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
-    expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ถูกแทนที่', tone: 'neutral' });
+    expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' });
     expect(dealQuotationStatusLabel('CANCELLED')).toEqual({ label: 'ยกเลิก', tone: 'danger' });
   });
 
@@ -663,10 +663,10 @@ describe('locationGroupsFromItems (F1)', () => {
 describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
   it('is exactly the five tabs the owner asked for, in order', () => {
     expect(meta.DEAL_QUOTATION_STATUS_TABS.map((t) => t.label))
-      .toEqual(['ทั้งหมด', 'รออนุมัติ', 'แก้', 'ยกเลิก', 'อนุมัติแล้ว']);
+      .toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
   });
 
-  it('drives แก้ off needsRework, not a docStatus', () => {
+  it('drives ฉบับแก้ off needsRework, not a docStatus', () => {
     const rework = meta.dealQuotationStatusTab('NEEDS_REWORK');
     expect(rework.params).toEqual({ needsRework: true });
     expect(rework.params.status).toBeUndefined();
