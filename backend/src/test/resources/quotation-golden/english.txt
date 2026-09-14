@@ -69,7 +69,7 @@ row 4 h=405
   c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
   c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 5 h=405
-  c1 STRING style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
+  c1 STRING style=161 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
   c2 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c3 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c4 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -97,7 +97,7 @@ row 6 h=405
   c12 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
 row 7 h=405
   c0 BLANK style=78 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=161 b=NONE/NONE/THIN/NONE font=15 wrap=false al=CENTER : "Project  : Showroom V2 Project"
+  c1 STRING style=162 b=NONE/NONE/THIN/NONE font=15 wrap=false al=CENTER : "Project  : Showroom V2 Project"
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=79 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=84 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -283,13 +283,13 @@ row 21 h=450
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 22 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=162 b=THIN/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "Remarks"
-  c2 BLANK style=163 b=THIN/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
-  c3 BLANK style=164 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c4 BLANK style=165 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
-  c5 BLANK style=166 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c6 BLANK style=167 b=THIN/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
-  c7 BLANK style=168 b=THIN/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c1 STRING style=163 b=THIN/NONE/THIN/THIN font=15 wrap=false al=GENERAL : "Remarks"
+  c2 BLANK style=164 b=THIN/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=165 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=166 b=THIN/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=167 b=THIN/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=168 b=THIN/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=169 b=THIN/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
   c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
   c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -390,20 +390,20 @@ row 30 h=450
   c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 31 h=450 hidden
-  c2 BLANK style=170 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
-  c7 BLANK style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
-  c8 BLANK style=172 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c2 BLANK style=171 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c7 BLANK style=172 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c8 BLANK style=173 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
   c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=141 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 32 h=450 hidden
-  c0 BLANK style=173 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
-  c2 BLANK style=174 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
-  c4 BLANK style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
-  c5 BLANK style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
-  c6 BLANK style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
-  c7 BLANK style=176 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : 
-  c8 BLANK style=177 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
+  c0 BLANK style=174 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
+  c2 BLANK style=175 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=176 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c5 BLANK style=176 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c6 BLANK style=176 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
+  c7 BLANK style=177 b=NONE/NONE/NONE/NONE font=15 wrap=false al=CENTER : 
+  c8 BLANK style=178 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
   c9 BLANK style=102 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=141 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
@@ -412,7 +412,7 @@ row 33 h=450
   c1 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-  c4 STRING style=169 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "Grand Total (USD)"
+  c4 STRING style=170 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "Grand Total (USD)"
   c5 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c6 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c7 BLANK style=70 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : 
@@ -430,7 +430,7 @@ row 34 h=450
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 35 h=450
   c0 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
-  c2 STRING style=178 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "Confirmed to order at the prices and conditions above"
+  c2 STRING style=179 b=NONE/NONE/NONE/NONE font=13 wrap=false al=RIGHT : "Confirmed to order at the prices and conditions above"
   c3 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c4 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c5 BLANK style=132 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
@@ -452,7 +452,7 @@ row 36 h=405
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 37 h=405
-  c0 STRING style=179 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "Printed by______________________Quoted by______________________Approved by____________________Ordered by_____________________"
+  c0 STRING style=180 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "Printed by______________________Quoted by______________________Approved by____________________Ordered by_____________________"
   c1 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=97 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=93 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -465,7 +465,7 @@ row 37 h=405
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=143 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 38 h=405
-  c0 STRING style=180 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
+  c0 STRING style=181 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "                    (จินตนา)                                      (จุฑาทิพ)                                           (ผึ้ง)                                      (สมหญิง ใจดี)                "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=67 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
@@ -478,7 +478,7 @@ row 38 h=405
   c10 BLANK style=121 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=142 b=NONE/NONE/NONE/NONE font=15 wrap=false al=GENERAL : 
 row 39 h=405
-  c0 STRING style=181 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               Date 10/9/2026                             Date 10/9/2026                             Date 11/9/2026                     Date ........./........./.........       "
+  c0 STRING style=182 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : "               Date 10/9/2026                             Date 10/9/2026                             Date 11/9/2026                     Date ........./........./.........       "
   c1 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 
   c2 BLANK style=99 b=NONE/NONE/NONE/NONE font=13 wrap=false al=CENTER : 
   c3 BLANK style=96 b=NONE/NONE/NONE/NONE font=13 wrap=false al=LEFT : 

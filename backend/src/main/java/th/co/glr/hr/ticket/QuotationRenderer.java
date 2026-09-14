@@ -284,6 +284,10 @@ public class QuotationRenderer {
             ? "   เลขที่ผู้เสียภาษี : " + customer.taxId() : "";
         String attnLine = contactPart + nullSafe(s.customerName()) + taxIdPart;
 
+        // KNOWN UNFIXED SIBLING (2026-09-14): this legacy/PCR wrapper has the same gap the direct-
+        // deal path's Thai branch just had fixed — customer.address() is available here too but is
+        // never printed. Left as-is: this is the legacy TicketDto/QuotationDto path (predates the
+        // v2 direct-deal model this class's own Javadoc documents), out of scope for that fix.
         String phonePart = customer != null && customer.phone() != null && !customer.phone().isBlank()
             ? "โทร. " + customer.phone() : "";
 
@@ -385,7 +389,15 @@ public class QuotationRenderer {
             mergeIfAbsent(sh, SALES_LINE_ROW, SALES_LINE_ROW, SALES_LINE_COL, SALES_LINE_COL + 1);
             setRightAligned(sh, SALES_LINE_ROW, SALES_LINE_COL, nullSafe(model.salesLine())); // H6:I6
             setStr(sh, ATTN_ROW, LABEL_VALUE_COL, nullSafe(model.attnLine()));       // B5
-            setStr(sh, PHONE_ROW, LABEL_VALUE_COL, nullSafe(model.phoneLine()));     // B6
+            // Opus review of the address-line fix (2026-09-14): B6:G6 is a MERGED cell that clips
+            // overflow rather than wrapping, and #phoneLine now regularly carries an address AND a
+            // phone number on both languages (ที่อยู่/Address + โทร./Tel, folded onto this one line
+            // because neither template has a free row of its own — see DealQuotationRenderAdapter).
+            // A real Bangkok office address (building + floor) plus a phone number measures past
+            // the slot's ~692px width at the template's own font and would silently drop the
+            // trailing โทร./Tel text off the printed document with plain setStr. Same built-in fix
+            // #setRightAligned/#setCentered already use for their own narrow ranges.
+            setStrShrinkToFit(sh, PHONE_ROW, LABEL_VALUE_COL, nullSafe(model.phoneLine())); // B6
             if (model.projectName() != null && !model.projectName().isBlank()) {
                 if (model.signatureLabelsV2()) {
                     // layout-spec §2: "Project : {name}" centred in B on the first body row (v2
@@ -2501,6 +2513,21 @@ public class QuotationRenderer {
         // otherwise POI keeps the formula and LibreOffice recalculates + reformats it.
         if (cell.getCellType() == CellType.FORMULA) cell.setBlank();
         cell.setCellValue(value != null ? value : "");
+    }
+
+    /** {@link #setStr}, plus shrink-to-fit — for a merged cell whose text length is no longer
+     * bounded by a single short value (see PHONE_ROW's call site: it now carries an address AND a
+     * phone number, folded onto one line because the template has no free row for either). A
+     * merged cell clips overflow rather than wrapping, so without this an unusually long value
+     * silently truncates on the printed document rather than shrinking to fit — the same built-in
+     * answer #setCentered/#setRightAligned already apply to their own narrow ranges. */
+    private void setStrShrinkToFit(Sheet sh, int rowIdx, int colIdx, String value) {
+        setStr(sh, rowIdx, colIdx, value);
+        Cell cell = getOrKeep(sh, rowIdx, colIdx);
+        CellStyle style = sh.getWorkbook().createCellStyle();
+        style.cloneStyleFrom(cell.getCellStyle());
+        style.setShrinkToFit(true);
+        cell.setCellStyle(style);
     }
 
     private void setNum(Sheet sh, int rowIdx, int colIdx, double value) {

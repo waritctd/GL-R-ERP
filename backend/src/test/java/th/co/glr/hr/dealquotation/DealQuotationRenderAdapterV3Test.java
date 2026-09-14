@@ -143,6 +143,20 @@ class DealQuotationRenderAdapterV3Test {
 
     // ── workbook level: the decisions above actually reach the printed cells ────────────────
 
+    /** Not redundant with the adapter-level assertions above — this class's own Javadoc explains
+     * why (a decision can be right at the adapter and still not reach the printed cell). B6 is
+     * row index 5 / column index 1 — {@code QuotationRenderer#PHONE_ROW}/{@code #LABEL_VALUE_COL}. */
+    @Test
+    void thaiDocument_theAddressLineActuallyReachesCellB6() throws Exception {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
+        byte[] xls = new QuotationRenderer().toXls(model);
+        var wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
+        Sheet sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+        assertThat(sheet.getRow(5).getCell(1).getStringCellValue())
+            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+    }
+
     @Test
     void adjustmentRow_leavesBothTheUnitAndTheDiscountCellsEmpty() throws Exception {
         Sheet sheet = render(WastageCalculator.PRICE_MODE_NET, List.of(adjustment()));

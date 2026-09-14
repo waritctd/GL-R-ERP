@@ -65,6 +65,20 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * finding changes confined to exactly those four regions in each. The XLS byte hashes below were
  * re-derived the same way from a real regenerated run (docker + backend/fonts/ licensed Thai
  * fonts), not copied from elsewhere.
+ *
+ * <p><b>Re-baselined 2026-09-14</b> for ALL FIVE fixtures (Opus review of the Thai-address fix,
+ * PR #966): {@code QuotationRenderer#PHONE_ROW} (B6) is now written with
+ * {@code setStrShrinkToFit} instead of plain {@code setStr} — the merged B6:G6 cell clips overflow
+ * rather than wrapping, and the line now regularly carries an address AND a phone number folded
+ * together (see {@code DealQuotationRenderAdapter}), which a long address can overrun. Creating
+ * that ONE extra {@code CellStyle} shifts every style index the renderer allocates AFTER it by
+ * exactly +1 for the rest of that render — confirmed by diffing every regenerated fixture against
+ * its prior version: every diff line is EITHER the B6 cell's own style index (a distinct style,
+ * not the previously-reused shared one) OR a same-content cell whose style index moved by +1;
+ * nothing else (no row height, merge, border, font, page break, or text) changed anywhere in any
+ * of the five fixtures. None of these fixtures' phoneLine text itself changed (all five keep the
+ * pre-existing "โทร. 02-000-0000" — no address in any of them), which is exactly why this is pure
+ * style-table churn and not a content regression.
  */
 class QuotationRendererNoPictureGoldenTest {
     private static final String UPDATE_PROPERTY = "quotation.golden.update";
@@ -110,18 +124,25 @@ class QuotationRendererNoPictureGoldenTest {
         // A4 signature-row-width fix (3f80c23c) deliberately moves the signature labels/names/date
         // rows and the signature picture anchor -- see this class's own Javadoc. legacy-shape has
         // no signature block, so its hash is untouched from the pre-picture baseline.
+        //
+        // Re-pinned AGAIN 2026-09-14 for ALL FIVE (this class's own Javadoc, "Re-baselined
+        // 2026-09-14"): PHONE_ROW (B6) now writes with setStrShrinkToFit instead of plain setStr,
+        // guarding against the address+phone line now printed there overrunning the merged cell.
+        // Every one of these five diffs is a style-table index shift only (one new CellStyle
+        // created earlier in the render bumps every later-created style's index by +1) -- no
+        // fixture's phoneLine TEXT changed (none of these fixtures carry a customer address).
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "b1eb3532779ff32924fb47a924713a331dedbbad43a1e06aaf83045eec81b6a2",
-            "one-page-scaled", "7bd39413de1df940753bccad20de0baff575cb73a403a0ad2f120cd9d611dd2b",
-            "paginated", "50d979cb59c89188b9a113ba5d810d386cb2a31aac3666391aa8de9bb8f1b047",
+            "single-page", "af5266e8f88e87aa2f1e0a86ff6271c4c9c69b5651cdba4228ca196431e7a1c3",
+            "one-page-scaled", "0a7220977dcbeed5448947a44ed05088c3fe27c9392b9d41b113b90cdfcd69cf",
+            "paginated", "6bf8b43b36989dc1034701964f3a0024895bb883cd4d63407fc9ce7752a34564",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "2398815b1a4e73995195bf910ca36a22c81158df18c31a899252d97e14319766",
-            "legacy-shape", "0eeb95aac63791149d8e230de304554126e91ee8ceca66c833cd8912fce4a6f2");
+            "english", "caae41a4a0ea2e3011e2017ef40c86b4fde6ee0c84c92afff7b078da467b90e7",
+            "legacy-shape", "463bf902752a732c69b01b1f6baafd7a72e524ae7de526f41cf42e1f62103e49");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),
             StandardCharsets.UTF_8).lines().findFirst().orElse("");
