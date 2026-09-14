@@ -194,6 +194,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED"));
         assertThat(notifications.findByEmployeeId(ceoId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED"));
+        // Owner request (2026-09-15): the submitting rep gets their own confirmation too, not just
+        // the two approvers -- same event kind, but the message reads from the rep's own side ("ส่ง
+        // ... แล้ว" rather than "... รอการอนุมัติ").
+        assertThat(notifications.findByEmployeeId(salesRepId))
+            .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED") && n.message().contains("ส่งใบเสนอราคา"));
 
         DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest("อนุมัติแล้ว"), salesManagerActor);
         assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -212,10 +217,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(notifications.findByEmployeeId(salesRepId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_APPROVED"));
 
-        // Email attempted via the capturing mailer, synchronously (no active transaction in this
-        // hand-wired call — see DealQuotationService#afterCommit's "no transaction, no deferral").
-        assertThat(mailer.attachmentsSent).isNotEmpty();
-        assertThat(mailer.attachmentsSent.get(0)[1]).contains(approved.number());
+        // Owner request (2026-09-15): approval used to ALSO send a second, plain-text email with
+        // the PDF attached (via #sendApprovalEmail's own mailer) alongside the branded HTML one
+        // notifyRepAndCreator already sends — the same recipient got two emails for one approval.
+        // That second send is now gone; only the in-app row (and its own HTML email, asserted via
+        // notifyRepAndCreator above) fires.
+        assertThat(mailer.attachmentsSent).isEmpty();
     }
 
     /**
