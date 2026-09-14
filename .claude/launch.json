@@ -4,21 +4,268 @@
     {
       "name": "frontend-uat",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev"
+      ],
       "port": 5174
     },
     {
       "name": "frontend-verify",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--port", "5199", "--strictPort"],
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5199",
+        "--strictPort"
+      ],
       "port": 5199
     },
     {
       "name": "frontend-mock",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--port", "5200", "--strictPort"],
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5200",
+        "--strictPort"
+      ],
       "port": 5200,
-      "env": { "VITE_USE_MOCKS": "true" }
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "ui-sweep-worktree",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/requests-page/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5203",
+        "--strictPort"
+      ],
+      "port": 5203,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "phase1-sweep",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/ui-sweep-selfservice/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5207",
+        "--strictPort"
+      ],
+      "port": 5207,
+      "env": {
+        "VITE_USE_MOCKS": "true",
+        "VITE_UAT_PHASE1": "true",
+        "VITE_ENABLE_SALES": "false"
+      }
+    },
+    {
+      "name": "import-ia",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/import-ia/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5201",
+        "--strictPort"
+      ],
+      "port": 5201,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "ceo-pricing-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/ceo-pricing-ui/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5212",
+        "--strictPort"
+      ],
+      "port": 5212,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "entry-channel-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/entry-channel-ui/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5211",
+        "--strictPort"
+      ],
+      "port": 5211,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "yang-catalouge",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5214",
+        "--strictPort"
+      ],
+      "port": 5214,
+      "env": {
+        "VITE_USE_MOCKS": "true",
+        "VITE_ENABLE_SALES": "true"
+      }
+    },
+    {
+      "name": "reset-password",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/reset-password/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5213",
+        "--strictPort"
+      ],
+      "port": 5213,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "profile-request-check",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/profile-request-widening/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5215",
+        "--strictPort"
+      ],
+      "port": 5215,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "quotation-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/quotation-ui/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5216",
+        "--strictPort"
+      ],
+      "port": 5216,
+      "env": {
+        "VITE_USE_MOCKS": "true"
+      }
+    },
+    {
+      "name": "backend-mirror-quotation",
+      "runtimeExecutable": "java",
+      "runtimeArgs": [
+        "-jar",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/quotation/backend/target/glr-hr-backend-0.1.0.jar"
+      ],
+      "port": 8081,
+      "env": {
+        "SPRING_DATASOURCE_URL": "jdbc:postgresql://127.0.0.1:5433/mirror_quotation",
+        "SPRING_DATASOURCE_USERNAME": "postgres",
+        "SPRING_DATASOURCE_PASSWORD": "mirror",
+        "APP_FLYWAY_ENABLED": "false",
+        "APP_MAIL_PROVIDER": "log",
+        "SERVER_SESSION_COOKIE_SECURE": "false",
+        "APP_CORS_ALLOWED_ORIGINS": "http://127.0.0.1:5218,http://localhost:5218",
+        "APP_MAIL_APP_BASE_URL": "http://127.0.0.1:5218",
+        "SERVER_PORT": "8081"
+      }
+    },
+    {
+      "name": "develop-real-backend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "port": 5173,
+      "env": {
+        "VITE_USE_MOCKS": "false"
+      }
+    },
+    {
+      "name": "quotation-ui-real",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/ploy_warit/Desktop/GL-R-ERP/.claude/worktrees/quotation-ui/frontend",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5218",
+        "--strictPort"
+      ],
+      "port": 5218,
+      "env": {
+        "VITE_USE_MOCKS": "false",
+        "VITE_API_PROXY_TARGET": "http://localhost:8082"
+      }
     }
   ]
 }
