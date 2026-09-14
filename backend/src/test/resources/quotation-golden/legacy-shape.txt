@@ -69,7 +69,7 @@ row 4 h=405
   c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
   c14 BLANK style=95 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 5 h=405
-  c1 STRING style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
+  c1 STRING style=152 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : "โทร. 02-000-0000"
   c2 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c3 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c4 BLANK style=150 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 

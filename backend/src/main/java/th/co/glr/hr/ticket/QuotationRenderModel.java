@@ -34,7 +34,12 @@ public record QuotationRenderModel(
     /** The full B5 cell value ("เรียน" itself is a separate template label cell, A5, never
      * touched) — "คุณ{contact}   /   {customerName}   เลขที่ผู้เสียภาษี : {taxId}". */
     String attnLine,
-    /** The full B6 cell value — "โทร. {phone}". */
+    /** The full B6 cell value. Historically just "โทร. {phone}"; since the Thai-address fix
+     * (2026-09-14) both the Thai and English branches may fold the customer address onto this
+     * SAME line too — "ที่อยู่ {address}   โทร. {phone}" (TH) / "Address : {address}   E : {email}
+     * Tel. {phone}" (EN) — because neither template has a free row of its own for an address.
+     * Written with shrink-to-fit ({@code QuotationRenderer#setStrShrinkToFit}) for exactly that
+     * reason: the merged B6:G6 cell clips overflow rather than wrapping. */
     String phoneLine,
     String projectName,
     List<RenderItem> items,

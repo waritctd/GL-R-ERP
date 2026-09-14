@@ -100,7 +100,62 @@ class DealQuotationRenderAdapterV3Test {
             .containsExactly("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
     }
 
+    // ── customer header: Thai document's B6 line (bug fix) ─────────────────────────────────
+
+    /** Bug fix: the Thai branch of {@code DealQuotationRenderAdapter#toRenderModel} built "เรียน"/
+     * "โทร." but never read {@code quotation.customerAddress()} at all, so every Thai-form
+     * quotation printed with no address even though it is captured correctly on the DTO. The Thai
+     * template has no free row of its own for an address (unlike the English branch, whose B6
+     * already folds Address/E/Tel into one cell) — so the fix folds the address into that same
+     * โทร. line rather than leaving it unprinted. */
+    @Test
+    void thaiDocument_printsTheCustomerAddressAlongsideThePhoneNumber() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+    }
+
+    @Test
+    void thaiDocument_withNoAddress_stillPrintsJustThePhoneNumber() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer(null, "081-234-5678"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("โทร. 081-234-5678");
+    }
+
+    @Test
+    void thaiDocument_withNoPhone_stillPrintsTheAddress() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
+    }
+
+    private DealQuotationDto quotationWithCustomer(String customerAddress, String customerPhone) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", customerAddress, null, customerPhone,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
+
     // ── workbook level: the decisions above actually reach the printed cells ────────────────
+
+    /** Not redundant with the adapter-level assertions above — this class's own Javadoc explains
+     * why (a decision can be right at the adapter and still not reach the printed cell). B6 is
+     * row index 5 / column index 1 — {@code QuotationRenderer#PHONE_ROW}/{@code #LABEL_VALUE_COL}. */
+    @Test
+    void thaiDocument_theAddressLineActuallyReachesCellB6() throws Exception {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "081-234-5678"), null, null);
+        byte[] xls = new QuotationRenderer().toXls(model);
+        var wb = WorkbookFactory.create(new ByteArrayInputStream(xls));
+        Sheet sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+        assertThat(sheet.getRow(5).getCell(1).getStringCellValue())
+            .isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110   โทร. 081-234-5678");
+    }
 
     @Test
     void adjustmentRow_leavesBothTheUnitAndTheDiscountCellsEmpty() throws Exception {

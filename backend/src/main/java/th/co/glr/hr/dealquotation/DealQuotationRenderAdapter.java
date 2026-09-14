@@ -112,7 +112,22 @@ public final class DealQuotationRenderAdapter {
             String taxIdPart = !blank(quotation.customerTaxId())
                 ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
             attnLine = contactPart + nullSafe(quotation.customerName()) + taxIdPart;
-            phoneLine = !blank(quotation.customerPhone()) ? "โทร. " + quotation.customerPhone().trim() : "";
+            // Bug fix: this branch built "เรียน"/"โทร." but never read quotation.customerAddress()
+            // at all, so every Thai-form quotation printed with no address line even though the
+            // address is captured in the UI and denormalized correctly onto the quotation record —
+            // it was simply dropped one step before printing. The Thai template (F-SM-002) reserves
+            // only ATTN_ROW/PHONE_ROW for this header block and has no free row of its own for an
+            // address (unlike QuotationRenderer's English branch just above, whose B6 already folds
+            // Address/E/Tel into one merged B6:G6 cell for the same reason) — so the address is
+            // folded into that same PHONE_ROW line here rather than left unprinted.
+            List<String> parts = new ArrayList<>();
+            if (!blank(quotation.customerAddress())) {
+                parts.add("ที่อยู่ " + quotation.customerAddress().trim().replace('\n', ' '));
+            }
+            if (!blank(quotation.customerPhone())) {
+                parts.add("โทร. " + quotation.customerPhone().trim());
+            }
+            phoneLine = String.join("   ", parts);
         }
 
         List<RenderItem> items = quotation.items().stream()
