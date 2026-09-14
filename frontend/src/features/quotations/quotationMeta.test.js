@@ -17,10 +17,12 @@ import {
   hasDealQuotationGrant,
   isDealQuotationEditable,
   isDealQuotationReadOnlyViewer,
+  listPricePerSqmIncVat,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
   sqmPerPieceFromPiecesPerSqm,
+  sqmPerPieceFromSizeCm,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -440,6 +442,67 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   });
 });
 
+describe('listPricePerSqmIncVat (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
+  // The four real-document figures the owner gave, each round2(unitPrice x piecesPerSqm x 1.07)
+  // where piecesPerSqm is piecesPerSqmFromSqmPerPiece(sqmPerPiece) -- the SAME reciprocal exercised
+  // above, never a second one.
+  it('reproduces all four owner figures exactly', () => {
+    expect(listPricePerSqmIncVat(1299.0, 0.72)).toBe(1932.0);
+    expect(listPricePerSqmIncVat(881.46, 0.36)).toBe(2621.99);
+    expect(listPricePerSqmIncVat(843.14, 0.36)).toBe(2508.0);
+    expect(listPricePerSqmIncVat(900.63, 0.36)).toBe(2679.01);
+  });
+
+  it('returns null when unitPrice is missing, zero or negative', () => {
+    expect(listPricePerSqmIncVat(null, 0.36)).toBeNull();
+    expect(listPricePerSqmIncVat('', 0.36)).toBeNull();
+    expect(listPricePerSqmIncVat(0, 0.36)).toBeNull();
+    expect(listPricePerSqmIncVat(-1, 0.36)).toBeNull();
+  });
+
+  it('returns null when sqmPerPiece is missing, zero or negative', () => {
+    expect(listPricePerSqmIncVat(1299.0, null)).toBeNull();
+    expect(listPricePerSqmIncVat(1299.0, '')).toBeNull();
+    expect(listPricePerSqmIncVat(1299.0, 0)).toBeNull();
+    expect(listPricePerSqmIncVat(1299.0, -0.36)).toBeNull();
+  });
+});
+
+describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ่น fallback, owner decision 2026-09-14)', () => {
+  it('parses widthXheight (optional whitespace/case/unit) into cm² / 10000, rounded 6dp', () => {
+    expect(sqmPerPieceFromSizeCm('60x120')).toBe(0.72);
+    expect(sqmPerPieceFromSizeCm('60 x 60')).toBe(0.36);
+    expect(sqmPerPieceFromSizeCm('60×120 cm')).toBe(0.72);
+    expect(sqmPerPieceFromSizeCm('60x120 ซม.')).toBe(0.72);
+    expect(sqmPerPieceFromSizeCm('7.5x30')).toBe(0.0225);
+    expect(sqmPerPieceFromSizeCm('30*60')).toBe(0.18);
+  });
+
+  it('ignores an optional third `x thickness` segment', () => {
+    expect(sqmPerPieceFromSizeCm('60X60x0.9')).toBe(0.36);
+  });
+
+  it('returns null for anything that is not a clean widthXheight[Xthickness] pair', () => {
+    expect(sqmPerPieceFromSizeCm('')).toBeNull();
+    expect(sqmPerPieceFromSizeCm(null)).toBeNull();
+    expect(sqmPerPieceFromSizeCm('60')).toBeNull();
+    expect(sqmPerPieceFromSizeCm('1,2X20 JOLLY COCO')).toBeNull();
+    expect(sqmPerPieceFromSizeCm('JOLLY 60x60')).toBeNull();
+    expect(sqmPerPieceFromSizeCm('60x')).toBeNull();
+    expect(sqmPerPieceFromSizeCm('abc')).toBeNull();
+  });
+
+  it('returns null for a non-positive dimension', () => {
+    expect(sqmPerPieceFromSizeCm('0x60')).toBeNull();
+  });
+
+  it('returns null outside the WastageCalculator MIN/MAX_SQM_PER_PIECE bound (0.001-10 m² per piece) -- catches millimetres typed into the cm field', () => {
+    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile --
+    // exactly the millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
+    expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
+  });
+});
+
 describe('quotationItemMissingSummary', () => {
   it('returns null once an item has no errors', () => {
     expect(quotationItemMissingSummary({}, 0)).toBeNull();
@@ -754,7 +817,7 @@ describe('v3 row validation', () => {
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง/แผ่น' });
+    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
