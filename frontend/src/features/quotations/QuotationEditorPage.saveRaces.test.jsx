@@ -285,3 +285,32 @@ describe('autosave error backoff (#932 defect 4, optional)', () => {
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2), { timeout: 4000 });
   });
 });
+
+describe('submit after rejection navigates to the new revision (owner clarification 2026-09-15)', () => {
+  // DealQuotationService#submit's own status-machine comment: submitting a ตีกลับ'd draft now
+  // mints a revision of ITSELF instead of resubmitting the SAME row, so res.quotation.id can now
+  // differ from this page's own `id`. Mirrors reviseMutation's onSuccess (the "สร้างฉบับแก้ไข"
+  // button already had to solve this exact "server minted a different id" case) -- see
+  // submitMutation's own onSuccess comment.
+  it('navigates to the new revision\'s id, and does not cache the new data under the old id\'s key', async () => {
+    const showToast = renderEditor('/quotations/5');
+    await screen.findByLabelText('หมายเหตุเพิ่มเติม');
+
+    api.dealQuotations.submit.mockResolvedValue({
+      quotation: draft({ id: 9, number: 'QT-2026-0005-2', docStatus: 'PENDING_APPROVAL', parentQuotationId: 5 }),
+    });
+    api.dealQuotations.get.mockImplementation(async (calledId) => ({
+      quotation: calledId === '9'
+        ? draft({ id: 9, number: 'QT-2026-0005-2', docStatus: 'PENDING_APPROVAL', parentQuotationId: 5 })
+        : draft({ id: 5, docStatus: 'DRAFT', approvalNote: 'ราคาสูงเกินไป' }),
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'ส่งขออนุมัติ' }).at(-1));
+
+    await waitFor(() => expect(api.dealQuotations.submit).toHaveBeenCalledWith('5'));
+    // The page followed the server to the new id -- its own next data fetch is for '9', not '5'.
+    await waitFor(() => expect(api.dealQuotations.get).toHaveBeenCalledWith('9'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('QT-2026-0005-2')));
+  });
+});

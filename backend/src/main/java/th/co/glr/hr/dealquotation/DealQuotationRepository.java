@@ -628,13 +628,29 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** Compare-and-set APPROVED -> SUPERSEDED — only called once the CHILD revision itself reaches
-     * APPROVED (see {@code DealQuotationService#approve}); the parent stays a valid, live APPROVED
-     * document until then. */
+    /** Compare-and-set the parent -> SUPERSEDED — only called once the CHILD revision itself
+     * reaches APPROVED (see {@code DealQuotationService#approve}'s
+     * {@code parentQuotationId() != null} call). Two starting statuses, matching this repository's
+     * two ways a revision gets minted:
+     * <ul>
+     *   <li>{@code APPROVED} — an ordinary revision of an already-approved document
+     *       ({@code DealQuotationService#createRevision}); the parent stays a valid, live APPROVED
+     *       document until the child actually replaces it, not before.</li>
+     *   <li>{@code DRAFT} — owner clarification (2026-09-15): a revision minted by resubmitting a
+     *       ตีกลับ'd draft ({@code DealQuotationService#submitAsRevisionOfRejected}). That parent
+     *       was never a live, sent document (it was rejected, never approved), so there is no
+     *       "still valid until replaced" concern to preserve — but it still only becomes
+     *       SUPERSEDED once its own child is actually approved, the SAME timing as the APPROVED
+     *       case, for the same reason: a child that itself gets rejected must not have already
+     *       retired the row it was trying to replace.</li>
+     * </ul>
+     * A parent in any OTHER status (CANCELLED, SUPERSEDED already, itself PENDING_APPROVAL — none
+     * reachable while it has an open child, per {@code #hasOpenRevision}) matches neither branch
+     * and this simply no-ops (0 rows), which is the safe outcome either way. */
     public int supersede(long quotationId) {
         return jdbc.update("""
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED', 'DRAFT')
             """, Map.of("id", quotationId));
     }
 
@@ -750,11 +766,19 @@ public class DealQuotationRepository {
     }
 
     /**
-     * The "แก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a reason
-     * ({@code approval_note}, cleared again on the next submit) OR a revision still in progress
-     * ({@code parent_quotation_id}). ONE definition, shared by {@link #search}'s
-     * {@code needsRework} filter and {@link #counts} so the tab's count can never disagree with
-     * the rows the tab lists.
+     * The "ฉบับแก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a
+     * reason ({@code approval_note}) OR a revision still in progress ({@code parent_quotation_id}).
+     * ONE definition, shared by {@link #search}'s {@code needsRework} filter and {@link #counts}
+     * so the tab's count can never disagree with the rows the tab lists.
+     *
+     * <p>Opus review (2026-09-15): this used to say {@code approval_note} is "cleared again on
+     * the next submit" — true before that same day's owner clarification, false after it.
+     * {@code DealQuotationService#submit}'s resubmit-after-rejection path now mints a REVISION of
+     * a rejected row instead of resubmitting it, and deliberately leaves the rejected row's own
+     * {@code approval_note} untouched — a permanent record of why that number was retired — so a
+     * rejected row stays in this bucket until {@code approve}'s ancestor walk finally supersedes
+     * it (see that method's own Javadoc for why a single-hop supersede left multi-cycle chains
+     * stranded here forever).
      */
     private static final String NEEDS_REWORK_PREDICATE =
         "(q.doc_status = 'DRAFT' AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))";

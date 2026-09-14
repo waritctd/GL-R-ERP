@@ -4860,6 +4860,84 @@ function dealQuotationRevisionNumber(baseNumber, revisionNo) {
   return `${baseNumber}-${revisionNo}`;
 }
 
+// M3 (DealQuotationRepository#hasOpenRevision's own Javadoc): a caller double-tapping "สร้าง
+// ฉบับแก้ไข"/"ส่งใหม่" on the SAME parent must not silently mint two children sharing the same
+// {base}-{n} number (the real backend's UNIQUE index would refuse the second INSERT; nothing in
+// this in-memory array does). Shared by createRevision() and submit()'s resubmit-after-rejection
+// branch below -- both mint a revision the same way.
+function hasOpenDealQuotationRevision(parentId) {
+  return mockDealQuotations.some((q) => q.parentQuotationId === parentId
+    && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'));
+}
+
+// The revision-copy step createRevision() and submit()'s owner-clarification (2026-09-15)
+// "resubmit after a ตีกลับ mints a new number" branch both need: a new DRAFT child of `parent`,
+// every header field copied VERBATIM, its items copied, at the next revision number. Callers are
+// responsible for their OWN precondition (the two paths gate on different parent statuses) and
+// for checking hasOpenDealQuotationRevision BEFORE calling this, same division of responsibility
+// as the real DealQuotationService#insertRevisionCopyOf. Returns the new row WITHOUT pushing it
+// -- the caller decides when (submit()'s branch pushes then immediately submits it; createRevision
+// just pushes it as a DRAFT).
+// Opus review nit (2026-09-15): mirrors DealQuotationRepository#nextRevisionNo's own Javadoc --
+// "NOT source.revisionNo() + 1". mintDealQuotationRevision used to compute
+// `parent.revisionNo + 1` directly, which is only correct while `parent` is always the HIGHEST
+// revision minted off this base -- true for an ordinary createRevision() chain, but NOT once a
+// row can be resubmitted-as-revision, cancelled, and its OWN parent resubmitted again: reject A
+// -> resubmit mints A's child B (revisionNo 2) -> reject B -> cancel B -> resubmit A AGAIN would
+// recompute `A.revisionNo + 1` = 2 a second time, colliding with B's already-used "-2" number,
+// where the real backend's MAX-based query correctly mints "-3". Scans every row sharing this
+// base number REGARDLESS of status (matching the real query's lack of a status filter) so a
+// cancelled sibling's number still counts as "used".
+function nextMockDealQuotationRevisionNo(ticketId, base) {
+  const max = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (q.number === base || q.number.startsWith(`${base}-`)))
+    .reduce((m, q) => Math.max(m, q.revisionNo ?? 0), 0);
+  return max + 1;
+}
+
+function mintDealQuotationRevision(parent, user) {
+  const now = new Date().toISOString();
+  const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
+  const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
+  return {
+    ...structuredClone(parent),
+    id: mockDealQuotationSeq++,
+    number: dealQuotationRevisionNumber(base, revisionNo),
+    docStatus: 'DRAFT',
+    revisionNo,
+    parentQuotationId: parent.id,
+    createdById: user.employeeId ?? null,
+    createdByName: user.name,
+    submittedAt: null, submittedBy: null,
+    approvedById: null, approvedByName: null, approvedAt: null,
+    approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+    validityDate: null,
+    quotationDate: now.slice(0, 10),
+    createdAt: now, updatedAt: now,
+    // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
+    // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
+    items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
+  };
+}
+
+// The actual DRAFT -> PENDING_APPROVAL flip shared by an ordinary first-time submit (`row` is the
+// row the caller named) and the resubmit-after-rejection branch (`row` is the freshly-minted,
+// freshly-pushed revision, not the row submit() was originally called with). All of submit()'s
+// OWN validation (ผู้สั่งซื้อ, V178 date, lead time) already ran against the PARENT's current data
+// before either branch is reached -- the revision is a verbatim copy of that same data, so it is
+// validated by construction and this never re-checks it, matching the real service.
+function submitDealQuotationRow(row, user) {
+  const now = new Date().toISOString();
+  row.docStatus = 'PENDING_APPROVAL';
+  row.submittedAt = now;
+  row.submittedBy = user.id;
+  // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment. A no-op
+  // for a freshly-minted revision, which never had one.
+  row.approvalNote = null;
+  row.updatedAt = now;
+  return delay({ quotation: buildDealQuotationDto(row) });
+}
+
 // round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
 // rather than redeclared.
 
@@ -12280,14 +12358,23 @@ export const api = {
       if (missingLeadTimeSeqs.length > 0) {
         fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}`, 400);
       }
-      const now = new Date().toISOString();
-      row.docStatus = 'PENDING_APPROVAL';
-      row.submittedAt = now;
-      row.submittedBy = user.id;
-      // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment.
-      row.approvalNote = null;
-      row.updatedAt = now;
-      return delay({ quotation: buildDealQuotationDto(row) });
+      // Owner clarification (2026-09-15): ตีกลับ itself never renumbers -- reject() below still
+      // just flips this SAME row back to DRAFT with a reason. But resubmitting one (approvalNote
+      // still set, since nothing has cleared it since) now mints a revision of ITSELF instead of
+      // resubmitting the SAME row -- mirrors DealQuotationService#submit's own branch EXACTLY,
+      // down to the signal it keys on (approvalNote != null, not the broader
+      // isDealQuotationNeedingRework, which also matches an in-progress child revision -- a
+      // different case with no rejection to resubmit FROM). A first-ever submit (approvalNote is
+      // null) is untouched below.
+      if (row.docStatus === 'DRAFT' && row.approvalNote != null) {
+        if (hasOpenDealQuotationRevision(row.id)) {
+          fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
+        }
+        const revision = mintDealQuotationRevision(row, user);
+        mockDealQuotations.push(revision);
+        return submitDealQuotationRow(revision, user);
+      }
+      return submitDealQuotationRow(row, user);
     },
 
     async approve(id, payload = {}) {
@@ -12324,13 +12411,20 @@ export const api = {
         : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
       row.updatedAt = now;
       // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced.
-      if (row.parentQuotationId) {
-        const parent = mockDealQuotations.find((q) => q.id === row.parentQuotationId);
-        if (parent && canTransitionDealQuotation(parent.docStatus, 'SUPERSEDED')) {
-          parent.docStatus = 'SUPERSEDED';
-          parent.updatedAt = now;
+      // last approved document stays valid until replaced. Opus review nit (2026-09-15): walks
+      // the WHOLE ancestry chain, not just the immediate parent -- mirrors
+      // DealQuotationService#approve's own ancestor walk (see that method's Javadoc for the
+      // multi-cycle-chain bug a single hop left open: every ancestor above the immediate parent
+      // stranded forever in a 2+ reject/resubmit chain).
+      let ancestorId = row.parentQuotationId;
+      while (ancestorId) {
+        const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+        if (!ancestor) break;
+        if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
+          ancestor.docStatus = 'SUPERSEDED';
+          ancestor.updatedAt = now;
         }
+        ancestorId = ancestor.parentQuotationId;
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
@@ -12366,28 +12460,12 @@ export const api = {
       if (parent.docStatus !== 'APPROVED') {
         fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
       }
-      const now = new Date().toISOString();
-      const revisionNo = parent.revisionNo + 1;
-      const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
-      const child = {
-        ...structuredClone(parent),
-        id: mockDealQuotationSeq++,
-        number: dealQuotationRevisionNumber(base, revisionNo),
-        docStatus: 'DRAFT',
-        revisionNo,
-        parentQuotationId: parent.id,
-        createdById: user.employeeId ?? null,
-        createdByName: user.name,
-        submittedAt: null, submittedBy: null,
-        approvedById: null, approvedByName: null, approvedAt: null,
-        approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
-        validityDate: null,
-        quotationDate: now.slice(0, 10),
-        createdAt: now, updatedAt: now,
-        // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
-        // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
-        items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
-      };
+      // M3: mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not
+      // silently mint two children sharing the same {base}-{n} number.
+      if (hasOpenDealQuotationRevision(parent.id)) {
+        fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
+      }
+      const child = mintDealQuotationRevision(parent, user);
       mockDealQuotations.push(child);
       return delay({ quotation: buildDealQuotationDto(child) });
     },
@@ -12401,6 +12479,13 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user);
       if (!canTransitionDealQuotation(row.docStatus, 'CANCELLED')) {
         fail(`ยกเลิกไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      // Opus review (2026-09-15), REQUIRED: mirrors DealQuotationService#cancel's own guard --
+      // see that method's Javadoc for the double-approve hole this closes (cancelling a DRAFT
+      // row that itself has an open child let that child's grandparent mint a SECOND, sibling
+      // branch once the direct child was no longer "open").
+      if (hasOpenDealQuotationRevision(row.id)) {
+        fail('ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน', 409);
       }
       row.docStatus = 'CANCELLED';
       row.updatedAt = new Date().toISOString();
