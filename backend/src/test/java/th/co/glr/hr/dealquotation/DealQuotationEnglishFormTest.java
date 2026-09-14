@@ -681,47 +681,126 @@ class DealQuotationEnglishFormTest {
             .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
     }
 
+    // ── owner feedback (2026-09-14) x V178: DATE-mode validity AND no lead time TOGETHER ──────
+    //
+    // The DATE variant (gated on hasSpecialPricing) and the lead-time-line drop (gated on
+    // hasAnyLeadTime) are independent decisions computed from different data -- an ADJUSTMENT row
+    // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all
+    // (see DealQuotationItemDto -- leadTimeMinDays/Max are TILE-only), so an ADJUSTMENT-only
+    // document exercises DATE mode with hasAnyLeadTime=false. Both must compose correctly: the
+    // line-drop-and-renumber must not disturb the DATE text, and the DATE text must survive being
+    // renumbered down by one.
+
+    /** Thai: the DATE line was remark 7 (index 6); after the drop it renumbers to remark 6
+     * (index 5), text otherwise unchanged. */
+    @Test
+    void remarks_dateModeValidityAndNoLeadTime_compose_thai() throws Exception {
+        LocalDate until = LocalDate.of(2026, 9, 30);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(thaiQuotation(), List.of(adjustmentRow(1))),
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isTrue();
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
+        assertThat(model.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+        assertThat(model.remarkLines().get(5))
+            .isEqualTo("6.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
+
+        Sheet sheet = renderLegacyModel(model);
+        assertThat(str(sheet, 28, 1))
+            .isEqualTo("6.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
+        assertThat(str(sheet, 30, 1)).isBlank(); // row 30 no longer part of the box
+    }
+
+    /** English, both layouts: bank layout's DATE line was remark 4 (index 6), renumbers to 3
+     * (index 5); no-bank layout's was remark 5 (index 4), renumbers to 4 (index 3). */
+    @Test
+    void remarks_dateModeValidityAndNoLeadTime_compose_english_bothLayouts() {
+        LocalDate until = LocalDate.of(2026, 10, 31);
+        DealQuotationDto q = withPriceModeAndValidity(withItems(englishQuotation(), List.of(adjustmentRow(1))),
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isTrue();
+
+        QuotationRenderModel bank = DealQuotationRenderAdapter.toRenderModel(q, null, null, BANK_BLOCK);
+        assertThat(bank.remarkLines()).hasSize(7).noneMatch(l -> l.contains("Delivery"));
+        assertThat(bank.remarkLines().get(5))
+            .startsWith("3.Special price for orders with deposit paid by 31/10/2026");
+
+        QuotationRenderModel noBank = DealQuotationRenderAdapter.toRenderModel(q, null, null, List.of());
+        assertThat(noBank.remarkLines()).hasSize(7).noneMatch(l -> l.contains("Delivery"));
+        assertThat(noBank.remarkLines().get(3))
+            .startsWith("4.Special price for orders with deposit paid by 31/10/2026");
+    }
+
     /**
-     * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row, so line 3 is
-     * the fallback. Owner feedback #7 (2026-09-14) REVERSES pass 3 (2026-09-11)'s "จีน 30-45 วัน /
-     * ไทย มีในสตอค 3-7 วัน" default: no country, no stock wording, at all now — a visible blank
-     * ("...... days") the rep must notice and fill in — see
-     * {@code DealQuotationRenderAdapter#EN_LINE3_FALLBACK}'s own comment for the full history. The
-     * box must stay at exactly 8 lines either way.
+     * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row. Owner
+     * feedback (2026-09-14, "if ระยะเวลานำเข้า is not chosen remove that from the หมายเหตุ")
+     * SUPERSEDES both the countries/stock-wording default (already reversed by #7, 2026-09-11) AND
+     * the "print a visible blank fallback" behaviour that replaced it: the line is now dropped
+     * ENTIRELY — not left blank — and every remark after it renumbers down by one, shrinking the
+     * box from 8 lines to 7, in BOTH English layouts. See
+     * {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}.
      */
     @Test
-    void remarks_anAllPlainDocument_printsTheBlankDeliveryFallback_inBothLayouts() throws Exception {
+    void remarks_anAllPlainDocument_dropsTheDeliveryLineEntirely_inBothLayouts() throws Exception {
         DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
             plainRow(1, "Supply of Porcelain Tiles"), plainRow(2, "Freight China to Male"))));
         for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
-            Sheet sheet = renderLegacyModel(
-                DealQuotationRenderAdapter.toRenderModel(allPlain, null, null, block));
+            String layout = block.isEmpty() ? "no bank" : "bank";
+            QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null, block);
+            assertThat(model.remarkLines()).as("adapter, %s layout", layout).hasSize(7)
+                .noneMatch(l -> l.contains("Delivery"));
+
+            Sheet sheet = renderLegacyModel(model);
             List<String> remarks = new ArrayList<>();
-            for (int r = 23; r <= 30; r++) {
+            for (int r = 23; r <= 29; r++) {
                 remarks.add(str(sheet, r, 1));
             }
-            String layout = block.isEmpty() ? "no bank" : "bank";
-            assertThat(remarks).as("8 lines, %s layout", layout).hasSize(8).allMatch(l -> !l.isBlank());
-            assertThat(remarks.get(block.isEmpty() ? 2 : 5)).as("line 3, %s layout", layout)
-                .isEqualTo("3.Delivery : approximately ...... days");
+            assertThat(remarks).as("7 lines, %s layout", layout).hasSize(7).allMatch(l -> !l.isBlank());
             assertThat(String.join("\n", remarks)).as("%s layout", layout)
                 .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian")
-                .doesNotContainIgnoringCase("china").doesNotContainIgnoringCase("thailand");
+                .doesNotContainIgnoringCase("china").doesNotContainIgnoringCase("thailand")
+                .doesNotContain("Delivery");
             remarks.forEach(l -> assertThat(l.length()).as("%s layout: %s", layout, l)
                 .isLessThanOrEqualTo(130));
+            // Row 30 (the old 8th packed slot) is no longer part of the box — the whole footer
+            // block shifted up by one extra row.
+            assertThat(str(sheet, 30, 1)).as("%s layout: row 30 must not be a leftover remark row", layout)
+                .isBlank();
+
+            if (block.isEmpty()) {
+                // No-bank layout, renumbered: 3(payment)/4(validity)/5(sizes)/6(colours)/7(goods) —
+                // was 4/5/6/7/8.
+                assertThat(remarks.get(2)).startsWith("3.Payment by telegraphic transfer");
+                assertThat(remarks.get(3)).startsWith("4.Price validity");
+                assertThat(remarks.get(6)).startsWith("7.Goods sold");
+            } else {
+                // Bank layout, renumbered: the 3 unnumbered bank lines are untouched, then
+                // 3(validity)/4(colours) — was 4/5.
+                assertThat(remarks.get(2)).isEqualTo(BANK_BLOCK.get(0));
+                assertThat(remarks.get(4)).isEqualTo(BANK_BLOCK.get(2));
+                assertThat(remarks.get(5)).startsWith("3.Price validity");
+                assertThat(remarks.get(6)).startsWith("4.Colours");
+            }
         }
     }
 
-    /** The Thai twin of the test above, pinning {@code DealQuotationRenderAdapter#LINE3_FALLBACK}
-     * — same owner reversal, no country/stock wording, the same visible-blank Thai fallback. */
+    /** The Thai twin of the test above, pinning {@code DealQuotationRenderAdapter#LINE3_FALLBACK}'s
+     * drop path — owner feedback (2026-09-14) drops the line ENTIRELY (rather than printing the
+     * visible-blank fallback) and renumbers every remark after it down by one. */
     @Test
-    void remarks_anAllPlainThaiDocument_printsTheBlankDeliveryFallback() throws Exception {
+    void remarks_anAllPlainThaiDocument_dropsTheLeadTimeLineEntirely() throws Exception {
         DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
             plainRow(1, "ค่าขนส่งกระเบื้อง"), plainRow(2, "ค่าติดตั้ง")));
-        Sheet sheet = render(allPlain);
-        // Thai never carries a bank block (see #thaiDocument_neverCarriesTheBankBlock_...), so this
-        // is always the no-bank-block layout: line 3 is remark index 2, i.e. row 23 + 2 = 25.
-        assertThat(str(sheet, 25, 1)).isEqualTo("3.ระยะเวลานำเข้า : ประมาณ ...... วัน");
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null);
+        assertThat(model.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+
+        Sheet sheet = renderLegacyModel(model);
+        // Thai never carries a bank block (see #thaiDocument_neverCarriesTheBankBlock_...), so the
+        // dropped line was always remark index 2 (row 23 + 2 = 25); the old LINE4 (ขนาดของ
+        // กระเบื้องจริง...) now renumbers down to "3." and slides into that row.
+        assertThat(str(sheet, 25, 1)).startsWith("3.ขนาดของกระเบื้องจริง");
+        assertThat(str(sheet, 25, 1)).doesNotContain("ระยะเวลานำเข้า");
+        // Row 30 (the old 8th packed slot) is no longer part of the box.
+        assertThat(str(sheet, 30, 1)).isBlank();
     }
 
     /** B1 must be the owner's own spelling from her F-SM-008 form, not the older "&amp; R." one. */

@@ -359,10 +359,16 @@ public final class DealQuotationRenderAdapter {
     // 3-7 วัน" default: she now wants NO country and NO stock wording printed at all when nothing
     // on the document carries a lead time — submit() below makes that case rare (every TILE row
     // must now carry one), but a DRAFT preview or a re-render of an older document can still hit
-    // it. The fallback is now a visible blank the rep has to notice and fill in, not a real-looking
-    // pair of numbers that happened to be wrong for most of her actual shipments. Same header word
-    // ("ระยะเวลานำเข้า") the per-item line below now uses too, so a document that mixes a priced
-    // item with an unpriced legacy row never reads as two different features.
+    // it. Same header word ("ระยะเวลานำเข้า") the per-item line below now uses too, so a document
+    // that mixes a priced item with an unpriced legacy row never reads as two different features.
+    //
+    // Superseded, and now unreachable (Opus review nit, 2026-09-15): this used to say "the
+    // fallback is now a visible blank the rep has to notice and fill in" -- true for one day, but
+    // a LATER same-day owner request ("if ระยะเวลานำเข้า is not chosen remove that from the
+    // หมายเหตุ") replaced "print a blank" with "drop the line entirely" -- see
+    // #dropLeadTimeLineAndRenumber, which fires on exactly the condition that makes #leadTimeLine
+    // return this constant, so the value below is computed and then always discarded by
+    // remarkLines()'s caller. Kept for the same reason EN_LINE3_FALLBACK is -- see its Javadoc.
     private static final String LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
     private static final String LINE4 =
         "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.";
@@ -397,19 +403,28 @@ public final class DealQuotationRenderAdapter {
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
         lines.add("2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText);
+        int leadTimeLineIndex = lines.size();
         lines.add(leadTimeLine(quotation.items()));
         lines.add(LINE4);
         lines.add(LINE5);
         lines.add(LINE6);
         lines.add(line7);
         lines.add(LINE8);
-        return lines;
+        // Owner feedback (2026-09-14): "if ระยะเวลานำเข้า is not chosen remove that from the
+        // หมายเหตุ" — when NOTHING on the document carries a lead time (leadTimeLine above would
+        // have printed LINE3_FALLBACK), the line is dropped ENTIRELY (not left blank) and every
+        // remark after it renumbers down by one. See #dropLeadTimeLineAndRenumber.
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
     /** {@code "3.ระยะเวลานำเข้า : รายการที่ 1-2 ประมาณ 75-90 วัน  รายการที่ 3 ประมาณ 30-45 วัน"} —
      * consecutive item numbers sharing the same (min, max) lead time are grouped, ALWAYS in this
      * per-item form (owner feedback #7, 2026-09-14) even for a single group; items with no lead
-     * time are omitted; when nothing has one, {@link #LINE3_FALLBACK} stands. */
+     * time are omitted; when nothing has one, this returns {@link #LINE3_FALLBACK} -- but the
+     * ONLY caller ({@link #remarkLines}) then drops that whole line via
+     * {@link #dropLeadTimeLineAndRenumber} rather than keeping the fallback (superseded same-day
+     * owner feedback, 2026-09-14 -- see {@link #LINE3_FALLBACK}'s own comment), so in practice this
+     * value never reaches a rendered document. */
     private static String leadTimeLine(List<DealQuotationItemDto> items) {
         List<DealQuotationItemDto> ordered = items.stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
@@ -443,7 +458,64 @@ public final class DealQuotationRenderAdapter {
         }
         flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
 
-        return groups.isEmpty() ? LINE3_FALLBACK : "3.ระยะเวลานำเข้า : " + String.join("  ", groups);
+        return hasAnyLeadTime(items) ? "3.ระยะเวลานำเข้า : " + String.join("  ", groups) : LINE3_FALLBACK;
+    }
+
+    // ── owner feedback (2026-09-14): "if ระยะเวลานำเข้า is not chosen remove that from the
+    // หมายเหตุ" ─────────────────────────────────────────────────────────────────────────────────
+
+    /** {@code true} when ANY item on the document carries a lead time (both
+     * {@code leadTimeMinDays}/{@code leadTimeMaxDays} set) — the SAME question
+     * {@link #leadTimeLine}/{@link #englishLeadTimeLine}'s own grouping already asks (an item
+     * contributes to a group iff it has both fields set), asked ONCE here and shared by both of
+     * those methods AND {@link #dropLeadTimeLineAndRenumber}'s callers, so "does the fallback
+     * print" and "should the line be dropped" can never disagree. A document made entirely of
+     * PLAIN rows (no lead-time fields at all) or a DRAFT preview before any TILE row's lead time
+     * has been filled in both answer {@code false} here. */
+    private static boolean hasAnyLeadTime(List<DealQuotationItemDto> items) {
+        return items.stream().anyMatch(i -> i.leadTimeMinDays() != null && i.leadTimeMaxDays() != null);
+    }
+
+    // Matches the leading "N." numbering convention every OTHER remark line (LINE4/5/6/7/8 and
+    // their English twins) carries as a literal prefix baked into the string — never a digit that
+    // is merely part of the sentence, since none of those constants opens with one for any other
+    // reason (checked by reading each literal, not inferred).
+    private static final java.util.regex.Pattern LEADING_REMARK_NUMBER =
+        java.util.regex.Pattern.compile("^(\\d+)\\.");
+
+    /**
+     * Drops the lead-time line at {@code leadTimeLineIndex} from {@code lines} when
+     * {@code hasLeadTime} is {@code false} — ENTIRELY, not blanked — and renumbers every
+     * subsequent line's leading {@code "N."} digit down by one, so e.g. old 4→3, 5→4, 6→5, 7→6,
+     * 8→7 with NO gap. A line with no leading number (an unnumbered bank-block line on the English
+     * form) is left untouched by the renumbering pass — {@link #LEADING_REMARK_NUMBER} simply does
+     * not match it, so it is never mistaken for one of the numbered remarks.
+     *
+     * <p>Shared by the Thai {@code remarkLines} builder and both branches of
+     * {@code englishRemarkLines} — each passes the FULL (today's) 8-line list and the index of its
+     * own lead-time line, so the 8-line construction itself never changes and this is the ONLY
+     * place that decides whether/how to shrink it to 7.
+     */
+    private static List<String> dropLeadTimeLineAndRenumber(List<String> lines, boolean hasLeadTime,
+                                                              int leadTimeLineIndex) {
+        if (hasLeadTime) {
+            return lines;
+        }
+        List<String> result = new ArrayList<>(lines);
+        result.remove(leadTimeLineIndex);
+        for (int i = leadTimeLineIndex; i < result.size(); i++) {
+            result.set(i, decrementLeadingRemarkNumber(result.get(i)));
+        }
+        return result;
+    }
+
+    private static String decrementLeadingRemarkNumber(String line) {
+        java.util.regex.Matcher m = LEADING_REMARK_NUMBER.matcher(line);
+        if (!m.find()) {
+            return line; // unnumbered (e.g. a bank-block line) -- leave untouched
+        }
+        int newNumber = Integer.parseInt(m.group(1)) - 1;
+        return newNumber + "." + line.substring(m.end());
     }
 
     private static void flushGroup(List<String> groups, Integer min, Integer max, Integer first, Integer last) {
@@ -515,12 +587,14 @@ public final class DealQuotationRenderAdapter {
             + ". Please re-confirm the actual quantities with your installer before ordering.");
         lines.add("2.A deposit of " + depositPct + "% is required upon order confirmation, "
             + remainderText + ".");
+        int leadTimeLineIndex;
         if (hasBankBlock) {
             // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
             // her samples. Numbering then runs on 3, 4, 5 — NOT her 5, 6, 7: her skipped 4 is a
             // spreadsheet artefact rather than intent, and reproducing it would print a gap a
             // customer reads as a missing term.
             lines.addAll(bankBlockLines);
+            leadTimeLineIndex = lines.size();
             lines.add(englishLeadTimeLine(quotation.items()));
             // ⚠️ Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is not
             // wrapped but CUT at the border. The first version of these two merged lines ran to 145
@@ -536,6 +610,7 @@ public final class DealQuotationRenderAdapter {
             lines.add("5.Colours may vary slightly between production lots. "
                 + "Goods sold are not returnable or exchangeable.");
         } else {
+            leadTimeLineIndex = lines.size();
             lines.add(englishLeadTimeLine(quotation.items()));
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
             lines.add(validityIsDate
@@ -548,7 +623,12 @@ public final class DealQuotationRenderAdapter {
             lines.add("8.Goods sold are not returnable or exchangeable. Please check the order "
                 + "carefully before confirming or signing for delivery.");
         }
-        return lines;
+        // Owner feedback (2026-09-14): same drop-and-renumber as the Thai branch, sharing the SAME
+        // hasAnyLeadTime question — see #dropLeadTimeLineAndRenumber. leadTimeLineIndex is 5 in the
+        // bank-block layout (after the 2 numbered + 3 unnumbered bank lines) and 2 in the no-bank
+        // layout; either way the method only ever renumbers a NUMBERED line, so the bank block's
+        // own unnumbered lines are untouched.
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
     /**
@@ -580,12 +660,20 @@ public final class DealQuotationRenderAdapter {
      * to do with the shipment (it once sat above a "Transportation Charges from China to Male Port,
      * Maldives" row on the owner's own QN6900902-6).
      *
-     * <p>Why not simply drop the line when there is nothing to say: the remark box is exactly
-     * {@code QuotationRenderer#REMARK_HEAD_ROWS} = 8 rows and never wraps, and dropping one leaves
-     * the no-bank-block layout at 7, which falls through to the older 3-line remark path. A
-     * replacement line keeps 8 in BOTH layouts with no renumbering. Length is guarded by
-     * {@code DealQuotationEnglishFormTest#everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts}
-     * (cap 130 chars; this line is well under it).
+     * <p><b>Superseded, and now unreachable (Opus review nit, 2026-09-15):</b> this comment used to
+     * explain why the line was kept as a visible blank rather than dropped — "dropping one leaves
+     * the no-bank-block layout at 7, which falls through to the older 3-line remark path" — but
+     * that was true only because {@code QuotationRenderer} still assumed a hardcoded 8-line v2
+     * render. Owner feedback (2026-09-14, "if ระยะเวลานำเข้า is not chosen remove that from the
+     * หมายเหตุ") asked for the drop anyway, and {@code QuotationRenderer#REMARK_V2_MIN_LINES}
+     * generalized the renderer to accept 7 lines as v2/full-remarks too, closing exactly the hazard
+     * this comment warned about. {@link #englishRemarkLines} now unconditionally runs
+     * {@link #dropLeadTimeLineAndRenumber} with {@link #hasAnyLeadTime}, which is {@code false}
+     * in EXACTLY the case that makes {@link #englishLeadTimeLine} return this constant — so this
+     * value is computed and then immediately discarded by the caller; it can never reach a
+     * rendered document. Kept (not deleted) as the value {@link #englishLeadTimeLine} still has to
+     * return something for while composing the full line list, and as a documented fallback should
+     * the two decisions (fallback text vs. drop-the-line) ever be decoupled again.
      */
     private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
@@ -624,7 +712,7 @@ public final class DealQuotationRenderAdapter {
             }
         }
         flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-        return groups.isEmpty() ? EN_LINE3_FALLBACK : "3.Delivery : " + String.join("  ", groups);
+        return hasAnyLeadTime(items) ? "3.Delivery : " + String.join("  ", groups) : EN_LINE3_FALLBACK;
     }
 
     private static void flushEnglishGroup(List<String> groups, Integer min, Integer max,

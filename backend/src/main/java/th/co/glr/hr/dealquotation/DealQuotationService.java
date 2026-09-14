@@ -1596,9 +1596,11 @@ public class DealQuotationService {
      * TILE row ({@code lineType} null or {@link WastageCalculator#LINE_TYPE_TILE}) must carry both
      * {@code leadTimeMinDays} and {@code leadTimeMaxDays} before the document can be submitted for
      * approval — the printed remark 3 used to fall back to a China/Thailand default that was wrong
-     * for most real shipments; that default is now a visible blank instead (see
-     * {@code DealQuotationRenderAdapter#LINE3_FALLBACK}), so a rep must actually enter a lead time
-     * rather than let the document print a plausible-looking but false one. PLAIN and ADJUSTMENT
+     * for most real shipments; a later same-day owner request ("if ระยะเวลานำเข้า is not chosen
+     * remove that from the หมายเหตุ") replaced that fallback with dropping the whole line
+     * entirely (see {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}), so a rep must
+     * actually enter a lead time rather than let the document print a plausible-looking but false
+     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT
      * rows are exempt — neither has a lead-time concept (freight/consumables/a ส่วนลดพิเศษ line
      * cannot "arrive"). A DRAFT may still be saved with no lead times; this gate is submit only.
      */
