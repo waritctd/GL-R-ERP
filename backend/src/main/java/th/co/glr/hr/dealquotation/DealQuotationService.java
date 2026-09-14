@@ -530,6 +530,14 @@ public class DealQuotationService {
         String link = "/quotations/" + submitted.id();
         notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
         notifications.notifyByRoleAtLink("ceo", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
+        // Owner request (2026-09-15): the rep who submitted (and the creator, if different -- same
+        // dedupe #notifyRepAndCreator already gives approve()/reject()) gets their own confirmation
+        // that the submission actually went through, not just a bell/mail for the two approvers.
+        // Same event kind/title as the approver-facing notification above -- reusing it rather than
+        // minting a second TicketEventKind keeps this to a one-line addition; the message text is
+        // still written from the rep's own point of view.
+        notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
+            "ส่งใบเสนอราคา " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
     }
 
     @Transactional
@@ -589,8 +597,16 @@ public class DealQuotationService {
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
+        // Owner request (2026-09-15): this used to ALSO fire #sendApprovalEmail below — a second,
+        // plain-text email with the PDF attached, from a completely separate mailer
+        // (approvalMailer/Mailer#sendWithAttachment) than the one notifyRepAndCreator uses
+        // (salesMailer -> NotificationEmailService#send, the branded HTML template). Two emails
+        // landed for one approval. Keep only the HTML one; #sendApprovalEmail/
+        // #sendToEmployeeIfPossible are left in place (dead) rather than deleted outright, since
+        // several integration tests still construct a mailer fake around them -- removing the
+        // call is the actual fix, not a reason to also cascade a constructor-signature change
+        // through every test file in the same pass.
         notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
-        afterCommit(() -> sendApprovalEmail(approved));
         return approved;
     }
 
