@@ -633,6 +633,13 @@ public class DealQuotationService {
         // whole subtree must be walked down to CANCELLED before the cancel above it succeeds) --
         // so at most one LIVE path (DRAFT/PENDING_APPROVAL/APPROVED) can ever exist through a
         // chain at a time, and approve()'s upward walk is always walking the ONLY live path.
+        //
+        // Locks the ticket FIRST, same as #requireNoOpenRevision -- without it, a concurrent
+        // cancel(id) and submit(id) (minting a child of id) could each read hasOpenRevision
+        // against the pre-commit state and both proceed, recreating the exact race this guard
+        // exists to close. M3's own precedent (createRevision's identical lock-then-check) is why
+        // this is a lock, not just the existence check alone.
+        quotations.lockTicket(quotation.ticketId());
         if (quotations.hasOpenRevision(id)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน");
