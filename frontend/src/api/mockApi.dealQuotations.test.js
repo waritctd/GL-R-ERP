@@ -420,6 +420,40 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(revision3.parentQuotationId).toBe(revision2.id);
   });
 
+  /** Opus review (2026-09-15), REQUIRED, wrong-way-round: mirrors
+   * DealQuotationIntegrationTest#cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole.
+   * The ancestry a rejected-and-resubmitted row can grow is a TREE, not a straight line --
+   * cancelling a DRAFT row that itself has an open child used to make that child's GRANDPARENT
+   * look "free" again, letting it mint a SECOND, sibling branch while the first branch was still
+   * alive -- two independently-APPROVED quotations on the same ticket. */
+  it('cancel refuses a draft with an open child, closing the double-approve hole', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const originalId = created.quotation.id;
+
+    await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(originalId, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revisionB } = await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revisionB.id, { reason: 'รอบ 2' });
+
+    await api.auth.login(salesUser);
+    await api.dealQuotations.submit(revisionB.id); // mints C -- B now has an open child.
+
+    // THE FIX: B cannot be cancelled out from under its own open child.
+    await expect(api.dealQuotations.cancel(revisionB.id, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('cancel still works on a plain draft with no open child (regression guard)', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const { quotation: cancelled } = await api.dealQuotations.cancel(created.quotation.id, {});
+    expect(cancelled.docStatus).toBe('CANCELLED');
+  });
+
   /** Opus review nit (2026-09-15): mintDealQuotationRevision used to compute
    * `parent.revisionNo + 1` directly -- only correct while `parent` is the HIGHEST revision
    * minted off this base. Once the middle revision is CANCELLED and the original resubmitted a

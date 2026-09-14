@@ -12411,13 +12411,20 @@ export const api = {
         : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
       row.updatedAt = now;
       // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced.
-      if (row.parentQuotationId) {
-        const parent = mockDealQuotations.find((q) => q.id === row.parentQuotationId);
-        if (parent && canTransitionDealQuotation(parent.docStatus, 'SUPERSEDED')) {
-          parent.docStatus = 'SUPERSEDED';
-          parent.updatedAt = now;
+      // last approved document stays valid until replaced. Opus review nit (2026-09-15): walks
+      // the WHOLE ancestry chain, not just the immediate parent -- mirrors
+      // DealQuotationService#approve's own ancestor walk (see that method's Javadoc for the
+      // multi-cycle-chain bug a single hop left open: every ancestor above the immediate parent
+      // stranded forever in a 2+ reject/resubmit chain).
+      let ancestorId = row.parentQuotationId;
+      while (ancestorId) {
+        const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+        if (!ancestor) break;
+        if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
+          ancestor.docStatus = 'SUPERSEDED';
+          ancestor.updatedAt = now;
         }
+        ancestorId = ancestor.parentQuotationId;
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
@@ -12472,6 +12479,13 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user);
       if (!canTransitionDealQuotation(row.docStatus, 'CANCELLED')) {
         fail(`ยกเลิกไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      // Opus review (2026-09-15), REQUIRED: mirrors DealQuotationService#cancel's own guard --
+      // see that method's Javadoc for the double-approve hole this closes (cancelling a DRAFT
+      // row that itself has an open child let that child's grandparent mint a SECOND, sibling
+      // branch once the direct child was no longer "open").
+      if (hasOpenDealQuotationRevision(row.id)) {
+        fail('ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน', 409);
       }
       row.docStatus = 'CANCELLED';
       row.updatedAt = new Date().toISOString();

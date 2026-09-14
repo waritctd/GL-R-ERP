@@ -619,6 +619,24 @@ public class DealQuotationService {
     public DealQuotationDto cancel(long id, CancelRequest request, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
+        // Opus review (2026-09-15), REQUIRED: the ancestry a rejected-and-resubmitted row can grow
+        // is a TREE, not a straight line -- cancelling a DRAFT row that itself has an OPEN child
+        // let that child's grandparent look "free" again (hasOpenRevision checks DIRECT children
+        // only, and CANCELLED is not open), so the grandparent could mint a SECOND, sibling branch
+        // while the first branch (this row's own child) was still alive. Approving one branch's
+        // leaf only ever walks UPWARD from that leaf -- it can never reach across to supersede a
+        // SIBLING branch -- so both branches could end APPROVED: two independently-approved
+        // quotations on the same ticket, proven against real Postgres. Requiring every cancel to
+        // be a LEAF (no open child of its own) closes this by induction: a rep can only ever
+        // cancel a row whose own subtree is already fully terminal (rejecting a child just
+        // reopens it as DRAFT, which is itself "open" and blocks the parent's cancel too, so the
+        // whole subtree must be walked down to CANCELLED before the cancel above it succeeds) --
+        // so at most one LIVE path (DRAFT/PENDING_APPROVAL/APPROVED) can ever exist through a
+        // chain at a time, and approve()'s upward walk is always walking the ONLY live path.
+        if (quotations.hasOpenRevision(id)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน");
+        }
         int rows = quotations.cancel(id);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงยกเลิกไม่ได้");

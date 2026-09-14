@@ -570,6 +570,72 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .doesNotContain(originalId, revision2Id);
     }
 
+    /** Opus review (2026-09-15), REQUIRED, wrong-way-round: the ancestry a rejected-and-resubmitted
+     * row can grow is a TREE, not a straight line -- {@link DealQuotationRepository#hasOpenRevision}
+     * only looks at DIRECT children, so cancelling a DRAFT row that itself has an OPEN child used to
+     * make that child's GRANDPARENT look "free" again (the direct child is now CANCELLED, not
+     * open), letting the grandparent mint a SECOND, sibling branch while the first branch (the
+     * cancelled row's own child) was still alive. Approving one branch's leaf only ever walks
+     * UPWARD from that leaf -- it can never reach across to supersede a SIBLING branch -- so BOTH
+     * branches could end APPROVED: two independently-approved quotations on the same ticket.
+     * Proves the fix (cancel() now refuses a row with an open child) blocks the exact sequence
+     * that produced this. */
+    @Test
+    void cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        long originalId = created.id();
+
+        // A -> reject -> resubmit mints B -> reject -> resubmit mints C. B now has an open child.
+        DealQuotationDto submitted = quotationService.submit(originalId, salesActor);
+        DealQuotationDto rejectedA = quotationService.reject(submitted.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revisionB = quotationService.submit(rejectedA.id(), salesActor);
+        DealQuotationDto rejectedB = quotationService.reject(revisionB.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revisionC = quotationService.submit(rejectedB.id(), salesActor);
+
+        // THE FIX: B cannot be cancelled out from under its own open child C.
+        assertThatThrownBy(() -> quotationService.cancel(revisionB.id(), new CancelRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่");
+
+        // Without this guard, the ORIGINAL sequence that broke the invariant continued: cancel(B)
+        // would have succeeded, hasOpenRevision(originalId) would then have read false (B's only
+        // status is CANCELLED, not open), and submit(originalId) would have minted a SECOND
+        // branch alongside C's. Confirm that second branch is ALSO still blocked, transitively:
+        // C itself must be resolved to a terminal CANCELLED state before B can be freed.
+        DealQuotationDto rejectedC = quotationService.reject(revisionC.id(),
+            new RejectRequest("รอบ 3"), salesManagerActor);
+        quotationService.cancel(rejectedC.id(), new CancelRequest(null), salesActor);
+        // NOW B has no open child (C is CANCELLED, a terminal state) -- cancelling B is legitimate.
+        DealQuotationDto cancelledB = quotationService.cancel(revisionB.id(), new CancelRequest(null), salesActor);
+        assertThat(cancelledB.docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+
+        // The original can now legitimately be resubmitted -- its whole subtree (B, C) is
+        // terminal, so there is only ONE live path from here, not a second sibling branch.
+        DealQuotationDto revisionB2 = quotationService.submit(originalId, salesActor);
+        assertThat(revisionB2.id()).isNotEqualTo(revisionB.id());
+        quotationService.approve(revisionB2.id(), new ApproveRequest(null), salesManagerActor);
+
+        // The invariant this whole feature exists to protect: never more than ONE APPROVED
+        // quotation on the same ticket at a time.
+        assertThat(quotationService.search(List.of("APPROVED"), false, salesActor))
+            .extracting(DealQuotationDto::id).containsExactly(revisionB2.id());
+    }
+
+    /** Regression guard: cancelling an ORDINARY leaf DRAFT (no open child of its own) must still
+     * work exactly as before -- the new guard in {@link #cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole}
+     * must not block the common case. */
+    @Test
+    void cancel_stillWorksOnAPlainDraftWithNoOpenChild() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = quotationService.cancel(created.id(), new CancelRequest(null), salesActor);
+        assertThat(cancelled.docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+    }
+
     /** LOW: reject() used to skip the existence check and go straight to the compare-and-set
      * UPDATE, so a missing id and a wrong-status id were indistinguishable (both 409) — unlike
      * approve/submit/cancel/update, which all 404 first. */
