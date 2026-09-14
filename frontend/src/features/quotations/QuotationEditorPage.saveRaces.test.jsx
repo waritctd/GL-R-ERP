@@ -50,12 +50,15 @@ const CONTACTS = [
 ];
 
 // A COMPLETE stored tile row (validateQuotationItem finds nothing missing), server id 101.
+// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
+// TILE row with neither) -- this file's ส่งขออนุมัติ assertions are about save/submit RACES, not
+// lead-time completeness, so the fixture must not trip the new gate.
 const TILE_ITEM = {
   id: 101, seq: 1, lineType: 'TILE', locationLabel: null, catalogPriceId: null, productCode: null,
   brand: 'Marazzi', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
   sqmPerPiece: 0.36, quantityMode: 'AREA', areaSqm: 20, piecesInput: null, wastageMode: 'PERCENT',
   wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0, originCountry: null,
-  leadTimeMinDays: null, leadTimeMaxDays: null, itemNotes: null,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45, itemNotes: null,
   piecesPerSqm: 2.78, piecesBeforeWastage: 56, piecesAfterWastage: 56, piecesFinal: 57, boxes: 19,
   netUnitPrice: 850, lineAmount: 48450, descriptionLine: 'Trilogy Ash', sizeLine: '60x60', calculationLine: '(calc)',
   quantity: 57, unit: 'แผ่น', specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,

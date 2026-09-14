@@ -12130,6 +12130,15 @@ export const api = {
       // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
       // none, and that document cannot go for approval with an empty signature slot.
       if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // Owner feedback #7 (2026-09-14). Mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+      // -- submit only, exactly like the ผู้สั่งซื้อ check above; a DRAFT may still be saved with no
+      // lead time. PLAIN/ADJUSTMENT rows are exempt, same as the Java side.
+      const missingLeadTimeSeqs = row.items
+        .filter((it) => (it.lineType ?? 'TILE') === 'TILE' && (it.leadTimeMinDays == null || it.leadTimeMaxDays == null))
+        .map((it) => it.seq);
+      if (missingLeadTimeSeqs.length > 0) {
+        fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}`, 400);
+      }
       const now = new Date().toISOString();
       row.docStatus = 'PENDING_APPROVAL';
       row.submittedAt = now;

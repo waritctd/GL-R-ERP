@@ -12,9 +12,13 @@ const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js
 // an empty list — and since quotation v3 the mock does too (buildDealQuotationItems). These fixtures
 // used to create with `items: []`, which only ever worked because the mock was MORE permissive than
 // the service; they now send the smallest body the service would actually accept.
+// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
+// TILE row with neither) -- this fixture backs revision-numbering/needsRework tests that call
+// submit() and have nothing to do with lead time.
 const ONE_ITEM = {
   model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
   quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
 
 describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => {

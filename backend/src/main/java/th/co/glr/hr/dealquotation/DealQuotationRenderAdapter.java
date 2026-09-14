@@ -93,7 +93,10 @@ public final class DealQuotationRenderAdapter {
             // line, because the template has exactly TWO free rows here and her samples print
             // three labelled lines. Flagged in the PR: with a genuine F-SM-008.xls each would get
             // its own row.
-            String contactPart = !blank(quotation.contactName()) ? quotation.contactName().trim() + "   /   " : "";
+            // Owner feedback item #1 (2026-09-14): the same dedupe as the Thai branch below, minus
+            // the คุณ decision (the English form never prefixes it at all).
+            String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
+                ? quotation.contactName().trim() + "   /   " : "";
             attnLine = contactPart + nullSafe(quotation.customerName());
             List<String> parts = new ArrayList<>();
             if (!blank(quotation.customerAddress())) {
@@ -107,8 +110,19 @@ public final class DealQuotationRenderAdapter {
             }
             phoneLine = String.join("   ", parts);
         } else {
-            String contactPart = !blank(quotation.contactName())
-                ? "คุณ" + quotation.contactName().trim() + "   /   " : "";
+            // Owner feedback item #1 (2026-09-14): production printed "เรียน คุณบริษัท นันทวัน
+            // จำกัด   /   บริษัท นันทวัน จำกัด" because the "contact" snapshot on that deal WAS the
+            // company name (no separate human contact was ever recorded, so the write path fell
+            // back to the customer name) and this branch prefixed "คุณ" and duplicated it
+            // unconditionally. Two independent fixes, both in #printContactPart/#looksLikeOrganisation:
+            // (1) when the contact snapshot equals the customer name (normalised), the contact part
+            // is omitted entirely rather than printed twice; (2) "คุณ" is prefixed only when the
+            // surviving contact name does not itself look like an organisation (a company recorded
+            // as its OWN contact, distinct from the customer name, still should not read "คุณ").
+            String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
+                ? (looksLikeOrganisation(quotation.contactName()) ? "" : "คุณ")
+                    + quotation.contactName().trim() + "   /   "
+                : "";
             String taxIdPart = !blank(quotation.customerTaxId())
                 ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
             attnLine = contactPart + nullSafe(quotation.customerName()) + taxIdPart;
@@ -266,15 +280,15 @@ public final class DealQuotationRenderAdapter {
     // fixed text (two rows concatenated where the template splits a sentence across a "head" row
     // and an unnumbered continuation row). ─────────────────────────────────────────────────────
 
-    // Owner feedback pass 3 (2026-09-11), verbatim: "ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค
-    // 3-7 วัน". She confirmed the fix is "แค่เปลี่ยนตัวเลขที่มีอยู่" -- just change the numbers
-    // already here, no new origin field or lookup -- so this stays what it always was: the FIXED
-    // fallback printed when NO row on the document carries a lead time (item.leadTimeMinDays()/
-    // leadTimeMaxDays(), set per item -- see #leadTimeLine below, which this constant backstops
-    // rather than replaces). Used to read "...ประเทศอิตาลี...ประมาณ 90 วัน", a single Italy/90-day
-    // default that had nothing to do with either of her two real cases.
-    private static final String LINE3_FALLBACK =
-        "3.ระยะเวลานำเข้า : จีน ประมาณ 30-45 วัน  ไทย มีในสต็อก ประมาณ 3-7 วัน";
+    // Owner feedback #7 (2026-09-14) REVERSES pass 3 (2026-09-11)'s "จีน 30-45 วัน / ไทย มีในสตอค
+    // 3-7 วัน" default: she now wants NO country and NO stock wording printed at all when nothing
+    // on the document carries a lead time — submit() below makes that case rare (every TILE row
+    // must now carry one), but a DRAFT preview or a re-render of an older document can still hit
+    // it. The fallback is now a visible blank the rep has to notice and fill in, not a real-looking
+    // pair of numbers that happened to be wrong for most of her actual shipments. Same header word
+    // ("ระยะเวลานำเข้า") the per-item line below now uses too, so a document that mixes a priced
+    // item with an unpriced legacy row never reads as two different features.
+    private static final String LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
     private static final String LINE4 =
         "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.";
     private static final String LINE5 =
@@ -303,9 +317,10 @@ public final class DealQuotationRenderAdapter {
         return lines;
     }
 
-    /** {@code "รายการที่ 1-2 ระยะเวลานำเข้า 75-90 วัน  รายการที่ 3 ระยะเวลานำเข้า 30-45 วัน"} —
-     * consecutive item numbers sharing the same (min, max) lead time are grouped; items with no
-     * lead time are omitted; when nothing has one, the template's original line 3 stands. */
+    /** {@code "3.ระยะเวลานำเข้า : รายการที่ 1-2 ประมาณ 75-90 วัน  รายการที่ 3 ประมาณ 30-45 วัน"} —
+     * consecutive item numbers sharing the same (min, max) lead time are grouped, ALWAYS in this
+     * per-item form (owner feedback #7, 2026-09-14) even for a single group; items with no lead
+     * time are omitted; when nothing has one, {@link #LINE3_FALLBACK} stands. */
     private static String leadTimeLine(List<DealQuotationItemDto> items) {
         List<DealQuotationItemDto> ordered = items.stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
@@ -339,7 +354,7 @@ public final class DealQuotationRenderAdapter {
         }
         flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
 
-        return groups.isEmpty() ? LINE3_FALLBACK : "3.กำหนดส่งมอบสินค้า : " + String.join("  ", groups);
+        return groups.isEmpty() ? LINE3_FALLBACK : "3.ระยะเวลานำเข้า : " + String.join("  ", groups);
     }
 
     private static void flushGroup(List<String> groups, Integer min, Integer max, Integer first, Integer last) {
@@ -347,7 +362,10 @@ public final class DealQuotationRenderAdapter {
             return;
         }
         String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
-        groups.add("รายการที่ " + range + " ระยะเวลานำเข้า " + min + "-" + max + " วัน");
+        // Owner feedback #7 nicety: an exact lead time (min == max) reads "ประมาณ 30 วัน", not the
+        // pointless "30-30 วัน" a range formatter would print for it.
+        String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
+        groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
     }
 
     // ── v3b: the ENGLISH remark block (F-SM-008) ─────────────────────────────────────────────
@@ -448,17 +466,19 @@ public final class DealQuotationRenderAdapter {
 
     /**
      * Remark 3 when NO row carries a lead time — typically a document made entirely of PLAIN rows
-     * (freight, consumables, mosaic priced per SQM), which have no lead-time fields at all.
+     * (freight, consumables, mosaic priced per SQM), which have no lead-time fields at all, or a
+     * DRAFT/older re-render that predates {@code DealQuotationService#submit}'s new requirement
+     * that every TILE row carry one.
      *
-     * <p>Owner feedback pass 3 (2026-09-11), the English mirror of {@link #LINE3_FALLBACK}: same
-     * verbatim request ("ระยะเวลานำเข้า / จีน 30-45 วัน / ไทย มีในสตอค 3-7 วัน"), same "just change
-     * the numbers already here" scope — no origin field, no lookup. This supersedes the line's
-     * PREVIOUS text ("Delivery : lead time will be confirmed at order confirmation."), which had in
-     * turn replaced an even older "Goods are in stock at the factory in Italy; shipping time is
-     * approximately 90 days" that named a country with nothing to do with the shipment (it once sat
-     * above a "Transportation Charges from China to Male Port, Maldives" row on the owner's own
-     * QN6900902-6). Naming China/Thailand here is a deliberate, owner-directed reversal of that
-     * older "name no country" caution — it is what she explicitly asked this fallback to say now.
+     * <p>Owner feedback #7 (2026-09-14) REVERSES pass 3 (2026-09-11)'s English mirror of
+     * {@link #LINE3_FALLBACK}, which had named "China (import) ... Thailand (in stock) ...": no
+     * country, no stock wording, at all now — just a visible blank for the rep to notice and fill
+     * in, since with the submit guard in place this fallback should rarely be seen on anything but
+     * a draft. That 2026-09-11 line had itself replaced "Delivery : lead time will be confirmed at
+     * order confirmation.", which had in turn replaced an even older "Goods are in stock at the
+     * factory in Italy; shipping time is approximately 90 days" that named a country with nothing
+     * to do with the shipment (it once sat above a "Transportation Charges from China to Male Port,
+     * Maldives" row on the owner's own QN6900902-6).
      *
      * <p>Why not simply drop the line when there is nothing to say: the remark box is exactly
      * {@code QuotationRenderer#REMARK_HEAD_ROWS} = 8 rows and never wraps, and dropping one leaves
@@ -467,8 +487,7 @@ public final class DealQuotationRenderAdapter {
      * {@code DealQuotationEnglishFormTest#everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts}
      * (cap 130 chars; this line is well under it).
      */
-    private static final String EN_LINE3_FALLBACK =
-        "3.Delivery : China (import) approximately 30-45 days; Thailand (in stock) approximately 3-7 days.";
+    private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
     /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
      * Kept as its own method rather than parameterising the Thai one: the two differ in every
@@ -514,7 +533,9 @@ public final class DealQuotationRenderAdapter {
             return;
         }
         String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-        groups.add(range + " approximately " + min + "-" + max + " days");
+        // Owner feedback #7 nicety: the same min == max collapse as the Thai #flushGroup.
+        String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
+        groups.add(range + " approximately " + days + " days");
     }
 
     /**
@@ -553,6 +574,75 @@ public final class DealQuotationRenderAdapter {
 
     private static LocalDate bangkokDate(java.time.Instant instant) {
         return instant == null ? null : instant.atZone(BANGKOK).toLocalDate();
+    }
+
+    // ── item #1 (2026-09-14): the "เรียน"/attn contact prefix ────────────────────────────────
+
+    /** Whether the contact part of the attn line should print at all — {@code false} when there
+     * is no contact name, or when it is (after normalising whitespace, case-insensitively) the
+     * SAME string as the customer name, which used to print the customer name twice
+     * ("...บริษัท นันทวัน จำกัด   /   บริษัท นันทวัน จำกัด..."). */
+    static boolean printContactPart(String contactName, String customerName) {
+        if (blank(contactName)) {
+            return false;
+        }
+        return !normalizeWhitespace(contactName).equalsIgnoreCase(normalizeWhitespace(customerName));
+    }
+
+    /** Trims and collapses internal whitespace runs to one space, so two names that differ only in
+     * spacing still compare equal in {@link #printContactPart}. Also drops a trailing "."/","
+     * (Opus review nit, 2026-09-14): a contact re-typed with a stray trailing full stop or comma
+     * — "...จำกัด." vs "...จำกัด" — is the SAME duplicate-name bug this method exists to catch,
+     * not a genuinely different name; only the very END of the string is touched, so a name that
+     * legitimately ends mid-abbreviation elsewhere is untouched. */
+    private static String normalizeWhitespace(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.trim().replaceAll("\\s+", " ").replaceAll("[.,]+$", "");
+    }
+
+    // A leading marker is checked as a PREFIX of the (whitespace-normalised) name — these are all
+    // legal-entity-type words that only ever open a Thai organisation's name, never a person's.
+    private static final String[] ORG_NAME_PREFIXES = {
+        "บริษัท", "บจก", "บ.จ.ก", "หจก", "ห.จ.ก", "ห้างหุ้นส่วน", "ร้าน", "สำนักงาน",
+        "มูลนิธิ", "สมาคม", "โรงแรม", "โรงเรียน", "โรงพยาบาล", "องค์การ", "การไฟฟ้า", "การประปา",
+    };
+    // These are checked as a SUBSTRING anywhere in the (lower-cased) name — a Thai "จำกัด"/"(มหาชน)"
+    // suffix, or an English company-type phrase, can trail after a name a leading-prefix check
+    // alone would miss (e.g. a contact typed as "นันทวัน จำกัด" with no "บริษัท"). Each is already
+    // distinctive/multi-character enough that a bare substring match is safe (unlike the short
+    // WORD markers below).
+    private static final String[] ORG_NAME_MARKERS = {
+        "จำกัด", "(มหาชน)", "co., ltd", "co.,ltd",
+    };
+    // Opus review nit (2026-09-14): these are short enough that a bare substring match false-
+    // positives on an ordinary name — "Somchai INchana" contains " inc", "John HoLLCroft" contains
+    // "llc". Matched with \b word boundaries instead, via #ORG_NAME_WORD_PATTERN.
+    private static final java.util.regex.Pattern ORG_NAME_WORD_PATTERN = java.util.regex.Pattern.compile(
+        "\\b(company|limited|ltd|inc|llc)\\b");
+
+    /** Owner feedback item #1 (2026-09-14): is {@code name} an organisation rather than a person,
+     * for deciding whether the attn line's surviving contact part should be prefixed "คุณ". A
+     * package-private static helper (see its own unit test) rather than inlined logic, because the
+     * list of markers is exactly the kind of thing a later owner request edits in isolation. */
+    static boolean looksLikeOrganisation(String name) {
+        if (blank(name)) {
+            return false;
+        }
+        String trimmed = normalizeWhitespace(name);
+        for (String prefix : ORG_NAME_PREFIXES) {
+            if (trimmed.startsWith(prefix)) {
+                return true;
+            }
+        }
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        for (String marker : ORG_NAME_MARKERS) {
+            if (lower.contains(marker)) {
+                return true;
+            }
+        }
+        return ORG_NAME_WORD_PATTERN.matcher(lower).find();
     }
 
     private static boolean blank(String s) {
