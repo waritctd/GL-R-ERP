@@ -227,6 +227,9 @@ public class DealQuotationRepository {
         ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
+        // V178 — "DAYS" | "DATE" and the exact deadline for DATE mode; see WastageCalculator's
+        // VALIDITY_MODE_* constants and DealQuotationService#requireValidityUntilForMode.
+        String validityMode, LocalDate validityUntil,
         String customerNotes, String priceMode, String documentLanguage, String currency,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
@@ -246,7 +249,7 @@ public class DealQuotationRepository {
                  customer_name, customer_address, customer_tax_id, customer_phone,
                  contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
-                 validity_days, customer_notes, price_mode, document_language,
+                 validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
                  parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
@@ -254,7 +257,7 @@ public class DealQuotationRepository {
                  :customerName, :customerAddress, :customerTaxId, :customerPhone,
                  :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
-                 :validityDays, :customerNotes, :priceMode, :documentLanguage,
+                 :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
                  :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
@@ -281,6 +284,8 @@ public class DealQuotationRepository {
                 .addValue("remainderMode", p.remainderMode())
                 .addValue("creditDays", p.creditDays())
                 .addValue("validityDays", p.validityDays())
+                .addValue("validityMode", p.validityMode())
+                .addValue("validityUntil", p.validityUntil())
                 .addValue("customerNotes", p.customerNotes())
                 .addValue("priceMode", p.priceMode())
                 // v3b: currency was a hardcoded 'THB' LITERAL in the VALUES list until V169 — it
@@ -491,7 +496,8 @@ public class DealQuotationRepository {
     public int updateHeader(long quotationId, ContactSnapshot contact, CustomerSnapshot customer,
                             String deptCode, String unitCode,
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
-                            Integer validityDays, String customerNotes, String priceMode,
+                            Integer validityDays, String validityMode, LocalDate validityUntil,
+                            String customerNotes, String priceMode,
                             String documentLanguage, String currency, BigDecimal subtotal) {
         return jdbc.update("""
             UPDATE sales.quotation
@@ -502,6 +508,7 @@ public class DealQuotationRepository {
                    dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
+                   validity_mode = :validityMode, validity_until = :validityUntil,
                    customer_notes = :customerNotes, price_mode = :priceMode,
                    document_language = :documentLanguage, currency = :currency,
                    total_amount = :subtotal, updated_at = now()
@@ -524,6 +531,8 @@ public class DealQuotationRepository {
                 .addValue("remainderMode", remainderMode)
                 .addValue("creditDays", creditDays)
                 .addValue("validityDays", validityDays)
+                .addValue("validityMode", validityMode)
+                .addValue("validityUntil", validityUntil)
                 .addValue("customerNotes", customerNotes)
                 .addValue("priceMode", priceMode)
                 .addValue("documentLanguage", documentLanguage)
@@ -876,7 +885,8 @@ public class DealQuotationRepository {
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
                    q.dept_code, q.unit_code, q.offer_date, q.deposit_percent, q.remainder_mode,
-                   q.credit_days, q.validity_days, q.validity_date, q.customer_notes, q.price_mode,
+                   q.credit_days, q.validity_days, q.validity_date, q.validity_mode, q.validity_until,
+                   q.customer_notes, q.price_mode,
                    q.document_language,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
@@ -954,6 +964,11 @@ public class DealQuotationRepository {
             nullableInt(rs, "credit_days"),
             nullableInt(rs, "validity_days"),
             rs.getObject("validity_date", LocalDate.class),
+            // V178: NULL validity_mode (every pre-V178 row, and the whole legacy customer-quotation
+            // path) reads as DAYS — see the migration's own comment.
+            rs.getString("validity_mode") == null
+                ? WastageCalculator.VALIDITY_MODE_DAYS : rs.getString("validity_mode"),
+            rs.getObject("validity_until", LocalDate.class),
             rs.getString("customer_notes"),
             // NULL price_mode (every pre-V168 row) reads as NET — see V168's own comment.
             rs.getString("price_mode") == null

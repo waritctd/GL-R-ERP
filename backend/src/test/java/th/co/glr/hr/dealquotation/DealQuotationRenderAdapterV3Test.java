@@ -308,6 +308,83 @@ class DealQuotationRenderAdapterV3Test {
             new BigDecimal("3"), LocalDate.of(2026, 7, 31), null, null);
     }
 
+    // ── V178 — hasSpecialPricing, the ONE shared gate for remark 7's DATE variant AND for
+    // DealQuotationService refusing DATE mode on save. Pure logic, no rendering — see
+    // DealQuotationRenderAdapter's own rule comment (a)-(e) for what each case pins. ────────────
+
+    @Test
+    void hasSpecialPricing_specialSqmWithATileRow_isTrue_regardlessOfDiscount() {
+        // rule (a): SPECIAL_SQM + >=1 TILE row is enough on its own -- tile()'s own discountPct
+        // (null) and specialPriceSqm are irrelevant to the rule.
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(tile(null, null))))).isTrue();
+    }
+
+    @Test
+    void hasSpecialPricing_directNetWithNetBelowList_isTrue() {
+        // rule (b): DIRECT_NET and net != list price.
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(quotation(
+            WastageCalculator.PRICE_MODE_DIRECT_NET,
+            List.of(tileWithPrices(new BigDecimal("100.00"), new BigDecimal("85.00")))))).isTrue();
+    }
+
+    @Test
+    void hasSpecialPricing_directNetWithNetEqualToList_isFalse() {
+        // The (b) counter-case: DIRECT_NET but net == list price -- no special pricing.
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(quotation(
+            WastageCalculator.PRICE_MODE_DIRECT_NET,
+            List.of(tileWithPrices(new BigDecimal("100.00"), new BigDecimal("100.00")))))).isFalse();
+    }
+
+    @Test
+    void hasSpecialPricing_netTileWithPositiveDiscount_isTrue() {
+        // rule (c): NET priceMode, a TILE row's discountPct > 0.
+        DealQuotationItemDto discounted = withDiscountPct(tile(null, null), new BigDecimal("5"));
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_NET, List.of(discounted)))).isTrue();
+    }
+
+    @Test
+    void hasSpecialPricing_netTileWithZeroOrNullDiscount_isFalse() {
+        // The (c) counter-case, both shapes: discountPct null, and explicitly zero.
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_NET, List.of(tile(null, null))))).isFalse();
+        DealQuotationItemDto zero = withDiscountPct(tile(null, null), BigDecimal.ZERO);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_NET, List.of(zero)))).isFalse();
+    }
+
+    @Test
+    void hasSpecialPricing_plainRowWithPositiveDiscount_isTrue_regardlessOfPriceMode() {
+        // rule (d): a PLAIN row's own discountPct > 0 -- independent of the document's priceMode.
+        DealQuotationItemDto discountedPlain = withDiscountPct(plain(), new BigDecimal("10"));
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_NET, List.of(discountedPlain)))).isTrue();
+    }
+
+    @Test
+    void hasSpecialPricing_plainRowWithNoDiscount_isFalse() {
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(
+            quotation(WastageCalculator.PRICE_MODE_NET, List.of(plain())))).isFalse();
+    }
+
+    @Test
+    void hasSpecialPricing_adjustmentRowExists_isTrue_regardlessOfPriceModeOrOtherRows() {
+        // rule (e): an ADJUSTMENT row on its own, even alongside an otherwise plain NET tile with
+        // zero discount.
+        DealQuotationItemDto plainTile = reseq(tile(null, null), 1);
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(quotation(
+            WastageCalculator.PRICE_MODE_NET, List.of(plainTile, reseq(adjustment(), 2))))).isTrue();
+    }
+
+    @Test
+    void hasSpecialPricing_noDiscountAnywhere_isFalse() {
+        // The negative baseline every gating test above gets contrasted against: a NET tile with
+        // no discount plus a PLAIN row with no discount and no adjustment row anywhere.
+        assertThat(DealQuotationRenderAdapter.hasSpecialPricing(quotation(
+            WastageCalculator.PRICE_MODE_NET, List.of(tile(null, null), reseq(plain(), 2))))).isFalse();
+    }
+
     private DealQuotationDto quotation(String priceMode, List<DealQuotationItemDto> items) {
         return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
             1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",

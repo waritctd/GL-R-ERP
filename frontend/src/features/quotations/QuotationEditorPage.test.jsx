@@ -1091,7 +1091,11 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     await fillCompleteQuotationItem();
     fireEvent.click(screen.getByRole('button', { name: '50%' }));
     fireEvent.click(screen.getByRole('button', { name: 'ชำระเมื่อส่งมอบ' }));
-    fireEvent.change(screen.getByLabelText(/^ยืนราคา/), { target: { value: '45' } });
+    // V178: ยืนราคา is now a จำนวนวัน/ระบุวันที่ toggle group, not one labelled control — the
+    // days select itself keeps id="validityDays" (targeted directly, same as elsewhere in this
+    // suite) since the group's own aria-label also matches /^ยืนราคา/ and getByLabelText would
+    // return the group `<div>` (no value setter) rather than the select.
+    fireEvent.change(document.getElementById('validityDays'), { target: { value: '45' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
@@ -1103,7 +1107,7 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ });
     expect(screen.getByRole('button', { name: '50%' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: 'ชำระเมื่อส่งมอบ' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByLabelText(/^ยืนราคา/)).toHaveProperty('value', '45');
+    expect(document.getElementById('validityDays')).toHaveProperty('value', '45');
   });
 
   // The whole prefs layer must degrade silently: the ACCESSOR itself throws in a private window,

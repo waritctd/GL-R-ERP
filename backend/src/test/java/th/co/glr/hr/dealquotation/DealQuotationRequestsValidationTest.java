@@ -151,6 +151,17 @@ class DealQuotationRequestsValidationTest {
         assertViolated(validUpsert().validityDays(366).build());
     }
 
+    /** V178 — the pattern accepts DAYS/DATE and rejects anything else; null is allowed (means
+     * DAYS), same discipline as {@code remainderMode}/{@code priceMode}/{@code documentLanguage}. */
+    @Test
+    void validityModeMustBeDaysOrDate() {
+        assertViolated(validUpsert().validityMode("SOMETHING_ELSE").build());
+        assertViolated(validUpsert().validityMode("days").build()); // case-sensitive on the wire
+        assertThat(VALIDATOR.validate(validUpsert().validityMode(null).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().validityMode("DAYS").build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().validityMode("DATE").build())).isEmpty();
+    }
+
     private void assertViolated(Object candidate) {
         assertThat(VALIDATOR.validate(candidate)).as(candidate.toString()).isNotEmpty();
     }
@@ -227,6 +238,8 @@ class DealQuotationRequestsValidationTest {
         private String remainderMode = "CREDIT";
         private Integer creditDays = 30;
         private Integer validityDays = 30;
+        private String validityMode = null;
+        private LocalDate validityUntil = null;
         private String customerNotes = null;
         private List<ItemInput> items = List.of(new ItemBuilder().build());
 
@@ -234,10 +247,12 @@ class DealQuotationRequestsValidationTest {
         UpsertBuilder remainderMode(String v) { remainderMode = v; return this; }
         UpsertBuilder creditDays(Integer v) { creditDays = v; return this; }
         UpsertBuilder validityDays(Integer v) { validityDays = v; return this; }
+        UpsertBuilder validityMode(String v) { validityMode = v; return this; }
+        UpsertBuilder validityUntil(LocalDate v) { validityUntil = v; return this; }
 
         UpsertDealQuotationRequest build() {
             return new UpsertDealQuotationRequest(null, deptCode, unitCode, offerDate, depositPercent, remainderMode,
-                creditDays, validityDays, customerNotes, items);
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, null, null, null, items);
         }
     }
 }

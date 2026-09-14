@@ -208,6 +208,21 @@ public final class DealQuotationRequests {
         String remainderMode,
         @Min(0) @Max(365) Integer creditDays,
         @Min(1) @Max(365) Integer validityDays,
+        /**
+         * Owner feedback 2026-09-14 (V178): "DAYS" (default when null) | "DATE" — remark 7's
+         * second variant, กำหนดยืนยันราคา by an exact calendar date rather than a day count.
+         * {@code null}/blank means DAYS, same device as {@code priceMode}/{@code
+         * documentLanguage} above. On UPDATE a missing value keeps the STORED mode, for the SAME
+         * reason those two fields do (see {@code DealQuotationService#update}) — a client that
+         * omits it must not silently flip a DATE document back to counting days from today.
+         */
+        @Pattern(regexp = "DAYS|DATE", message = "ต้องเป็น DAYS หรือ DATE") String validityMode,
+        /**
+         * DATE mode only — the exact "ภายในวันที่" deadline. Required by
+         * {@code DealQuotationService} when {@code validityMode} resolves to DATE; ignored
+         * (stored NULL) in DAYS mode.
+         */
+        LocalDate validityUntil,
         @Size(max = 4000) String customerNotes,
         /**
          * "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3, owner feedback pass 3.
@@ -264,6 +279,21 @@ public final class DealQuotationRequests {
                                           String priceMode, List<ItemInput> items) {
             this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, customerNotes, priceMode, null, null, items);
+        }
+
+        /** The pre-V178 shape (no {@code validityMode}/{@code validityUntil}) — the canonical
+         * shape from v3b until this change, kept so every existing call site (mostly tests)
+         * compiles unchanged. Defaults both to null, which reads as DAYS mode — exactly what
+         * every one of those fixtures means. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String customerNotes,
+                                          String priceMode, String documentLanguage, String currency,
+                                          List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, null, null, customerNotes, priceMode, documentLanguage,
+                currency, items);
         }
     }
 

@@ -124,6 +124,33 @@ function docQuotation(overrides = {}) {
   };
 }
 
+describe('QuotationDocumentView -- ยืนราคา (V178, owner ruling 2026-09-14)', () => {
+  function validityText(container) {
+    const label = Array.from(container.querySelectorAll('span'))
+      .find((el) => el.textContent === 'ยืนราคา');
+    return label.nextElementSibling.textContent;
+  }
+
+  it('DAYS mode shows the day count, unchanged from before this change', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({ validityMode: 'DAYS' })} />);
+    expect(validityText(container)).toBe('30 วัน');
+  });
+
+  it('DATE mode shows the exact deadline, in the same Thai date format the view already uses', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      validityMode: 'DATE', validityUntil: '2026-12-31',
+    })} />);
+    expect(validityText(container)).toBe('ถึง 31 ธ.ค. 2569');
+  });
+
+  it('DATE mode with no validityUntil yet (an in-progress draft) shows the "-" placeholder', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      validityMode: 'DATE', validityUntil: null,
+    })} />);
+    expect(validityText(container)).toBe('-');
+  });
+});
+
 describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10)', () => {
   // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
   // pinned here — both were measured in a real browser and can only be RE-measured in one. This is

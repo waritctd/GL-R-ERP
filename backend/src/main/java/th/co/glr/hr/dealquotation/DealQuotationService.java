@@ -164,6 +164,14 @@ public class DealQuotationService {
         String currency = resolveCurrency(documentLanguage, request.currency());
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
+        // Owner feedback 2026-09-14 (V178): a brand-new document's "own date" is today (Bangkok) —
+        // the same value #mapQuotation will compute for quotationDate from issued_at = now(). Must
+        // run AFTER #buildItems: "has special pricing" (owner ruling, same date) is decided from
+        // the rows about to be written, not from the request's raw input.
+        String validityMode = resolveValidityMode(request.validityMode());
+        boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
+        LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
+            LocalDate.now(BANGKOK), specialPricing);
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
@@ -179,7 +187,8 @@ public class DealQuotationService {
             contact,
             ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
+            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal, null, 1, items));
         return requireQuotation(id);
     }
@@ -308,8 +317,22 @@ public class DealQuotationService {
         // the resolved language and accepts only the matching one, so the stored value can add
         // nothing. Passing it would merely turn a legitimate language switch into a spurious 400.
         String currency = resolveCurrency(documentLanguage, request.currency());
+        // V178, the SAME "missing keeps stored" discipline as priceMode/documentLanguage above —
+        // a client that omits validityMode on a PUT must not silently flip a DATE document back to
+        // counting days from today.
+        String validityMode = isBlank(request.validityMode())
+            ? resolveValidityMode(existing.validityMode())
+            : resolveValidityMode(request.validityMode());
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
+        // Must run AFTER #buildItems — same reasoning as #create's own comment: "has special
+        // pricing" is decided from the rows about to be written, so a discount cleared on THIS
+        // save (or an adjustment row removed) already refuses DATE mode here, before anything is
+        // persisted, rather than leaving a stale validity_until on a document that no longer has
+        // any special pricing to protect.
+        boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
+        LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
+            existing.quotationDate(), specialPricing);
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -320,7 +343,8 @@ public class DealQuotationService {
         int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
+            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
@@ -383,6 +407,16 @@ public class DealQuotationService {
         if (quotation.contactId() == null || isBlank(quotation.contactName())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
         }
+        // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
+        // create/update already refuse one before the quotation's OWN date, but time keeps moving
+        // after a draft is saved, so submit re-checks against TODAY (Bangkok), the last gate before
+        // an approver ever sees the document (same reasoning as the item-completeness re-check
+        // below).
+        if (WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+            && quotation.validityUntil() != null
+            && quotation.validityUntil().isBefore(LocalDate.now(BANGKOK))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาผ่านไปแล้ว");
+        }
         // Item completeness rule, re-checked over the STORED rows: create/update already enforce
         // this on write (#buildItem), but a row can predate this rule (created before this
         // migration of behaviour) or a stale client could in principle bypass the write-time
@@ -419,8 +453,21 @@ public class DealQuotationService {
         requireApproveAccess(actor);
         DealQuotationDto quotation = requireQuotation(id);
         LocalDate approvalDate = LocalDate.now(BANGKOK);
-        LocalDate validityDate = quotation.validityDays() != null
-            ? approvalDate.plusDays(quotation.validityDays()) : null;
+        // V178: a DATE-mode document WITH special pricing names its OWN validity_date (the rep's
+        // ภายในวันที่, verbatim — approval never recomputes it); every other case (DAYS mode, or a
+        // stale DATE mode that lost its special pricing — create/update refuse THAT combination
+        // going forward, but an already-PENDING_APPROVAL row from before this change could still
+        // carry it) falls back to the existing day-count rule.
+        // Opus review (2026-09-14): mirror the render adapter's own null guard (DealQuotation
+        // RenderAdapter:372/475) rather than trusting validityUntil is non-null just because the
+        // mode says DATE — unreachable through create/update/createRevision today, but a stray
+        // NULL here would otherwise skip the DAYS fallback entirely and leave validity_date NULL
+        // despite validity_days being set.
+        LocalDate validityDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+                && quotation.validityUntil() != null
+                && DealQuotationRenderAdapter.hasSpecialPricing(quotation)
+            ? quotation.validityUntil()
+            : (quotation.validityDays() != null ? approvalDate.plusDays(quotation.validityDays()) : null);
         int rows = quotations.approve(id, actor.id(), blankToNull(request.note()), validityDate);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
@@ -518,6 +565,13 @@ public class DealQuotationService {
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
+            // V178: a revision inherits its parent's validity MODE AND DATE verbatim — a DATE-mode
+            // parent's own "ภายในวันที่" deadline is a fact about the customer's order, not
+            // something that should silently reset to a day count (or a stale date) on revise.
+            // source.validityMode() is never null (the repository normalises a stored NULL to
+            // DAYS), so resolveValidityMode is not needed on this path — same reasoning as
+            // documentLanguage below.
+            source.validityMode(), source.validityUntil(),
             // v3b: a revision inherits the parent's ภาษาเอกสาร and currency verbatim, like every
             // other header field here — revising an English quotation must not silently reissue it
             // in Thai. source.documentLanguage() is never null (the repository normalises a stored
@@ -923,6 +977,42 @@ public class DealQuotationService {
                 "สกุลเงิน " + currency + " ใช้กับเอกสารภาษา " + documentLanguage + " ไม่ได้ (ต้องเป็น " + expected + ")");
         }
         return currency;
+    }
+
+    /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
+     * (and the whole legacy customer-quotation path) stores. */
+    private String resolveValidityMode(String validityMode) {
+        return isBlank(validityMode)
+            ? WastageCalculator.VALIDITY_MODE_DAYS : validityMode.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * V178: DAYS mode always stores {@code validity_until = NULL} — the day count in
+     * {@code validity_days} is the only thing that matters, exactly as before this change.
+     *
+     * <p>DATE mode is refused outright on a document with NO special pricing (owner ruling
+     * 2026-09-14 — a price-validity DEADLINE only makes sense when there is a special price or
+     * discount to protect; see {@link DealQuotationRenderAdapter#hasSpecialPricing}'s own rule).
+     * Otherwise it requires a date, and refuses one that predates the quotation's own document
+     * date ({@code quotationDate} — today on create, the frozen creation date on update): a
+     * validity deadline earlier than the document itself is never a fact a rep meant to type.
+     */
+    private LocalDate requireValidityUntilForMode(String validityMode, LocalDate validityUntil,
+                                                   LocalDate quotationDate, boolean hasSpecialPricing) {
+        if (!WastageCalculator.VALIDITY_MODE_DATE.equals(validityMode)) {
+            return null;
+        }
+        if (!hasSpecialPricing) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+        }
+        if (validityUntil == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุวันที่ยืนราคา");
+        }
+        if (validityUntil.isBefore(quotationDate)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา");
+        }
+        return validityUntil;
     }
 
     // v3b's requirePriceModeAvailableInLanguage (SPECIAL_SQM refused on English) is GONE — owner

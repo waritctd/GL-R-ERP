@@ -174,6 +174,15 @@ export function remainderModeLabel(value) {
 
 export const VALIDITY_DAYS_OPTIONS = [15, 30, 45, 60];
 
+/** V178 (owner feedback 2026-09-14): กำหนดยืนยันราคา (remark 7) as a day count from the document
+ * date, or a specific calendar date — mirrors {@code WastageCalculator.VALIDITY_MODE_*} and the
+ * remainderMode toggle's own shape exactly. DATE is offered only when {@link hasSpecialPricing}
+ * is true — see the toggle in QuotationEditorPage's เงื่อนไข panel. */
+export const VALIDITY_MODE_OPTIONS = [
+  { code: 'DAYS', label: 'จำนวนวัน' },
+  { code: 'DATE', label: 'ระบุวันที่' },
+];
+
 // ── Item row options (editor) ────────────────────────────────────────────────────────────────
 
 export const QUANTITY_MODE_OPTIONS = [
@@ -818,6 +827,44 @@ export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') 
   }
   const pct = Number(item.discountPct);
   return !pct ? 'Net' : `${formatPlainNumber(pct)}%`;
+}
+
+/**
+ * V178 (owner ruling 2026-09-14): remark 7's ระบุวันที่ (DATE) validity variant — and the
+ * จำนวนวัน / ระบุวันที่ toggle offering it at all — is gated on the document having special
+ * pricing. Mirrors {@code th.co.glr.hr.dealquotation.DealQuotationRenderAdapter#hasSpecialPricing}
+ * EXACTLY: same five rules, same TILE/PLAIN/ADJUSTMENT split (via {@link lineTypeOf}), decided
+ * from the DATA rather than from {@link documentDiscountLabel}'s printed word — an English
+ * per-sqm SPECIAL_SQM row prints "Net" but rule (a) still counts it. A quotation has special
+ * pricing when ANY row satisfies:
+ *   a. priceMode SPECIAL_SQM and the row is a TILE (any TILE row counts, discount aside);
+ *   b. priceMode DIRECT_NET and the row is a TILE whose netUnitPrice differs from its unitPrice
+ *      (the row whose ส่วนลด cell reads พิเศษ — see documentDiscountLabel's own DIRECT_NET branch);
+ *   c. priceMode NET (i.e. neither of the above) and the row is a TILE with discountPct > 0;
+ *   d. the row is PLAIN with discountPct > 0;
+ *   e. the row is an ADJUSTMENT (ส่วนลดพิเศษ) row.
+ */
+export function hasSpecialPricing(priceMode, rows) {
+  const isPositive = (value) => value != null && value !== '' && Number(value) > 0;
+  for (const row of rows ?? []) {
+    const type = lineTypeOf(row);
+    if (type === LINE_TYPE_ADJUSTMENT) return true; // (e)
+    if (type === LINE_TYPE_PLAIN) {
+      if (isPositive(row?.discountPct)) return true; // (d)
+      continue;
+    }
+    // TILE (lineTypeOf's own default when lineType is null/blank)
+    if (priceMode === 'SPECIAL_SQM') return true; // (a)
+    if (priceMode === 'DIRECT_NET') {
+      if (row?.unitPrice != null && row?.netUnitPrice != null
+        && Number(row.unitPrice) !== Number(row.netUnitPrice)) {
+        return true; // (b)
+      }
+    } else if (isPositive(row?.discountPct)) {
+      return true; // (c)
+    }
+  }
+  return false;
 }
 
 /** Up to `places` decimals — the backend's `@Digits(fraction = N)` bounds (quantity 2, the
