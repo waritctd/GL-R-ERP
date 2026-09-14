@@ -1337,4 +1337,113 @@ class QuotationRendererTest {
             null, null, null,           // calcedCost, calcedPrice, calcConfigVersion
             "PIECE", null, null);       // unitBasis, manualPrice, manualOverrideReason
     }
+
+    // ── terms & conditions page (owner decision 2026-09-14) ──────────────────────────────────
+    // toPdf(QuotationRenderModel) — the deal quotation editor's ดาวน์โหลด PDF button — now appends
+    // forms/quotation_terms_and_conditions.pdf as the document's final page(s). See
+    // QuotationRenderer#appendTermsAndConditionsPage / #appendPdf.
+
+    /**
+     * Fast unit test of the merge primitive itself: no LibreOffice, no Chromium, a bare one-page
+     * PDF built purely with PDFBox as {@code basePdf}. Calls {@link QuotationRenderer#appendPdf}
+     * directly (the package-private test seam) rather than going through {@code toPdf(model)}, so
+     * this stays cheap and independent of either rendering engine.
+     */
+    @Test
+    void appendPdf_appendsEveryPageOfTheTermsFormOntoAMinimalBasePdf() throws Exception {
+        byte[] basePdf;
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            doc.save(out);
+            basePdf = out.toByteArray();
+        }
+        byte[] termsPdf;
+        try (var in = new ClassPathResource(QuotationRenderer.TERMS_AND_CONDITIONS_FORM).getInputStream()) {
+            termsPdf = in.readAllBytes();
+        }
+        int termsPageCount;
+        try (PDDocument doc = Loader.loadPDF(termsPdf)) {
+            termsPageCount = doc.getNumberOfPages(); // read the real resource — do not hardcode
+        }
+
+        byte[] merged = QuotationRenderer.appendPdf(basePdf, termsPdf);
+
+        try (PDDocument doc = Loader.loadPDF(merged)) {
+            assertThat(doc.getNumberOfPages()).isEqualTo(1 + termsPageCount);
+
+            PDFTextStripper lastPageOnly = new PDFTextStripper();
+            lastPageOnly.setStartPage(doc.getNumberOfPages());
+            lastPageOnly.setEndPage(doc.getNumberOfPages());
+            String lastPageText = lastPageOnly.getText(doc);
+            // NOT the document's own Thai title: PDFBox's text extraction on this file's embedded
+            // fonts doesn't just insert stray spaces (as elsewhere in this file) — it reorders Thai
+            // tone-mark glyph clusters outright (checked directly: extracting this PDF prints
+            // "เงือ่นไขประกอบใบเสนอราคา", not "เงื่อนไขประกอบใบเสนอราคา"), so neither the raw nor the
+            // whitespace-flattened title text-matches reliably. "info@glr.co.th" is plain ASCII in
+            // the same header block and is reliably extractable — it distinctively identifies THIS
+            // document (the company's own e-mail, printed once, only on this form).
+            assertThat(lastPageText).contains("info@glr.co.th");
+        }
+    }
+
+    /**
+     * Integration-shaped test through the real {@code toPdf(model)} call site: the default
+     * ({@code xls}) engine, gated on LibreOffice exactly like every other PDF test in this file.
+     * Computes the "before" page count independently — {@code toXls(model)} converted straight by
+     * {@link LibreOfficePdfConverter}, the same two calls {@code toPdf(model)} makes internally,
+     * called directly so the terms merge is bypassed — rather than asserting a hardcoded number.
+     */
+    @Test
+    void toPdf_model_appendsTermsPageAfterTheQuotationsOwnPages() throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        int quotationOnlyPages;
+        try (PDDocument doc = Loader.loadPDF(LibreOfficePdfConverter.convert(renderer.toXls(model)))) {
+            quotationOnlyPages = doc.getNumberOfPages();
+        }
+        int termsPages;
+        try (var in = new ClassPathResource(QuotationRenderer.TERMS_AND_CONDITIONS_FORM).getInputStream();
+             PDDocument doc = Loader.loadPDF(in.readAllBytes())) {
+            termsPages = doc.getNumberOfPages();
+        }
+
+        byte[] pdf = renderer.toPdf(model);
+        int totalPages;
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            totalPages = doc.getNumberOfPages();
+        }
+
+        assertThat(totalPages).isEqualTo(quotationOnlyPages + termsPages);
+    }
+
+    /**
+     * Wrong-way-round regression guard: {@code toPdf(model)} now does extra PDF-merge work AFTER
+     * {@code toXls(model)} builds the workbook, on the SAME (singleton-shaped) renderer instance
+     * production reuses (see {@code fillItems}'s own H1 comment on why that reuse matters here).
+     * Pins that the terms-page addition touches nothing about how {@code toXls} itself renders:
+     * byte-for-byte identical output whether or not {@code toPdf} was called first, and still real
+     * BIFF8/OLE bytes — the same format pin {@code xlsxOutputIsRealBiff8OleBytesNotOoxmlZip} makes
+     * for the legacy path — never an OOXML zip.
+     */
+    @Test
+    void toXls_model_isUnaffectedByTermsPageMerge_evenAfterToPdfRunsOnTheSameRenderer() throws Exception {
+        requireLibreOffice();
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
+        QuotationRenderModel model = modelWithItems(List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        byte[] xlsBefore = renderer.toXls(model);
+        renderer.toPdf(model); // now appends the terms page internally — must not leak back
+        byte[] xlsAfter = renderer.toXls(model);
+
+        assertThat(xlsAfter).isEqualTo(xlsBefore);
+        assertThat(xlsAfter).startsWith((byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+            (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1);
+    }
 }
