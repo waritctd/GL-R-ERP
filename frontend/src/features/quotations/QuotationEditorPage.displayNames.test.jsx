@@ -156,8 +156,12 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
   // Opus review nit N1 (2026-09-14): before this fix, the "ข้อมูลลูกค้าและผู้ขาย" read-only strip
   // showed the REAL rep (salesRepName/salesRepPhone) under พนักงานขาย even when salesRepDisplayId
   // was set, disagreeing with what QuotationDocumentView's preview and the printed PDF show for
-  // the exact same document.
-  it('the context strip shows the salesRepDisplay override, not the real rep, once one is set', async () => {
+  // the exact same document. That strip is now the editable card select itself (bb5de447), so
+  // this test's own assertion changed with it -- see the corrected name and body below. Second
+  // Opus follow-up nit (2026-09-14): renamed from "the context strip shows the salesRepDisplay
+  // override, not the real rep, once one is set", which described the read-only strip's TEXT this
+  // test no longer checks and had come to overlap the twin-select-sync test further down.
+  it('the เงื่อนไข select and the card select both reflect a saved salesRepDisplay override', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
         salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',
@@ -165,13 +169,79 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     });
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe('9'));
-    expect(screen.getByText('ผู้จัดการ ฝ่ายขาย · T.089-999-9999')).toBeTruthy();
-    expect(screen.queryByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeNull();
+    // The override is what's SELECTED on the card's own twin select too -- not text-matched
+    // (a collapsed <select>'s other <option> labels are still in the DOM and would make a plain
+    // text search meaningless the moment the empty option ALSO carries text, per the fix just
+    // below this test).
+    expect(byId('salesRepDisplayIdCard').value).toBe('9');
+  });
+
+  // Opus review fix (2026-09-14): the card's own select's EMPTY option (value="") means "use the
+  // real name" -- its label must show the REAL rep even when an override is already saved, not
+  // the override itself (which would tell the rep the option that TURNS OFF the override is
+  // somehow the override's own name).
+  it('the card select\'s empty option always labels the REAL rep, even with an override saved', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย', salesRepDisplayPhone: '089-999-9999',
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('salesRepDisplayIdCard')?.value).toBe('9'));
+    const emptyOption = [...byId('salesRepDisplayIdCard').options].find((o) => o.value === '');
+    expect(emptyOption.textContent).toBe('คุณสมหมาย ขายดี · T.081-000-0000');
   });
 
   it('the context strip shows the real rep when no salesRepDisplay override is set', async () => {
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe(''));
     expect(screen.getByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeTruthy();
+  });
+
+  // Owner feedback 2026-09-14 ("keep both, add inline edit here too"): the card's own
+  // salesRepDisplayIdCard select is a SECOND control over the SAME terms.salesRepDisplayId the
+  // เงื่อนไข panel's own salesRepDisplayId select drives -- picking a value in either one must move
+  // the other.
+  it('the card select and the เงื่อนไข select stay in sync (either one moves the other)', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('salesRepDisplayIdCard')).toBeTruthy());
+    expect(byId('salesRepDisplayIdCard').value).toBe('');
+    expect(byId('salesRepDisplayId').value).toBe('');
+
+    fireEvent.change(byId('salesRepDisplayIdCard'), { target: { value: '9' } });
+    expect(byId('salesRepDisplayId').value).toBe('9'); // moved by the CARD's own select
+
+    fireEvent.change(byId('salesRepDisplayId'), { target: { value: '4' } });
+    expect(byId('salesRepDisplayIdCard').value).toBe('4'); // moved by the เงื่อนไข select
+  });
+});
+
+// Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be able
+// to correct it") -- โครงการ was static text on this same card; now a real, saved field.
+describe('QuotationEditorPage — โครงการ is editable on the summary card', () => {
+  it('pre-fills from the quotation and sends an edit in the save payload', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
+
+    fireEvent.change(byId('projectNameCard'), { target: { value: 'Associates By Choice' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.projectName).toBe('Associates By Choice');
+  });
+
+  it('a blank projectName sends null, not the empty string', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('projectNameCard')?.value).toBe('โครงการ A'));
+
+    fireEvent.change(byId('projectNameCard'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.projectName).toBeNull();
   });
 });

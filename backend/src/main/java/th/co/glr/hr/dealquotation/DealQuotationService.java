@@ -192,7 +192,11 @@ public class DealQuotationService {
             customerSnapshot.name(), customerSnapshot.address(),
             customerSnapshot.taxId(), customerSnapshot.phone(),
             contact,
-            ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
+            // Owner feedback 2026-09-14: a request-supplied projectName (even blank, to clear it)
+            // wins; null (a caller that never sends the field at all) falls back to the deal's own
+            // project name, exactly as this line unconditionally did before projectName existed.
+            request.projectName() != null ? blankToNull(request.projectName()) : ticket.projectName(),
+            blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
@@ -362,7 +366,13 @@ public class DealQuotationService {
             request.creditDays(), request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal,
-            printedByDisplayId, salesRepDisplayId);
+            printedByDisplayId, salesRepDisplayId,
+            // Owner feedback 2026-09-14 — a genuinely editable header field now (see this request
+            // field's own Javadoc): the editor always sends its CURRENT value, so, same as
+            // printedByDisplayId/salesRepDisplayId just above, there is no "missing keeps stored"
+            // case — blankToNull(null) clears it, exactly like every other free-text header field
+            // on this same call (customerNotes, deptCode, unitCode).
+            blankToNull(request.projectName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -841,15 +851,24 @@ public class DealQuotationService {
      * card; this is what makes an edit reach the document, since {@code updateHeader} now rewrites
      * these columns on every DRAFT save.
      *
-     * <p>{@code name} deliberately still comes from the ticket (its own join on the customer row,
-     * i.e. equally live) rather than from {@code CustomerDto}, so a deal whose customer row has been
-     * deleted out from under it still prints the name it was created with instead of a blank.
+     * <p>Opus review fix (2026-09-14): {@code name} used to come from the ticket's OWN frozen
+     * {@code customer_name} column unconditionally, on the reasoning that a deal whose customer
+     * row has been deleted out from under it should still print the name it was created with
+     * instead of a blank. That reasoning is right for the deleted-row case, but it silently
+     * defeated the owner's actual request ("sometimes there's a typo in the name so they should
+     * be able to correct it", 2026-09-14, {@code CustomerDetailsFields}'s new ชื่อลูกค้า field):
+     * a correction saved to {@code customers.customer.name} never reached the ticket's own frozen
+     * column (no cascade exists, and none should — see V167's header on why an already-issued
+     * document must stay frozen), so the printed name never changed. Now takes the LIVE
+     * {@code customer.name()} whenever the customer row still exists (the normal case, and the
+     * one this fix is FOR), falling back to the ticket's frozen name only when it does not — same
+     * fallback shape address/taxId/phone already use just below.
      */
     private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket) {
         CustomerDto customer = ticket.customerId() != null
             ? customers.findById(ticket.customerId()).orElse(null) : null;
         return new CustomerSnapshot(
-            ticket.customerName(),
+            customer != null ? customer.name() : ticket.customerName(),
             customer != null ? customer.address() : null,
             customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null);

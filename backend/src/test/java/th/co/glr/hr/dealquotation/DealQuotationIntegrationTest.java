@@ -939,6 +939,54 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
     }
 
+    /** Opus review fix (2026-09-14): the SAME re-snapshot guarantee as the test above, but for the
+     * customer's NAME specifically -- {@code customerSnapshot} used to take the name from the
+     * ticket's own frozen column unconditionally (never re-read), which silently defeated the
+     * owner's "correct a typo in the name" request (CustomerDetailsFields' new ชื่อลูกค้า field):
+     * the correction reached {@code customers.customer.name} but never the printed document. */
+    @Test
+    void customerSnapshot_nameIsReSnapshottedOnEveryDraftSave_butFrozenOnceApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String originalName = created.customerName();
+
+        // The rep corrects a typo in the customer master (exactly what the new ชื่อลูกค้า field's
+        // PUT /api/customers/{id} does) …
+        customers.update(customer.id(), "บริษัท ชื่อที่ถูกต้อง จำกัด", null, null, null, null);
+        // … and re-saves the DRAFT.
+        DealQuotationDto resaved = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(resaved.customerName()).as("the correction reached the snapshot")
+            .isEqualTo("บริษัท ชื่อที่ถูกต้อง จำกัด");
+        assertThat(renderedStrings(resaved.id()))
+            .as("and the rendered document prints it, not the stale one")
+            .anyMatch(s -> s.contains("บริษัท ชื่อที่ถูกต้อง จำกัด"))
+            .noneMatch(s -> s.contains(originalName));
+
+        // Approve, then correct the name AGAIN: the approved document must not move.
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(resaved.id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        customers.update(customer.id(), "บริษัท เปลี่ยนอีกครั้ง จำกัด", null, null, null, null);
+
+        DealQuotationDto reread = quotationService.get(approved.id(), salesActor);
+        assertThat(reread.customerName()).as("frozen at approval").isEqualTo("บริษัท ชื่อที่ถูกต้อง จำกัด");
+        assertThat(renderedStrings(reread.id()))
+            .anyMatch(s -> s.contains("บริษัท ชื่อที่ถูกต้อง จำกัด"))
+            .noneMatch(s -> s.contains("บริษัท เปลี่ยนอีกครั้ง จำกัด"));
+    }
+
+    // The documented reason `customerSnapshot`'s name falls back to the ticket's own frozen
+    // column at all -- a deal with no resolvable customer row should still print the name it was
+    // created with, not a blank -- has NO reachable test through the public service today, tried
+    // two ways and confirmed both closed:
+    //   1. A real DELETE of the referenced customer row: refused by a live FK
+    //      (`ticket_customer_id_fkey`) while any ticket still points at it.
+    //   2. Nulling `sales.ticket.customer_id` directly: `resolveContact`'s own
+    //      `ticket.customerId() != null && ...` guard (DealQuotationService.java:896) throws
+    //      "กรุณาระบุผู้สั่งซื้อ" before `customerSnapshot` is ever reached, for the SAME reason.
+    // So this fallback is unreachable dead-code-safety today, not a live branch -- worth flagging
+    // in the PR body rather than forcing a test around it.
+
     /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X"
      * without hardcoding which cell the adapter happens to put it in. */
     private List<String> renderedStrings(long quotationId) {
@@ -1013,6 +1061,44 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(contact.id(), List.of(sampleItem("200.00", 5))), salesActor);
         assertThat(switched.contactId()).isEqualTo(contact.id());
         assertThat(switched.contactName()).isEqualTo("สมหญิง ใจดี");
+    }
+
+    // ── owner feedback 2026-09-14: โครงการ (project name) is now editable, not write-once ──────
+
+    /** Every OTHER test in this class omits {@code projectName} entirely (the oldest legacy
+     * constructor shapes) and still passes -- that already proves the create-time fallback to
+     * {@code ticket.projectName()} is unbroken. This pins the other half: an EXPLICIT value wins. */
+    @Test
+    void create_withAnExplicitProjectName_usesItInsteadOfTheTickets() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการทดสอบ A", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.projectName()).isEqualTo("โครงการทดสอบ A");
+    }
+
+    @Test
+    void update_correctsATypoInTheProjectName_andRoundTripsOnRead() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("ABC", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto corrected = quotationService.update(created.id(),
+            upsertRequestWithProjectName("Associates By Choice", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(corrected.projectName()).isEqualTo("Associates By Choice");
+
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.projectName()).isEqualTo("Associates By Choice");
+    }
+
+    /** No "missing keeps stored" for this field (unlike priceMode/documentLanguage/validityMode):
+     * the editor always sends its current value, blank included, so a blank is a deliberate clear
+     * -- same discipline as customerNotes/deptCode/unitCode on the same call. */
+    @Test
+    void update_withABlankProjectName_clearsIt() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการเดิม", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto cleared = quotationService.update(created.id(),
+            upsertRequestWithProjectName("", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(cleared.projectName()).isNull();
     }
 
     /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
@@ -2545,6 +2631,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", priceMode, items);
+    }
+
+    /** The full canonical constructor, for the one field (projectName) none of this class's other
+     * helpers thread through. Every other field left at its "use the default" value. */
+    private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */

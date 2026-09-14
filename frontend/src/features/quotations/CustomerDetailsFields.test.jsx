@@ -120,6 +120,38 @@ it('a refused save rolls back the field, then a later refresh applies cleanly', 
   expect(taxId.value).toBe('0207778889990');
 });
 
+// Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able to
+// correct it" — ชื่อลูกค้า joins the same generic save-on-blur mechanism the other three fields
+// already use.
+it('saves a corrected customer name on blur', async () => {
+  render(<QueryClientProvider client={new QueryClient()}><Harness /></QueryClientProvider>);
+  const name = screen.getByLabelText('ชื่อลูกค้า');
+  expect(name.value).toBe(legacy.name);
+
+  api.customers.update.mockResolvedValueOnce({ customer: { ...legacy, name: 'บริษัท เต็มชื่อ จำกัด' } });
+  fireEvent.change(name, { target: { value: 'บริษัท เต็มชื่อ จำกัด' } });
+  fireEvent.blur(name);
+
+  await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(5, { name: 'บริษัท เต็มชื่อ จำกัด' }));
+  await waitFor(() => expect(name.value).toBe('บริษัท เต็มชื่อ จำกัด'));
+});
+
+// The backend refuses a blank name (NOT NULL column, "กรุณาระบุชื่อลูกค้า") — this pins that
+// saveField's EXISTING generic rollback/toast path covers it with no special-casing, the same way
+// it already covers a refused taxId (the test just above this one).
+it('a blank name is refused by the server and rolled back', async () => {
+  const showToast = vi.fn();
+  render(<QueryClientProvider client={new QueryClient()}><Harness showToast={showToast} /></QueryClientProvider>);
+  const name = screen.getByLabelText('ชื่อลูกค้า');
+
+  api.customers.update.mockRejectedValueOnce(new Error('กรุณาระบุชื่อลูกค้า'));
+  fireEvent.change(name, { target: { value: '' } });
+  fireEvent.blur(name);
+
+  await waitFor(() => expect(name.value).toBe(legacy.name)); // rolled back
+  expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุชื่อลูกค้า');
+});
+
 it('focusing and leaving a field without typing is not dirty: a refresh still applies', async () => {
   const ref = React.createRef();
   const initial = { id: 5, name: 'Test', taxId: '0105551234567', phone: '', address: '' };

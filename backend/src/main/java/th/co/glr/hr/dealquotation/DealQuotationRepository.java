@@ -507,13 +507,18 @@ public class DealQuotationRepository {
                             String customerNotes, String priceMode,
                             String documentLanguage, String currency, BigDecimal subtotal,
                             // V179 — print-only override; see DealQuotationDtos' Javadoc.
-                            Long printedByDisplayId, Long salesRepDisplayId) {
+                            Long printedByDisplayId, Long salesRepDisplayId,
+                            // Owner feedback 2026-09-14 — project_name was write-once at INSERT
+                            // only until now; genuinely editable on every DRAFT save, same as
+                            // customer_notes just below it.
+                            String projectName) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
                    contact_phone = :contactPhone, contact_email = :contactEmail,
                    customer_name = :customerName, customer_address = :customerAddress,
                    customer_tax_id = :customerTaxId, customer_phone = :customerPhone,
+                   project_name = :projectName,
                    dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
@@ -534,6 +539,7 @@ public class DealQuotationRepository {
                 .addValue("customerAddress", customer.address())
                 .addValue("customerTaxId", customer.taxId())
                 .addValue("customerPhone", customer.phone())
+                .addValue("projectName", projectName)
                 .addValue("deptCode", deptCode)
                 .addValue("unitCode", unitCode)
                 .addValue("offerDate", offerDate)

@@ -640,3 +640,59 @@ describe('mock dealQuotations.create/update -- V179 printedByDisplayId/salesRepD
     expect(revision.salesRepDisplayId).toBe(9);
   });
 });
+
+// Opus review fix (2026-09-14): create() ignored payload.projectName entirely (always derived
+// from the deal's own project) and update() omitted the field from its Object.assign altogether,
+// so editing โครงการ silently never persisted under VITE_USE_MOCKS=true -- exactly CLAUDE.md's
+// "mock omits a field the feature keys on" shape. Mirrors DealQuotationService#create/#update.
+describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-09-14)', () => {
+  it('an explicit projectName on create wins over the deal\'s own project', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการทดสอบ A', items: [ONE_ITEM],
+    });
+    expect(quotation.projectName).toBe('โครงการทดสอบ A');
+  });
+
+  it('update corrects a typo in the project name, and it round-trips on read', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'ABC', items: [ONE_ITEM],
+    });
+    const { quotation: corrected } = await api.dealQuotations.update(created.id, {
+      projectName: 'Associates By Choice', items: [ONE_ITEM],
+    });
+    expect(corrected.projectName).toBe('Associates By Choice');
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.projectName).toBe('Associates By Choice');
+  });
+
+  it('a blank projectName on update clears it -- no "missing keeps stored"', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการเดิม', items: [ONE_ITEM],
+    });
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, {
+      projectName: null, items: [ONE_ITEM],
+    });
+    expect(cleared.projectName).toBeNull();
+  });
+
+  // Second Opus follow-up nit (2026-09-14): the first pass's update() wrote
+  // `payload.projectName ?? null`, which stores an explicit ""/whitespace-only string AS-IS
+  // instead of clearing it -- diverging from the real DealQuotationService#update's
+  // `blankToNull(request.projectName())` and from this file's own create() two tests above (which
+  // already trims+blanks). An explicitly-blank string reaches update() from
+  // buildUpsertPayload's `terms.projectName || null` only when the field is whitespace-only (a
+  // plain "" is already caught by `||`), so this exercises exactly that gap.
+  it('a whitespace-only projectName on update clears it too, not stored literally', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการเดิม', items: [ONE_ITEM],
+    });
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, {
+      projectName: '   ', items: [ONE_ITEM],
+    });
+    expect(cleared.projectName).toBeNull();
+  });
+});

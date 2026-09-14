@@ -12149,7 +12149,16 @@ export const api = {
         quotationDate: now.slice(0, 10),
         ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
-        projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+        // Opus review fix (2026-09-14): mirrors DealQuotationService#create -- an EXPLICIT
+        // payload.projectName (even blank, to send no project at all on a brand-new document)
+        // wins; omitted/null (a caller that never sends the field) falls back to the deal's own
+        // project, exactly as this line unconditionally did before projectName became editable.
+        // This used to ignore payload.projectName entirely, so the mock could not exercise the
+        // override half of create() at all -- CLAUDE.md's "mock omits a field the feature keys
+        // on" shape.
+        projectName: payload.projectName != null
+          ? (String(payload.projectName).trim() || null)
+          : (ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null),
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? now.slice(0, 10),
@@ -12213,6 +12222,18 @@ export const api = {
         // name"), so there is no "missing keeps stored" fallback here either.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Opus review fix (2026-09-14): was missing entirely, so editing โครงการ silently never
+        // persisted under VITE_USE_MOCKS=true -- CLAUDE.md's "mock omits a field the feature keys
+        // on" shape. Same #M7 DIRECT-assignment discipline as every other field in this
+        // Object.assign: no "missing keeps stored". Second Opus follow-up nit (2026-09-14): the
+        // first pass wrote `payload.projectName ?? null` here, which stores an explicit ""/"   "
+        // as-is instead of clearing it -- diverging from the real DealQuotationService#update's
+        // `blankToNull(request.projectName())` and from `create`'s own handling two blocks above.
+        // Use blankToNullMock, the file's shared top-level helper (mirrors PriceImportService.
+        // blankToNull) -- not the same-named local const inside mockDepositNoticeHeaderAutofill
+        // above, which is out of scope here -- so "" and whitespace-only both clear the field
+        // exactly as they do against the real backend.
+        projectName: blankToNullMock(payload.projectName),
         items,
         updatedAt: new Date().toISOString(),
       });
