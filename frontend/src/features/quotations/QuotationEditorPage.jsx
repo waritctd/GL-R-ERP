@@ -97,6 +97,12 @@ function emptyTerms(defaults = null) {
     validityMode: defaults?.validityMode ?? 'DAYS',
     validityUntil: '',
     customerNotes: '',
+    // V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-name override. Neither
+    // remembers a default (unlike validityMode above): the override is deal/document-specific
+    // ("admin filled this one in for the rep"), not a rep-wide preference, so a brand-new
+    // quotation always starts with "(ค่าเริ่มต้น)" — use the real names.
+    printedByDisplayId: '',
+    salesRepDisplayId: '',
   };
 }
 
@@ -202,6 +208,19 @@ export function QuotationEditorPage({ user, showToast }) {
   });
   // What the rep just saved through CustomerDetailsFields, until the refetch catches up.
   const [customerOverride, setCustomerOverride] = useState(null);
+
+  // V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name selector options.
+  // Gated the same as who may SET the fields at all (canCreateDealQuotationStandalone: sales,
+  // sales_manager, or the canCreateQuotation grant — role/grant-only, no ticket/quotation needed),
+  // matching DealQuotationService#findQuotationDisplayNameOptions' own gate. Every branch that
+  // renders the two selectors below is already inside `isEditable`, which implies this same set,
+  // so no separate role check is needed at render time — only at fetch time.
+  const displayNameOptionsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationDisplayNameOptions(),
+    queryFn: () => api.dealQuotations.displayNameOptions().then((r) => r.items ?? []),
+    enabled: canCreateDealQuotationStandalone(user),
+  });
+  const displayNameOptions = displayNameOptionsQuery.data ?? [];
 
   // Owner ask 2026-09-10 ("inline deal creation"): /quotations/new with NEITHER an :id NOR a
   // ?ticket= is a brand-new deal that does not exist anywhere yet -- the rep picks/creates the
@@ -341,6 +360,9 @@ export function QuotationEditorPage({ user, showToast }) {
         // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
         // server's own read-side default.
         validityMode: quotation.validityMode ?? 'DAYS', validityUntil: quotation.validityUntil ?? '',
+        // V179: null (the DTO's own default) reads as "(ค่าเริ่มต้น)" — the select's own empty option.
+        printedByDisplayId: quotation.printedByDisplayId ?? '',
+        salesRepDisplayId: quotation.salesRepDisplayId ?? '',
       });
       setDirty(false);
       setInitializedFor(key);
@@ -819,6 +841,11 @@ export function QuotationEditorPage({ user, showToast }) {
     priceMode: docSettings.priceMode,
     documentLanguage: docSettings.documentLanguage,
     currency: currencyForLanguage(docSettings.documentLanguage),
+    // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override. Always
+    // sent explicitly (like priceMode/documentLanguage above): a full PUT carries the payload's
+    // own value, null included, so there is no ambiguity between "omitted" and "cleared".
+    printedByDisplayId: terms.printedByDisplayId === '' ? null : Number(terms.printedByDisplayId),
+    salesRepDisplayId: terms.salesRepDisplayId === '' ? null : Number(terms.salesRepDisplayId),
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -1229,8 +1256,16 @@ export function QuotationEditorPage({ user, showToast }) {
   // (salesRepName in the document context strip).
   const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
   const projectName = quotation?.projectName ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
-  const salesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
-  const salesRepPhone = quotation?.salesRepPhone ?? null;
+  // V179 (Opus review nit, 2026-09-14): mirrors QuotationDocumentView's own
+  // printedByDisplayId/salesRepDisplayId fallback exactly, so this read-only strip can never show
+  // a DIFFERENT พนักงานขาย than the preview and the printed document -- before this, a document
+  // with salesRepDisplayId set would show the real rep here and the override everywhere else.
+  const realSalesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
+  const salesRepName = quotation?.salesRepDisplayId != null
+    ? (quotation.salesRepDisplayName || quotation.salesRepDisplayNameEn || realSalesRepName)
+    : realSalesRepName;
+  const salesRepPhone = quotation?.salesRepDisplayId != null
+    ? (quotation.salesRepDisplayPhone ?? null) : (quotation?.salesRepPhone ?? null);
   const wasRejected = quotation?.docStatus === 'DRAFT' && Boolean(quotation?.approvalNote);
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
   // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
@@ -1759,6 +1794,44 @@ export function QuotationEditorPage({ user, showToast }) {
                     </select>
                   )}
                 </div>
+              </FormField>
+              {/* V179 (owner feedback #4, 2026-09-14): "กรณีที่ admin ช่วยทำใบเสนอราคาแทนเซลล์
+                  อยากให้แสดงชื่อผู้พิมพ์เป็นชื่อแอดมิน ส่วนชื่อพนักงานขายเป็นชื่อเซลล์" — PRINT-ONLY
+                  name selection. Neither field changes who created/owns the deal, who may edit it,
+                  or who earns commission on it (createdById/salesRepId are untouched) — only what
+                  two names the PDF prints. "(ค่าเริ่มต้น)" (the empty option, value="") sends null,
+                  which prints exactly as today: the real creator/sales rep. Both selects share the
+                  SAME eligible-employee list (the union of ฝ่ายขาย members and can_create_quotation
+                  grant holders), fetched once above. */}
+              <FormField
+                label="แสดงชื่อผู้พิมพ์เป็น"
+                htmlFor="printedByDisplayId"
+                hint="ค่าเริ่มต้น = ชื่อผู้สร้างใบเสนอราคาจริง (ใช้เมื่อแอดมินช่วยทำใบเสนอราคาแทนเซลล์)"
+              >
+                <select
+                  id="printedByDisplayId"
+                  value={terms.printedByDisplayId}
+                  disabled={displayNameOptionsQuery.isLoading}
+                  onChange={(e) => { setTerms((t) => ({ ...t, printedByDisplayId: e.target.value })); setDirty(true); }}
+                >
+                  <option value="">(ค่าเริ่มต้น)</option>
+                  {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </FormField>
+              <FormField
+                label="แสดงชื่อพนักงานขายเป็น"
+                htmlFor="salesRepDisplayId"
+                hint="ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย"
+              >
+                <select
+                  id="salesRepDisplayId"
+                  value={terms.salesRepDisplayId}
+                  disabled={displayNameOptionsQuery.isLoading}
+                  onChange={(e) => { setTerms((t) => ({ ...t, salesRepDisplayId: e.target.value })); setDirty(true); }}
+                >
+                  <option value="">(ค่าเริ่มต้น)</option>
+                  {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
               </FormField>
             </div>
             <FormField label="หมายเหตุเพิ่มเติม" htmlFor="customerNotes">

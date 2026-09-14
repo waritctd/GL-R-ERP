@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.commission.CommissionRepOptionDto;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
@@ -86,6 +87,16 @@ public class DealQuotationController {
     DealQuotationCountsDto counts(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return quotations.counts(user);
+    }
+
+    /** V179 (owner feedback #4, 2026-09-14) — the option list for the ผู้พิมพ์/พนักงานขาย
+     * print-name selectors on the quotation editor. See
+     * {@link DealQuotationService#findQuotationDisplayNameOptions} for who is listed and who may
+     * call this. */
+    @GetMapping("/deal-quotations/display-name-options")
+    Map<String, List<CommissionRepOptionDto>> displayNameOptions(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("items", quotations.findQuotationDisplayNameOptions(user));
     }
 
     @GetMapping("/deal-quotations/{id}")
