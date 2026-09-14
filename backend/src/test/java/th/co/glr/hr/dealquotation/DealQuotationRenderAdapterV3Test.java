@@ -407,12 +407,85 @@ class DealQuotationRenderAdapterV3Test {
             "3.ระยะเวลานำเข้า : รายการที่ 1 ประมาณ 10-20 วัน  รายการที่ 2 ประมาณ 40-50 วัน");
     }
 
-    /** No item carries a lead time at all -- the (2026-09-14) fallback: a visible blank, no
-     * country, no stock wording. */
+    /** No item carries a lead time at all -- owner feedback (2026-09-14) supersedes the earlier
+     * "print a visible blank" behaviour: the line is now dropped ENTIRELY (not left blank), and
+     * every remark after it renumbers down by one -- exactly 7 lines, old line 4 becomes "3.",
+     * old 5->4, 6->5, 7->6, 8->7, with no gap. */
     @Test
-    void leadTime_noItemHasOne_printsTheBlankFallback() {
+    void leadTime_noItemHasOne_dropsTheLineEntirelyAndRenumbers() {
         QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(null, null)));
-        assertThat(m.remarkLines().get(2)).isEqualTo("3.ระยะเวลานำเข้า : ประมาณ ...... วัน");
+        assertThat(m.remarkLines()).hasSize(7);
+        assertThat(m.remarkLines()).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+        assertThat(m.remarkLines().get(0)).startsWith("1.");
+        assertThat(m.remarkLines().get(1)).startsWith("2.");
+        // Old LINE4 ("4.ขนาดของกระเบื้องจริง...") renumbers down to "3." and slides into the
+        // now-vacant slot.
+        assertThat(m.remarkLines().get(2)).startsWith("3.ขนาดของกระเบื้องจริง");
+        assertThat(m.remarkLines().get(3)).startsWith("4."); // was LINE5
+        assertThat(m.remarkLines().get(4)).startsWith("5."); // was LINE6
+        assertThat(m.remarkLines().get(5)).startsWith("6."); // was line 7 (validity)
+        assertThat(m.remarkLines().get(6)).startsWith("7."); // was LINE8
+    }
+
+    /** The same drop, this time through the renderer -- the workbook actually ends up with 7
+     * populated remark rows (23..29) and the box closes ONE ROW EARLIER than the 8-line case: the
+     * bottom rule sits on row 29, not row 30, with no blank row left inside the box. */
+    @Test
+    void leadTime_noItemHasOne_rendererWritesExactlySevenRemarkRows() throws Exception {
+        Sheet sheet = render(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(null, null)));
+        for (int r = 23; r <= 29; r++) {
+            assertThat(sheet.getRow(r).getCell(1).getStringCellValue())
+                .as("row %d must be populated", r).isNotBlank();
+        }
+        // The closing bottom rule (see QuotationRenderer#closeItemTableBorders) is on row 29 across
+        // every column A..I -- the ACTUAL last packed remark row, not always row 30.
+        for (int c = 0; c <= 8; c++) {
+            assertThat(sheet.getRow(29).getCell(c).getCellStyle().getBorderBottom())
+                .as("row 29 col %d must carry the box's closing bottom rule", c)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        // Row 30 (the now-unused 8th packed slot) must not be pulled INSIDE the box's side borders
+        // either -- see QuotationRenderer#writeRemarks' openRemarkBox call, which must span only
+        // through the ACTUAL last written row (29), not the hardcoded 8th slot (30). A missing
+        // cell counts as NONE -- openRemarkBox creates the cell via getOrKeep when it adds a
+        // border, so "no cell" and "cell with no border" are the same "untouched" outcome here.
+        assertThat(borderLeftOrNone(sheet, 30, 1))
+            .as("row 30 must not be inside the box's left border once it has shrunk to 7 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        assertThat(borderRightOrNone(sheet, 30, 7))
+            .as("row 30 must not be inside the box's right border once it has shrunk to 7 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+    }
+
+    private org.apache.poi.ss.usermodel.BorderStyle borderLeftOrNone(Sheet sheet, int row, int col) {
+        var cell = sheet.getRow(row) == null ? null : sheet.getRow(row).getCell(col);
+        return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderLeft();
+    }
+
+    private org.apache.poi.ss.usermodel.BorderStyle borderRightOrNone(Sheet sheet, int row, int col) {
+        var cell = sheet.getRow(row) == null ? null : sheet.getRow(row).getCell(col);
+        return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderRight();
+    }
+
+    /** The rest of the footer (totals/signature block) shifts up by exactly ONE extra row versus
+     * an otherwise-identical 8-line (has-lead-time) fixture -- same content, one row higher,
+     * because the 7-line render removes one more now-unused packed slot. */
+    @Test
+    void leadTime_dropVsNoDrop_shiftsTheFooterBlockUpByExactlyOneRow() throws Exception {
+        Sheet eightLine = render(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(30, 45)));
+        Sheet sevenLine = render(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(null, null)));
+        // SUBTOTAL_ROW (raw template constant 38) + footerShift: -7 for the 8-line case (physical
+        // row 31), -8 for the 7-line case (physical row 30) -- the SAME value, one row higher.
+        assertThat(eightLine.getRow(31).getCell(8).getNumericCellValue()).isEqualTo(1000.00);
+        assertThat(sevenLine.getRow(30).getCell(8).getNumericCellValue()).isEqualTo(1000.00);
+        // Row 31 in the 7-line render is no longer the subtotal row: its I-column cell is either
+        // absent or not the numeric subtotal.
+        org.apache.poi.ss.usermodel.Row row31 = sevenLine.getRow(31);
+        boolean row31IsNotSubtotal = row31 == null || row31.getCell(8) == null
+            || row31.getCell(8).getCellType() != org.apache.poi.ss.usermodel.CellType.NUMERIC
+            || row31.getCell(8).getNumericCellValue() != 1000.00;
+        assertThat(row31IsNotSubtotal)
+            .as("row 31 must not carry the subtotal in the 7-line render").isTrue();
     }
 
     // ── item #3 (2026-09-14): a calculation line that is 66 String.length() chars but only 59
