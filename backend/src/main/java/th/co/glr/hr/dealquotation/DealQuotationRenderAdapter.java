@@ -359,10 +359,16 @@ public final class DealQuotationRenderAdapter {
     // 3-7 วัน" default: she now wants NO country and NO stock wording printed at all when nothing
     // on the document carries a lead time — submit() below makes that case rare (every TILE row
     // must now carry one), but a DRAFT preview or a re-render of an older document can still hit
-    // it. The fallback is now a visible blank the rep has to notice and fill in, not a real-looking
-    // pair of numbers that happened to be wrong for most of her actual shipments. Same header word
-    // ("ระยะเวลานำเข้า") the per-item line below now uses too, so a document that mixes a priced
-    // item with an unpriced legacy row never reads as two different features.
+    // it. Same header word ("ระยะเวลานำเข้า") the per-item line below now uses too, so a document
+    // that mixes a priced item with an unpriced legacy row never reads as two different features.
+    //
+    // Superseded, and now unreachable (Opus review nit, 2026-09-15): this used to say "the
+    // fallback is now a visible blank the rep has to notice and fill in" -- true for one day, but
+    // a LATER same-day owner request ("if ระยะเวลานำเข้า is not chosen remove that from the
+    // หมายเหตุ") replaced "print a blank" with "drop the line entirely" -- see
+    // #dropLeadTimeLineAndRenumber, which fires on exactly the condition that makes #leadTimeLine
+    // return this constant, so the value below is computed and then always discarded by
+    // remarkLines()'s caller. Kept for the same reason EN_LINE3_FALLBACK is -- see its Javadoc.
     private static final String LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
     private static final String LINE4 =
         "4.ขนาดของกระเบื้องจริง จะแตกต่างจากขนาดที่ระบุในใบเสนอราคา ได้เล็กน้อย ตามมาตรฐาน ISO และ มอก.";
@@ -414,7 +420,11 @@ public final class DealQuotationRenderAdapter {
     /** {@code "3.ระยะเวลานำเข้า : รายการที่ 1-2 ประมาณ 75-90 วัน  รายการที่ 3 ประมาณ 30-45 วัน"} —
      * consecutive item numbers sharing the same (min, max) lead time are grouped, ALWAYS in this
      * per-item form (owner feedback #7, 2026-09-14) even for a single group; items with no lead
-     * time are omitted; when nothing has one, {@link #LINE3_FALLBACK} stands. */
+     * time are omitted; when nothing has one, this returns {@link #LINE3_FALLBACK} -- but the
+     * ONLY caller ({@link #remarkLines}) then drops that whole line via
+     * {@link #dropLeadTimeLineAndRenumber} rather than keeping the fallback (superseded same-day
+     * owner feedback, 2026-09-14 -- see {@link #LINE3_FALLBACK}'s own comment), so in practice this
+     * value never reaches a rendered document. */
     private static String leadTimeLine(List<DealQuotationItemDto> items) {
         List<DealQuotationItemDto> ordered = items.stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
@@ -650,12 +660,20 @@ public final class DealQuotationRenderAdapter {
      * to do with the shipment (it once sat above a "Transportation Charges from China to Male Port,
      * Maldives" row on the owner's own QN6900902-6).
      *
-     * <p>Why not simply drop the line when there is nothing to say: the remark box is exactly
-     * {@code QuotationRenderer#REMARK_HEAD_ROWS} = 8 rows and never wraps, and dropping one leaves
-     * the no-bank-block layout at 7, which falls through to the older 3-line remark path. A
-     * replacement line keeps 8 in BOTH layouts with no renumbering. Length is guarded by
-     * {@code DealQuotationEnglishFormTest#everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts}
-     * (cap 130 chars; this line is well under it).
+     * <p><b>Superseded, and now unreachable (Opus review nit, 2026-09-15):</b> this comment used to
+     * explain why the line was kept as a visible blank rather than dropped — "dropping one leaves
+     * the no-bank-block layout at 7, which falls through to the older 3-line remark path" — but
+     * that was true only because {@code QuotationRenderer} still assumed a hardcoded 8-line v2
+     * render. Owner feedback (2026-09-14, "if ระยะเวลานำเข้า is not chosen remove that from the
+     * หมายเหตุ") asked for the drop anyway, and {@code QuotationRenderer#REMARK_V2_MIN_LINES}
+     * generalized the renderer to accept 7 lines as v2/full-remarks too, closing exactly the hazard
+     * this comment warned about. {@link #englishRemarkLines} now unconditionally runs
+     * {@link #dropLeadTimeLineAndRenumber} with {@link #hasAnyLeadTime}, which is {@code false}
+     * in EXACTLY the case that makes {@link #englishLeadTimeLine} return this constant — so this
+     * value is computed and then immediately discarded by the caller; it can never reach a
+     * rendered document. Kept (not deleted) as the value {@link #englishLeadTimeLine} still has to
+     * return something for while composing the full line list, and as a documented fallback should
+     * the two decisions (fallback text vs. drop-the-line) ever be decoupled again.
      */
     private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 

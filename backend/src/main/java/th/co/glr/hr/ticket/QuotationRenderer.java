@@ -1178,8 +1178,11 @@ public class QuotationRenderer {
             }
             // Owner feedback (2026-09-14): the box's bottom edge sits on the LAST line actually
             // written, not always REMARK_HEAD_ROWS[0] + 7 — a 7-line list would otherwise leave the
-            // (unwritten) 8th packed row sitting inside the box as a blank gap.
-            openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + remarkLines.size() - 1);
+            // (unwritten) 8th packed row sitting inside the box as a blank gap. Clamped to
+            // REMARK_HEAD_ROWS.length (Opus review nit, 2026-09-15): a caller that ever handed this
+            // MORE than 8 lines would otherwise open the box past the packed slots entirely — see
+            // #clampToPackedSlots.
+            openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + clampToPackedSlots(remarkLines.size()) - 1);
             return;
         }
         // Legacy (3 lines): unchanged — template's own head+continuation rows, single column B,
@@ -1204,10 +1207,26 @@ public class QuotationRenderer {
      * {@code -7} when {@code actualLineCount == REMARK_HEAD_ROWS.length} (8); when it is one fewer
      * (the lead-time line dropped — owner feedback 2026-09-14), one MORE row (the now-unused 8th
      * packed slot) is also removed, so the shift becomes {@code -8}.
+     *
+     * <p>Opus review nit (2026-09-15): {@code actualLineCount} is clamped to
+     * {@code REMARK_HEAD_ROWS.length} first — uncapped, a count ABOVE 8 (never produced today, but
+     * not otherwise prevented) would make {@code REMARK_HEAD_ROWS.length - actualLineCount}
+     * negative and shrink the shift below {@code -7} instead of growing it, leaving a leftover
+     * template row inside the box and mis-siting the totals block below it. Before this whole
+     * feature, a &gt;8 list rendered identically to exactly 8 (a hardcoded {@code -7} either way);
+     * the clamp preserves that instead of making the out-of-range case worse.
      */
     private int remarkV2CompactShift(int actualLineCount) {
-        return -(REMARK_V2_COMPACT_LAST_UNUSED - REMARK_V2_COMPACT_FIRST_UNUSED + 1)
-            - (REMARK_HEAD_ROWS.length - actualLineCount);
+        int n = clampToPackedSlots(actualLineCount);
+        return REMARK_V2_COMPACT_SHIFT - (REMARK_HEAD_ROWS.length - n);
+    }
+
+    /** Caps a packed remark-line count at {@link #REMARK_HEAD_ROWS}{@code .length} (8) — the
+     * physical number of packed slots the template has. Shared by every row-math call site that
+     * turns a line count into a row offset, so none of them can be driven past the slots that
+     * actually exist. See {@link #remarkV2CompactShift}'s Javadoc for what goes wrong without it. */
+    private static int clampToPackedSlots(int actualLineCount) {
+        return Math.min(actualLineCount, REMARK_HEAD_ROWS.length);
     }
 
     /**
@@ -1245,7 +1264,8 @@ public class QuotationRenderer {
         // B..I remark row draws it whichever cell an engine reads a merged region's bottom edge
         // from. Owner feedback (2026-09-14): this is {@code actualLineCount} rows past the first
         // packed row, NOT always the 8th slot — a 7-line render's box closes on row 29, not 30.
-        closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + actualLineCount - 1);
+        // Clamped (Opus review nit, 2026-09-15) for the same reason remarkV2CompactShift is.
+        closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + clampToPackedSlots(actualLineCount) - 1);
     }
 
     // layout-spec §3 + html-fidelity-spec §8: each remark line is ONE merged B..H cell (see
