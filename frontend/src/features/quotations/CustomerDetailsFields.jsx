@@ -7,11 +7,10 @@ import { ThaiAddressFields, emptyThaiAddress, completeThaiAddress } from '../loc
 import { FormField } from '../../components/common/FormField.jsx';
 import { QUOTATION_FIELD_IDS } from './quotationMeta.js';
 
-const EDIT_FIELDS = ['name', 'taxId', 'phone', 'address'];
+const EDIT_FIELDS = ['taxId', 'phone', 'address'];
 
 function editsFrom(customer) {
   return {
-    name: customer?.name ?? '',
     taxId: customer?.taxId ?? '',
     phone: customer?.phone ?? '',
     address: customer?.address ?? '',
@@ -80,7 +79,7 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   useEffect(() => {
     // Read fields directly (not via `editsFrom(customer)`) so eslint's exhaustive-deps rule can
     // verify this against the deps array below field by field, same as the deps themselves.
-    const record = { name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' };
+    const record = { taxId: customer?.taxId ?? '', phone: customer?.phone ?? '', address: customer?.address ?? '' };
     // Snapshot the OLD baseline before reassigning the ref below. `setEdits`'s updater runs
     // asynchronously (whenever React processes the queued update) — by then `lastSeededRef.current`
     // has already been reassigned to the NEW record a few lines down, so reading `.current` from
@@ -98,7 +97,7 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
       return merged;
     });
     lastSeededRef.current = { id: customer?.id, ...record };
-  }, [customer?.id, customer?.name, customer?.taxId, customer?.phone, customer?.address]);
+  }, [customer?.id, customer?.taxId, customer?.phone, customer?.address]);
 
   /**
    * Persists ONE field on blur. Sends only that field, never the whole record: the endpoint has
@@ -113,16 +112,6 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     // An address keeps its internal line breaks (it is printed as typed); only the ends are trimmed.
     const next = (edits[field] ?? '').trim();
     if (next === previous.trim()) return; // untouched (or re-typed identically) — no request at all
-    // The name is not optional (CustomerController#update's requireNotBlankIfPresent 400s on a
-    // blank name) — refuse locally with the backend's own wording rather than round-trip
-    // a request that can only fail, and put the previous (non-blank) name back so the field is
-    // never left empty on screen.
-    if (field === 'name' && next === '') {
-      setEdits((prev) => ({ ...prev, name: previous }));
-      lastSeededRef.current = { ...lastSeededRef.current, name: previous };
-      showToast?.('error', 'กรุณาระบุชื่อลูกค้า');
-      return;
-    }
     const restore = customer;
     setSavingField(field);
     // Mark this field clean — both the ref AND the displayed text — at `next` (the value being
@@ -154,17 +143,6 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const hint = 'แก้ไขได้ บันทึกกลับไปที่ข้อมูลลูกค้าอัตโนมัติ ใช้ต่อได้ในใบเสนอราคาถัดไป';
   return (
     <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1" data-testid="customer-details">
-      <FormField label="ชื่อลูกค้า" htmlFor={QUOTATION_FIELD_IDS.customerName}>
-        <input
-          id={QUOTATION_FIELD_IDS.customerName}
-          value={edits.name}
-          maxLength={200}
-          disabled={disabled || savingField === 'name'}
-          onChange={(e) => setEdits((prev) => ({ ...prev, name: e.target.value }))}
-          onBlur={() => saveField('name')}
-          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-        />
-      </FormField>
       <FormField label="เลขที่ผู้เสียภาษี" htmlFor={QUOTATION_FIELD_IDS.customerTaxId} hint={hint}>
         <input
           id={QUOTATION_FIELD_IDS.customerTaxId}
