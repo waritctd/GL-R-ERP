@@ -1,6 +1,7 @@
 package th.co.glr.hr.ticket;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -11,6 +12,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.CellType;
@@ -57,6 +60,15 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 // (default) or headless Chromium drawing the sheet as HTML (QuotationHtmlDocument /
 // th.co.glr.hr.common.sheet.SheetHtmlRenderer). toPdf(TicketDto, QuotationDto, CustomerDto) — the
 // legacy/PCR path — is untouched: XLS through LibreOffice. See toPdf(QuotationRenderModel).
+//
+// Terms & conditions page (owner decision 2026-09-14): toPdf(QuotationRenderModel) — the deal
+// quotation editor's ดาวน์โหลด PDF button, DealQuotationController's GET .../file?format=pdf, the
+// only quotation flow in production use — appends every page of forms/quotation_terms_and_
+// conditions.pdf onto whatever PDF either engine produced, as the document's final page(s). This
+// is the SAME terms page regardless of document_language (TH/EN) — there is no language branch.
+// It applies ONLY to that one PDF method: toXls/toXlsx (Excel output) are byte-for-byte
+// unchanged, and the legacy toPdf(TicketDto, QuotationDto, CustomerDto) and
+// CustomerQuotationController's PDF are untouched. See #appendTermsAndConditionsPage.
 @Component
 public class QuotationRenderer {
     private static final Logger log = LoggerFactory.getLogger(QuotationRenderer.class);
@@ -518,9 +530,16 @@ public class QuotationRenderer {
      * </ul>
      * Both engines consume one row plan: the workbook. See {@code QuotationHtmlDocument} and
      * {@code HtmlXlsFidelityTest} for the pixel/rule-level proof that the two renders agree.
+     *
+     * <p>Whichever engine produced the PDF, {@link #appendTermsAndConditionsPage} appends the
+     * company's terms & conditions form as the document's final page(s) before returning — the
+     * SAME page regardless of {@code model.documentLanguage()}. This is the only PDF path that
+     * gets it: {@link #toXls}/{@link #toXlsx} and the legacy {@code toPdf(TicketDto, QuotationDto,
+     * CustomerDto)} overload are unaffected.
      */
     public byte[] toPdf(QuotationRenderModel model) {
         byte[] xls = toXls(model);
+        byte[] pdf;
         if (PDF_RENDERER_CHROMIUM.equalsIgnoreCase(pdfRenderer)) {
             if (!th.co.glr.hr.common.ChromiumPdfPrinter.isAvailable()) {
                 throw new th.co.glr.hr.common.ApiException(
@@ -528,9 +547,56 @@ public class QuotationRenderer {
                     "ระบบสร้าง PDF ไม่พร้อมใช้งาน");
             }
             String html = th.co.glr.hr.dealquotation.QuotationHtmlDocument.render(xls, model);
-            return th.co.glr.hr.common.ChromiumPdfPrinter.print(html);
+            pdf = th.co.glr.hr.common.ChromiumPdfPrinter.print(html);
+        } else {
+            pdf = LibreOfficePdfConverter.convert(xls);
         }
-        return LibreOfficePdfConverter.convert(xls);
+        return appendTermsAndConditionsPage(pdf);
+    }
+
+    // ── terms & conditions page (owner decision 2026-09-14) ──────────────────────────────────
+
+    /** Classpath location of the company's terms & conditions form — see the class Javadoc's
+     * "Terms & conditions page" note. Package-private so the test can assert its own page count
+     * against the real resource rather than hardcoding one. */
+    static final String TERMS_AND_CONDITIONS_FORM = "forms/quotation_terms_and_conditions.pdf";
+
+    private static byte[] termsAndConditionsBytes() throws IOException {
+        try (InputStream in = new ClassPathResource(TERMS_AND_CONDITIONS_FORM).getInputStream()) {
+            return in.readAllBytes();
+        }
+    }
+
+    /**
+     * Appends the terms & conditions form onto {@code basePdf} via {@link #appendPdf}, wrapping
+     * any {@link IOException} to match this class's existing error style (see {@link #toXls}'s
+     * own catch block a few lines above).
+     */
+    private byte[] appendTermsAndConditionsPage(byte[] basePdf) {
+        try {
+            return appendPdf(basePdf, termsAndConditionsBytes());
+        } catch (IOException e) {
+            throw new RuntimeException("Quotation PDF terms page merge failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Appends every page of {@code extraPdf} onto {@code basePdf} (in that order) and returns the
+     * combined bytes. Package-private test seam: {@code QuotationRendererTest} calls this
+     * directly with a minimal in-memory PDFBox document as {@code basePdf} so the merge itself can
+     * be asserted without LibreOffice or Chromium in the loop. Not hardcoded to the terms
+     * resource — {@link #appendTermsAndConditionsPage} is the one caller that supplies it.
+     */
+    static byte[] appendPdf(byte[] basePdf, byte[] extraPdf) throws IOException {
+        try (PDDocument base = Loader.loadPDF(basePdf);
+             PDDocument extra = Loader.loadPDF(extraPdf)) {
+            for (int i = 0; i < extra.getNumberOfPages(); i++) {
+                base.importPage(extra.getPage(i));
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            base.save(out);
+            return out.toByteArray();
+        }
     }
 
     /** The HTML {@code toPdf} prints in {@code chromium} mode — exposed for the fidelity gate. */
