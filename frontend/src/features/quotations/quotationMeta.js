@@ -505,35 +505,66 @@ function parseSizeCmPair(sizeText) {
 }
 
 /**
- * Whether `sizeText` states the SAME face size as `catalogSizeText` — both read in THIS field's
- * own unit, cm (see {@link parseSizeCmPair}/{@code SIZE_CM_PATTERN}) — compared order-insensitively
- * and in EITHER centimetres (as both are typed/stored) or millimetres (a rep who typed the
- * catalogue's millimetre figures straight into this cm-labelled field, e.g. "600x600" against a
+ * Compares `sizeText` against `catalogSizeText` as face sizes — both read in THIS field's own
+ * unit, cm (see {@link parseSizeCmPair}/{@code SIZE_CM_PATTERN}) — order-insensitively and in
+ * EITHER centimetres (as both are typed/stored) or millimetres (a rep who typed the catalogue's
+ * millimetre figures straight into this cm-labelled field, e.g. "600x600" against a
  * 60x60cm/600x600mm catalogue row). Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod
- * QT-2026-0034-1, 2026-09-15) so the editor's "is this still the catalogue's size?" question and
- * the printed document's answer to the same question never diverge.
+ * QT-2026-0034-1, 2026-09-15).
  *
- * Used by `QuotationItemRow`'s ขนาด (ซม.) `onChange` to decide whether a catalogue-resolved
- * แผ่น/ตร.ม. (`sqmPerPieceSource === 'catalog'`) needs recomputing from the newly typed size, or is
- * still describing the same tile the catalogue pick resolved.
- *
- * A floating-point tolerance (1e-6) stands in for the backend's exact `BigDecimal#compareTo` — far
- * finer than the two-decimal-place precision either side's figures actually carry.
- *
- * @return `false` (never `true`) when either text fails to parse as a plain size pair — an
- *     unparseable typed size is always treated as "a different size" by the caller, exactly like
- *     an unparseable one is on the backend.
+ * @return `true` (matches), `false` (both parsed and DIFFER), or `null` ("can't tell" — either
+ *     text failed to parse as a plain size pair). The `null` case is exactly where this function
+ *     diverges in spirit from `sizeLine`'s FALLBACK branch on the backend: an unparseable typed
+ *     size there simply keeps printing the catalogue dims (never treated as "a different size"),
+ *     which is why the two exported wrappers below read this three-way result asymmetrically
+ *     rather than collapsing it to a boolean here — see their own docs.
  */
-export function sizeTextMatchesCatalogFaceSize(sizeText, catalogSizeText) {
+function compareToCatalogFaceSize(sizeText, catalogSizeText) {
   const typed = parseSizeCmPair(sizeText);
   const catalog = parseSizeCmPair(catalogSizeText);
-  if (!typed || !catalog) return false;
+  if (!typed || !catalog) return null;
   const closeEnough = (a, b) => Math.abs(a - b) < 1e-6;
   const matchesPair = (a, b, w, h) => (closeEnough(a, w) && closeEnough(b, h)) || (closeEnough(a, h) && closeEnough(b, w));
   const [typedWidth, typedHeight] = typed;
   const [catalogWidth, catalogHeight] = catalog;
   return matchesPair(typedWidth, typedHeight, catalogWidth, catalogHeight)
     || matchesPair(typedWidth, typedHeight, catalogWidth * 10, catalogHeight * 10);
+}
+
+/**
+ * Whether `sizeText` states the SAME face size as `catalogSizeText` — see
+ * {@link compareToCatalogFaceSize} for the comparison itself.
+ *
+ * @return `true` only when both parse AND match; `false` otherwise, INCLUDING when either text
+ *     fails to parse — "matches" and "can't tell" both read as "not confirmed to match" here. Do
+ *     not use this to decide whether to KEEP a catalogue-resolved value on an unparseable edit —
+ *     use {@link sizeTextDiffersFromCatalogFaceSize} for that (its `false` on "can't tell" means
+ *     the opposite thing this function's `false` does).
+ */
+export function sizeTextMatchesCatalogFaceSize(sizeText, catalogSizeText) {
+  return compareToCatalogFaceSize(sizeText, catalogSizeText) === true;
+}
+
+/**
+ * Whether `sizeText` is CONFIRMED to state a DIFFERENT face size than `catalogSizeText` — the
+ * predicate `QuotationItemRow`'s ขนาด (ซม.) `onChange` actually needs to decide whether a
+ * catalogue-resolved แผ่น/ตร.ม. (`sqmPerPieceSource === 'catalog'`) should be recomputed.
+ *
+ * Review fix (2026-09-15): an earlier version of this file used `!sizeTextMatchesCatalogFaceSize`
+ * for that decision, which reads "can't tell" (either side unparseable) the SAME as "confirmed
+ * different" — the opposite of `DealQuotationLines#sizeLine`'s own backend rule, where a blank or
+ * unparseable typed size simply KEEPS the catalogue dims. That bug wiped a catalogue-resolved
+ * แผ่น/ตร.ม. mid-typing (clearing the field, or a first keystroke like "3" or "30x" while retyping)
+ * and, whenever `catalogSizeText` itself happened to be unparseable (a catalogue row with no
+ * width/height falls back to a dirty `sizeRaw` string — see `sizeTextFromCatalog`), on EVERY ขนาด
+ * edit including a plain typo fix.
+ *
+ * @return `true` ONLY when both texts parse to a size pair AND they differ. `false` both when they
+ *     match AND when either fails to parse — "can't tell" must never trigger a recompute, exactly
+ *     like the backend's FALLBACK branch never treats an unparseable typed size as "different".
+ */
+export function sizeTextDiffersFromCatalogFaceSize(sizeText, catalogSizeText) {
+  return compareToCatalogFaceSize(sizeText, catalogSizeText) === false;
 }
 
 // ── Item completeness (frontend pass 4, owner ruling 2026-09-10) ────────────────────────────────

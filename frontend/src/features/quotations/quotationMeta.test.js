@@ -28,6 +28,7 @@ import {
   sqmPerPieceFromPiecesPerSqm,
   sqmPerPieceFromSizeCm,
   sizeTextMatchesCatalogFaceSize,
+  sizeTextDiffersFromCatalogFaceSize,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -573,6 +574,36 @@ describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mi
     expect(sizeTextMatchesCatalogFaceSize('60x60', '')).toBe(false);
     expect(sizeTextMatchesCatalogFaceSize('', '60x60')).toBe(false);
     expect(sizeTextMatchesCatalogFaceSize(null, null)).toBe(false);
+  });
+});
+
+// Review fix (2026-09-15): sizeTextMatchesCatalogFaceSize's negation is NOT the right predicate
+// for "should the editor recompute แผ่น/ตร.ม.?" -- it reads "can't tell" (unparseable) the same as
+// "confirmed different". sizeTextDiffersFromCatalogFaceSize is the three-way-aware predicate that
+// only fires on a CONFIRMED difference, mirroring DealQuotationLines#sizeLine's own FALLBACK rule
+// (a blank/unparseable typed size keeps the catalogue dims, never treated as "different").
+describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t tell" must never read as "different")', () => {
+  it('is true only when both sides parse AND genuinely differ -- the exact prod bug\'s two lines', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('30x60', '60x60')).toBe(true);
+    expect(sizeTextDiffersFromCatalogFaceSize('3x60', '60x60')).toBe(true);
+  });
+
+  it('is false when the sizes match, in cm or mm, order-insensitive', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('60x60', '60x60')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('600x600', '60x60')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('120x60', '60x120')).toBe(false);
+  });
+
+  it('is false ("not confirmed different") whenever either side fails to parse -- the exact defect this fixes', () => {
+    // A clearing edit, or any unparseable intermediate mid-retype ("3", "30x").
+    expect(sizeTextDiffersFromCatalogFaceSize('', '60x60')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('3', '60x60')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('30x', '60x60')).toBe(false);
+    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's
+    // sizeRaw fallback) -- even a genuinely different-looking typed size must not read as "different"
+    // when there is nothing reliable to compare it against.
+    expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
   });
 });
 

@@ -9,7 +9,7 @@ import {
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
-  sqmPerPieceFromSizeCm, sizeTextMatchesCatalogFaceSize,
+  sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -535,14 +535,29 @@ export function QuotationItemRow({
               // catalogue pick (`sqmPerPieceSource === 'catalog'`) must NOT silently keep that
               // catalogue figure once the rep retypes ขนาด to a genuinely DIFFERENT size -- that
               // is exactly how a line kept a linked catalogue's 600x600mm ตร.ม./แผ่น (0.36) after
-              // being retyped to "30x60" (should be 0.18). Only when the new text parses to a
-              // DIFFERENT face size than the catalogue row that was picked (`catalogSizeText`,
-              // compared the same cm-or-mm/order-insensitive way DealQuotationLines#sizeLine's
-              // REFINEMENT does server-side) does this recompute; typing the SAME size in another
-              // unit (e.g. "600x600" over a picked 60x60cm/600x600mm row) leaves the catalog value
-              // exactly as it was, matching the backend's own "still the same tile" rule.
-              if (!readOnly && item.sqmPerPieceSource === 'catalog' && item.catalogSizeText
-                && !sizeTextMatchesCatalogFaceSize(newSizeText, item.catalogSizeText)) {
+              // being retyped to "30x60" (should be 0.18). Only when the new text is CONFIRMED to
+              // parse to a DIFFERENT face size than the catalogue row that was picked
+              // (`catalogSizeText`, compared the same cm-or-mm/order-insensitive way
+              // DealQuotationLines#sizeLine's REFINEMENT does server-side) does this recompute.
+              //
+              // ⚠️ Review fix (2026-09-15): `sizeTextDiffersFromCatalogFaceSize`, NOT
+              // `!sizeTextMatchesCatalogFaceSize` -- an earlier version of this branch used the
+              // negated "matches" predicate, which reads "can't tell" (either side failed to parse
+              // as a plain size pair) the SAME as "confirmed different". That wiped the catalogue
+              // value mid-typing on every unparseable intermediate (clearing the field, or a first
+              // keystroke like "3"/"30x" while retyping), and on EVERY edit at all when
+              // `catalogSizeText` itself happened to be unparseable (a catalogue row with no
+              // width/height falls back to a dirty sizeRaw string) -- the exact OPPOSITE of the
+              // backend's own FALLBACK rule, where a blank/unparseable typed size simply keeps
+              // printing the catalogue dims. `sizeTextDiffersFromCatalogFaceSize` returns `true`
+              // ONLY when both texts parse AND differ, so an unparseable intermediate or an
+              // unparseable `catalogSizeText` falls through to the existing logic below unchanged
+              // (which, for source 'catalog', just patches sizeText and leaves the catalogue
+              // figure alone) -- typing the SAME size in another unit (e.g. "600x600" over a
+              // picked 60x60cm/600x600mm row) does the same, matching the backend's own "still the
+              // same tile" rule.
+              if (!readOnly && item.sqmPerPieceSource === 'catalog'
+                && sizeTextDiffersFromCatalogFaceSize(newSizeText, item.catalogSizeText)) {
                 const recomputed = sqmPerPieceFromSizeCm(newSizeText);
                 patch({
                   sizeText: newSizeText,

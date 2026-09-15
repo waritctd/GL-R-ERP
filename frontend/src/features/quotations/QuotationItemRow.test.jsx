@@ -661,6 +661,50 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
       fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
       expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
     });
+
+    // Review fix (2026-09-15): the earlier version of this branch used the NEGATION of "matches",
+    // which treats "can't tell" (an unparseable intermediate) the same as "confirmed different" --
+    // the opposite of the backend's own FALLBACK rule. These four pin the corrected behaviour.
+    it('clearing ขนาด entirely leaves the catalogue figure UNCHANGED (not wiped)', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '' } });
+      // Only sizeText patches -- sqmPerPiece stays 0.36 and source stays 'catalog' because neither
+      // key is even in the patch (the parent's `{ ...item, ...patch }` merge leaves them as they were).
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '' });
+    });
+
+    it('an unparseable intermediate while retyping ("3", then "30x") leaves the catalogue figure UNCHANGED at each step', () => {
+      const { onChange, item, rerender } = renderCatalogPicked();
+
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '3' } });
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '3' });
+
+      // Re-render as the parent would after applying that patch (sqmPerPiece/source untouched),
+      // then continue typing -- "30x" is still unparseable (no second number yet).
+      const patched = { ...item, ...onChange.mock.calls.at(-1)[0] };
+      rerender(<QuotationItemRow item={patched} index={0} onChange={onChange} onRemove={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x' } });
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x' });
+    });
+
+    it('finishing the retype ("30x60") after those unparseable intermediates still recomputes', () => {
+      const { onChange } = renderCatalogPicked({ sizeText: '30x' });
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      expect(onChange).toHaveBeenLastCalledWith({
+        sizeText: '30x60',
+        sqmPerPiece: 0.18,
+        piecesPerSqmDisplay: 5.56,
+        sqmPerPieceSource: 'size',
+      });
+    });
+
+    it('an unparseable catalogSizeText (e.g. a dirty sizeRaw fallback) never triggers the new branch, even for a genuinely different-looking size', () => {
+      const { onChange } = renderCatalogPicked({ catalogSizeText: 'JOLLY COCO 60x120' });
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      // Falls through to the existing 'catalog'-source logic: only sizeText patches, nothing wiped
+      // or replaced via the new branch.
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
+    });
   });
 
   it('never fills แผ่น/ตร.ม. from a size on a per_linear_m catalogue row', () => {
