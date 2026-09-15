@@ -236,6 +236,27 @@ class DealQuotationLinesTest {
         assertUnparsed(null);
     }
 
+    // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. Java's `\s` is ASCII-only
+    // and `String.trim()` strips only <= U+0020; JS's `\s` is Unicode-aware. Both engines must now
+    // agree on every one of these -- see DealQuotationLines#normalize's own doc for which direction
+    // each vector used to fail on. The SAME vectors are pinned in quotationMeta.test.js's own "F2"
+    // describe block, against `parseSizeText` -- same inputs, same result, on both sides. ─────────
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_unicodeWhitespaceNormalisation() {
+        assertParsed("30 x 60", "30", "60", null); // NBSP
+        assertParsed("30x60 cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30x60　cm", "30", "60", DealQuotationLines.SizeUnit.CM); // ideographic space
+        assertParsed("30 x 60", "30", "60", null); // thin space
+        assertParsed("30 x 60", "30", "60", null); // narrow no-break space
+        assertParsed("﻿30x60", "30", "60", null); // BOM / ZWNBSP
+        assertParsed("30x60 ", "30", "60", null); // line separator
+        // The OTHER direction: a bare control byte, which String.trim() has ALWAYS stripped (it
+        // strips anything <= U+0020) -- this was never broken on the Java side, but is pinned here
+        // so the two vector tables stay byte-for-byte identical.
+        assertParsed("30x60", "30", "60", null);
+        assertParsed("30x60", "30", "60", null);
+    }
+
     // ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing
     // vectors below must stay well under 50ms; a regression in either the grammar fix or the length
     // guard alone would blow one of them up (the first is short enough to bypass the guard entirely

@@ -588,6 +588,27 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
     expect(parseSizeText('')).toBeNull();
     expect(parseSizeText(null)).toBeNull();
   });
+
+  // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. JS's `\s` is Unicode-aware
+  // and its own `.trim()`/`\s` already treat NBSP etc. as whitespace, while Java's `\s` is
+  // ASCII-only and `String.trim()` strips only <= U+0020 -- so the two engines disagreed on every
+  // character in this class (in one direction or the other). Both must now agree, via a shared
+  // pre-fold rather than trying to reconcile two different `\s` definitions inside the pattern
+  // itself. The SAME vectors are pinned in DealQuotationLinesTest.java's own "F2" section, against
+  // `DealQuotationLines#parseTwoDimensions` -- same inputs, same result, on both sides. ───────────
+  it('agrees with the backend on every measured whitespace divergence', () => {
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // NBSP
+    expect(parseSizeText('30x60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60　cm')).toEqual({ width: 30, height: 60, unit: 'cm' }); // ideographic space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
+    expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
+    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator
+    // The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
+    // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+  });
 });
 
 // ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing vectors

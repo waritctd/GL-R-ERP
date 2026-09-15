@@ -508,6 +508,35 @@ const SIZE_PATTERN = new RegExp(
  * same reasoning, on the backend side — `DealQuotationLines#MAX_SIZE_TEXT_LENGTH`. */
 const MAX_SIZE_TEXT_LENGTH = 64;
 
+/** F2 (HIGH, 2026-09-16 review) — every Unicode space separator (general category `Z`: NBSP, thin
+ * space, ideographic space, narrow no-break space, …), the BOM/ZWNBSP (U+FEFF, category `Cf` so not
+ * covered by `\p{Z}`) and the line/paragraph separators. */
+const SIZE_TEXT_WHITESPACE = /[\p{Z}\uFEFF\u2028\u2029]/gu;
+
+/**
+ * F2 (HIGH, 2026-09-16 review) — folds every character `SIZE_TEXT_WHITESPACE` matches to a plain
+ * ASCII space, then trims ASCII whitespace AND raw control characters from both ends. Mirrors
+ * `DealQuotationLines#normalize` on the backend exactly.
+ *
+ * JS's own `\s`/`.trim()` already treat most Unicode space separators, and the BOM, as whitespace —
+ * but NOT a bare control byte like U+0001, which Java's ASCII-only `String.trim()` (`<= U+0020`)
+ * has always stripped; the explicit `[\x00-\x20]` trim below closes that gap from the JS side. The
+ * OTHER direction — NBSP, U+3000, U+2009, U+202F, U+FEFF, U+2028 — used to parse HERE (JS `\s` is
+ * Unicode-aware) but return `null` on the backend (Java `\s` is ASCII-only): a rep's pasted (often
+ * Excel/Word-sourced) size recomputed แผ่น/ตร.ม. on screen while the printed PDF kept the catalogue
+ * size, exactly the divergence this branch exists to close. Folding to plain ASCII BEFORE the shared
+ * grammar ever runs, on both sides, is what keeps the two engines agreeing rather than trying to
+ * reconcile two different `\s` definitions inside the pattern itself. See
+ * `quotationMeta.test.js`'s own "F2" describe block for the full vector table, pinned identically in
+ * `DealQuotationLinesTest`.
+ */
+function normalizeSizeText(text) {
+  // Intentional control-character range: mirrors String#trim()'s own "<= U+0020" definition
+  // (control bytes included), see this function's own doc.
+  // eslint-disable-next-line no-control-regex
+  return text.replace(SIZE_TEXT_WHITESPACE, ' ').replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
+}
+
 /** `cm`/`cm.`/`ซม`/`ซม.`/`ซ.ม.` → `'cm'`; `mm`/`mm.`/`มม`/`มม.`/`ม.ม.` → `'mm'`; no token captured
  * → `null` ("unspecified"). Thai ซ (cm) and ม (mm) never share a leading character, so a plain
  * `startsWith` is unambiguous. */
@@ -538,10 +567,10 @@ function unitFamily(token) {
  *     strictly positive.
  */
 export function parseSizeText(sizeText) {
-  const text = sizeText ?? '';
+  const normalized = normalizeSizeText(sizeText ?? '');
   // F1 (ReDoS guard): reject BEFORE the regex ever runs, independent of the grammar fix above.
-  if (text.length > MAX_SIZE_TEXT_LENGTH) return null;
-  const match = SIZE_PATTERN.exec(text);
+  if (!normalized || normalized.length > MAX_SIZE_TEXT_LENGTH) return null;
+  const match = SIZE_PATTERN.exec(normalized);
   if (!match) return null;
   const width = Number(match[1].replace(',', '.'));
   const height = Number(match[3].replace(',', '.'));

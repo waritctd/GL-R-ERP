@@ -39,6 +39,18 @@ public final class DealQuotationLines {
      * number, same reasoning, on the frontend side — {@code quotationMeta.js#MAX_SIZE_TEXT_LENGTH}. */
     private static final int MAX_SIZE_TEXT_LENGTH = 64;
 
+    /** F2 (HIGH, 2026-09-16 review) — every Unicode space separator (general category {@code Z}:
+     * NBSP, thin space, ideographic space, narrow no-break space, …), the BOM/ZWNBSP ({@code U+FEFF},
+     * category {@code Cf} so not covered by {@code \p{Z}}) and the line/paragraph
+     * separators. Java's {@code \s} (used throughout {@link #TWO_DIMENSIONS}) is ASCII-only and
+     * {@link String#trim()} strips only code points {@code <= U+0020}, while JS's {@code \s} is
+     * Unicode-aware — so the two engines disagreed on every character in this class (see {@link
+     * #normalize}'s own doc for the measured vectors). Folding them all to a plain ASCII space
+     * BEFORE the shared grammar ever runs is what keeps the two engines agreeing, rather than
+     * trying to reconcile two different {@code \s} definitions inside the pattern itself. */
+    private static final java.util.regex.Pattern SIZE_TEXT_WHITESPACE =
+        java.util.regex.Pattern.compile("[\\p{Z}\\uFEFF\\u2028\\u2029]");
+
     /**
      * ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
      * แต่ PDF ยังใช้ค่าเดิม"): this pattern and the frontend's {@code quotationMeta.js#SIZE_PATTERN}
@@ -272,12 +284,12 @@ public final class DealQuotationLines {
         if (blank(sizeText)) {
             return null;
         }
-        String trimmed = sizeText.trim();
+        String normalized = normalize(sizeText);
         // F1 (ReDoS guard): reject BEFORE the regex ever runs, independent of the grammar fix above.
-        if (trimmed.length() > MAX_SIZE_TEXT_LENGTH) {
+        if (normalized.isEmpty() || normalized.length() > MAX_SIZE_TEXT_LENGTH) {
             return null;
         }
-        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(trimmed);
+        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(normalized);
         if (!m.matches()) {
             return null;
         }
@@ -297,6 +309,30 @@ public final class DealQuotationLines {
             unit = null;
         }
         return new ParsedSize(a, b, unit);
+    }
+
+    /**
+     * F2 (HIGH, 2026-09-16 review) — folds every character {@link #SIZE_TEXT_WHITESPACE} matches to
+     * a plain ASCII space, then trims (via {@link String#trim()}, which strips anything
+     * {@code <= U+0020} — control bytes included, e.g. a stray {@code U+0001}). Mirrors
+     * {@code normalizeSizeText} in {@code quotationMeta.js} exactly.
+     *
+     * <p>Measured divergences this closes, all against a plain {@code "30x60"} pair unless noted:
+     * NBSP between the numbers or before a trailing unit, U+3000 (ideographic space) before a unit,
+     * U+2009 (thin space) and U+202F (narrow NBSP) between the numbers, a leading U+FEFF (BOM), and
+     * a trailing U+2028 (line separator) all used to return {@code null} here (Java's {@code \s} is
+     * ASCII-only) while {@code parseSizeText} parsed them (JS's {@code \s} is Unicode-aware) — a
+     * rep's pasted (often Excel/Word-sourced) size recomputed แผ่น/ตร.ม. on screen while the printed
+     * PDF kept the catalogue size, exactly the divergence this repo's own quotation-size-parsing
+     * history warns about. The OTHER direction — a leading/trailing raw control byte like
+     * {@code U+0001} — used to parse here (because {@link String#trim()} always stripped it) but
+     * return {@code null} in JS (because neither {@code \s} nor {@code String#trim()} in JS treats a
+     * bare control byte as whitespace); {@code normalizeSizeText}'s own explicit {@code [\x00-\x20]}
+     * trim closes that gap from the other side. See {@code DealQuotationLinesTest}'s "F2" section
+     * for the full vector table, pinned identically in {@code quotationMeta.test.js}.
+     */
+    private static String normalize(String sizeText) {
+        return SIZE_TEXT_WHITESPACE.matcher(sizeText).replaceAll(" ").trim();
     }
 
     /** {@code cm}/{@code cm.}/{@code ซม}/{@code ซม.}/{@code ซ.ม.} → {@link SizeUnit#CM};
