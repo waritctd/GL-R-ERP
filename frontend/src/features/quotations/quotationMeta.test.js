@@ -674,6 +674,21 @@ describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on th
   it('explicit unit wins the other way too: "600x600mm" still matches a 60x60cm catalogue row', () => {
     expect(sizeTextDiffersFromCatalogFaceSize('600x600mm', '60x60')).toBe(false);
   });
+
+  /**
+   * F5-style bonus (2026-09-16 review): the two vectors above never distinguish an explicit unit
+   * from "no unit, check both readings" -- both happen to land on the same reading regardless (the
+   * backend's own equivalent test had this exact vacuity, see DealQuotationLinesTest's F5 section).
+   * This one does: catalogue 30cm x 60cm, typed "60x30mm" -- an explicit MM reading that matches
+   * NEITHER the catalogue's mm figures (300,600) NOR its cm figures directly (30,60), but DOES match
+   * the catalogue's cm figures order-swapped (60==60, 30==30) if the explicit unit were ignored and
+   * both readings checked anyway. Mutation-checked the same way as the backend test: forcing the
+   * typed `unit` to `null` in `compareToCatalogFaceSize` turns this red (it wrongly reads as
+   * "matches"); the real unit resolution turns it green.
+   */
+  it('pins unit resolution -- mutation-discriminating (F5-style), unlike the two vectors above', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('60x30mm', '30x60')).toBe(true);
+  });
 });
 
 describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mirrors DealQuotationLines#sizeLine\'s REFINEMENT)', () => {

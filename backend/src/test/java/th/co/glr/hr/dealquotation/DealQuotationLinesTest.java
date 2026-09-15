@@ -330,6 +330,28 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
+    /**
+     * F5 (test quality, 2026-09-16 review) — the test above passes even with unit resolution
+     * DELETED from {@link DealQuotationLines#matchesCatalogFaceSize} (mutation-checked: forcing
+     * {@code typed.unit()} to {@code null} there leaves both of its assertions green), because
+     * neither of its two vectors ever lands on a DIFFERENT reading depending on whether the unit is
+     * honoured — both "600x600mm" and "300x600mm" happen to agree with the (wrong) "check both
+     * readings" answer too. This vector does not: catalogue 30cm x 60cm (300mm x 600mm), typed
+     * "60x30mm" — an explicit MM reading that matches NEITHER the catalogue's real mm figures
+     * (60,30 vs 300,600) NOR its cm figures directly (60,30 vs 30,60), but DOES match the catalogue's
+     * cm figures order-swapped (60==60, 30==30) if the explicit unit is ignored and both readings are
+     * checked regardless. Mutation-checked the same way: forcing {@code typed.unit()} to
+     * {@code null} turns this test red (it wrongly starts printing the catalogue's "30 cm x 60 cm");
+     * restoring the real unit resolution turns it green again — see the PR body for the run.
+     */
+    @Test
+    void sizeLine_explicitMmUnit_pinsUnitResolution_mutationDiscriminating() {
+        assertThat(DealQuotationLines.sizeLine("60x30mm", new BigDecimal("9"),
+            new BigDecimal("300"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60x30mm x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("30 cm x 60 cm");
+    }
+
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
     @Test
