@@ -656,6 +656,24 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
       expect(onChange).toHaveBeenLastCalledWith({ sizeText: '600x600' });
     });
 
+    // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): a rep
+    // typing the catalogue's OWN millimetre figures into this cm-labelled field ("300x600" for a
+    // 60x60cm/600x600mm tile) parses fine as a plain size pair -- genuinely different from
+    // catalogSizeText per sizeTextDiffersFromCatalogFaceSize (300x600 matches neither 60x60cm nor
+    // 600x600mm) -- but resolves to 18 m²/piece, outside sqmPerPieceFromSizeCm's own 0.001-10 m²
+    // bound, so it returns null. The previous version patched `sqmPerPiece: recomputed`
+    // UNCONDITIONALLY here, nulling a previously-valid catalogue figure on EITHER failure
+    // (unparseable OR out-of-range) -- turning a size typo into a blocking "required" error that
+    // silently refused every save (autosave, บันทึกร่าง, ส่งขออนุมัติ) for the whole document.
+    it('an out-of-range recompute (mm typed into a cm field) keeps the existing แผ่น/ตร.ม. rather than nulling it', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '300x600' } });
+      // Only sizeText patches -- sqmPerPiece/source stay exactly as the catalogue left them (0.36 /
+      // 'catalog'), same shape as the "unparseable" and "same tile in millimetres" cases above, so
+      // the row stays valid and the rep can still edit แผ่น/ตร.ม. manually.
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '300x600' });
+    });
+
     it('a \'manual\' value is never overwritten, even on a row that still carries catalogSizeText', () => {
       const { onChange } = renderCatalogPicked({ sqmPerPieceSource: 'manual', sqmPerPiece: 0.5 });
       fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });

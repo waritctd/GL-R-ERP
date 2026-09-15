@@ -559,12 +559,29 @@ export function QuotationItemRow({
               if (!readOnly && item.sqmPerPieceSource === 'catalog'
                 && sizeTextDiffersFromCatalogFaceSize(newSizeText, item.catalogSizeText)) {
                 const recomputed = sqmPerPieceFromSizeCm(newSizeText);
-                patch({
-                  sizeText: newSizeText,
-                  sqmPerPiece: recomputed,
-                  piecesPerSqmDisplay: recomputed != null ? (piecesPerSqmFromSqmPerPiece(recomputed) ?? '') : '',
-                  sqmPerPieceSource: recomputed != null ? 'size' : null,
-                });
+                // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"):
+                // `recomputed` is `null` not only when the text fails to parse, but also when it
+                // parses to an OUT-OF-RANGE area (sqmPerPieceFromSizeCm's own 0.001-10 m² bound) --
+                // e.g. a rep typing the catalogue's millimetre figures ("300x600") into this
+                // cm-labelled field for a 60x60cm tile parses fine as 300x600 CM (18 m²) and is
+                // rejected by that bound. The previous version patched `sqmPerPiece: recomputed`
+                // unconditionally here, so EITHER failure NULLED a previously-valid catalogue
+                // figure — turning a size typo into a blocking "required" error that then refused
+                // EVERY save (autosave, บันทึกร่าง, ส่งขออนุมัติ) on the whole document, not just
+                // this row. Only replace the figure when the recompute is genuinely valid; otherwise
+                // keep whatever ตร.ม./แผ่น the row already had (still the catalogue's own value here)
+                // so the rep can still edit it manually rather than the row going blank and blocking
+                // every save silently.
+                if (recomputed != null) {
+                  patch({
+                    sizeText: newSizeText,
+                    sqmPerPiece: recomputed,
+                    piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(recomputed) ?? '',
+                    sqmPerPieceSource: 'size',
+                  });
+                } else {
+                  patch({ sizeText: newSizeText });
+                }
                 return;
               }
               const sizeFallbackEligible = !readOnly
