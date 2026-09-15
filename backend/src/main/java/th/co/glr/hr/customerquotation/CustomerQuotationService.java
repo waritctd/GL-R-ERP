@@ -86,7 +86,10 @@ public class CustomerQuotationService {
     // there is no positive grant for account to read a customer quotation either, so it stays
     // forbidden end-to-end, not just for writes.
     private static final Set<String> VIEW_ROLES = Set.of("sales", "sales_manager", "ceo", "import");
-    private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
+    // Package-private (review fix, 2026-09-15): CustomerQuotationRepository#mapQuotation (R-H)
+    // reuses this exact constant for its own document-level VAT rather than declaring a second
+    // copy of "0.07" in the same package.
+    static final BigDecimal VAT_RATE = new BigDecimal("0.07");
 
     private final CustomerQuotationRepository quotations;
     private final PricingRequestRepository pricingRequests;

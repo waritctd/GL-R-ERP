@@ -12,8 +12,8 @@ import th.co.glr.hr.dealquotation.WastageCalculator.Result;
 
 /**
  * Pins docs/sales/quotation-v2-plan.md's own worked reference figures (QN6900595-3, items 1/3/5) plus every
- * branch of the arithmetic — see {@link WastageCalculator}'s class Javadoc for the meeting rule
- * (pieces round UP).
+ * branch of the arithmetic — see {@link WastageCalculator}'s class Javadoc for the corrected
+ * rounding rule (pieces round HALF_UP, not CEILING; see the 2026-09-15 reconciliation).
  */
 class WastageCalculatorTest {
 
@@ -32,7 +32,10 @@ class WastageCalculatorTest {
 
         assertThat(r.piecesPerSqm()).isEqualByComparingTo("2.78");
         assertThat(r.piecesBeforeWastage()).isEqualTo(242);
-        assertThat(r.piecesAfterWastage()).isEqualTo(267);
+        // R-C (2026-09-15): 242 × 1.10 = 266.20 rounds HALF_UP to 266, not CEILING's 267 — the
+        // box-multiple rounding on top still lands on the same printed 268 either way, so this
+        // line alone could not tell the two rules apart; see item1 below for one that can.
+        assertThat(r.piecesAfterWastage()).isEqualTo(266);
         assertThat(r.piecesFinal()).isEqualTo(268);
         assertThat(r.boxes()).isEqualTo(67);
     }
@@ -51,12 +54,16 @@ class WastageCalculatorTest {
     }
 
     /**
-     * Item1: the human-made reference printed 870 (rounding down twice — 790.91 -> 790,
-     * 869.1 -> 869 rounded to 870 for the box). The meeting rule is round UP throughout, which
-     * this test pins at 872 — the divergence is recorded, not silently "fixed" back to 870.
+     * Item1 (quotation arithmetic reconciliation, 2026-09-15): reproduces the owner's OWN printed
+     * reference figure, 870 — the "round UP throughout" reading this test used to pin (872) was
+     * wrong, settled by nine other real, owner-confirmed quotations (see the class Javadoc on
+     * {@link WastageCalculator}). 569 × 1.39 = 790.91 rounds HALF_UP to 791 (unchanged — CEILING
+     * agrees here since the fractional part is already > 0.5); 791 × 1.10 = 870.1 rounds HALF_UP
+     * to 870, where CEILING gave 871 and then box-rounded UP again to 872 — a double error in the
+     * same direction that this rule removes.
      */
     @Test
-    void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_roundsTo872_notTheHumanReference870() {
+    void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_reproducesTheOwnersPrinted870() {
         Result r = WastageCalculator.calculate(new Input(
             sqmPerPieceFor("1.39"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("569"), null,
             WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 2,
@@ -64,10 +71,10 @@ class WastageCalculatorTest {
 
         assertThat(r.piecesPerSqm()).isEqualByComparingTo("1.39");
         assertThat(r.piecesBeforeWastage()).isEqualTo(791);
-        assertThat(r.piecesAfterWastage()).isEqualTo(871);
-        assertThat(r.piecesFinal()).isEqualTo(872);
-        assertThat(r.piecesFinal()).isNotEqualTo(870);
-        assertThat(r.boxes()).isEqualTo(436);
+        assertThat(r.piecesAfterWastage()).isEqualTo(870);
+        assertThat(r.piecesFinal()).isEqualTo(870);
+        assertThat(r.piecesFinal()).isNotEqualTo(872);
+        assertThat(r.boxes()).isEqualTo(435);
     }
 
     @Test
@@ -153,7 +160,17 @@ class WastageCalculatorTest {
             new BigDecimal("123.456"), null));
 
         assertThat(r.netUnitPrice()).isEqualByComparingTo("123.46"); // rounded HALF_UP to 2dp
-        assertThat(r.lineAmount()).isEqualByComparingTo(new BigDecimal("123.46").multiply(BigDecimal.valueOf(3)));
+        // R-D input scale (review fix, 2026-09-15): the LIST price is pre-rounded to 2dp
+        // (123.456 -> 123.46) before the line amount is computed at all — sales.quotation_item.
+        // unit_price is NUMERIC(14,2) (V49), so a 3dp-or-finer typed price must be rounded before
+        // it enters the money math, or the stored row could never reproduce its own amount. So
+        // lineAmount here is round2(123.46 × 3) = 370.38, not round2(123.456 × 3) = 370.37 — none
+        // of the nine owner documents this rounds against has a list price finer than 2dp, so
+        // this input-scale rule is not discriminated by any of them; it exists for the DB column
+        // width, not a printed figure. (R-D's OWN evidence — that the amount is a single rounding
+        // of list × qty × factor, not round2(netUnitPrice × qty) — is still QN6900971-4 rows
+        // 5.3-5.7 in WastageCalculator's class Javadoc; this 2dp list price is what "list" means.)
+        assertThat(r.lineAmount()).isEqualByComparingTo("370.38");
     }
 
     @Test
