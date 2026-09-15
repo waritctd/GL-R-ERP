@@ -230,6 +230,10 @@ export const API_ROUTES = {
     search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
     contacts: (customerId) => `/api/customers/${customerId}/contacts`,
     createContact: (customerId) => `/api/customers/${customerId}/contacts`,
+    // PUT /api/customers/{customerId}/contacts/{contactId} — gap fix (prod QT-2026-0041-1): a
+    // contact created without an e-mail could never gain one. PATCH-shaped update, same PATCH
+    // semantics as customers.update above (see CustomerController#updateContact).
+    updateContact: (customerId, contactId) => `/api/customers/${customerId}/contacts/${contactId}`,
     projects: (customerId) => `/api/customers/${customerId}/projects`,
     createProject: (customerId) => `/api/customers/${customerId}/projects`,
   },

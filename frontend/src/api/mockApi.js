@@ -9895,6 +9895,27 @@ export const api = {
       mockContacts.push(contact);
       return delay({ contact });
     },
+    // Gap fix (prod QT-2026-0041-1). Same requireDealEntry() gate as createContact() above —
+    // mirrors CustomerController#updateContact's DealEntryAccess.requireCanEnterDeal, deliberately
+    // not one notch looser. PATCH semantics mirroring ContactRepository.update's
+    // `SET x = COALESCE(:x, x)` EXACTLY: null (also what an omitted JSON key deserializes to on
+    // the Java side) means "leave it alone", any other value is written, '' included. firstName
+    // is NOT NULL (customers.contact, V23) — a sent blank is a 400
+    // (CustomerController#requireNotBlankIfPresent), never a constraint violation. The WHERE
+    // clause on the Java side requires BOTH contact_id AND customer_id; mirrored here by requiring
+    // the found row's own customerId to match, so a mismatched customerId 404s exactly like prod.
+    // ⚠️ AUTHZ CAVEAT: this gate approximates the Java one and is NOT authoritative — verify
+    // against DealEntryAccess, never here.
+    async updateContact(customerId, contactId, payload = {}) {
+      requireDealEntry();
+      const contact = mockContacts.find((c) => c.id === Number(contactId) && c.customerId === Number(customerId));
+      if (!contact) fail('ไม่พบผู้สั่งซื้อรายนี้', 404);
+      if (payload.firstName != null && !String(payload.firstName).trim()) fail('กรุณาระบุชื่อผู้สั่งซื้อ', 400);
+      for (const key of ['firstName', 'lastName', 'position', 'email', 'phone']) {
+        if (payload[key] != null) contact[key] = payload[key];
+      }
+      return delay({ contact: { ...contact } });
+    },
     async projects(customerId) {
       requireCustomerViewer();
       return delay({ projects: mockProjects.filter((p) => p.customerId === Number(customerId)) });

@@ -146,6 +146,46 @@ public class CustomerController {
             req.firstName(), req.lastName(), req.position(), req.email(), req.phone()));
     }
 
+    /**
+     * Gap fix (prod QT-2026-0041-1): a rep created a ผู้สั่งซื้อ (contact) without an e-mail and had
+     * no way to add one later — the frontend's {@code QuotationContactPicker} documented the
+     * selected contact as read-only "on purpose", because this endpoint did not exist.
+     *
+     * <p><strong>Stated authz change</strong> (CLAUDE.md's sales-flow relaxation — a sales API
+     * contract change, declared, not smuggled in): this is a NEW write endpoint, same audience as
+     * {@link #createContact} — gated by {@link DealEntryAccess#requireCanEnterDeal}, no wider. Real-DB
+     * evidence: {@code DealEntryAccessIntegrationTest#...UpdateContact...}.
+     *
+     * <p>PATCH semantics on a PUT verb, exactly like {@link #update} (customer): a field the body
+     * omits or sends as {@code null} is left alone; a field it sends is written, blank included, so
+     * a wrong e-mail or phone can be cleared. {@code firstName} mirrors {@code first_name NOT NULL}
+     * — a sent blank is a 400, never a constraint violation.
+     *
+     * <p>The path carries BOTH ids and {@link ContactRepository#update}'s {@code WHERE} clause
+     * requires both to match, so a contact cannot be edited through another customer's URL — a
+     * mismatch is 404, same as {@link #update} (customer) on an unknown id, and leaks nothing about
+     * which customer actually owns the contact.
+     *
+     * <p>Nothing here rewrites an already-issued document: {@code sales.quotation}'s
+     * {@code contact_name}/{@code contact_phone}/{@code contact_email} (V167) are a frozen snapshot
+     * taken at DRAFT save time ({@code DealQuotationService#resolveContact} re-reads the LIVE
+     * contact row on every create/update by id, the same discipline
+     * {@code DealQuotationService#customerSnapshot} already uses for the customer master) — an
+     * edited contact reaches the next draft save/print, never an approved one.
+     */
+    @PutMapping("/{customerId}/contacts/{contactId}")
+    Map<String, ContactDto> updateContact(@PathVariable long customerId,
+                                          @PathVariable long contactId,
+                                          @Valid @RequestBody UpdateContactRequest req,
+                                          HttpSession session) {
+        DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
+        requireNotBlankIfPresent(req.firstName(), "กรุณาระบุชื่อผู้สั่งซื้อ");
+        ContactDto updated = contacts.update(customerId, contactId,
+                req.firstName(), req.lastName(), req.position(), req.email(), req.phone())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้สั่งซื้อรายนี้"));
+        return Map.of("contact", updated);
+    }
+
     // P0 fix — same gate as search() above; see CustomerService's javadoc for the derived audience.
     @GetMapping("/{customerId}/projects")
     Map<String, List<ProjectDto>> listProjects(@PathVariable long customerId, HttpSession session) {
@@ -191,6 +231,16 @@ public class CustomerController {
 
     record CreateContactRequest(
         @NotBlank @Size(max = 100) String firstName,
+        @Size(max = 100) String lastName,
+        @Size(max = 100) String position,
+        @Email @Size(max = 200) String email,
+        @Size(max = 50) String phone
+    ) {}
+
+    /** Every field optional — see {@link #updateContact}: null means "leave it alone". The @Size
+     * caps mirror {@code CreateContactRequest}'s, which mirror V23's own column widths. */
+    record UpdateContactRequest(
+        @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
         @Email @Size(max = 200) String email,
