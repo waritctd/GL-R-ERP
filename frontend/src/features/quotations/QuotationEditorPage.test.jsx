@@ -689,7 +689,11 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     await selectContact();
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
-  });
+    // Custom timeout (matches the autosave tests' own convention below): this test drives a
+    // typeahead ลูกค้า/โครงการ pick, a full item fill AND a ผู้สั่งซื้อ pick with its now-editable
+    // โทร./อีเมล fields (gap fix, prod QT-2026-0041-1) in one run — genuinely more render/jsdom
+    // work than the default 5000ms budget, not a hang.
+  }, 10000);
 
   it('บันทึกร่าง creates the ticket, then the quotation on it, then navigates to /quotations/{id}', async () => {
     api.tickets.create.mockResolvedValue({

@@ -107,9 +107,11 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.contactEmail())) {
                 parts.add("E : " + quotation.contactEmail().trim());
             }
-            // #stripPhoneLabel — the stored value may open with its OWN label; see its Javadoc.
-            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
-                parts.add("Tel. " + stripPhoneLabel(quotation.customerPhone()));
+            // Fix (2026-09-15): #effectiveCustomerPhone -- see its Javadoc. #stripPhoneLabel — the
+            // stored value may open with its OWN label; see its Javadoc.
+            String phone = effectiveCustomerPhone(quotation);
+            if (!blank(stripPhoneLabel(phone))) {
+                parts.add("Tel. " + stripPhoneLabel(phone));
             }
             phoneLine = String.join("   ", parts);
         } else {
@@ -122,8 +124,15 @@ public final class DealQuotationRenderAdapter {
             // is omitted entirely rather than printed twice; (2) "คุณ" is prefixed only when the
             // surviving contact name does not itself look like an organisation (a company recorded
             // as its OWN contact, distinct from the customer name, still should not read "คุณ").
+            //
+            // Fix (2026-09-15): production printed "เรียน คุณคุณปิยพร เมืองจีน" for contact_name =
+            // "คุณปิยพร เมืองจีน" -- the imported/typed value already carried its own honorific, and
+            // this branch prefixed a second one unconditionally whenever the name was not an
+            // organisation. #hasThaiHonorificPrefix adds the same "already has one" check
+            // #looksLikeOrganisation already does for a company name.
             String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
-                ? (looksLikeOrganisation(quotation.contactName()) ? "" : "คุณ")
+                ? (looksLikeOrganisation(quotation.contactName())
+                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ")
                     + quotation.contactName().trim() + "   /   "
                 : "";
             String taxIdPart = !blank(quotation.customerTaxId())
@@ -141,10 +150,22 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.customerAddress())) {
                 parts.add("ที่อยู่ " + quotation.customerAddress().trim().replace('\n', ' '));
             }
+            // Fix (2026-09-15): production example customer_phone=null, contact_phone=
+            // "062-328-7555", contact_email="qs.twcfurline@gmail.com" printed NEITHER -- this
+            // branch only ever read customerPhone (never contactPhone, which existed on the DTO
+            // unused) and never read contactEmail at all. #effectiveCustomerPhone falls back to the
+            // deal's own contact phone when the customer master carries none, and the e-mail joins
+            // the same ที่อยู่/โทร. line the English branch above already folds Address/E/Tel into
+            // (this template has no free row of its own for either — see the bug-fix comment just
+            // above for why the address already lives here).
+            if (!blank(quotation.contactEmail())) {
+                parts.add("อีเมล " + quotation.contactEmail().trim());
+            }
             // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the customer master
             // row's own phone value opens with the label. See #stripPhoneLabel's Javadoc.
-            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
-                parts.add("โทร. " + stripPhoneLabel(quotation.customerPhone()));
+            String phone = effectiveCustomerPhone(quotation);
+            if (!blank(stripPhoneLabel(phone))) {
+                parts.add("โทร. " + stripPhoneLabel(phone));
             }
             phoneLine = String.join("   ", parts);
         }
@@ -170,7 +191,7 @@ public final class DealQuotationRenderAdapter {
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
-            blank(quotation.contactName()) ? null : quotation.contactName().trim(),
+            orderedByName(quotation),
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
@@ -387,6 +408,34 @@ public final class DealQuotationRenderAdapter {
     private static final String LINE7_DATE_PREFIX =
         "7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ ";
 
+    /**
+     * Note 2, remark slot -- the ONE numbered line that names the deposit. Production complaint
+     * (2026-09-15): a document with {@code deposit_percent = 0} still printed "บริษัทฯ ขอรับมัดจำ
+     * 0% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ..." -- a phantom zero-percent deposit demand, since
+     * nothing in the old text handled zero as anything other than "some positive percentage".
+     *
+     * <p>Only an EXPLICIT zero takes this branch. A {@code null} {@code depositPercent} still
+     * defaults to 30 above ({@code depositPct}), UNCHANGED -- out of scope for this fix, per the
+     * task that requested it, and mentioned here so a later reader does not conflate the two.
+     *
+     * <p>When there truly is no deposit, note 2 states the FULL-amount payment terms directly
+     * instead of naming a deposit that does not exist -- the remainder text passed in (the
+     * CREDIT-days wording, or the before/upon-delivery wording) already covers the SAME two
+     * {@code remainderMode} variants this file has ever supported (nothing else is stored in
+     * {@code remainder_mode} -- see the DB column's own comment), just now applied to the WHOLE
+     * amount rather than "the remainder after the deposit". The "2." slot number is kept exactly
+     * as before either way.
+     */
+    private static String depositLine(int depositPct, String remainderMode, Integer creditDays,
+                                       String remainderText) {
+        if (depositPct != 0) {
+            return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
+        }
+        return "CREDIT".equals(remainderMode)
+            ? "2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต " + (creditDays != null ? creditDays : 0) + " วัน"
+            : "2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+    }
+
     private static List<String> remarkLines(DealQuotationDto quotation) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
@@ -405,7 +454,7 @@ public final class DealQuotationRenderAdapter {
 
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
-        lines.add("2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText);
+        lines.add(depositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
         int leadTimeLineIndex = lines.size();
         lines.add(leadTimeLine(quotation.items()));
         lines.add(LINE4);
@@ -561,6 +610,20 @@ public final class DealQuotationRenderAdapter {
      * proforma-invoice line at 4. The bank lines themselves come from configuration, not from this
      * class — see {@code app.quotation.bank-block-line1..3}.
      */
+    /** The English twin of {@link #depositLine} -- same zero-deposit rule, same two {@code
+     * remainderMode} variants, English words. See that method's Javadoc for the full reasoning;
+     * kept as its own method for the same "two flat methods read better than one with language
+     * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
+    private static String englishDepositLine(int depositPct, String remainderMode, Integer creditDays,
+                                              String remainderText) {
+        if (depositPct != 0) {
+            return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
+        }
+        return "CREDIT".equals(remainderMode)
+            ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
+            : "2.Full payment is due before or upon delivery.";
+    }
+
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
@@ -588,8 +651,7 @@ public final class DealQuotationRenderAdapter {
         List<String> lines = new ArrayList<>();
         lines.add("1.The quantities above are as received on " + shortEnglishDate(offerDate)
             + ". Please re-confirm the actual quantities with your installer before ordering.");
-        lines.add("2.A deposit of " + depositPct + "% is required upon order confirmation, "
-            + remainderText + ".");
+        lines.add(englishDepositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
         int leadTimeLineIndex;
         if (hasBankBlock) {
             // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
@@ -743,6 +805,22 @@ public final class DealQuotationRenderAdapter {
         return thai;
     }
 
+    // ── Fix (2026-09-15, production complaint): ผู้สั่งซื้อ signature-name fallback ────────────
+
+    /** The ผู้สั่งซื้อ (F2) signature-slot name: the deal's contact snapshot when there is one,
+     * else the CUSTOMER name -- production printed the dotted {@code
+     * QuotationRenderer#BLANK_NAME_PLACEHOLDER} on the signature line whenever a deal recorded no
+     * separate contact, even though the customer being quoted to is right there on the same
+     * document. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
+     * returns null, i.e. when both fields are blank. Shared by both TH/EN documents -- {@code
+     * Signatories} is built once above for either language. */
+    static String orderedByName(DealQuotationDto quotation) {
+        if (!blank(quotation.contactName())) {
+            return quotation.contactName().trim();
+        }
+        return blank(quotation.customerName()) ? null : quotation.customerName().trim();
+    }
+
     // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────
     // "they should be able to select who to show for ผู้พิมพ์ and พนักงานขาย" — PRINT-ONLY. Each
     // helper prefers the display-override fields when the corresponding *DisplayId is set, and
@@ -866,6 +944,73 @@ public final class DealQuotationRenderAdapter {
             }
         }
         return ORG_NAME_WORD_PATTERN.matcher(lower).find();
+    }
+
+    // ── "คุณ" double-prefix fix (2026-09-15) ─────────────────────────────────────────────────
+
+    // Longest-prefix-first so "นางสาว" (Ms.) is never left matching only as far as "นาง" (Mrs.) --
+    // doesn't actually change which names match (either entry alone already answers "starts with
+    // ONE of these" correctly), but keeps the list read in the same "most specific first" order as
+    // #ORG_NAME_PREFIXES above rather than inviting a future maintainer to wonder why it isn't.
+    private static final String[] THAI_HONORIFIC_PREFIXES = {
+        "นางสาว", "นาย", "นาง", "คุณ", "ดร.",
+    };
+
+    /** {@code true} when {@code name} (whitespace-normalised) already OPENS with one of {@link
+     * #THAI_HONORIFIC_PREFIXES} -- production bug, contact_name = "คุณปิยพร เมืองจีน" printed
+     * "เรียน คุณคุณปิยพร เมืองจีน" because the value stored on the deal already carried its own
+     * honorific and the attn-line builder prefixed a second one. Checked as a PREFIX only, exactly
+     * like {@link #ORG_NAME_PREFIXES} -- a name that merely contains "นาง" mid-word does not count.
+     *
+     * <p>Review fix (2026-09-15): a bare {@code startsWith} also matched real Thai given names
+     * that happen to OPEN with the same letters as an honorific -- "คุณากร ใจดี", "คุณาพร",
+     * "คุณัญญา", "นายิกา" all start with "คุณ"/"นาย", which used to read as "already prefixed" and
+     * printed "เรียน คุณากร ใจดี" with no "คุณ" at all. {@link #isThaiHonorificBoundary} is the
+     * fix: a prefix only counts when the very next character is NOT a Thai FOLLOWING vowel/tone
+     * mark (one that attaches to the preceding consonant rather than opening a new syllable) --
+     * the same signal that tells "คุณ" + "ปิยพร" (a genuine honorific + name, next char a plain
+     * consonant) apart from "คุณ" + "ากร" (one word, next char a following vowel). A leading vowel
+     * (เ/แ/โ/ใ/ไ) always starts a new syllable and so is still a valid boundary -- "คุณเอก" is
+     * "คุณ" + "เอก", not a longer word. */
+    static boolean hasThaiHonorificPrefix(String name) {
+        if (blank(name)) {
+            return false;
+        }
+        String trimmed = normalizeWhitespace(name);
+        for (String prefix : THAI_HONORIFIC_PREFIXES) {
+            if (trimmed.startsWith(prefix) && isThaiHonorificBoundary(trimmed, prefix.length())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code true} when index {@code afterPrefix} of {@code trimmed} is either past the end of
+     * the string, or a character that is NOT a Thai "following" vowel sign or tone/diacritic mark
+     * (U+0E30–U+0E3A: ะ ั า ำ ิ ี ึ ื ุ ู ฺ; U+0E47–U+0E4E: ็ ่ ้ ๊ ๋ ์ ํ ๎) -- those marks attach
+     * to the PRECEDING consonant and so mean the candidate prefix is the opening of one longer
+     * word, not a standalone honorific followed by a name. Everything else -- a consonant, a
+     * LEADING vowel (เ แ โ ใ ไ, U+0E40–U+0E44), whitespace, a Latin character, or end of string --
+     * is a genuine word boundary. */
+    private static boolean isThaiHonorificBoundary(String trimmed, int afterPrefix) {
+        if (afterPrefix >= trimmed.length()) {
+            return true;
+        }
+        char c = trimmed.charAt(afterPrefix);
+        boolean followingVowelOrTone = (c >= 'ะ' && c <= 'ฺ') || (c >= '็' && c <= '๎');
+        return !followingVowelOrTone;
+    }
+
+    // ── Fix (2026-09-15, production complaint): customer phone falls back to the deal's own ──
+    // ── contact phone; the contact e-mail joins the same line ────────────────────────────────
+
+    /** The phone to print for this customer: {@code customerPhone} (the customer-master value)
+     * when present, else {@code contactPhone} (the deal's own contact snapshot) -- production
+     * example: {@code customer_phone=null}, {@code contact_phone="062-328-7555"} printed nothing
+     * at all, even though a phone number for this exact deal WAS recorded, just on the contact
+     * rather than the customer row. Shared by both TH/EN branches. */
+    static String effectiveCustomerPhone(DealQuotationDto quotation) {
+        return !blank(quotation.customerPhone()) ? quotation.customerPhone() : quotation.contactPhone();
     }
 
     // ── the customer phone's own label (QT-2026-0032-1, 2026-09-15) ─────────────────────────

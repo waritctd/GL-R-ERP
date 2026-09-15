@@ -41,6 +41,45 @@ public class ContactRepository {
         ).stream().findFirst();
     }
 
+    /**
+     * PATCH-shaped update (mirrors {@link CustomerRepository#update}'s own {@code COALESCE}
+     * discipline exactly): a {@code null} argument — what an omitted JSON key deserializes to —
+     * means "leave this column alone"; any other value, blank included, is written. The
+     * {@code WHERE} clause requires BOTH {@code contact_id} AND {@code customer_id} so a caller
+     * cannot rewrite a contact that belongs to a different customer by guessing/URL-editing the
+     * {@code customerId} path segment — an id mismatch simply matches zero rows, and the
+     * controller turns that into 404 rather than silently applying the edit or leaking whose
+     * contact it is.
+     *
+     * <p>{@code firstName} is validated not-blank-if-present in the controller before this is
+     * called (mirrors {@code first_name NOT NULL}); there is no NOT NULL enforcement here, same
+     * division of labour as {@code CustomerRepository#update}'s name/branch checks.
+     */
+    public Optional<ContactDto> update(long customerId, long contactId, String firstName, String lastName,
+                                       String position, String email, String phone) {
+        int updated = jdbc.update(
+            """
+            UPDATE customers.contact
+               SET first_name = COALESCE(:firstName, first_name),
+                   last_name  = COALESCE(:lastName, last_name),
+                   position   = COALESCE(:position, position),
+                   email      = COALESCE(:email, email),
+                   phone      = COALESCE(:phone, phone)
+             WHERE contact_id = :contactId
+               AND customer_id = :customerId
+            """,
+            new MapSqlParameterSource()
+                .addValue("contactId", contactId)
+                .addValue("customerId", customerId)
+                .addValue("firstName", firstName)
+                .addValue("lastName", lastName)
+                .addValue("position", position)
+                .addValue("email", email)
+                .addValue("phone", phone)
+        );
+        return updated == 0 ? Optional.empty() : findById(contactId);
+    }
+
     public ContactDto create(long customerId, String firstName, String lastName,
                              String position, String email, String phone) {
         var kh = new GeneratedKeyHolder();

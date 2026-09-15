@@ -1375,6 +1375,61 @@ class QuotationRendererTest {
         return count;
     }
 
+    // ── fix (2026-09-15): "-1" revision suffix on เลขที่อ้างอิง / Ref. (I4) must not clip ─────────
+
+    /**
+     * Production bug: I4 printed "QT-2026-0034" with its "-1" revision suffix silently missing.
+     * {@code sizeMoneyColumns} only ever measured the GRAND TOTAL figure column I also shows,
+     * never the actual เลขที่อ้างอิง/Ref. text written there — and column I is the LAST printed
+     * column (right margin 0; {@code SheetHtmlRenderer} clips overflow rather than wrapping), so a
+     * reference number wider than the grand total had nothing to overflow into. A MODEST grand
+     * total (so the money-based sizing alone stays narrow) paired with a long suffixed number
+     * reproduces exactly that shape — every golden fixture uses a suffix-less number
+     * ("QT-2026-0099"), which is why nothing caught this before. Mutation-checked: reverting
+     * {@code QuotationRenderer#fitColumnToText} to a no-op turns this assertion red (see the PR
+     * body).
+     */
+    @Test
+    void numberValueColumnI_widensToFitASuffixedReferenceNumber() throws Exception {
+        String number = "QT-2026-0034-1";
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 15), number, "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // NUMBER_VALUE_ROW=3 (row 4), VALUE_COL=8 (col I) — QuotationRenderer's own constants.
+            assertThat(sheet.getRow(3).getCell(8).getStringCellValue()).isEqualTo(number);
+
+            var poiFont = sheet.getWorkbook().getFontAt(
+                sheet.getRow(3).getCell(8).getCellStyle().getFontIndexAsInt());
+            FontResolver.Resolved resolved = FontResolver.resolve(poiFont.getFontName());
+            java.util.OptionalDouble widthPt = FontResolver.stringWidthPt(
+                resolved, number, poiFont.getFontHeightInPoints(), poiFont.getBold());
+            Assumptions.assumeTrue(widthPt.isPresent(),
+                "no measurable font for the I4 cell on this host -- cannot verify the fit");
+            double neededPx = widthPt.getAsDouble() * 96.0 / 72.0; // pt -> 96dpi px
+
+            // Same POI-units -> twips -> pixel conversion #approverUnderscoreRun already uses for
+            // LibreOffice-fidelity assertions elsewhere in this file.
+            int charWidthTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sheet.getWorkbook());
+            int colTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.columnTwips(
+                sheet.getColumnWidth(8), charWidthTwips);
+            double colPx = colTwips / 1440.0 * 96.0;
+            double insetPx = 2 * (40 / 1440.0 * 96.0); // both sides — LibreOfficeMetrics.TEXT_INSET_TWIPS
+
+            assertThat(colPx)
+                .as("column I must be wide enough for the FULL suffixed reference number, "
+                    + "not just the (much smaller) grand total")
+                .isGreaterThanOrEqualTo(neededPx + insetPx - 0.5); // small epsilon for twips rounding
+        }
+    }
+
     private QuotationRenderModel.RenderItem renderItem(String heading, List<String> descriptionLines,
             BigDecimal qty, BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
         return new QuotationRenderModel.RenderItem(heading, descriptionLines, qty, "แผ่น", unitPrice,

@@ -896,4 +896,255 @@ class DealQuotationRenderAdapterV3Test {
             salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
             List.<DealQuotationItemDto>of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
+
+    // ── fix (2026-09-15): "คุณ" is not doubled when the contact name already carries one ────────
+
+    /** The exact production value: contact_name = "คุณปิยพร เมืองจีน" printed "เรียน
+     * คุณคุณปิยพร เมืองจีน" because #looksLikeOrganisation correctly said this is NOT an
+     * organisation (so the "คุณ" branch fired) but nothing checked whether the name already
+     * carried its own honorific. */
+    @Test
+    void thaiDocument_attnLine_doesNotDoublePrefixAnHonorificTheContactNameAlreadyCarries() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("คุณปิยพร เมืองจีน", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณปิยพร เมืองจีน   /   บริษัท ทดสอบ จำกัด");
+        assertThat(model.attnLine()).doesNotContain("คุณคุณ");
+    }
+
+    @Test
+    void hasThaiHonorificPrefix_detectsEachSupportedHonorific() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณปิยพร เมืองจีน")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นายสมชาย ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสมหญิง ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสาวสมหญิง ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("ดร.สมชาย ใจดี")).isTrue();
+    }
+
+    /** The prefix overlap the task specifically calls out: "นางสาว" must be recognised as its OWN
+     * honorific, not merely as "นาง" followed by a name that happens to start with "สาว" -- both
+     * readings currently answer {@code true} here (this method only ever detects, never strips),
+     * but the point is that a name genuinely typed as "นางสาว..." must not be misread as if only
+     * "นาง" matched and the rest were part of the name. */
+    @Test
+    void hasThaiHonorificPrefix_doesNotConfuseNangsaoForNangPlusAName() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสาวปิยพร เมืองจีน")).isTrue();
+    }
+
+    @Test
+    void hasThaiHonorificPrefix_aPersonWithNoHonorificIsNotPrefixed() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("ธนพล ใจดี")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix(null)).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("   ")).isFalse();
+    }
+
+    /** Only a LEADING match counts -- a name that merely contains "นาง" somewhere past the start
+     * (never at position 0 of the whitespace-normalised string) is not mistaken for one. */
+    @Test
+    void hasThaiHonorificPrefix_aMidStringOccurrenceDoesNotCount() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("จรินางค์ ใจดี")).isFalse();
+    }
+
+    /** Review fix (2026-09-15): a plain {@code startsWith} misread these real Thai given names --
+     * each one happens to OPEN with the same letters as an honorific, but the letter right after
+     * is a Thai FOLLOWING vowel sign that attaches to the preceding consonant, so the "honorific"
+     * is really just the opening syllable of one longer word. These must NOT be read as
+     * already-prefixed (i.e. this returns {@code false}, and the adapter's "คุณ"/no-"คุณ" logic
+     * would still add "คุณ" in front, exactly as it would for any other honorific-less name). */
+    @Test
+    void hasThaiHonorificPrefix_aRealNameThatMerelyOpensWithTheSameLettersIsNotMisread() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณากร ใจดี")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณัญญา สุขใจ")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นายิกา ดี")).isFalse();
+    }
+
+    /** The counter-cases proving the boundary check is the right ONE signal, not merely "reject
+     * more names": a SPACE and a LEADING vowel (เ/แ/โ/ใ/ไ) both still count as a genuine honorific
+     * boundary, because neither can ever be part of the SAME word as the consonant before it. */
+    @Test
+    void hasThaiHonorificPrefix_aSpaceOrALeadingVowelAfterTheHonorificStillCounts() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณ ปิยพร")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณเอก")).isTrue();
+    }
+
+    /** Review fix (2026-09-15), end-to-end: "คุณากร ใจดี" is a real given name, not an
+     * already-honorific-prefixed one -- the attn line must still gain its OWN "คุณ", the same as
+     * any other honorific-less contact. Before the boundary check this printed with no "คุณ" at
+     * all, having (wrongly) read "คุณากร" as "already has one". */
+    @Test
+    void thaiDocument_attnLine_stillPrefixesKhunForARealNameThatMerelyOpensWithTheSameLetters() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("คุณากร ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณคุณากร ใจดี   /   บริษัท ทดสอบ จำกัด");
+    }
+
+    /** A genuine person contact with NO honorific at all still gets "คุณ" prefixed, exactly as
+     * before -- this fix must not remove the "คุณ" prefix for the common case, only skip it when
+     * one is already present. */
+    @Test
+    void thaiDocument_attnLine_stillPrefixesKhunWhenTheContactHasNoHonorificOfItsOwn() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("ธนพล ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท ทดสอบ จำกัด");
+    }
+
+    // ── fix (2026-09-15): the ผู้สั่งซื้อ signature name falls back to the customer name ─────────
+
+    @Test
+    void signatories_orderedBy_prefersTheContactNameWhenPresent() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.signatories().orderedBy()).isEqualTo("สมหญิง ใจดี");
+    }
+
+    /** The bug: a deal with no separate contact snapshot printed the dotted placeholder on the
+     * ผู้สั่งซื้อ signature line even though the customer being quoted to is right there on the
+     * same document. */
+    @Test
+    void signatories_orderedBy_fallsBackToTheCustomerNameWhenThereIsNoContact() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.signatories().orderedBy()).isEqualTo("บริษัท ทดสอบ จำกัด");
+    }
+
+    @Test
+    void signatories_orderedBy_nullOnlyWhenBothContactAndCustomerAreBlank() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, null, null), null, null);
+        assertThat(model.signatories().orderedBy()).isNull();
+    }
+
+    @Test
+    void orderedByName_directly_mirrorsTheSameFallback() {
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null))).isEqualTo("สมหญิง ใจดี");
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null))).isEqualTo("บริษัท ทดสอบ จำกัด");
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact(null, null, null))).isNull();
+    }
+
+    // ── fix (2026-09-15): customer phone falls back to the contact phone; contact e-mail prints ──
+
+    /** The exact production example: customer_phone=null, contact_phone="062-328-7555",
+     * contact_email="qs.twcfurline@gmail.com" printed NEITHER -- customerPhone wins when present
+     * (unaffected by this fix, tested separately below), contactPhone is the fallback, and the
+     * e-mail joins the same line. */
+    @Test
+    void thaiDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com", null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com   โทร. 062-328-7555");
+    }
+
+    @Test
+    void thaiDocument_phoneLine_customerPhoneWinsOverContactPhoneWhenBothPresent() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("โทร. 02-999-9999");
+    }
+
+    @Test
+    void thaiDocument_phoneLine_noPhoneAtAll_stillPrintsTheEmailAlone() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, null, "qs.twcfurline@gmail.com", null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com");
+    }
+
+    @Test
+    void englishDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com",
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.phoneLine()).isEqualTo("E : qs.twcfurline@gmail.com   Tel. 062-328-7555");
+    }
+
+    @Test
+    void effectiveCustomerPhone_directly_prefersCustomerPhoneThenFallsBackToContactPhone() {
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null))).isEqualTo("02-999-9999");
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail(null, "062-328-7555", null, null))).isEqualTo("062-328-7555");
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail(null, null, null, null))).isNull();
+    }
+
+    private DealQuotationDto quotationWithPhoneAndEmail(String customerPhone, String contactPhone,
+                                                        String contactEmail, String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, customerPhone,
+            9L, "ผู้ติดต่อทดสอบ", contactPhone, contactEmail, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
+
+    // ── fix (2026-09-15): 0% deposit no longer prints a phantom deposit clause ──────────────────
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "CREDIT", 45, null), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต 45 วัน");
+    }
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "ON_DELIVERY", null, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "CREDIT", 45, WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment is due on 45 days credit.");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "ON_DELIVERY", null, WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment is due before or upon delivery.");
+    }
+
+    /** Regression guard: an ordinary POSITIVE deposit is completely untouched by this fix -- same
+     * text as before the {@code depositLine}/{@code englishDepositLine} extraction. */
+    @Test
+    void thaiDocument_note2_nonZeroDeposit_isUnchanged() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(30, "CREDIT", 30, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
+    }
+
+    /** Explicitly out of scope, per the task: a {@code null} depositPercent still defaults to 30%
+     * -- only an EXPLICIT zero takes the new branch. Kept as its own test so a future reader sees
+     * the two cases were deliberately kept apart, not merged by accident. */
+    @Test
+    void thaiDocument_note2_nullDepositPercent_stillDefaultsToThirtyPercent_notTheZeroBranch() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(null, "CREDIT", 30, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
+    }
+
+    private DealQuotationDto quotationWithDeposit(Integer depositPercent, String remainderMode,
+                                                  Integer creditDays, String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), depositPercent, remainderMode, creditDays, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
 }

@@ -1,8 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
+
+const CONTACT_EDIT_FIELDS = ['phone', 'email'];
+
+function contactEditsFrom(contact) {
+  return { phone: contact?.phone ?? '', email: contact?.email ?? '' };
+}
 
 export function contactDisplayName(contact) {
   if (!contact) return '';
@@ -94,6 +100,69 @@ export function QuotationContactPicker({
     if (match) onResolve(match);
   }, [options, selectedId, value, onResolve]);
 
+  // ── edit-in-place: โทร./อีเมล of the SELECTED contact (gap fix, prod QT-2026-0041-1) ──────
+  // A contact created without an e-mail used to be stuck that way — there was no update
+  // endpoint. Mirrors CustomerDetailsFields' own save-on-blur pattern: local field state, seeded
+  // from the selected contact and re-seeded only for a field this component itself last put
+  // there (never clobbering text the rep is mid-typing), saved on blur with PATCH semantics
+  // (only the changed field is sent), optimistic + rollback + toast on refusal.
+  const [contactEdits, setContactEdits] = useState(() => contactEditsFrom(selected));
+  const [savingContactField, setSavingContactField] = useState(null);
+  const lastSeededContactRef = useRef({ id: selected?.id ?? null, ...contactEditsFrom(selected) });
+
+  useEffect(() => {
+    // Still resolving (see the onResolve effect above) — โทร./อีเมล are unknown, not editable yet.
+    if (!selected || selected.phone === undefined || selected.email === undefined) return;
+    const record = contactEditsFrom(selected);
+    const wasSeeded = lastSeededContactRef.current;
+    const idChanged = selected.id !== wasSeeded.id;
+    setContactEdits((prev) => {
+      if (idChanged) return record; // a different contact — the rep's dirty text belonged to the old one
+      const merged = { ...prev };
+      for (const field of CONTACT_EDIT_FIELDS) {
+        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record
+        // else: the rep has typed something else since it was seeded — keep their text
+      }
+      return merged;
+    });
+    lastSeededContactRef.current = { id: selected.id, ...record };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.phone, selected?.email]);
+
+  /** Persists ONE field on blur, sending only that field (PATCH semantics — an omitted key is
+   * left alone). Updates the local options list too, so the picker's own list reflects the edit
+   * without a refetch, and hands the result up through `onChange` — the SAME callback a newly
+   * created contact uses — so the parent marks the quotation dirty and the next draft save
+   * re-snapshots it (DealQuotationService#resolveContact re-reads the live contact by id on
+   * every save; see CustomerController#updateContact's own Javadoc). */
+  async function saveContactField(field) {
+    if (!selected?.id || !customerId) return;
+    const previous = (selected[field] ?? '').toString();
+    const next = (contactEdits[field] ?? '').trim();
+    if (next === previous.trim()) return; // untouched — no request at all
+    const restore = selected;
+    setSavingContactField(field);
+    lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: next };
+    setContactEdits((prev) => ({ ...prev, [field]: next }));
+    const optimistic = { ...selected, [field]: next || null };
+    setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? { ...c, [field]: next || null } : c)));
+    onChange(optimistic);
+    try {
+      const res = await api.customers.updateContact(customerId, selected.id, { [field]: next });
+      const updated = res?.contact ?? optimistic;
+      setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? updated : c)));
+      onChange(updated);
+    } catch (err) {
+      setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? restore : c)));
+      setContactEdits((prev) => ({ ...prev, [field]: previous }));
+      lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
+      onChange(restore);
+      showToast?.('error', err.message || 'บันทึกข้อมูลผู้สั่งซื้อไม่สำเร็จ');
+    } finally {
+      setSavingContactField(null);
+    }
+  }
+
   function closeNewContact() {
     if (saving) return;
     setShowNew(false);
@@ -143,23 +212,48 @@ export function QuotationContactPicker({
           ))}
         </select>
         {/* The ผู้สั่งซื้อ's own โทร./อีเมล — prefilled from the contact record the moment one is
-            picked (a repeat customer's contacts arrive with them), and shown so a gap is visible
-            before the document is sent. The English form prints the email ("E :").
-            Read-only on purpose: there is NO endpoint to update an existing contact
-            (CustomerController has POST /{id}/contacts but no PUT), so offering an edit box here
-            would be a lie — a new ผู้สั่งซื้อ can carry corrected details via "+ เพิ่มผู้สั่งซื้อใหม่". */}
+            picked (a repeat customer's contacts arrive with them), editable in place (gap fix,
+            prod QT-2026-0041-1: a contact created without an e-mail could never gain one) and
+            saved back to PUT /api/customers/{customerId}/contacts/{contactId} on blur — same
+            pattern as CustomerDetailsFields' ที่อยู่/โทร. fields. The English form prints the
+            email ("E :"). A new ผู้สั่งซื้อ with corrected details from the start can still be
+            added via "+ เพิ่มผู้สั่งซื้อใหม่". */}
         {selected ? (
-          <span className="block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
-            {selected.phone === undefined && selected.email === undefined
-              ? 'กำลังโหลดเบอร์โทร/อีเมล…'
-              : (
-                <>
-                  <span className={selected.phone ? '' : 'text-warning'}>โทร. {selected.phone || 'ยังไม่มี'}</span>
-                  {' · '}
-                  <span className={selected.email ? '' : 'text-warning'}>อีเมล {selected.email || 'ยังไม่มี'}</span>
-                </>
-              )}
-          </span>
+          selected.phone === undefined && selected.email === undefined ? (
+            <span className="block text-2xs text-text-muted" data-testid={`${idPrefix}-details`}>
+              กำลังโหลดเบอร์โทร/อีเมล…
+            </span>
+          ) : (
+            <div className="mt-1.5 grid grid-cols-2 gap-2 mobile:grid-cols-1" data-testid={`${idPrefix}-details`}>
+              <label className="m-0">
+                <span className={`text-2xs ${contactEdits.phone ? 'text-text-muted' : 'text-warning'}`}>โทร.{contactEdits.phone ? '' : ' (ยังไม่มี)'}</span>
+                <input
+                  aria-label="แก้ไขโทรศัพท์ผู้สั่งซื้อ"
+                  className="text-2xs"
+                  value={contactEdits.phone}
+                  maxLength={50}
+                  disabled={disabled || savingContactField === 'phone'}
+                  onChange={(e) => setContactEdits((prev) => ({ ...prev, phone: e.target.value }))}
+                  onBlur={() => saveContactField('phone')}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                />
+              </label>
+              <label className="m-0">
+                <span className={`text-2xs ${contactEdits.email ? 'text-text-muted' : 'text-warning'}`}>อีเมล{contactEdits.email ? '' : ' (ยังไม่มี)'}</span>
+                <input
+                  type="email"
+                  aria-label="แก้ไขอีเมลผู้สั่งซื้อ"
+                  className="text-2xs"
+                  value={contactEdits.email}
+                  maxLength={200}
+                  disabled={disabled || savingContactField === 'email'}
+                  onChange={(e) => setContactEdits((prev) => ({ ...prev, email: e.target.value }))}
+                  onBlur={() => saveContactField('email')}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                />
+              </label>
+            </div>
+          )
         ) : null}
       </FormField>
 

@@ -274,6 +274,130 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("id", id), String.class);
     }
 
+    // ── update contact (gap fix, prod QT-2026-0041-1) ─────────────────────────────────────
+
+    /**
+     * {@code PUT /api/customers/{customerId}/contacts/{contactId}} is a NEW write endpoint, gated
+     * by {@link DealEntryAccess#requireCanEnterDeal} — exactly the gate
+     * {@code POST /api/customers/{id}/contacts} uses, no wider. CLAUDE.md requires real-DB evidence
+     * for any authz change: these run the REAL controller over the REAL {@code ContactRepository}
+     * on REAL Postgres, and every denial case is written wrong-way-round — it asks whether a caller
+     * who should NOT be able to rewrite another rep's ผู้สั่งซื้อ can, asserts 403, AND re-reads the
+     * row to prove the value did not move.
+     */
+    @Test
+    void rolesOutsideTheDealEntryGate_cannotUpdateAContact_andTheRowIsUnchanged() throws Exception {
+        long customerId = seedCustomerForUpdate();
+        long contactId = seedContactForUpdate(customerId);
+        for (long actorId : List.of(importUserId, accountUserId, employeeUserId, qcUserId)) {
+            String role = actorId == importUserId ? "import"
+                : actorId == accountUserId ? "account"
+                : actorId == employeeUserId ? "employee" : "qc";
+            customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
+                    .session(session(actorId, role))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"email\":\"hacked-" + role + "@evil.example\"}"))
+                .andExpect(status().isForbidden());
+            assertThat(contactEmailOf(contactId)).as("%s must not have rewritten the row", role)
+                .isEqualTo(SEED_CONTACT_EMAIL);
+        }
+    }
+
+    @Test
+    void salesSalesManagerAndAGrantedQc_canUpdateAContact() throws Exception {
+        long customerId = seedCustomerForUpdate();
+        long contactId = seedContactForUpdate(customerId);
+        // sales: the ordinary rep on the deal card.
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
+                .session(session(employeeUserId, "sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"new1@example.com\"}"))
+            .andExpect(status().isOk());
+        assertThat(contactEmailOf(contactId)).isEqualTo("new1@example.com");
+
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
+                .session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"phone\":\"02-777-0000\"}"))
+            .andExpect(status().isOk());
+        assertThat(contactPhoneOf(contactId)).isEqualTo("02-777-0000");
+        assertThat(contactEmailOf(contactId)).as("a body carrying only phone must not blank the e-mail")
+            .isEqualTo("new1@example.com");
+
+        grantQuotationCapability(qcUserId);
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
+                .session(session(qcUserId, "qc"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"new2@example.com\"}"))
+            .andExpect(status().isOk());
+        assertThat(contactEmailOf(contactId)).isEqualTo("new2@example.com");
+    }
+
+    /** A blank firstName is refused, mirroring the customer update's blank-name refusal. */
+    @Test
+    void blankFirstNameOnContactUpdateIsRefused() throws Exception {
+        long customerId = seedCustomerForUpdate();
+        long contactId = seedContactForUpdate(customerId);
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, contactId)
+                .session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"firstName\":\"\"}"))
+            .andExpect(status().isBadRequest());
+        assertThat(contactFirstNameOf(contactId)).isEqualTo(SEED_CONTACT_FIRST_NAME);
+    }
+
+    /**
+     * A contact id that exists but belongs to a DIFFERENT customer must 404, exactly like the
+     * customer-update 404 above — proves {@link th.co.glr.hr.customer.ContactRepository#update}'s
+     * {@code WHERE contact_id = ... AND customer_id = ...} actually filters, not just the ORM
+     * shape. The row must be unchanged, because a 404 that had already written would be a bug too.
+     */
+    @Test
+    void updatingAContactThroughAMismatchedCustomerIdIs404_andTheRowIsUnchanged() throws Exception {
+        long customerId = seedCustomerForUpdate();
+        long contactId = seedContactForUpdate(customerId);
+        long otherCustomerId = seedCustomerForUpdate();
+
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", otherCustomerId, contactId)
+                .session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"leaked@example.com\"}"))
+            .andExpect(status().isNotFound());
+        assertThat(contactEmailOf(contactId)).as("a mismatched customerId must not have rewritten the row")
+            .isEqualTo(SEED_CONTACT_EMAIL);
+    }
+
+    /** A missing contact is a 404, not a silent 200. */
+    @Test
+    void updatingAContactThatDoesNotExistIs404() throws Exception {
+        long customerId = seedCustomerForUpdate();
+        customerMvc.perform(put("/api/customers/{customerId}/contacts/{contactId}", customerId, 999_999_999L)
+                .session(session(salesManagerId, "sales_manager"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"x@example.com\"}"))
+            .andExpect(status().isNotFound());
+    }
+
+    private static final String SEED_CONTACT_FIRST_NAME = "F7-SEED-CONTACT";
+    private static final String SEED_CONTACT_EMAIL      = "seed-contact@example.com";
+    private static final String SEED_CONTACT_PHONE      = "02-000-0002";
+
+    private long seedContactForUpdate(long customerId) {
+        return new ContactRepository(jdbc)
+            .create(customerId, SEED_CONTACT_FIRST_NAME, "นามสกุลทดสอบ", "ตำแหน่งทดสอบ",
+                SEED_CONTACT_EMAIL, SEED_CONTACT_PHONE)
+            .id();
+    }
+
+    private String contactEmailOf(long contactId) {
+        return jdbc.queryForObject("SELECT email FROM customers.contact WHERE contact_id = :id",
+            Map.of("id", contactId), String.class);
+    }
+
+    private String contactPhoneOf(long contactId) {
+        return jdbc.queryForObject("SELECT phone FROM customers.contact WHERE contact_id = :id",
+            Map.of("id", contactId), String.class);
+    }
+
+    private String contactFirstNameOf(long contactId) {
+        return jdbc.queryForObject("SELECT first_name FROM customers.contact WHERE contact_id = :id",
+            Map.of("id", contactId), String.class);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────
 
     private void grantQuotationCapability(long employeeId) {

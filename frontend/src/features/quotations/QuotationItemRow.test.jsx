@@ -207,6 +207,7 @@ describe('QuotationItemRow', () => {
 
     expect(onChange).toHaveBeenCalledWith({
       model: 'Trilogy X', catalogPriceId: null, catalogSqmPerPiece: null, catalogPriceUnit: null,
+      catalogSizeText: null,
     });
     expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ productCode: expect.anything() }));
   });
@@ -277,6 +278,9 @@ describe('QuotationItemRow', () => {
       // แผ่น/ตร.ม. reciprocal (round2(1/0.72) = 1.39), and the source is 'catalog', not 'manual'.
       catalogSqmPerPiece: 0.72,
       catalogPriceUnit: null,
+      // The picked row's own face size (cm) -- see pickCatalog's own comment for why this is
+      // recorded and never sent to the server.
+      catalogSizeText: '60x120',
       piecesPerSqmDisplay: 1.39,
       sqmPerPieceSource: 'catalog',
       piecesPerBox: 3,
@@ -607,6 +611,100 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
     });
     fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x120' } });
     expect(onChange).toHaveBeenLastCalledWith({ sizeText: '60x120' });
+  });
+
+  // Bug fix (prod QT-2026-0034-1, quotation_id=32, 2026-09-15): a catalogue-resolved row whose
+  // แผ่น/ตร.ม. survived a size retype was exactly the prod bug -- two lines linked to a 600x600mm
+  // catalogue row kept its 0.36 ตร.ม./แผ่น (and its printed 60x60cm size) after being retyped to
+  // "30x60"/"3x60". `catalogSizeText` (set at pick time, see pickCatalog) is what lets the row tell
+  // "same tile, different unit" (keep the catalogue figure) from "a different tile" (recompute).
+  describe('catalogue-resolved value + a genuinely different retyped size (prod QT-2026-0034-1)', () => {
+    function renderCatalogPicked(sizeOverrides = {}) {
+      return renderBlank({
+        catalogPriceId: 99, catalogPriceUnit: 'per_piece',
+        sizeText: '60x60', sqmPerPiece: 0.36, sqmPerPieceSource: 'catalog', catalogSizeText: '60x60',
+        piecesPerSqmDisplay: 2.78,
+        ...sizeOverrides,
+      });
+    }
+
+    it('recomputes แผ่น/ตร.ม. from the new size and flips source to \'size\'', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      expect(onChange).toHaveBeenLastCalledWith({
+        sizeText: '30x60',
+        sqmPerPiece: 0.18,
+        piecesPerSqmDisplay: 5.56,
+        sqmPerPieceSource: 'size',
+      });
+    });
+
+    it('the second prod line ("3x60") recomputes the same way', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '3x60' } });
+      const patch = onChange.mock.calls.at(-1)[0];
+      expect(patch.sizeText).toBe('3x60');
+      expect(patch.sqmPerPieceSource).toBe('size');
+      expect(patch.sqmPerPiece).toBeCloseTo(0.018, 6);
+    });
+
+    it('leaves the catalogue figure UNCHANGED when the retyped size is the SAME tile in millimetres', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '600x600' } });
+      // Only sizeText patches -- sqmPerPiece/source are NOT touched, exactly like the pre-existing
+      // "does not recalculate a catalogue-resolved value" case above.
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '600x600' });
+    });
+
+    it('a \'manual\' value is never overwritten, even on a row that still carries catalogSizeText', () => {
+      const { onChange } = renderCatalogPicked({ sqmPerPieceSource: 'manual', sqmPerPiece: 0.5 });
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
+    });
+
+    // Review fix (2026-09-15): the earlier version of this branch used the NEGATION of "matches",
+    // which treats "can't tell" (an unparseable intermediate) the same as "confirmed different" --
+    // the opposite of the backend's own FALLBACK rule. These four pin the corrected behaviour.
+    it('clearing ขนาด entirely leaves the catalogue figure UNCHANGED (not wiped)', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '' } });
+      // Only sizeText patches -- sqmPerPiece stays 0.36 and source stays 'catalog' because neither
+      // key is even in the patch (the parent's `{ ...item, ...patch }` merge leaves them as they were).
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '' });
+    });
+
+    it('an unparseable intermediate while retyping ("3", then "30x") leaves the catalogue figure UNCHANGED at each step', () => {
+      const { onChange, item, rerender } = renderCatalogPicked();
+
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '3' } });
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '3' });
+
+      // Re-render as the parent would after applying that patch (sqmPerPiece/source untouched),
+      // then continue typing -- "30x" is still unparseable (no second number yet).
+      const patched = { ...item, ...onChange.mock.calls.at(-1)[0] };
+      rerender(<QuotationItemRow item={patched} index={0} onChange={onChange} onRemove={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x' } });
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x' });
+    });
+
+    it('finishing the retype ("30x60") after those unparseable intermediates still recomputes', () => {
+      const { onChange } = renderCatalogPicked({ sizeText: '30x' });
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      expect(onChange).toHaveBeenLastCalledWith({
+        sizeText: '30x60',
+        sqmPerPiece: 0.18,
+        piecesPerSqmDisplay: 5.56,
+        sqmPerPieceSource: 'size',
+      });
+    });
+
+    it('an unparseable catalogSizeText (e.g. a dirty sizeRaw fallback) never triggers the new branch, even for a genuinely different-looking size', () => {
+      const { onChange } = renderCatalogPicked({ catalogSizeText: 'JOLLY COCO 60x120' });
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
+      // Falls through to the existing 'catalog'-source logic: only sizeText patches, nothing wiped
+      // or replaced via the new branch.
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '30x60' });
+    });
   });
 
   it('never fills แผ่น/ตร.ม. from a size on a per_linear_m catalogue row', () => {

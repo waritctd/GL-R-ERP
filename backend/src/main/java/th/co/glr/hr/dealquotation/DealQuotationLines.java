@@ -21,6 +21,10 @@ import java.util.Locale;
 public final class DealQuotationLines {
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
         java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
+    /** Matches a plain "{@code W x H}" pair — see {@link #parseTwoDimensions} for the exact shape
+     * this is meant to recognise (and, as importantly, everything it deliberately does not). */
+    private static final java.util.regex.Pattern TWO_DIMENSIONS = java.util.regex.Pattern.compile(
+        "(?i)^\\s*(\\d+(?:\\.\\d+)?)\\s*[x×*]\\s*(\\d+(?:\\.\\d+)?)\\s*(?:cm\\.?|ซม\\.?|mm\\.?|มม\\.?)?\\s*$");
     private DealQuotationLines() {}
 
     /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
@@ -97,12 +101,35 @@ public final class DealQuotationLines {
      * #findSqmBases}. Divide by 10 for centimetres; {@link #format(BigDecimal)}'s {@code "#,##0.##"}
      * pattern already drops a trailing ".0" (60 cm, never 60.0 cm).
      *
+     * <p><b>REFINEMENT (prod QT-2026-0034-1, quotation_id=32, 2026-09-15).</b> The catalogue-first
+     * rule above was meant for a rep typing the SAME tile's size in an unreliable unit (the
+     * "200x300" example is genuinely a 200mm x 300mm tile). It was never meant to override a rep
+     * who edited the ขนาด field to a genuinely DIFFERENT size on a row that still happens to carry
+     * a catalogue link — that bug printed the linked catalogue's 600x600mm dims on two lines the
+     * rep had retyped to "30x60" and "3x60". So: when {@code sizeText} parses into exactly two
+     * positive numbers (tolerating spaces; {@code x}/{@code X}/{@code ×}/{@code *} as the
+     * separator; a trailing {@code cm}/{@code ซม.}/{@code mm}/{@code มม.} unit; decimals like
+     * "6x24.6") AND that pair equals the catalogue's own face size — compared with {@link
+     * BigDecimal#compareTo}, order-insensitive, in EITHER centimetres or millimetres (so "120x60"
+     * matches a 600x1200mm catalogue row) — the catalogue dims print exactly as before (this is
+     * what keeps the 200x300 regression above, and every other existing case, green). Only when
+     * the typed pair parses AND matches NEITHER unit does the rep's typed text win, printed
+     * verbatim via the FALLBACK below — never unit-guessed. Blank or unparseable {@code sizeText}
+     * (spelled-out shapes, three-number typos, anything the regex does not recognise as two plain
+     * numbers) is unchanged: catalogue dims when present, the FALLBACK otherwise.
+     *
+     * <p>This is a pure render-time rule — {@code sizeText}/{@code catalogWidthMm}/{@code
+     * catalogHeightMm} are re-read from the row's live catalogue link on every load (see {@code
+     * DealQuotationRepository#toItemDto}, ~line 1242) — so it also repairs already-saved documents
+     * like QT-2026-0034-1 the next time they are rendered, with no data migration.
+     *
      * <p><b>FALLBACK</b> — no catalogue dimensions available (no catalog link on the row, or the
-     * linked row has neither dimension populated): print {@code sizeText} EXACTLY AS TYPED, unit
-     * and all, un-split, un-converted. There is no way to tell which unit free text is in from the
-     * text alone, so a size the rep recognises beats a confidently mangled one. Only the thickness
-     * is ever unit-suffixed in this branch — thickness is always entered in millimetres regardless
-     * of source, which is the one thing this method is never unsure about.
+     * linked row has neither dimension populated), OR the typed size parses but matches neither the
+     * catalogue's cm nor mm face size: print {@code sizeText} EXACTLY AS TYPED, unit and all,
+     * un-split, un-converted. There is no way to tell which unit free text is in from the text
+     * alone, so a size the rep recognises beats a confidently mangled one. Only the thickness is
+     * ever unit-suffixed in this branch — thickness is always entered in millimetres regardless of
+     * source, which is the one thing this method is never unsure about.
      *
      * <p>layout-spec §2: when thickness is absent there is NO separate ขนาด row at all — the size
      * already went inline on {@link #descriptionLine} — so this returns {@code null} (not an
@@ -115,8 +142,10 @@ public final class DealQuotationLines {
     }
 
     /** Owner ruling 2026-09-13 (1): {@code Size {w} cm x {h} cm x {t} mm (approx.)} on an English
-     * document — the same face-size resolution (catalogue mm first, the rep's typed text as the
-     * fallback) and the same null-when-no-thickness contract as the Thai line. */
+     * document — the same face-size resolution (catalogue mm first, unless the rep typed a
+     * genuinely different size — see the Thai overload's Javadoc "REFINEMENT" section — with the
+     * rep's typed text as the ultimate fallback) and the same null-when-no-thickness contract as
+     * the Thai line. */
     public static String sizeLine(String documentLanguage, String sizeText, BigDecimal thicknessMm,
                                   BigDecimal catalogWidthMm, BigDecimal catalogHeightMm) {
         boolean en = english(documentLanguage);
@@ -127,7 +156,15 @@ public final class DealQuotationLines {
         }
         String thicknessPart = format(thicknessMm) + " mm";
         String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
-        if (facePart == null && !blank(sizeText)) {
+        if (facePart != null) {
+            BigDecimal[] typed = parseTwoDimensions(sizeText);
+            if (typed != null && !matchesCatalogFaceSize(typed, catalogWidthMm, catalogHeightMm)) {
+                // The rep typed a genuinely DIFFERENT size than the row's linked catalogue tile --
+                // print exactly what they typed rather than the (wrong-for-this-line) catalogue
+                // dims. See this method's Javadoc "REFINEMENT" section -- bug prod QT-2026-0034-1.
+                facePart = sizeText.trim();
+            }
+        } else if (!blank(sizeText)) {
             // FALLBACK: no catalogue geometry -- print exactly what the rep typed. Never split it
             // on "x", never unit-suffix it, never treat SIZE_HAS_UNIT as license to reformat it --
             // see this method's Javadoc for why guessing here was the bug.
@@ -137,6 +174,53 @@ public final class DealQuotationLines {
             return label + thicknessPart + approx;
         }
         return label + facePart + " x " + thicknessPart + approx;
+    }
+
+    /**
+     * Two positive numbers separated by an "x"-like separator ({@code x}/{@code X}/{@code ×}/
+     * {@code *}), tolerating surrounding spaces, decimals ("6x24.6"), and ONE trailing unit token
+     * ({@code cm}/{@code ซม.}/{@code mm}/{@code มม.}) after the pair — not per-number, matching how
+     * reps actually type ("60 x 60 cm", never "60cm x 60cm"). Anything else (a spelled-out shape, a
+     * third number, a non-numeric token) is deliberately treated as unparseable: this method exists
+     * only to detect "the rep typed a plain WxH pair", not to understand free text in general.
+     *
+     * @return the two numbers in the order typed, or {@code null} when {@code sizeText} is blank,
+     *     does not match the two-number shape, or either number is not strictly positive.
+     */
+    private static BigDecimal[] parseTwoDimensions(String sizeText) {
+        if (blank(sizeText)) {
+            return null;
+        }
+        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(sizeText.trim());
+        if (!m.matches()) {
+            return null;
+        }
+        BigDecimal a = new BigDecimal(m.group(1));
+        BigDecimal b = new BigDecimal(m.group(2));
+        if (a.signum() <= 0 || b.signum() <= 0) {
+            return null;
+        }
+        return new BigDecimal[] {a, b};
+    }
+
+    /**
+     * Whether a typed {@code {a, b}} pair is the SAME face size as the catalogue's own
+     * {@code width_mm}/{@code height_mm}, order-insensitive (so "120x60" matches a 600x1200mm
+     * catalogue row) and checked in EITHER unit — millimetres (the pair as stored) or centimetres
+     * (the pair {@link #sizeLine} actually prints) — since a rep might type either. Compares with
+     * {@link BigDecimal#compareTo}, never {@code equals}, so a trailing ".00" never causes a false
+     * mismatch.
+     */
+    private static boolean matchesCatalogFaceSize(BigDecimal[] typed, BigDecimal catalogWidthMm,
+                                                  BigDecimal catalogHeightMm) {
+        BigDecimal catalogWidthCm = catalogWidthMm.movePointLeft(1);
+        BigDecimal catalogHeightCm = catalogHeightMm.movePointLeft(1);
+        return pairMatches(typed[0], typed[1], catalogWidthMm, catalogHeightMm)
+            || pairMatches(typed[0], typed[1], catalogWidthCm, catalogHeightCm);
+    }
+
+    private static boolean pairMatches(BigDecimal a, BigDecimal b, BigDecimal w, BigDecimal h) {
+        return (a.compareTo(w) == 0 && b.compareTo(h) == 0) || (a.compareTo(h) == 0 && b.compareTo(w) == 0);
     }
 
     /**
