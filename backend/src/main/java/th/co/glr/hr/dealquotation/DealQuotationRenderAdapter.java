@@ -107,9 +107,11 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.contactEmail())) {
                 parts.add("E : " + quotation.contactEmail().trim());
             }
-            // #stripPhoneLabel — the stored value may open with its OWN label; see its Javadoc.
-            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
-                parts.add("Tel. " + stripPhoneLabel(quotation.customerPhone()));
+            // Fix (2026-09-15): #effectiveCustomerPhone -- see its Javadoc. #stripPhoneLabel — the
+            // stored value may open with its OWN label; see its Javadoc.
+            String phone = effectiveCustomerPhone(quotation);
+            if (!blank(stripPhoneLabel(phone))) {
+                parts.add("Tel. " + stripPhoneLabel(phone));
             }
             phoneLine = String.join("   ", parts);
         } else {
@@ -148,10 +150,22 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.customerAddress())) {
                 parts.add("ที่อยู่ " + quotation.customerAddress().trim().replace('\n', ' '));
             }
+            // Fix (2026-09-15): production example customer_phone=null, contact_phone=
+            // "062-328-7555", contact_email="qs.twcfurline@gmail.com" printed NEITHER -- this
+            // branch only ever read customerPhone (never contactPhone, which existed on the DTO
+            // unused) and never read contactEmail at all. #effectiveCustomerPhone falls back to the
+            // deal's own contact phone when the customer master carries none, and the e-mail joins
+            // the same ที่อยู่/โทร. line the English branch above already folds Address/E/Tel into
+            // (this template has no free row of its own for either — see the bug-fix comment just
+            // above for why the address already lives here).
+            if (!blank(quotation.contactEmail())) {
+                parts.add("อีเมล " + quotation.contactEmail().trim());
+            }
             // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the customer master
             // row's own phone value opens with the label. See #stripPhoneLabel's Javadoc.
-            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
-                parts.add("โทร. " + stripPhoneLabel(quotation.customerPhone()));
+            String phone = effectiveCustomerPhone(quotation);
+            if (!blank(stripPhoneLabel(phone))) {
+                parts.add("โทร. " + stripPhoneLabel(phone));
             }
             phoneLine = String.join("   ", parts);
         }
@@ -917,6 +931,18 @@ public final class DealQuotationRenderAdapter {
             }
         }
         return false;
+    }
+
+    // ── Fix (2026-09-15, production complaint): customer phone falls back to the deal's own ──
+    // ── contact phone; the contact e-mail joins the same line ────────────────────────────────
+
+    /** The phone to print for this customer: {@code customerPhone} (the customer-master value)
+     * when present, else {@code contactPhone} (the deal's own contact snapshot) -- production
+     * example: {@code customer_phone=null}, {@code contact_phone="062-328-7555"} printed nothing
+     * at all, even though a phone number for this exact deal WAS recorded, just on the contact
+     * rather than the customer row. Shared by both TH/EN branches. */
+    static String effectiveCustomerPhone(DealQuotationDto quotation) {
+        return !blank(quotation.customerPhone()) ? quotation.customerPhone() : quotation.contactPhone();
     }
 
     // ── the customer phone's own label (QT-2026-0032-1, 2026-09-15) ─────────────────────────

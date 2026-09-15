@@ -989,4 +989,63 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.orderedByName(
             quotationWithContact(null, null, null))).isNull();
     }
+
+    // ── fix (2026-09-15): customer phone falls back to the contact phone; contact e-mail prints ──
+
+    /** The exact production example: customer_phone=null, contact_phone="062-328-7555",
+     * contact_email="qs.twcfurline@gmail.com" printed NEITHER -- customerPhone wins when present
+     * (unaffected by this fix, tested separately below), contactPhone is the fallback, and the
+     * e-mail joins the same line. */
+    @Test
+    void thaiDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com", null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com   โทร. 062-328-7555");
+    }
+
+    @Test
+    void thaiDocument_phoneLine_customerPhoneWinsOverContactPhoneWhenBothPresent() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("โทร. 02-999-9999");
+    }
+
+    @Test
+    void thaiDocument_phoneLine_noPhoneAtAll_stillPrintsTheEmailAlone() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, null, "qs.twcfurline@gmail.com", null), null, null);
+        assertThat(model.phoneLine()).isEqualTo("อีเมล qs.twcfurline@gmail.com");
+    }
+
+    @Test
+    void englishDocument_phoneLine_fallsBackToContactPhoneAndPrintsTheContactEmail() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithPhoneAndEmail(null, "062-328-7555", "qs.twcfurline@gmail.com",
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.phoneLine()).isEqualTo("E : qs.twcfurline@gmail.com   Tel. 062-328-7555");
+    }
+
+    @Test
+    void effectiveCustomerPhone_directly_prefersCustomerPhoneThenFallsBackToContactPhone() {
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail("02-999-9999", "062-328-7555", null, null))).isEqualTo("02-999-9999");
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail(null, "062-328-7555", null, null))).isEqualTo("062-328-7555");
+        assertThat(DealQuotationRenderAdapter.effectiveCustomerPhone(
+            quotationWithPhoneAndEmail(null, null, null, null))).isNull();
+    }
+
+    private DealQuotationDto quotationWithPhoneAndEmail(String customerPhone, String contactPhone,
+                                                        String contactEmail, String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, customerPhone,
+            9L, "ผู้ติดต่อทดสอบ", contactPhone, contactEmail, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
 }
