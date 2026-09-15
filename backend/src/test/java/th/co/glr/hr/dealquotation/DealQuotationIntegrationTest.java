@@ -538,6 +538,132 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.parentQuotationId()).isNull();
     }
 
+    // ── owner request (2026-09-16): a revision's submit must read as a REVISION to
+    // sales_manager/ceo, not the identical "รออนุมัติ" text a first-time submit sends ──
+
+    /**
+     * {@link #createRevision}'s own submit (parent {@code APPROVED}): sales_manager + CEO get the
+     * NEW {@code DEAL_QUOTATION_REVISION_SUBMITTED} kind, mailed with the REVISION subject/title
+     * ("ใบเสนอราคาฉบับแก้ไขรออนุมัติ" -- {@code NotificationRepository.TICKET_EVENT_TITLES}), and a
+     * message naming the actor, the new number, and the number it revises -- wired against the
+     * REAL {@link SalesNotificationMailRouter} (see {@link
+     * #submit_actuallyMailsSalesManagerCeoAndRep_throughTheRealMailRouter}'s own Javadoc for why a
+     * bare {@code new DealQuotationService} would be a false positive for the mail assertions).
+     */
+    @Test
+    void createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage() {
+        NotificationEmailService realEmailService =
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
+        NotificationRepository realNotifications = new NotificationRepository(jdbc,
+            new SalesNotificationMailRouter(realEmailService, new SalesMailRecipientRepository(jdbc)));
+        DealQuotationService realQuotationService = transactional(new DealQuotationService(quotationRepository,
+            tickets, customers, contacts, realNotifications, realEmailService, new QuotationRenderer(), employeeAuth,
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", ""));
+
+        DealQuotationDto created = realQuotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = realQuotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            realQuotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        // Isolate the revision submit's OWN mail from the create/submit/approve noise above.
+        mailer.htmlSent.clear();
+
+        DealQuotationDto revision = realQuotationService.createRevision(approved.id(), salesActor);
+        DealQuotationDto revisionSubmitted = realQuotationService.submit(revision.id(), salesActor);
+
+        assertThat(mailer.htmlSent).extracting(sent -> sent[0])
+            .as("sales_manager, ceo, and the rep's own confirmation each sent mail")
+            .containsExactlyInAnyOrder("sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
+        assertThat(mailer.htmlSent)
+            .filteredOn(sent -> !sent[0].equals("sales-dq@glr.co.th"))
+            .as("sales_manager + ceo get the REVISION subject, not the first-time-submit one")
+            .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
+
+        // The message body itself (htmlSent only captures [to, subject] in this fixture) is
+        // asserted through the in-app row instead -- same underlying Postgres row the real mail
+        // router reads from.
+        assertThat(notifications.findByEmployeeId(salesManagerId)).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
+                && n.message().contains(salesActor.name())
+                && n.message().contains(revisionSubmitted.number())
+                && n.message().contains(approved.number()));
+        assertThat(notifications.findByEmployeeId(ceoId)).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
+                && n.message().contains(salesActor.name())
+                && n.message().contains(revisionSubmitted.number())
+                && n.message().contains(approved.number()));
+    }
+
+    /**
+     * {@link #submitAsRevisionOfRejected}'s path (parent {@code DRAFT}, carrying a rejection):
+     * same REVISION kind/subject as {@link
+     * #createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage}
+     * above, PLUS the rejection reason appended to the message -- {@code parent.docStatus()}
+     * being {@code DRAFT} (not {@code approvalNote() != null} alone) is what {@code
+     * notifyRevisionSubmitted} keys the suffix on, since an APPROVED parent's own {@code
+     * approvalNote} is an approval note, not a rejection reason (see that method's own Javadoc).
+     */
+    @Test
+    void submit_afterRejection_mailsAndNotifiesWithTheRevisionSubjectAndTheRejectionReason() {
+        NotificationEmailService realEmailService =
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
+        NotificationRepository realNotifications = new NotificationRepository(jdbc,
+            new SalesNotificationMailRouter(realEmailService, new SalesMailRecipientRepository(jdbc)));
+        DealQuotationService realQuotationService = transactional(new DealQuotationService(quotationRepository,
+            tickets, customers, contacts, realNotifications, realEmailService, new QuotationRenderer(), employeeAuth,
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", ""));
+
+        DealQuotationDto created = realQuotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = realQuotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = realQuotationService.reject(submitted.id(),
+            new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
+        mailer.htmlSent.clear();
+
+        DealQuotationDto resubmitted = realQuotationService.submit(rejected.id(), salesActor);
+
+        assertThat(mailer.htmlSent)
+            .filteredOn(sent -> !sent[0].equals("sales-dq@glr.co.th"))
+            .as("sales_manager + ceo get the REVISION subject on a resubmit-after-ตีกลับ too")
+            .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
+
+        assertThat(notifications.findByEmployeeId(salesManagerId)).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
+                && n.message().contains(salesActor.name())
+                && n.message().contains(resubmitted.number())
+                && n.message().contains(rejected.number())
+                && n.message().contains("แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข"));
+        assertThat(notifications.findByEmployeeId(ceoId)).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
+                && n.message().contains("แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข"));
+    }
+
+    /**
+     * Wrong-way-round (CLAUDE.md's own rule for this kind of assertion): an ORDINARY first-time
+     * submit -- no parent, {@link #submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber}
+     * above already pins {@code parentQuotationId()} null for it -- must NOT use the revision
+     * kind, subject, or wording, byte-identical to before this feature. Guards against the new
+     * {@code parentQuotationId() != null} branch in {@code notifySubmitted} ever being loosened
+     * (or its condition inverted) to fire on a first-time submit too.
+     */
+    @Test
+    void submit_firstTime_doesNotUseTheRevisionKindSubjectOrMessage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+
+        assertThat(submitted.parentQuotationId()).isNull();
+        List<NotificationDto> managerNotifications = notifications.findByEmployeeId(salesManagerId);
+        assertThat(managerNotifications).noneMatch(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"));
+        assertThat(managerNotifications).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_SUBMITTED")
+                && n.message().equals("ใบเสนอราคา " + submitted.number() + " รอการอนุมัติ")
+                && !n.message().contains("ฉบับแก้ไข"));
+        List<NotificationDto> ceoNotifications = notifications.findByEmployeeId(ceoId);
+        assertThat(ceoNotifications).noneMatch(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"));
+    }
+
     /** The revision must copy the rejected draft's CURRENT (edited-after-rejection) data, not a
      * stale snapshot from before the rework -- the same verbatim-copy contract
      * {@code createRevision_carriesPriceModeAndEveryRowTypeVerbatim} pins for an ordinary

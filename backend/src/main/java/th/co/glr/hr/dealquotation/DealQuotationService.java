@@ -529,11 +529,25 @@ public class DealQuotationService {
         // silently swallowed, though the in-app bell rows still landed since that INSERT runs
         // synchronously and simply joins the ambient transaction like any other write here -- no
         // manual deferral needed for it to roll back together with everything else.
-        notifySubmitted(submitted);
+        notifySubmitted(submitted, actor);
         return submitted;
     }
 
-    private void notifySubmitted(DealQuotationDto submitted) {
+    /**
+     * Owner request (2026-09-16): a submitted row that is a revision -- {@code
+     * parentQuotationId() != null}, true for BOTH {@link #createRevision}'s own submit (parent
+     * {@code APPROVED}) and {@link #submitAsRevisionOfRejected}'s (parent {@code DRAFT}, carrying
+     * a rejection reason in its own {@code approvalNote}) -- must read as a REVISION to
+     * sales_manager/ceo, not the identical "รออนุมัติ" text an ordinary first-time submit sends; a
+     * reviewer skimming the bell/inbox otherwise has no way to tell the two apart. First-time
+     * submits ({@code parentQuotationId() == null}) fall straight through to the original
+     * unchanged branch below.
+     */
+    private void notifySubmitted(DealQuotationDto submitted, UserPrincipal actor) {
+        if (submitted.parentQuotationId() != null) {
+            notifyRevisionSubmitted(submitted, submitted.parentQuotationId(), actor);
+            return;
+        }
         String message = "ใบเสนอราคา " + submitted.number() + " รอการอนุมัติ";
         String link = "/quotations/" + submitted.id();
         notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
@@ -546,6 +560,41 @@ public class DealQuotationService {
         // still written from the rep's own point of view.
         notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
             "ส่งใบเสนอราคา " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
+    }
+
+    /**
+     * The revision half of {@link #notifySubmitted} above. Looks the parent up (a plain {@link
+     * #requireQuotation}, no access re-check -- the actor already passed {@link
+     * #requireEditAccessForQuotation} against the CURRENT row earlier in {@link #submit}, and the
+     * parent is the very row that row was copied from) purely to read its {@code number()} and,
+     * for the resubmit-after-ตีกลับ path only, its rejection reason.
+     *
+     * <p>{@code parent.docStatus()} is what actually tells the two {@link #insertRevisionCopyOf}
+     * callers apart, NOT {@code approvalNote() != null} alone: {@link #createRevision} requires an
+     * {@code APPROVED} source, and an approved row's own {@code approvalNote} is whatever the
+     * approver typed (see {@code acceptanceScenario_createUpdateSubmitApprove}'s "อนุมัติแล้ว"),
+     * which would be a false "ตีกลับ" reading here. {@link #submitAsRevisionOfRejected} requires a
+     * {@code DRAFT} source carrying a PRIOR rejection decision, and ตีกลับ itself never renumbers
+     * (see this class's own status-machine comment above {@link #submit}) -- so the parent is
+     * STILL {@code DRAFT} at this point, with {@code approvalNote} holding the rejection reason,
+     * not yet superseded (that only happens once THIS revision itself reaches {@code APPROVED}).
+     */
+    private void notifyRevisionSubmitted(DealQuotationDto submitted, long parentId, UserPrincipal actor) {
+        DealQuotationDto parent = requireQuotation(parentId);
+        StringBuilder message = new StringBuilder()
+            .append(actor.name()).append(" ได้จัดทำใบเสนอราคาฉบับแก้ไข ").append(submitted.number())
+            .append(" (แก้ไขจาก ").append(parent.number()).append(") กรุณาตรวจสอบและพิจารณาอนุมัติ");
+        if (QuotationStatus.DRAFT.equals(parent.docStatus()) && !isBlank(parent.approvalNote())) {
+            message.append(" — แก้ไขตามที่ตีกลับ: ").append(parent.approvalNote());
+        }
+        String link = "/quotations/" + submitted.id();
+        notifications.notifyByRoleAtLink(
+            "sales_manager", TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED, message.toString(), link);
+        notifications.notifyByRoleAtLink(
+            "ceo", TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED, message.toString(), link);
+        // Same rep/creator confirmation as the first-time-submit branch, worded for a revision.
+        notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
+            "ส่งใบเสนอราคาฉบับแก้ไข " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
     }
 
     @Transactional
