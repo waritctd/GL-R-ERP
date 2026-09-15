@@ -44,6 +44,20 @@ function editsFrom(customer) {
  *
  * Contract: `customer` is the record (or a stand-in carrying `id`); `onChange(next)` receives the
  * record the SERVER says it stored (optimistic first, rolled back on refusal).
+ *
+ * ลูกค้าต่างประเทศ switch (bug fix, prod customer_id 4326 "DONG NGO GROUP..." / QT-2026-0039-1): a
+ * customer already saved with a Thai structured address (`provinceCode` set) had its ที่อยู่
+ * textarea permanently `readOnly` — the only editor was "แก้ไขที่อยู่แบบแยกจังหวัด", which requires
+ * `completeThaiAddress(...)` and so could never turn INTO a foreign/free-text address. 4326 is a
+ * Vietnamese customer that got fake Thai codes because the rep had no real way to say otherwise.
+ * `foreignSwitch` (reset whenever `customer?.id` changes, or a switch attempt is refused) unlocks
+ * the textarea for a currently-structured customer, reusing DealCustomerCard's exact checkbox
+ * label. Saving still goes through the existing generic `saveField('address')` below, which
+ * already sends ONLY `{ address }` — no structured keys, not even blank ones — and
+ * `CustomerRepository#update` (verified 2026-09-15) already clears every structured column to
+ * NULL whenever `:address` is non-null, so no backend change was needed, only this frontend gate.
+ * A customer that already has no `provinceCode` keeps today's behaviour unchanged (free-text
+ * textarea, no checkbox shown — there is nothing to switch out of).
  */
 export function CustomerDetailsFields({ customer, onChange, showToast, disabled = false }) {
   // Own local state rather than editing `customer` on every keystroke, so a half-typed value never
@@ -58,6 +72,10 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const [savingField, setSavingField] = useState(null);
   const queryClient = useQueryClient();
   const [addressEdit, setAddressEdit] = useState(null);
+  // "ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย" — see the component doc above. Only meaningful while
+  // `customer?.provinceCode` is set (a currently-structured customer); reset per customer below and
+  // on a refused switch, so it never survives onto a different record.
+  const [foreignSwitch, setForeignSwitch] = useState(false);
   // What this component itself last put into each field (the record's value, or a save's own
   // in-flight/rolled-back value) — the baseline a field is compared against to tell "still what we
   // seeded" (safe to re-seed) from "the rep typed something else" (leave it alone). `id` tracks
@@ -98,6 +116,7 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     // instead keeps the comparison correct regardless of when React actually calls the updater.
     const wasSeeded = lastSeededRef.current;
     const idChanged = customer?.id !== wasSeeded.id;
+    if (idChanged) setForeignSwitch(false); // a dirty ลูกค้าต่างประเทศ toggle belonged to the OLD customer
     setEdits((prev) => {
       if (idChanged) return record; // a different customer — the rep's dirty text belonged to the old one
       const merged = { ...prev };
@@ -145,6 +164,10 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
       onChange(restore);
       setEdits((prev) => ({ ...prev, [field]: previous }));
       lastSeededRef.current = { ...lastSeededRef.current, [field]: previous };
+      // A refused switch-to-foreign leaves the customer structured (restored above) — drop the
+      // toggle too, so the textarea goes back to readOnly rather than looking "unlocked" over a
+      // value that was never actually saved.
+      if (field === 'address') setForeignSwitch(false);
       showToast?.('error', error.message || 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
     } finally {
       setSavingField(null);
@@ -208,11 +231,22 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
             placeholder="เลขที่ ถนน แขวง/ตำบล เขต/อำเภอ จังหวัด รหัสไปรษณีย์"
             maxLength={2000}
             disabled={disabled || savingField === 'address'}
-            readOnly={Boolean(customer?.provinceCode)}
+            readOnly={Boolean(customer?.provinceCode) && !foreignSwitch}
             onChange={(e) => setEdits((prev) => ({ ...prev, address: e.target.value }))}
             onBlur={() => saveField('address')}
           />
         </FormField>
+        {customer?.provinceCode ? (
+          <label className="m-0 mb-1 flex items-center gap-1.5 text-2xs">
+            <input
+              type="checkbox"
+              checked={foreignSwitch}
+              disabled={disabled || savingField === 'address'}
+              onChange={(e) => setForeignSwitch(e.target.checked)}
+            />
+            ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย
+          </label>
+        ) : null}
         <Button variant="text" disabled={disabled || Boolean(savingField)} onClick={() => {
           const draft = emptyThaiAddress();
           Object.keys(draft).forEach((key) => { draft[key] = customer[key] ?? ''; });
