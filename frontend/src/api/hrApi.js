@@ -542,6 +542,11 @@ export const api = {
     search: (q) => apiRequest(API_ROUTES.customers.search(q ?? '')),
     contacts: (customerId) => apiRequest(API_ROUTES.customers.contacts(customerId)),
     createContact: (customerId, payload) => apiRequest(API_ROUTES.customers.createContact(customerId), { method: 'POST', body: payload }),
+    // Gap fix (prod QT-2026-0041-1): a rep created a ผู้สั่งซื้อ without an e-mail and had no way
+    // to add one later. PATCH semantics on the PUT verb, same discipline as customers.update above
+    // — send ONLY the changed fields; an omitted field is left alone (CustomerController#updateContact).
+    // Gated by DealEntryAccess, exactly like createContact().
+    updateContact: (customerId, contactId, payload) => apiRequest(API_ROUTES.customers.updateContact(customerId, contactId), { method: 'PUT', body: payload }),
     projects: (customerId) => apiRequest(API_ROUTES.customers.projects(customerId)),
     createProject: (customerId, payload) => apiRequest(API_ROUTES.customers.createProject(customerId), { method: 'POST', body: payload }),
   },
