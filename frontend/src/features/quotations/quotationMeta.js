@@ -1034,7 +1034,6 @@ export const QUOTATION_CHECK = Object.freeze({
   PROJECT: 'project',
   DEAL_PROJECT: 'dealProject',
   CONTACT: 'contact',
-  DESIGNER: 'designer',
   CONTACT_PHONE: 'contactPhone',
   CONTACT_EMAIL: 'contactEmail',
   CUSTOMER_ADDRESS: 'customerAddress',
@@ -1115,8 +1114,6 @@ export function buildQuotationChecklist({
   projectName = undefined,
   contact = null,
   contactFieldId = 'quotation-contact',
-  terms = undefined,
-  designerFieldId = 'quotation-designer-picker',
   items = [],
   itemErrorsByRow = [],
   adjustments = [],
@@ -1136,9 +1133,9 @@ export function buildQuotationChecklist({
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }
   if (!contact?.id) push(QUOTATION_CHECK.CONTACT, 'กรุณาระบุผู้สั่งซื้อ', contactFieldId);
-  if (terms && blankValue(terms.unitCode)) {
-    push(QUOTATION_CHECK.DESIGNER, 'ยังไม่ได้เลือกผู้ออกแบบ', designerFieldId);
-  }
+  // ผู้ออกแบบ (unitCode) and ฝ่าย (deptCode) are deliberately NOT checked — owner ruling 2026-09-16,
+  // "make ผู้ออกแบบ optional including ฝ่าย". The backend never required either; this list used to
+  // warn "ยังไม่ได้เลือกผู้ออกแบบ", which read as a required field.
 
   if (customer) {
     if (customer.address !== undefined && blankValue(customer.address)) {

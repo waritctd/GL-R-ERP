@@ -812,8 +812,6 @@ export function QuotationEditorPage({ user, showToast }) {
     projectName: checklistProjectName,
     contact,
     contactFieldId: isInlineCreate ? 'deal-contact' : 'quotation-contact',
-    terms,
-    designerFieldId: `${isInlineCreate ? 'inline-quotation' : 'quotation'}-designer-picker`,
     items,
     itemErrorsByRow,
     adjustments,
@@ -822,7 +820,7 @@ export function QuotationEditorPage({ user, showToast }) {
     // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
     priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
-  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, terms, items, itemErrorsByRow,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);

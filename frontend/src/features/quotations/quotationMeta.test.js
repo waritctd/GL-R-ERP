@@ -971,7 +971,7 @@ describe('buildQuotationChecklist', () => {
       ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'designer']
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
   });
 
@@ -979,11 +979,14 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
   });
 
-  it('WARNS (does not block) when a designer has not been selected, and passes when the saved code exists', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '' } });
-    expect(blocking(entries)).toEqual([]);
-    expect(entries).toEqual([{ check: 'designer', message: 'ยังไม่ได้เลือกผู้ออกแบบ', targetId: 'quotation-designer-picker', blocking: false }]);
-    expect(meta.buildQuotationChecklist({ ...complete, terms: { unitCode: 'A001' } })).toEqual([]);
+  // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on
+  // the backend and never blocking; the checklist still listed "ยังไม่ได้เลือกผู้ออกแบบ" as missing
+  // information, which read as required. Wrong-way-round: neither a blank designer (unitCode) nor a
+  // blank ฝ่าย (deptCode) may produce ANY checklist entry, warning or blocking.
+  it('never lists ผู้ออกแบบ or ฝ่าย as missing — both are optional', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '', deptCode: '' } });
+    expect(entries).toEqual([]);
+    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('designer');
   });
 
   it('BLOCKS on a missing ผู้สั่งซื้อ, with the backend\'s own wording, and targets the picker', () => {
