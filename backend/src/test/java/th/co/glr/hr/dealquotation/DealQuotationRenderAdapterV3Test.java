@@ -944,6 +944,39 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("จรินางค์ ใจดี")).isFalse();
     }
 
+    /** Review fix (2026-09-15): a plain {@code startsWith} misread these real Thai given names --
+     * each one happens to OPEN with the same letters as an honorific, but the letter right after
+     * is a Thai FOLLOWING vowel sign that attaches to the preceding consonant, so the "honorific"
+     * is really just the opening syllable of one longer word. These must NOT be read as
+     * already-prefixed (i.e. this returns {@code false}, and the adapter's "คุณ"/no-"คุณ" logic
+     * would still add "คุณ" in front, exactly as it would for any other honorific-less name). */
+    @Test
+    void hasThaiHonorificPrefix_aRealNameThatMerelyOpensWithTheSameLettersIsNotMisread() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณากร ใจดี")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณัญญา สุขใจ")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นายิกา ดี")).isFalse();
+    }
+
+    /** The counter-cases proving the boundary check is the right ONE signal, not merely "reject
+     * more names": a SPACE and a LEADING vowel (เ/แ/โ/ใ/ไ) both still count as a genuine honorific
+     * boundary, because neither can ever be part of the SAME word as the consonant before it. */
+    @Test
+    void hasThaiHonorificPrefix_aSpaceOrALeadingVowelAfterTheHonorificStillCounts() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณ ปิยพร")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณเอก")).isTrue();
+    }
+
+    /** Review fix (2026-09-15), end-to-end: "คุณากร ใจดี" is a real given name, not an
+     * already-honorific-prefixed one -- the attn line must still gain its OWN "คุณ", the same as
+     * any other honorific-less contact. Before the boundary check this printed with no "คุณ" at
+     * all, having (wrongly) read "คุณากร" as "already has one". */
+    @Test
+    void thaiDocument_attnLine_stillPrefixesKhunForARealNameThatMerelyOpensWithTheSameLetters() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("คุณากร ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณคุณากร ใจดี   /   บริษัท ทดสอบ จำกัด");
+    }
+
     /** A genuine person contact with NO honorific at all still gets "คุณ" prefixed, exactly as
      * before -- this fix must not remove the "คุณ" prefix for the common case, only skip it when
      * one is already present. */

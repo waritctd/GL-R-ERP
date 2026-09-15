@@ -960,18 +960,45 @@ public final class DealQuotationRenderAdapter {
      * #THAI_HONORIFIC_PREFIXES} -- production bug, contact_name = "คุณปิยพร เมืองจีน" printed
      * "เรียน คุณคุณปิยพร เมืองจีน" because the value stored on the deal already carried its own
      * honorific and the attn-line builder prefixed a second one. Checked as a PREFIX only, exactly
-     * like {@link #ORG_NAME_PREFIXES} -- a name that merely contains "นาง" mid-word does not count. */
+     * like {@link #ORG_NAME_PREFIXES} -- a name that merely contains "นาง" mid-word does not count.
+     *
+     * <p>Review fix (2026-09-15): a bare {@code startsWith} also matched real Thai given names
+     * that happen to OPEN with the same letters as an honorific -- "คุณากร ใจดี", "คุณาพร",
+     * "คุณัญญา", "นายิกา" all start with "คุณ"/"นาย", which used to read as "already prefixed" and
+     * printed "เรียน คุณากร ใจดี" with no "คุณ" at all. {@link #isThaiHonorificBoundary} is the
+     * fix: a prefix only counts when the very next character is NOT a Thai FOLLOWING vowel/tone
+     * mark (one that attaches to the preceding consonant rather than opening a new syllable) --
+     * the same signal that tells "คุณ" + "ปิยพร" (a genuine honorific + name, next char a plain
+     * consonant) apart from "คุณ" + "ากร" (one word, next char a following vowel). A leading vowel
+     * (เ/แ/โ/ใ/ไ) always starts a new syllable and so is still a valid boundary -- "คุณเอก" is
+     * "คุณ" + "เอก", not a longer word. */
     static boolean hasThaiHonorificPrefix(String name) {
         if (blank(name)) {
             return false;
         }
         String trimmed = normalizeWhitespace(name);
         for (String prefix : THAI_HONORIFIC_PREFIXES) {
-            if (trimmed.startsWith(prefix)) {
+            if (trimmed.startsWith(prefix) && isThaiHonorificBoundary(trimmed, prefix.length())) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** {@code true} when index {@code afterPrefix} of {@code trimmed} is either past the end of
+     * the string, or a character that is NOT a Thai "following" vowel sign or tone/diacritic mark
+     * (U+0E30–U+0E3A: ะ ั า ำ ิ ี ึ ื ุ ู ฺ; U+0E47–U+0E4E: ็ ่ ้ ๊ ๋ ์ ํ ๎) -- those marks attach
+     * to the PRECEDING consonant and so mean the candidate prefix is the opening of one longer
+     * word, not a standalone honorific followed by a name. Everything else -- a consonant, a
+     * LEADING vowel (เ แ โ ใ ไ, U+0E40–U+0E44), whitespace, a Latin character, or end of string --
+     * is a genuine word boundary. */
+    private static boolean isThaiHonorificBoundary(String trimmed, int afterPrefix) {
+        if (afterPrefix >= trimmed.length()) {
+            return true;
+        }
+        char c = trimmed.charAt(afterPrefix);
+        boolean followingVowelOrTone = (c >= 'ะ' && c <= 'ฺ') || (c >= '็' && c <= '๎');
+        return !followingVowelOrTone;
     }
 
     // ── Fix (2026-09-15, production complaint): customer phone falls back to the deal's own ──
