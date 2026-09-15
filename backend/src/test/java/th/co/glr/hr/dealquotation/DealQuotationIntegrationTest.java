@@ -43,7 +43,9 @@ import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationDto;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesMailRecipientRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
+import th.co.glr.hr.notification.SalesNotificationMailRouter;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -216,6 +218,67 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // hand-wired call — see DealQuotationService#afterCommit's "no transaction, no deferral").
         assertThat(mailer.attachmentsSent).isNotEmpty();
         assertThat(mailer.attachmentsSent.get(0)[1]).contains(approved.number());
+    }
+
+    /**
+     * Regression test for a double-{@code afterCommit}-defer bug (found 2026-09-15): {@code
+     * submitDraftRow} used to wrap {@code notifySubmitted(submitted)} in this class's OWN {@code
+     * afterCommit()} helper, on top of the fact that {@code notifyByRoleAtLink}/{@code
+     * notifyEmployeeAtLink} already defer their OWN mail send until commit via {@code
+     * notification.AfterCommit.run()} inside {@link SalesNotificationMailRouter}. That is a SECOND
+     * {@code TransactionSynchronization} registered from inside the FIRST one's own {@code
+     * afterCommit()} callback — proven (a standalone repro against this repo's exact Spring 7.0.8)
+     * to be silently dropped: the nested synchronization's {@code afterCommit()} never runs, even
+     * though {@code isSynchronizationActive()} still reads {@code true} at the point it is
+     * registered. So EVERY mail {@code notifySubmitted()} sends — sales_manager, ceo, and the rep's
+     * own submission confirmation — was silently swallowed, while the in-app bell rows (a plain,
+     * synchronous {@code INSERT} that simply joins the ambient transaction, no manual deferral
+     * needed) still landed fine.
+     *
+     * <p>The {@code @BeforeEach}-wired {@code notifications}/{@code quotationService} use {@code
+     * SalesNotificationMailer.NO_OP}, which structurally cannot see this bug — {@code NO_OP} never
+     * defers at all, so double-deferring on top of it is a no-op on a no-op. This test wires the
+     * REAL {@link SalesNotificationMailRouter} (backed by the shared {@link CapturingMailer}) so a
+     * reintroduced double-defer fails this test loudly instead of being invisible again, exactly as
+     * it was invisible to {@link #acceptanceScenario_createUpdateSubmitApprove} above despite that
+     * test asserting the in-app rows correctly the whole time.
+     *
+     * <p><b>Must go through {@link #transactional}, not a bare {@code new DealQuotationService}
+     * call.</b> This whole suite hand-wires services with {@code new} (see {@code
+     * AbstractPostgresIntegrationTest}'s own Javadoc on {@code transactional}), so a plain call has
+     * NO Spring AOP proxy and {@code @Transactional} is inert — every {@code afterCommit}-style
+     * defer then hits its own "no transaction active" fallback and just runs the action inline, mail
+     * included, regardless of whether the double-defer bug is present or fixed. Confirmed by first
+     * getting this test to pass identically against BOTH the buggy and the fixed service when called
+     * bare — a false-positive green that proved nothing. Wrapping in {@code transactional(...)}
+     * gives a REAL {@code PlatformTransactionManager}-driven commit, which is what actually
+     * distinguishes the two: bare-called, the bug is unreachable; proxied, it reproduces.
+     */
+    @Test
+    void submit_actuallyMailsSalesManagerCeoAndRep_throughTheRealMailRouter() {
+        NotificationEmailService realEmailService =
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
+        NotificationRepository realNotifications = new NotificationRepository(jdbc,
+            new SalesNotificationMailRouter(realEmailService, new SalesMailRecipientRepository(jdbc)));
+        DealQuotationService realQuotationService = transactional(new DealQuotationService(quotationRepository,
+            tickets, customers, contacts, realNotifications, realEmailService, new QuotationRenderer(), employeeAuth,
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", ""));
+
+        DealQuotationDto created = realQuotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        realQuotationService.submit(created.id(), salesActor);
+
+        assertThat(mailer.htmlSent).as("sales_manager, ceo, and the rep's own confirmation each sent mail")
+            .hasSize(3);
+        // "rarm@glr.co.th" is SalesNotificationMailRouter.CEO_MAILBOX -- package-private there
+        // (th.co.glr.hr.notification), not reachable from this package, so hardcoded verbatim.
+        assertThat(mailer.htmlSent).extracting(sent -> sent[0]).containsExactlyInAnyOrder(
+            "sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
+        // The subject is the fixed TICKET_EVENT_TITLES entry for DEAL_QUOTATION_SUBMITTED
+        // ("ใบเสนอราคารออนุมัติ"), the same for all three recipients regardless of each call's own
+        // message text -- NotificationRepository#ticketEventTitle, prefixed "[GL&R HR] " by
+        // NotificationEmailService#send.
+        assertThat(mailer.htmlSent).allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคารออนุมัติ"));
     }
 
     /**
@@ -1597,12 +1660,18 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * mailer" the report's evidence for the approval email cites. */
     private static final class CapturingMailer implements Mailer {
         final List<String[]> attachmentsSent = new ArrayList<>();
+        // The branded HTML notification path (NotificationEmailService#send -> Mailer#sendHtml) --
+        // distinct from attachmentsSent above, which is the dead PDF-attachment path's own mailer
+        // call. {to, subject} per send, in call order.
+        final List<String[]> htmlSent = new ArrayList<>();
 
         @Override
         public void send(String to, String subject, String body) {}
 
         @Override
-        public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {}
+        public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
+            htmlSent.add(new String[]{to, subject});
+        }
 
         @Override
         public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {

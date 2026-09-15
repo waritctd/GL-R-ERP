@@ -16,8 +16,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -398,12 +396,22 @@ public class DealQuotationService {
         DealQuotationDto submitted = requireQuotation(id);
         tickets.addEvent(submitted.ticketId(), actor.id(), actor.name(), TicketEventKind.SUBMITTED, null, null,
             "ส่งใบเสนอราคา " + submitted.number() + " ขออนุมัติ");
-        // M5: notify() used to run the role fan-out (2 inserts + 2 emails via SalesNotificationMailer)
-        // INSIDE this transaction. Same reasoning as #approve's own afterCommit -- mail (and the
-        // in-app row alongside it here, since notifyByRoleAtLink does both in one call) must not be
-        // observable before the submit itself is durable; a rollback after this line would otherwise
-        // have already notified sales_manager/ceo about a submission that never actually happened.
-        afterCommit(() -> notifySubmitted(submitted));
+        // Call directly, exactly like #approve/#reject call notifyRepAndCreator directly -- NOT
+        // wrapped in this class's own afterCommit(). That used to wrap this call (M5), on the
+        // reasoning that mail/the in-app row must not be observable before the submit is durable.
+        // That reasoning is sound but the mechanism was wrong: notifyByRoleAtLink/notifyEmployeeAtLink
+        // already defer their OWN mail send until commit, via notification.AfterCommit.run() inside
+        // SalesNotificationMailRouter -- the same single-defer mechanism #approve/#reject already
+        // rely on below. Wrapping notifySubmitted() in a SECOND, service-local afterCommit() double-
+        // registered a TransactionSynchronization from inside another synchronization's own
+        // afterCommit() callback, and Spring silently drops that (confirmed against this repo's
+        // Spring 7.0.8: the nested synchronization's afterCommit() never runs, even though
+        // isSynchronizationActive() still reads true when it is registered) -- so EVERY mail from
+        // notifySubmitted() (sales_manager, ceo, and the rep's own submission confirmation) was
+        // silently swallowed, though the in-app bell rows still landed since that INSERT runs
+        // synchronously and simply joins the ambient transaction like any other write here -- no
+        // manual deferral needed for it to roll back together with everything else.
+        notifySubmitted(submitted);
         return submitted;
     }
 
@@ -734,23 +742,6 @@ public class DealQuotationService {
         } catch (Exception e) {
             log.error("Deal quotation approval email failed: to={}", email, e);
         }
-    }
-
-    /** Defers a side effect (the approval email) until the surrounding transaction commits — mail
-     * cannot be un-sent. Same "no transaction, no deferral" contract as this codebase's existing
-     * {@code th.co.glr.hr.notification.AfterCommit} (package-private there; reimplemented here
-     * rather than reaching into that package for one static method). */
-    private static void afterCommit(Runnable action) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                action.run();
-            }
-        });
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
