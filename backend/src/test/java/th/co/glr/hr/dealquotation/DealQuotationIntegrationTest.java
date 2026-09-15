@@ -2952,6 +2952,178 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("1000.00");
     }
 
+    // ── Quotation arithmetic reconciliation (2026-09-15) — service-level reproductions of five
+    // ── of the owner's real printed documents, through create()+get() against real Postgres.
+    // ── D6 (English per-sqm boxes) is already pinned in DealQuotationEnglishIntegrationTest;
+    // ── not duplicated here. D2/D4/D9 have no service-level equivalent (D2/D4 are plain-row
+    // ── totals identical in shape to D1/D8 below; D9 is pieces-only, already pinned at the
+    // ── WastageCalculator layer by WastageCalculatorTest/QuotationGoldenDocumentsTest). ────────
+
+    @Test
+    void goldenDocument_D1_QN6900971_4_plainRowsWithDiscount20pct() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItemWithDiscount("สุขภัณฑ์ 1", "1", "ชุด", "58889.72", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 2", "1", "ชุด", "12143.93", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 3", "1", "ชุด", "8900.00", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 4", "1", "ชุด", "36598.13", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5", "2", "ชุด", "35433.64", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.1", "2", "ชุด", "45581.31", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.2", "2", "ชุด", "36764.49", "20"),
+                // Bold in the plan: proves amount = round2(list × qty × (1 − pct/100)), not
+                // round2(round2(net) × qty) — the double-rounded formula gives 35,799.64 here.
+                plainItemWithDiscount("สุขภัณฑ์ 5.3", "2", "ชุด", "22374.77", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.4", "2", "ชุด", "10314.02", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.5", "2", "ชุด", "7153.27", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.6", "2", "ชุด", "10314.02", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.7", "2", "ชุด", "7153.27", "20"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(12);
+        String[] nets = {"47111.78", "9715.14", "7120.00", "29278.50", "28346.91", "36465.05", "29411.59",
+            "17899.82", "8251.22", "5722.62", "8251.22", "5722.62"};
+        String[] amounts = {"47111.78", "9715.14", "7120.00", "29278.50", "56693.82", "72930.10", "58823.18",
+            "35799.63", "16502.43", "11445.23", "16502.43", "11445.23"};
+        for (int i = 0; i < saved.items().size(); i++) {
+            var item = saved.items().get(i);
+            assertThat(item.netUnitPrice()).as("D1 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D1 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("373367.47");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("26135.72");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("399503.19");
+    }
+
+    @Test
+    void goldenDocument_D3_QN6900981_1_areaModeSpecialSqmNoWastage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                // Row 1: 2,793 × 1.39 = 3,882.27 HALF_UPs to the printed 3,882 (an even box
+                // multiple already) — CEILING would give 3,883, box-rounding up to 3,884.
+                areaSpecialSqmItem("2793", "0.72", 2, "790"),
+                areaSpecialSqmItem("274", "0.72", 2, "790"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(2);
+        assertThat(saved.items().get(0).piecesFinal()).isEqualTo(3882);
+        assertThat(saved.items().get(0).netUnitPrice()).isEqualByComparingTo("531.16");
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("2061963.12");
+        assertThat(saved.items().get(1).piecesFinal()).isEqualTo(382);
+        assertThat(saved.items().get(1).netUnitPrice()).isEqualByComparingTo("531.16");
+        assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("202903.12");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("2264866.24");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("158540.64");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("2423406.88");
+    }
+
+    @Test
+    void goldenDocument_D5_QN6900704_2_piecesModeSpecialSqmWithAdjustment() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                piecesTileSpecialSqmItem(329, 3, "881.46", "1350", "0.36"),
+                piecesTileSpecialSqmItem(202, 4, "843.14", "1400", "0.36"),
+                piecesTileSpecialSqmItem(1161, 4, "881.46", "1350", "0.36"),
+                piecesTileSpecialSqmItem(1100, 4, "900.63", "1350", "0.36"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(5);
+        int[] finalPieces = {330, 204, 1164, 1100};
+        String[] nets = {"453.84", "470.65", "453.84", "453.84"};
+        String[] amounts = {"149767.20", "96012.60", "528269.76", "499224.00"};
+        for (int i = 0; i < 4; i++) {
+            var item = saved.items().get(i);
+            assertThat(item.piecesFinal()).as("D5 row %s pieces", i + 1).isEqualTo(finalPieces[i]);
+            assertThat(item.netUnitPrice()).as("D5 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D5 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.items().get(4).lineAmount()).isEqualByComparingTo("-38198.21");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("1235075.35");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("86455.27");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("1321530.62");
+    }
+
+    @Test
+    void goldenDocument_D7_QN6900648_areaModeSpecialSqmNoWastage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                areaSpecialSqmItem("945", "0.72", 2, "1800"),
+                areaSpecialSqmItem("339", "0.72", 2, "1800"),
+                areaSpecialSqmItem("159", "0.72", 2, "860"),
+                // The OTHER headline R-B example: 511 × 1.39 = 710.29 HALF_UPs to the printed
+                // 710 (already even); CEILING gives 711, box-rounding up again to 712.
+                areaSpecialSqmItem("511", "0.72", 2, "1800"),
+                areaSpecialSqmItem("1200", "0.72", 2, "1800"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(5);
+        int[] pieces = {1314, 472, 222, 710, 1668};
+        String[] nets = {"1210.25", "1210.25", "578.23", "1210.25", "1210.25"};
+        String[] amounts = {"1590268.50", "571238.00", "128367.06", "859277.50", "2018697.00"};
+        for (int i = 0; i < 5; i++) {
+            var item = saved.items().get(i);
+            assertThat(item.piecesFinal()).as("D7 row %s pieces", i + 1).isEqualTo(pieces[i]);
+            assertThat(item.netUnitPrice()).as("D7 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D7 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("5167848.06");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("361749.36");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("5529597.42");
+    }
+
+    @Test
+    void goldenDocument_D8_QN6900782_2_plainRowsNoDiscount() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItem("กระเบื้อง A", "22", "แผ่น", "1950"),
+                plainItem("กระเบื้อง B", "24", "แผ่น", "385"),
+                plainItem("กระเบื้อง C", "24", "แผ่น", "345"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(3);
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("42900.00");
+        assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("9240.00");
+        assertThat(saved.items().get(2).lineAmount()).isEqualByComparingTo("8280.00");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("60420.00");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("4229.40");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("64649.40");
+    }
+
+    /** D1/D8 — a PLAIN row with an explicit discount ({@link #plainItem} has none). */
+    private ItemInput plainItemWithDiscount(String description, String quantity, String unit,
+                                            String unitPrice, String discountPct) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal(unitPrice), new BigDecimal(discountPct), null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    /** D3/D7 — an AREA-mode TILE row priced SPECIAL_SQM, no wastage. {@code unitPrice} is a
+     * dummy positive value: SPECIAL_SQM pricing never reads it for the net/amount computation
+     * (only validates it is positive; the printed ราคา column instead shows the special price). */
+    private ItemInput areaSpecialSqmItem(String area, String sqmPerPiece, int piecesPerBox, String specialPerSqm) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x120",
+            new BigDecimal("10"), new BigDecimal(sqmPerPiece),
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal(area), null,
+            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox,
+            new BigDecimal("1"), null, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
+    /** D5 — a PIECES-mode TILE row priced SPECIAL_SQM, no wastage, box rounding only. */
+    private ItemInput piecesTileSpecialSqmItem(int piecesInput, int piecesPerBox, String listPrice,
+                                               String specialPerSqm, String sqmPerPiece) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal(sqmPerPiece),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, piecesInput,
+            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox,
+            new BigDecimal(listPrice), null, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
     // ── v3 fixtures ────────────────────────────────────────────────────────────────────────
 
     /**

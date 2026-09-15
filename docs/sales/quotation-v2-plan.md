@@ -48,18 +48,52 @@ AMOUNT derived from pct (NOT NULL), `final_unit_price` = net unit price, `amount
 `hr.employee_signature (employee_id BIGINT PK REFERENCES hr.employee, mime_type VARCHAR(40) NOT NULL,
 image BYTEA NOT NULL, uploaded_by BIGINT, uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now())`.
 
-## Arithmetic (backend-owned, pure class `WastageCalculator`, unit-tested; meeting rule = ROUND UP)
+## Arithmetic (backend-owned, pure class `WastageCalculator`, unit-tested)
+⚠️ **Corrected 2026-09-15 (quotation arithmetic reconciliation)** — this section used to state the
+"meeting rule" as pieces-round-UP (CEILING) throughout, pinned against a single reference document
+(QN6900595-3) that turned out to be ambiguous on two of its three lines. Three separate rules were
+corrected, each on its OWN evidence — not one blanket "nine documents settled it" claim, since most
+of the nine attached documents discriminate nothing:
+- **R-B (AREA pieces HALF_UP)** — proven by two rows in two attached documents: QN6900981-1 row 1
+  (2,793 × 1.39 = 3,882.27 → printed 3,882; CEILING gives an odd 3,883 that box-rounds up again to
+  3,884) and QN6900648 row 4 (511 × 1.39 = 710.29 → printed 710; CEILING gives an odd 711 that
+  box-rounds up to 712). FLOOR is refuted by QN6900648 row 1 (1,313.55 → printed 1,314) and
+  QN6900981-1 row 2 (380.86 → printed 381), both of which would floor DOWN.
+- **R-C (PERCENT wastage HALF_UP)** — rests on ONE line only: the spec's own recorded reference,
+  QN6900595-3 item1 (791 × 1.10 = 870.1 → printed 870; the old CEILING reading gave 871 → boxed to
+  872). None of the eight ATTACHED documents has any wastage at all, so QN6900595-3 is the sole
+  evidence either way. This REVERSES the earlier judgement below that 870 was a human rounding
+  error the meeting rule deliberately diverged from.
+- **R-D (single-rounding line amount)** — proven by QN6900971-4 (D1) rows 5.3-5.7 (see below).
+- The remaining four attached documents — QN6900971 ใบสรุป, QN6900902-6, QN6900933, QN6900782-2 —
+  discriminate NONE of the three: they reproduce identically under the old and new rules alike, and
+  serve only as regression coverage in `QuotationGoldenDocumentsTest`, not as evidence.
+
+See `WastageCalculator`'s class Javadoc and `QuotationGoldenDocumentsTest` for the full
+reconciliation against all nine documents, to the satang.
 - `piecesPerSqm = round(1 / sqmPerPiece, 2, HALF_UP)`; `sqmPerPiece` from catalog, else W×H(mm)/1e6 parsed
   from the size text ("60x120" cm → 0.72), else sales types it.
-- AREA mode: `piecesBefore = ceil(areaSqm × piecesPerSqm)`; PIECES mode: `piecesBefore = piecesInput`.
-- PERCENT: `piecesAfter = ceil(piecesBefore × (1 + pct/100))`; PIECES: `piecesBefore + n`; NONE: `piecesBefore`.
+- AREA mode: `piecesBefore = round(areaSqm × piecesPerSqm, 0, HALF_UP)`; PIECES mode: `piecesBefore = piecesInput`.
+- PERCENT: `piecesAfter = round(piecesBefore × (1 + pct/100), 0, HALF_UP)`; PIECES: `piecesBefore + n`; NONE: `piecesBefore`.
 - `piecesFinal = ppb > 0 ? ceil(piecesAfter / ppb) × ppb : piecesAfter`; `boxes = ppb > 0 ? piecesFinal / ppb : null`.
-- `netUnitPrice = round(unitPrice × (1 − discountPct/100), 2)`; `lineAmount = round(piecesFinal × netUnitPrice, 2)`.
+  (Box-multiple rounding is unchanged — it still rounds UP to the next full box.)
+- `list = round(unitPrice, 2)` (review fix, 2026-09-15: `sales.quotation_item.unit_price` is
+  NUMERIC(14,2), so the typed list price is pre-rounded to 2dp before any money math — not
+  discriminated by any of the nine documents, all of which already type 2dp list prices, but needed
+  so the stored row can always reproduce its own printed amount);
+  `netUnitPrice = round(list × (1 − discountPct/100), 2)` (the DISPLAYED net price, unchanged);
+  `lineAmount = round(list × piecesFinal × (1 − discountPct/100), 2)` — a SINGLE rounding of the
+  unrounded product, **not** `round(piecesFinal × netUnitPrice, 2)`, which double-rounds through the
+  already-2dp net price and drifts a satang on some rows (QN6900971-4's rows 5.3-5.7 — R-D's own
+  evidence: the double-rounded formula gives 35,799.64/16,502.44/11,445.24 against the printed
+  35,799.63/16,502.43/11,445.23).
 - `subtotal = Σ lineAmount`; `vat = round(subtotal × 0.07, 2)`; `grandTotal = subtotal + vat`.
-Reference figures to pin (QN6900595-3): item3 87 ตร.ม., 2.78, 10%, 4/box → 242 → 267 → **268**;
-item5 124 ตร.ม. → 345 → 380 → **380**; item1 569 ตร.ม., 1.39, 10%, 2/box → 791 → 871 → **872** (the
-human-made reference printed 870 by rounding down twice — the meeting rule is round UP; this divergence
-is recorded, not "fixed").
+Reference figures pinned (QN6900595-3): item3 87 ตร.ม., 2.78, 10%, 4/box → 242 → 266 → **268**
+(unchanged from before — the box-multiple rounding on top lands on the same 268 either way, so this
+line alone discriminates neither rule); item5 124 ตร.ม. → 345 → 380 → **380** (unchanged, same
+reason); item1 569 ตร.ม., 1.39, 10%, 2/box → 791 → **870** (HALF_UP) — R-C's sole evidence — this now
+REPRODUCES the owner's own printed reference figure exactly. It is no longer a recorded divergence:
+the old CEILING rule gave 791 → 871 → 872, which is what used to diverge from her printed 870.
 
 ## Printed lines (renderer)
 Per item, rows: [optional location heading row, underlined, no borders, only when the label changes from

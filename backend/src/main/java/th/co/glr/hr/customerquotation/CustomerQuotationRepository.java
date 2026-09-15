@@ -1,6 +1,7 @@
 package th.co.glr.hr.customerquotation;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -27,6 +28,11 @@ import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationIte
  */
 @Repository
 public class CustomerQuotationRepository {
+    // R-H: document-level VAT is round2(subtotal × 7%) — see #mapQuotation. Step 4 has no EN/USD
+    // document concept (unlike the deal-quotation path's WastageCalculator#vatRateFor), so this
+    // is unconditional, matching QuotationRenderer's own hardcoded rate for this document type.
+    // Reuses CustomerQuotationService.VAT_RATE (package-private) rather than a second "0.07"
+    // literal in the same package (review fix, 2026-09-15).
     private final NamedParameterJdbcTemplate jdbc;
 
     public CustomerQuotationRepository(NamedParameterJdbcTemplate jdbc) {
@@ -518,10 +524,15 @@ public class CustomerQuotationRepository {
 
     private CustomerQuotationDto mapQuotation(ResultSet rs, List<CustomerQuotationItemDto> items) throws SQLException {
         BigDecimal subtotal = rs.getBigDecimal("total_amount") != null ? rs.getBigDecimal("total_amount") : BigDecimal.ZERO;
-        BigDecimal vatTotal = items.stream().map(CustomerQuotationItemDto::vat).filter(v -> v != null)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal grandTotal = items.stream().map(CustomerQuotationItemDto::lineTotal).filter(v -> v != null)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // R-H (quotation arithmetic reconciliation, 2026-09-15): document-level VAT is
+        // round2(subtotal × 7%), NOT Σ(per-line vat) — summing the per-line columns (each already
+        // independently rounded to 2dp) drifts by a satang from the document-level rounding on
+        // some fixtures (D1 / QN6900971-4: Σ per-line VAT = 26,135.73 against round2(373,367.47 ×
+        // 0.07) = 26,135.72). QuotationRenderer's PDF already computes VAT this way
+        // (subtotal.multiply(VAT_RATE)); this brought the API DTO into agreement with the PDF it
+        // backs. The per-item vat/line_total columns are unchanged — still stored/returned as-is.
+        BigDecimal vatTotal = subtotal.multiply(CustomerQuotationService.VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal grandTotal = subtotal.add(vatTotal);
         return new CustomerQuotationDto(
             rs.getLong("quotation_id"),
             rs.getString("number"),

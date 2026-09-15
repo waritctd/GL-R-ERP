@@ -1499,10 +1499,14 @@ function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, pa
   return quotation;
 }
 
+// Mirrors CustomerQuotationRepository#mapQuotation (R-H, quotation arithmetic reconciliation,
+// 2026-09-15): vatAmount/grandTotal are a SINGLE document-level rounding of the subtotal, not
+// Σ per-line vat/lineTotal — summing the already-2dp per-line figures can drift a satang from the
+// document-level rounding (see that repository method's own comment for a worked example).
 function recalcMockCustomerQuotationTotals(quotation) {
   quotation.subtotalAmount = round2(quotation.items.reduce((sum, it) => sum + it.lineSubtotal, 0));
-  quotation.vatAmount = round2(quotation.items.reduce((sum, it) => sum + it.vat, 0));
-  quotation.grandTotal = round2(quotation.items.reduce((sum, it) => sum + it.lineTotal, 0));
+  quotation.vatAmount = round2(quotation.subtotalAmount * 0.07);
+  quotation.grandTotal = round2(quotation.subtotalAmount + quotation.vatAmount);
 }
 
 // Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is
@@ -4947,16 +4951,25 @@ function submitDealQuotationRow(row, user) {
  * persisting, so the editor's live calculation line and totals have SOMETHING to render under
  * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
  *
- *   - The real WastageCalculator (backend, pure class, unit-tested against the meeting's
- *     ROUND-UP rule) uses `ceil` at every rounding step. This stub uses `Math.round` instead, so
- *     its numbers are close but NOT pinned to the reference figures QUOTATION-V2-PLAN.md records
- *     (e.g. item1: 569 sqm, 1.39 pieces/sqm, 10% wastage, 2/box -> the real engine's answer is
- *     872, not 870 -- a mock-driven test asserting either number here is asserting nothing about
- *     that engine).
+ *   - Corrected 2026-09-15 (quotation arithmetic reconciliation): the real WastageCalculator
+ *     (backend, pure class, unit-tested) rounds PIECES HALF_UP, not CEILING as this comment used
+ *     to say — the old "meeting rule" reading was wrong, settled against real owner documents;
+ *     see that class's own Javadoc for the evidence. This stub's `Math.round` for
+ *     `piecesBeforeWastage`/`wastageExtra` now happens to AGREE with the real engine's piece
+ *     rounding (both are round-half-up) — that convergence is incidental to this stub still being
+ *     a placeholder, not a claim that the two are kept in sync on purpose; box-multiple rounding
+ *     (`Math.ceil` at the ppb step) is unchanged and still correct either way.
+ *   - The MONEY math below is still NOT the real algorithm and remains a placeholder: `lineAmount`
+ *     here is `round2(piecesFinal × netUnitPrice)` — the double-rounded formula the real engine no
+ *     longer uses (R-D: the real `lineAmount` is a single rounding of `list × piecesFinal ×
+ *     (1 − pct/100)`, and `list` itself is pre-rounded to 2dp before that — see
+ *     WastageCalculator#calculate). A mock-driven test asserting a `lineAmount` figure here is
+ *     still asserting nothing about the real engine's money math.
  *   - Mirroring the exact algorithm would make a green mock-driven test look like evidence about
  *     the real rounding rule, which CLAUDE.md's "Mock API contract" section calls out by name
  *     (computeDraftEtag) as never being independent evidence once a mock mirrors a backend
- *     computation. Diverging on purpose keeps that failure mode impossible here.
+ *     computation. Diverging on purpose (on the money side, still) keeps that failure mode
+ *     impossible here.
  *
  * Every field the real ItemDto adds on top of ItemInput is still populated, so the UI has
  * something to bind to; only the NUMBERS are a placeholder.

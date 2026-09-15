@@ -1333,7 +1333,13 @@ public class DealQuotationService {
         BigDecimal netUnitPrice = result.netUnitPrice();
         BigDecimal discountPct = input.discountPct();
         BigDecimal specialPriceSqm = null;
-        BigDecimal unitPrice = input.unitPrice();
+        // R-D input scale (review fix, 2026-09-15): persist the same 2dp list price
+        // WastageCalculator#calculate computed netUnitPrice/lineAmount from (its own listPrice =
+        // round2(unitPrice)) — sales.quotation_item.unit_price is NUMERIC(14,2) (V49), so storing
+        // the raw, unrounded input here while the money math used the rounded value would let the
+        // stored row disagree with its own printed amount on a 3dp-or-finer typed price. Null-safe
+        // because perSqm rows legitimately omit unitPrice (specialPriceSqm stands in below).
+        BigDecimal unitPrice = input.unitPrice() == null ? null : money2(input.unitPrice());
         BigDecimal perSqmLineAmount = null;
         if (perSqm) {
             specialPriceSqm = money2(input.specialPriceSqm());
@@ -1397,9 +1403,18 @@ public class DealQuotationService {
      * No wastage, no ตร.ม./แผ่น, no แผ่น/กล่อง, no auto-composed description, no catalog link.
      * Freight (1 JOB), Mapei consumables (Bags/Barrels), the cut service, sanitary-ware ชุด rows.
      *
-     * <p>{@code amount = quantity × netPrice}, with the row's own discount applied to the unit
-     * price exactly as {@code WastageCalculator#calculate} does for a tile — the discount is
-     * normally absent, which prints "Net".
+     * <p>{@code amount = round2(list × quantity × (1 − pct/100))} — R-D (quotation arithmetic
+     * reconciliation, 2026-09-15), a single rounding of the unrounded product rather than
+     * {@code round2(netUnitPrice × quantity)}, which double-rounds through the already-2dp net
+     * unit price and drifts a satang on some rows (D1 / QN6900971-4, rows 5.3-5.7:
+     * round2(netUnitPrice × qty) gives 35,799.64 against the printed 35,799.63). {@code list} here
+     * is the input price PRE-ROUNDED to 2dp (review fix, 2026-09-15) — {@code
+     * sales.quotation_item.unit_price} is NUMERIC(14,2) (V49), so a finer-than-2dp typed price
+     * would otherwise be stored at 2dp while the amount kept computing from the unrounded value,
+     * and the stored row could never reproduce its own printed amount. netUnitPrice below stays
+     * the rounded DISPLAY figure printed in the ราคา/คงเหลือ column; the row's own discount is
+     * applied to the unit price exactly as {@code WastageCalculator#calculate} does for a tile —
+     * the discount is normally absent, which prints "Net".
      */
     private NewItem buildPlainItem(ItemInput input, Integer rowNumber, BigDecimal vatRate) {
         if (rowNumber != null) {
@@ -1414,9 +1429,15 @@ public class DealQuotationService {
         }
         BigDecimal quantity = input.quantity() == null ? BigDecimal.ONE : input.quantity();
         BigDecimal discountPct = input.discountPct() == null ? BigDecimal.ZERO : input.discountPct();
-        BigDecimal netUnitPrice = money2(input.unitPrice().multiply(
-            BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP))));
-        BigDecimal lineAmount = money2(netUnitPrice.multiply(quantity));
+        BigDecimal discountFactor = BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP));
+        // R-D input scale (review fix, 2026-09-15): pre-round the LIST price to 2dp before any
+        // multiplication AND persist that same 2dp value — see WastageCalculator#calculate's
+        // matching comment. sales.quotation_item.unit_price is NUMERIC(14,2) (V49); storing the
+        // unrounded input.unitPrice() while computing from it too would let the stored row and
+        // the computed amount silently disagree on a 3dp-or-finer typed price.
+        BigDecimal listPrice = money2(input.unitPrice());
+        BigDecimal netUnitPrice = money2(listPrice.multiply(discountFactor));
+        BigDecimal lineAmount = money2(listPrice.multiply(quantity).multiply(discountFactor));
         BigDecimal vat = money2(lineAmount.multiply(vatRate));
         return new NewItem(
             input.locationLabel(), null, null,
@@ -1425,7 +1446,7 @@ public class DealQuotationService {
             null, null, null,
             null, null, null,
             0, 0, 0, null,
-            input.unitPrice(), input.discountPct(), netUnitPrice, lineAmount,
+            listPrice, input.discountPct(), netUnitPrice, lineAmount,
             vat, lineAmount.add(vat),
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             input.description() == null ? null : input.description().trim(),
