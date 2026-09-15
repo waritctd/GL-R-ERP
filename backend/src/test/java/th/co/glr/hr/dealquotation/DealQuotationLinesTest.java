@@ -86,6 +86,92 @@ class DealQuotationLinesTest {
             .doesNotContain("200 cm").doesNotContain("300 cm");
     }
 
+    // ── REFINEMENT (prod QT-2026-0034-1, quotation_id=32, 2026-09-15): a rep who retypes ขนาด to a
+    // genuinely DIFFERENT size on a row that still carries a catalogue link must see THEIR size,
+    // not the linked catalogue's -- the catalogue-first rule above was only ever meant to catch
+    // the SAME size typed in an unreliable unit (the 200x300mm regression). ────────────────────
+
+    /** The exact prod bug: catalogue is 600x600mm, rep retyped "30x60" (a genuinely different
+     * tile) -- must print the rep's typed size, not "60 cm x 60 cm". */
+    @Test
+    void sizeLine_typedSizeDiffersFromCatalogue_30x60_printsTypedText_notTheCatalogue600x600() {
+        assertThat(DealQuotationLines.sizeLine("30x60", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 30x60 x 20 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
+    /** The second prod line: "3x60" against the same 600x600mm catalogue row. */
+    @Test
+    void sizeLine_typedSizeDiffersFromCatalogue_3x60_printsTypedText_notTheCatalogue600x600() {
+        assertThat(DealQuotationLines.sizeLine("3x60", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 3x60 x 20 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
+    /** Typed in millimetres, exactly matching the catalogue's own mm figures -- still prints the
+     * catalogue's (identical) centimetre conversion, same as always. */
+    @Test
+    void sizeLine_typedSizeMatchesCatalogueInMillimetres_printsCatalogueCentimetres() {
+        assertThat(DealQuotationLines.sizeLine("600x600", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** Typed in centimetres, exactly matching the catalogue's face size once converted. */
+    @Test
+    void sizeLine_typedSizeMatchesCatalogueInCentimetres_printsCatalogueCentimetres() {
+        assertThat(DealQuotationLines.sizeLine("60x60", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** Spaces around the separator and a trailing unit are tolerated by the parser. */
+    @Test
+    void sizeLine_typedSizeWithSpacesAndUnit_stillRecognisedAsMatchingTheCatalogue() {
+        assertThat(DealQuotationLines.sizeLine("60 x 60 cm", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** Order-insensitive: "120x60" (rep wrote width/height swapped) still matches a 600x1200mm
+     * catalogue row -- printed as the catalogue states it, width first. */
+    @Test
+    void sizeLine_typedSizeMatchesCatalogue_orderInsensitive_120x60_vs600x1200() {
+        assertThat(DealQuotationLines.sizeLine("120x60", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("1200")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A decimal pair, matched against the catalogue's own millimetre figures converted to
+     * centimetres (60mm/246mm -> 6cm/24.6cm) -- exercises BigDecimal#compareTo, not float. */
+    @Test
+    void sizeLine_typedSizeMatchesCatalogue_decimalPair_6x24point6_vs60x246mm() {
+        assertThat(DealQuotationLines.sizeLine("6x24.6", new BigDecimal("9"),
+            new BigDecimal("60"), new BigDecimal("246")))
+            .isEqualTo("ขนาด 6 cm x 24.6 cm x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** Unparseable typed text with catalogue dimensions present is unchanged behaviour: the
+     * catalogue wins, exactly as it did before this refinement. */
+    @Test
+    void sizeLine_unparseableTypedText_withCatalogueDimensions_stillPrintsCatalogue() {
+        assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("1200")))
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** The EN variant of the exact prod bug: typed "30x60" against a 600x600mm catalogue row must
+     * print the rep's text, not the catalogue's centimetre conversion. */
+    @Test
+    void english_sizeLine_typedSizeDiffersFromCatalogue_printsTypedText() {
+        assertThat(DealQuotationLines.sizeLine(EN, "30x60", new BigDecimal("20"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("Size 30x60 x 20 mm (approx.)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
     @Test
