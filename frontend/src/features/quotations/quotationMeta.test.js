@@ -925,14 +925,21 @@ describe('v3 row validation', () => {
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
-  // Owner-approved "sell loose pieces" (2026-09-16, V182): defence in depth for the combination
-  // the checkbox is disabled to prevent — see roundToFullBoxDisabledReason's own tests below for
-  // the UI-facing half of this rule.
-  it('English per-sqm refuses roundToFullBox=false even though the checkbox should already prevent it', () => {
+  // Review fix F1 (2026-09-16): validateQuotationItem used to flag `roundToFullBox === false` here
+  // as "defence in depth" against DealQuotationService#requireBoxDataForPerSqm's 400. That claim
+  // was false (itemInputFromRow already forces `roundToFullBox: true` onto the wire in this mode
+  // regardless of the row's own state — see quotationItemInput.test.jsx), and the branch was
+  // actively harmful: it permanently blocked บันทึกร่าง/ส่งขออนุมัติ for a row ticked under NET/TH
+  // and then switched to English per-sqm, with no on-screen control left to un-tick it (the
+  // checkbox is disabled AND unchecked in this mode). Fixed at the source instead —
+  // QuotationEditorPage's `applyPriceMode` now resets the stored flag to `true` the moment the
+  // document reaches this mode — so the branch was dropped rather than kept pointing at a state
+  // that can no longer occur. The SERVER-side rejection of roundToFullBox=false under English
+  // per-sqm is unchanged; only this frontend checklist branch was removed.
+  it('English per-sqm no longer flags roundToFullBox=false in the checklist — that state is now unreachable, not merely re-guarded', () => {
     const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
-    expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN'))
-      .toEqual({ roundToFullBox: meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON });
-    // Unaffected everywhere else: Thai ราคาพิเศษ, and NET in any language.
+    expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN')).toEqual({});
+    // Unaffected everywhere else, same as before: Thai ราคาพิเศษ, and NET in any language.
     expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'SPECIAL_SQM', 'TH').roundToFullBox).toBeUndefined();
     expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'NET', 'EN').roundToFullBox).toBeUndefined();
   });

@@ -627,11 +627,19 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   if (perSqm) {
     if (!(Number(item?.sqmPerBox) > 0)) errors.sqmPerBox = 'กรุณาระบุ ตร.ม./กล่อง';
     else if (!withinDecimals(item.sqmPerBox, 6)) errors.sqmPerBox = 'ทศนิยมได้ไม่เกิน 6 ตำแหน่ง';
-    // Owner-approved "sell loose pieces" (V182): defence in depth — the checkbox is disabled in
-    // this mode (see roundToFullBoxDisabledReason), but a row can reach here via a stale UI state
-    // or a copied row, and DealQuotationService#requireBoxDataForPerSqm refuses this combination
-    // outright, so the checklist must catch it too rather than let a 400 surprise the rep at save.
-    if (item?.roundToFullBox === false) errors.roundToFullBox = ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON;
+    // Owner-approved "sell loose pieces" (V182): this used to also flag `roundToFullBox === false`
+    // here as "defence in depth", but review (2026-09-16, F1) found that claim false and the branch
+    // actively harmful — QuotationItemRow's `itemInputFromRow` already forces `roundToFullBox: true`
+    // onto the wire in this mode regardless of the row's own state (the real, and only needed,
+    // guard against DealQuotationService#requireBoxDataForPerSqm's 400), so this checklist entry
+    // was never preventing a server rejection. What it DID do: a row ticked under NET/TH and then
+    // switched to English per-sqm kept its stored `false` forever — the checkbox is disabled and
+    // renders UNCHECKED here (roundToFullBoxDisabledReason), so there was no on-screen control left
+    // to clear it, and the row became permanently unable to save. Fixed at the actual source instead
+    // — QuotationEditorPage's `applyPriceMode` now resets `roundToFullBox` to `true` on every row the
+    // moment the document reaches this mode — which makes `roundToFullBox === false` genuinely
+    // unreachable here, so the branch is dropped rather than kept pointing at a state that cannot
+    // occur.
   }
   if (item?.quantityMode === 'PIECES') {
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';

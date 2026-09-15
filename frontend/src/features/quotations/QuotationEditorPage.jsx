@@ -19,7 +19,7 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
-  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
+  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
@@ -505,6 +505,15 @@ export function QuotationEditorPage({ user, showToast }) {
   function applyPriceMode(priceMode, {
     prefill = true, documentLanguage = docSettings.documentLanguage, clearPrices = false,
   } = {}) {
+    // Review fix F1 (2026-09-16): English per-sqm cannot express a loose-piece quantity — the
+    // checkbox is disabled AND renders unchecked in this mode (roundToFullBoxDisabledReason,
+    // QuotationItemRow), so a row ticked under NET/TH before the switch had no on-screen control
+    // left to un-tick it, and validateQuotationItem's own checklist branch blocked บันทึกร่าง/
+    // ส่งขออนุมัติ forever. Reset the STORED flag back to `true` here, the moment the document
+    // reaches this mode (both changePriceMode and changeLanguage route through this function), so
+    // the state can never linger — matching itemInputFromRow's own wire-level force for the same
+    // reason.
+    const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
     const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
       const carried = prefill && priceMode === 'DIRECT_NET'
@@ -512,7 +521,10 @@ export function QuotationEditorPage({ user, showToast }) {
         ? { directNetPrice: it.netUnitPrice } : {};
       // The previous mode's derived money is dropped until the new preview lands — see the
       // calc-error note above for why a stale net must never be shown under the new mode.
-      return { ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true };
+      return {
+        ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true,
+        ...(perSqm ? { roundToFullBox: true } : {}),
+      };
     });
     setItems(next);
     setDirty(true);
