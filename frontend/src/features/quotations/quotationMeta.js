@@ -477,8 +477,36 @@ export function listPricePerSqmIncVat(unitPrice, sqmPerPiece) {
 //
 // Group 1 = width digits, group 2 = width's own unit token (or undefined), group 3 = height
 // digits, group 4 = height's own unit token (or undefined).
-const SIZE_PATTERN =
-  /^\s*(\d+(?:[.,]\d+)?)\s*(cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*[xX×*]\s*(\d+(?:[.,]\d+)?)\s*(cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*(?:[xX×*]\s*\d+(?:[.,]\d+)?\s*(?:cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*)?(?:\([^)]*\))?\s*$/i;
+//
+// ⚠️ F1 (BLOCKER, 2026-09-16 review) — this pattern previously had FOUR independent
+// `\s*(unit)?\s*` positions: a leading and trailing `\s*` around each optional, possibly-empty unit
+// group. Because the unit group can match empty, a whitespace run of length n between two required
+// tokens could be split n+1 ways between the leading and trailing `\s*`, and these splits multiply
+// across the four positions — a ~degree-5 polynomial blow-up, measured on this exact (pre-fix) code
+// at 389ms / 3,357ms (Node, 128 / 248 chars; the reviewer's own run measured 130ms / 4,092ms)
+// against `"30" + " "×n + "x60" + " "×n + "x1" + " "×n + "!"`. Fixed by folding each position to a
+// SINGLE leading `\s*` with the unit token consuming its own trailing whitespace inside the (now
+// single) optional group — `\s*(?:(unit)\s*)?` — so there is exactly one way to distribute a
+// whitespace run rather than n+1 (this does not change what the pattern MATCHES, only how many ways
+// it can try to match it — see `MAX_SIZE_TEXT_LENGTH` below for the second, independent line of
+// defense). See `quotationMeta.test.js`'s own "F1" describe block for the timing vectors that pin
+// both.
+const UNIT_ALTERNATION = 'cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?';
+const SIZE_PATTERN = new RegExp(
+  '^\\s*(\\d+(?:[.,]\\d+)?)\\s*(?:(' + UNIT_ALTERNATION + ')\\s*)?'
+  + '[xX×*]\\s*(\\d+(?:[.,]\\d+)?)\\s*(?:(' + UNIT_ALTERNATION + ')\\s*)?'
+  + '(?:[xX×*]\\s*\\d+(?:[.,]\\d+)?\\s*(?:(?:' + UNIT_ALTERNATION + ')\\s*)?)?'
+  + '(?:\\([^)]*\\))?\\s*$',
+  'i',
+);
+
+/** ReDoS guard (F1, BLOCKER, 2026-09-16 review) — the maximum `sizeText` length `parseSizeText` will
+ * attempt to match against `SIZE_PATTERN` at all. 64 comfortably covers every real "WxH[xT] [unit]
+ * (note)" free-text cell in this file's own vector table with room to spare, so this never rejects a
+ * genuine size — it exists purely so a pasted multi-hundred-character string can never reach the
+ * matcher, as a second, independent line of defense alongside the grammar fix above. Same number,
+ * same reasoning, on the backend side — `DealQuotationLines#MAX_SIZE_TEXT_LENGTH`. */
+const MAX_SIZE_TEXT_LENGTH = 64;
 
 /** `cm`/`cm.`/`ซม`/`ซม.`/`ซ.ม.` → `'cm'`; `mm`/`mm.`/`มม`/`มม.`/`ม.ม.` → `'mm'`; no token captured
  * → `null` ("unspecified"). Thai ซ (cm) and ม (mm) never share a leading character, so a plain
@@ -506,10 +534,14 @@ function unitFamily(token) {
  * silently preferring one side.
  *
  * @return `{width, height, unit}` (unit is `'cm'`, `'mm'`, or `null`), or `null` when `sizeText` is
- *     blank, does not match the grammar, or either number is not strictly positive.
+ *     blank, exceeds `MAX_SIZE_TEXT_LENGTH`, does not match the grammar, or either number is not
+ *     strictly positive.
  */
 export function parseSizeText(sizeText) {
-  const match = SIZE_PATTERN.exec(sizeText ?? '');
+  const text = sizeText ?? '';
+  // F1 (ReDoS guard): reject BEFORE the regex ever runs, independent of the grammar fix above.
+  if (text.length > MAX_SIZE_TEXT_LENGTH) return null;
+  const match = SIZE_PATTERN.exec(text);
   if (!match) return null;
   const width = Number(match[1].replace(',', '.'));
   const height = Number(match[3].replace(',', '.'));

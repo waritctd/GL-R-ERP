@@ -590,6 +590,43 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
   });
 });
 
+// ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing vectors
+// below must stay well under 50ms; a regression in either the grammar fix or the length guard alone
+// would blow one of them up (the first is short enough to bypass the guard entirely and exercises
+// the grammar fix in isolation; the second is the reviewer's own reported shape, which also
+// exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 389ms / 3,357ms at
+// 128 / 248 chars (the reviewer's own run measured 130ms / 4,092ms). Same vectors pinned in
+// DealQuotationLinesTest.java's own "F1" section. ──────────────────────────────────────────────
+describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
+  it('pathological whitespace under the 64-char length guard does not catastrophically backtrack', () => {
+    const attack = '30' + ' '.repeat(18) + 'x60' + ' '.repeat(18) + 'x1' + ' '.repeat(18) + '!';
+    expect(attack.length).toBeLessThanOrEqual(64);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it("the reviewer's own 248-char pathological shape does not catastrophically backtrack", () => {
+    const attack = '30' + ' '.repeat(80) + 'x60' + ' '.repeat(80) + 'x1' + ' '.repeat(80) + '!';
+    expect(attack.length).toBe(248);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step
+    // could shrink it away -- this pins the length guard itself, not just the regex fix.
+    const genuineButLong = '30' + ' '.repeat(60) + 'x60';
+    expect(genuineButLong.length).toBe(65);
+    expect(parseSizeText(genuineButLong)).toBeNull();
+  });
+});
+
 // ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a catalog-linked 60x60 row must
 // recompute แผ่น/ตร.ม. from the TYPED size (0.18), not silently keep the catalogue's 0.36 -- the old
 // SIZE_CM_PATTERN already tolerated a third dimension, so this specific vector was never broken on

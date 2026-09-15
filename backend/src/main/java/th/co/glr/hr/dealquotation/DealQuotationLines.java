@@ -29,6 +29,16 @@ public final class DealQuotationLines {
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
         java.util.regex.Pattern.compile("(?i)(" + UNIT_ALTERNATION + ")\\s*$");
 
+    /** ReDoS guard (F1, BLOCKER, 2026-09-16 review) — the maximum {@code sizeText} length
+     * {@link #parseTwoDimensions} will attempt to match against {@link #TWO_DIMENSIONS} at all. 64
+     * comfortably covers every real "WxH[xT] [unit] (note)" free-text cell in this file's own vector
+     * table with room to spare, so this never rejects a genuine size — it exists purely so a pasted
+     * multi-hundred-character string can never reach the matcher, as a second, independent line of
+     * defense alongside the grammar fix below (a length guard costs nothing and catches a regression
+     * in the regex fix; the regex fix costs nothing and catches a regression in the guard). Same
+     * number, same reasoning, on the frontend side — {@code quotationMeta.js#MAX_SIZE_TEXT_LENGTH}. */
+    private static final int MAX_SIZE_TEXT_LENGTH = 64;
+
     /**
      * ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
      * แต่ PDF ยังใช้ค่าเดิม"): this pattern and the frontend's {@code quotationMeta.js#SIZE_PATTERN}
@@ -58,12 +68,29 @@ public final class DealQuotationLines {
      * <p>Group 1 = width digits, group 2 = width's own unit token (or {@code null}), group 3 =
      * height digits, group 4 = height's own unit token (or {@code null}). See {@link
      * #parseTwoDimensions} for how the two unit groups resolve to one {@link SizeUnit}.
+     *
+     * <p>⚠️ F1 (BLOCKER, 2026-09-16 review) — this grammar previously had FOUR independent
+     * {@code \s*(unit)?\s*} positions: a leading and trailing {@code \s*} around each optional,
+     * possibly-empty unit group. Because the unit group can match empty, a whitespace run of length
+     * n between two required tokens could be split n+1 ways between the leading and trailing
+     * {@code \s*}, and these splits multiply across the four positions — a ~degree-5 polynomial
+     * blow-up, measured on this exact (pre-fix) code at 253 ms / 5,026 ms (Java, 128 / 248 chars;
+     * the reviewer's own run measured 367 ms / 12,238 ms) against {@code "30" + " "×n + "x60" + " "×n
+     * + "x1" + " "×n + "!"} — and the 488-char shape did not finish within a 15-second timeout at
+     * all. Fixed by folding each position to a SINGLE leading {@code \s*+} with the unit token
+     * consuming its own trailing whitespace inside the (now single) optional group — {@code
+     * \s*+(?:(unit)\s*+)?} — so there is exactly one way to distribute a whitespace run rather than
+     * n+1 (this does not change what the pattern MATCHES, only how many ways it can try to match
+     * it). Possessive quantifiers ({@code *+}) are additionally used throughout on this (Java) side,
+     * so backtracking into an already-fully-consumed whitespace run is not even attempted. See
+     * {@link #MAX_SIZE_TEXT_LENGTH} for the second, independent line of defense, and {@code
+     * DealQuotationLinesTest}'s own "F1" section for the timing vectors that pin both.
      */
     private static final java.util.regex.Pattern TWO_DIMENSIONS = java.util.regex.Pattern.compile(
-        "(?i)^\\s*(\\d+(?:[.,]\\d+)?)\\s*(" + UNIT_ALTERNATION + ")?\\s*"
-        + "[x×*]\\s*(\\d+(?:[.,]\\d+)?)\\s*(" + UNIT_ALTERNATION + ")?\\s*"
-        + "(?:[x×*]\\s*\\d+(?:[.,]\\d+)?\\s*(?:" + UNIT_ALTERNATION + ")?\\s*)?"
-        + "(?:\\([^)]*\\))?\\s*$");
+        "(?i)^\\s*+(\\d+(?:[.,]\\d+)?)\\s*+(?:(" + UNIT_ALTERNATION + ")\\s*+)?"
+        + "[x×*]\\s*+(\\d+(?:[.,]\\d+)?)\\s*+(?:(" + UNIT_ALTERNATION + ")\\s*+)?"
+        + "(?:[x×*]\\s*+\\d+(?:[.,]\\d+)?\\s*+(?:(?:" + UNIT_ALTERNATION + ")\\s*+)?)?"
+        + "(?:\\([^)]*\\))?\\s*+$");
 
     /** The unit a typed size pair states — {@code null} reads as "unspecified" (today's ambiguous
      * rule: compare the catalogue in BOTH cm and mm readings; see {@link #matchesCatalogFaceSize}).
@@ -237,14 +264,20 @@ public final class DealQuotationLines {
      * pin the shared vector table directly against the parse RESULT, not just against {@link
      * #sizeLine}'s printed string.
      *
-     * @return the parsed {@link ParsedSize}, or {@code null} when {@code sizeText} is blank, does
-     *     not match the grammar, or either number is not strictly positive.
+     * @return the parsed {@link ParsedSize}, or {@code null} when {@code sizeText} is blank, exceeds
+     *     {@link #MAX_SIZE_TEXT_LENGTH}, does not match the grammar, or either number is not
+     *     strictly positive.
      */
     static ParsedSize parseTwoDimensions(String sizeText) {
         if (blank(sizeText)) {
             return null;
         }
-        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(sizeText.trim());
+        String trimmed = sizeText.trim();
+        // F1 (ReDoS guard): reject BEFORE the regex ever runs, independent of the grammar fix above.
+        if (trimmed.length() > MAX_SIZE_TEXT_LENGTH) {
+            return null;
+        }
+        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(trimmed);
         if (!m.matches()) {
             return null;
         }

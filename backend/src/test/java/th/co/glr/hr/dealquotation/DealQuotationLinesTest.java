@@ -236,6 +236,49 @@ class DealQuotationLinesTest {
         assertUnparsed(null);
     }
 
+    // ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing
+    // vectors below must stay well under 50ms; a regression in either the grammar fix or the length
+    // guard alone would blow one of them up (the first is short enough to bypass the guard entirely
+    // and exercises the grammar fix in isolation; the second is the reviewer's own reported shape,
+    // which also exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 253 ms /
+    // 5,026 ms at 128 / 248 chars (the reviewer's own run measured 367 ms / 12,238 ms); the fixed
+    // grammar/guard bring both down to ~0-1 ms. ─────────────────────────────────────────────────
+    @Test
+    void parseTwoDimensions_pathologicalWhitespace_underTheLengthGuard_doesNotCatastrophicallyBacktrack() {
+        String attack = "30" + " ".repeat(18) + "x60" + " ".repeat(18) + "x1" + " ".repeat(18) + "!";
+        assertThat(attack.length()).isLessThanOrEqualTo(64);
+        long start = System.nanoTime();
+        DealQuotationLines.ParsedSize result = DealQuotationLines.parseTwoDimensions(attack);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(result).as("a trailing '!' must never match").isNull();
+        assertThat(elapsedMs).as("must not catastrophically backtrack on pathological whitespace")
+            .isLessThan(50);
+    }
+
+    @Test
+    void parseTwoDimensions_pathologicalWhitespace_248chars_doesNotCatastrophicallyBacktrack() {
+        // The reviewer's own reported shape (measured pre-fix at 12,238ms on the reviewer's code,
+        // 5,026ms on this machine).
+        String attack = "30" + " ".repeat(80) + "x60" + " ".repeat(80) + "x1" + " ".repeat(80) + "!";
+        assertThat(attack).hasSize(248);
+        long start = System.nanoTime();
+        DealQuotationLines.ParsedSize result = DealQuotationLines.parseTwoDimensions(attack);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(result).isNull();
+        assertThat(elapsedMs).as("must not catastrophically backtrack on pathological whitespace")
+            .isLessThan(50);
+    }
+
+    @Test
+    void parseTwoDimensions_longerThanTheLengthGuard_isRejectedOutright_evenForAGenuineShape() {
+        // 65 chars of otherwise-perfectly-parseable text (the padding is INTERNAL, between the first
+        // number and the separator, so String.trim() cannot shrink it away) -- proves the length
+        // guard itself, not just the regex fix, independent of any pathological shape.
+        String genuineButLong = "30" + " ".repeat(60) + "x60";
+        assertThat(genuineButLong.length()).isEqualTo(65);
+        assertUnparsed(genuineButLong);
+    }
+
     // ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a linked 60x60cm catalogue tile
     // must print the rep's typed text, not the catalogue's -- the old TWO_DIMENSIONS grammar had no
     // third-dimension allowance, so this typed text failed to parse and sizeLine silently kept
