@@ -12,9 +12,13 @@ const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js
 // an empty list — and since quotation v3 the mock does too (buildDealQuotationItems). These fixtures
 // used to create with `items: []`, which only ever worked because the mock was MORE permissive than
 // the service; they now send the smallest body the service would actually accept.
+// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
+// TILE row with neither) -- this fixture backs revision-numbering/needsRework tests that call
+// submit() and have nothing to do with lead time.
 const ONE_ITEM = {
   model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
   quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
+  leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
 
 describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => {
@@ -313,7 +317,15 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(counts.needsRework).toBe(rework.items.length);
   });
 
-  it('needsRework=true selects a rejected DRAFT, and stops selecting it once resubmitted', async () => {
+  it('needsRework=true selects a rejected DRAFT permanently -- resubmitting mints a NEW revision, it does not leave แก้', async () => {
+    // Owner clarification (2026-09-15): submit() on a rejected draft now mints a revision of
+    // ITSELF (DealQuotationService#submit's own status-machine comment) instead of resubmitting
+    // the SAME row -- so the rejected row's own approvalNote is no longer cleared "on the next
+    // submit"; it stays a permanent record of why THAT number was retired, and the row stays แก้
+    // until it is finally SUPERSEDED (once its new revision reaches APPROVED, not before). This
+    // test used to pin "cleared on the next submit, leaves แก้ immediately" -- that behaviour is
+    // exactly what this owner clarification supersedes; see `mintDealQuotationRevision` in
+    // mockApi.js.
     await api.auth.login(salesUser);
     const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     const id = created.quotation.id;
@@ -330,10 +342,149 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     rework = await api.dealQuotations.list({ needsRework: true });
     expect(rework.items.some((q) => q.id === id)).toBe(true);
 
-    // "cleared on the next submit" -- so the row leaves แก้ the moment it goes back for approval.
-    await api.dealQuotations.submit(id);
+    // Resubmitting mints a NEW revision (a different id) and leaves the REJECTED row's own note
+    // untouched -- it stays in แก้, the new revision does not join it (PENDING_APPROVAL is not แก้).
+    const { quotation: revision } = await api.dealQuotations.submit(id);
+    expect(revision.id).not.toBe(id);
+    expect(revision.docStatus).toBe('PENDING_APPROVAL');
+
     rework = await api.dealQuotations.list({ needsRework: true });
-    expect(rework.items.some((q) => q.id === id)).toBe(false);
+    // The rejected row itself stays แก้ until superseded.
+    expect(rework.items.some((q) => q.id === id)).toBe(true);
+    expect(rework.items.some((q) => q.id === revision.id)).toBe(false);
+  });
+
+  /** Mirrors DealQuotationRepository#supersede's own widened WHERE clause -- a DRAFT (rejected)
+   * parent becomes SUPERSEDED the SAME way and at the SAME time an APPROVED parent already does:
+   * only once its OWN revision reaches APPROVED, not before. */
+  it('submit after rejection: the rejected row becomes SUPERSEDED only once the revision is approved', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const id = created.quotation.id;
+    await api.dealQuotations.submit(id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(id, { reason: 'แก้ราคา' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.submit(id);
+
+    // Not yet -- the revision itself hasn't been approved.
+    let rejected = (await api.dealQuotations.get(id)).quotation;
+    expect(rejected.docStatus).toBe('DRAFT');
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(revision.id, {});
+
+    rejected = (await api.dealQuotations.get(id)).quotation;
+    expect(rejected.docStatus).toBe('SUPERSEDED');
+  });
+
+  /** Mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap on "ส่งใหม่" must
+   * not silently mint two revisions of the same rejected draft. */
+  it('submit after rejection: resubmitting the SAME rejected row twice is a 409, not a second revision', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const id = created.quotation.id;
+    await api.dealQuotations.submit(id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(id, { reason: 'แก้ราคา' });
+
+    await api.auth.login(salesUser);
+    await api.dealQuotations.submit(id);
+
+    await expect(api.dealQuotations.submit(id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles -- never
+   * "{base}-1-2-3" -- the mock's own mirror of
+   * DealQuotationIntegrationTest#submit_afterRejection_numberingChainsThroughMultipleRejectCycles. */
+  it('submit after rejection: numbering chains through multiple reject cycles', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const base = created.quotation.number.replace(/-\d+$/, '');
+
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(created.quotation.id, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision2 } = await api.dealQuotations.submit(created.quotation.id);
+    expect(revision2.number).toBe(`${base}-2`);
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision3 } = await api.dealQuotations.submit(revision2.id);
+    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.parentQuotationId).toBe(revision2.id);
+  });
+
+  /** Opus review (2026-09-15), REQUIRED, wrong-way-round: mirrors
+   * DealQuotationIntegrationTest#cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole.
+   * The ancestry a rejected-and-resubmitted row can grow is a TREE, not a straight line --
+   * cancelling a DRAFT row that itself has an open child used to make that child's GRANDPARENT
+   * look "free" again, letting it mint a SECOND, sibling branch while the first branch was still
+   * alive -- two independently-APPROVED quotations on the same ticket. */
+  it('cancel refuses a draft with an open child, closing the double-approve hole', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const originalId = created.quotation.id;
+
+    await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(originalId, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revisionB } = await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revisionB.id, { reason: 'รอบ 2' });
+
+    await api.auth.login(salesUser);
+    await api.dealQuotations.submit(revisionB.id); // mints C -- B now has an open child.
+
+    // THE FIX: B cannot be cancelled out from under its own open child.
+    await expect(api.dealQuotations.cancel(revisionB.id, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('cancel still works on a plain draft with no open child (regression guard)', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const { quotation: cancelled } = await api.dealQuotations.cancel(created.quotation.id, {});
+    expect(cancelled.docStatus).toBe('CANCELLED');
+  });
+
+  /** Opus review nit (2026-09-15): mintDealQuotationRevision used to compute
+   * `parent.revisionNo + 1` directly -- only correct while `parent` is the HIGHEST revision
+   * minted off this base. Once the middle revision is CANCELLED and the original resubmitted a
+   * SECOND time, that formula recomputes the SAME "-2" the cancelled row already used, instead
+   * of the "-3" DealQuotationRepository#nextRevisionNo's real MAX-based query would mint. */
+  it('submit after rejection: a cancelled sibling revision still counts toward the next number', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const base = created.quotation.number.replace(/-\d+$/, '');
+    const originalId = created.quotation.id;
+
+    await api.dealQuotations.submit(originalId);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(originalId, { reason: 'รอบ 1' });
+
+    await api.auth.login(salesUser);
+    const { quotation: revision2 } = await api.dealQuotations.submit(originalId);
+    expect(revision2.number).toBe(`${base}-2`);
+
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
+
+    // revision2 is DRAFT again -- cancel it instead of resubmitting it, freeing the original
+    // (originalId) to be resubmitted a SECOND time (hasOpenRevision no longer sees an open child).
+    await api.auth.login(salesUser);
+    await api.dealQuotations.cancel(revision2.id, {});
+
+    // Must not collide with revision2's already-used -2.
+    const { quotation: revision3 } = await api.dealQuotations.submit(originalId);
+    expect(revision3.number).toBe(`${base}-3`);
+    expect(revision3.number).not.toBe(revision2.number);
   });
 
   it('needsRework=true also selects a DRAFT revision in progress (the owner\'s second sense of แก้)', async () => {
@@ -417,5 +568,278 @@ describe('mock catalog.prices originCountryCode -- owner feedback F1', () => {
     await api.auth.login(salesUser);
     const { items } = await api.catalog.prices('Elegance');
     expect(items.every((row) => row.originCountryCode === 'TH')).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// V178 (owner ruling 2026-09-14) — remark 7's second กำหนดยืนยันราคา variant (validityMode DATE).
+// Mirrors DealQuotationService's create/update/submit/approve rules exactly, and reuses the SAME
+// hasSpecialPricing (quotationMeta.js) the editor's own toggle hides/shows against.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('mock dealQuotations -- V178 validityMode DATE', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // net (700) < list (850) -- DIRECT_NET special pricing, rule (b).
+  const DISCOUNTED_DIRECT_NET_ITEM = { ...ONE_ITEM, directNetPrice: 700 };
+
+  function pinToday(iso) {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(`${iso}T09:00:00+07:00`));
+  }
+
+  it('DATE mode without special pricing (net == list, no discount) is refused on create', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2099-01-01',
+      items: [{ ...ONE_ITEM, directNetPrice: 850 }], // net == list -- no special pricing
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ระบุวันที่ยืนราคาได้เฉพาะ') });
+  });
+
+  it('DATE mode with special pricing but no date is refused', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', items: [DISCOUNTED_DIRECT_NET_ITEM],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('กรุณาระบุวันที่ยืนราคา') });
+  });
+
+  it('DATE before the quotation\'s own date is refused', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-09-13',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ต้องไม่ก่อนวันที่ใบเสนอราคา') });
+  });
+
+  it('round-trips validityMode/validityUntil through create -> get', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    expect(created.validityMode).toBe('DATE');
+    expect(created.validityUntil).toBe('2026-10-31');
+
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.validityMode).toBe('DATE');
+    expect(reread.validityUntil).toBe('2026-10-31');
+  });
+
+  it('an update that clears the discount while still requesting DATE mode is refused', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await expect(api.dealQuotations.update(created.id, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-10-31',
+      items: [{ ...ONE_ITEM, directNetPrice: 850 }], // net back to list -- no more special pricing
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ระบุวันที่ยืนราคาได้เฉพาะ') });
+  });
+
+  it('submit refuses a validity date that has already passed', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-09-14', // == today, allowed
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    pinToday('2026-09-15'); // time moves on after the draft is saved
+    await expect(api.dealQuotations.submit(created.id)).rejects
+      .toMatchObject({ status: 400, message: expect.stringContaining('วันที่ยืนราคาผ่านไปแล้ว') });
+  });
+
+  it('approve sets validityDate to validityUntil, NOT approvalDate + validityDays', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-12-25', validityDays: 45,
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    expect(approved.validityDate).toBe('2026-12-25');
+    expect(approved.validityDate).not.toBe('2026-10-29'); // 2026-09-14 + 45 days -- the DAYS answer
+  });
+
+  it('createRevision copies validityMode and validityUntil verbatim', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      priceMode: 'DIRECT_NET', validityMode: 'DATE', validityUntil: '2026-12-25',
+      items: [DISCOUNTED_DIRECT_NET_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.validityMode).toBe('DATE');
+    expect(revision.validityUntil).toBe('2026-12-25');
+  });
+
+  it('DAYS mode (the default) behaves exactly as before this change', async () => {
+    pinToday('2026-09-14');
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, { validityDays: 30, items: [ONE_ITEM] });
+    expect(created.validityMode).toBe('DAYS');
+    expect(created.validityUntil).toBeNull();
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    expect(approved.validityMode).toBe('DAYS');
+    expect(approved.validityDate).toBe('2026-10-14'); // 2026-09-14 + validityDays default 30
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-name override.
+// demoData.js ids used below: 6 = sales@glr.co.th (ticket 18's owner), 9 = sales.manager@glr.co.th,
+// 4 = employee@glr.co.th (canCreateQuotation grant, role `employee`), 7 = import@glr.co.th
+// (neither sales-shaped role nor grant).
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): mock authz is NOT authoritative — see
+// DealQuotationDisplayNameIntegrationTest for the real-DB evidence.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('mock dealQuotations.displayNameOptions -- V179 eligible union', () => {
+  it('lists sales, sales_manager and the canCreateQuotation grant holder; excludes import', async () => {
+    await api.auth.login(salesUser);
+    const { items } = await api.dealQuotations.displayNameOptions();
+    const ids = items.map((o) => o.id);
+    expect(ids).toEqual(expect.arrayContaining([6, 9, 4]));
+    expect(ids).not.toContain(7);
+  });
+
+  it('a sales_manager may also list the options', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    const { items } = await api.dealQuotations.displayNameOptions();
+    expect(items.length).toBeGreaterThan(0);
+  });
+
+  it('a role with neither a sales-shaped role nor the grant is refused (403)', async () => {
+    await api.auth.login({ role: 'import' });
+    await expect(api.dealQuotations.displayNameOptions())
+      .rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('mock dealQuotations.create/update -- V179 printedByDisplayId/salesRepDisplayId', () => {
+  it('a valid printedByDisplayId/salesRepDisplayId round-trips on create, with names resolved', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    expect(quotation.printedByDisplayId).toBe(4);
+    expect(quotation.salesRepDisplayId).toBe(9);
+    expect(quotation.printedByDisplayName).toBeTruthy();
+    expect(quotation.salesRepDisplayName).toBeTruthy();
+  });
+
+  it('an id outside the eligible union is refused (400) on create', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, { printedByDisplayId: 7, items: [ONE_ITEM] }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('update accepts null to clear a previously-set display override', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, items: [ONE_ITEM],
+    });
+    expect(created.printedByDisplayId).toBe(4);
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, { items: [ONE_ITEM] });
+    expect(cleared.printedByDisplayId).toBeNull();
+  });
+
+  it('update refuses an ineligible id too (400)', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await expect(api.dealQuotations.update(created.id, { salesRepDisplayId: 7, items: [ONE_ITEM] }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  // Wrong-way-round: the display override must never touch the real ownership fields.
+  it('setting salesRepDisplayId does not change the real salesRepId/createdById', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    expect(quotation.salesRepId).toBe(6); // ticket 18's real owner, unchanged
+    expect(quotation.salesRepDisplayId).toBe(9);
+  });
+
+  it('createRevision copies both display ids verbatim', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      printedByDisplayId: 4, salesRepDisplayId: 9, items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.printedByDisplayId).toBe(4);
+    expect(revision.salesRepDisplayId).toBe(9);
+  });
+});
+
+// Opus review fix (2026-09-14): create() ignored payload.projectName entirely (always derived
+// from the deal's own project) and update() omitted the field from its Object.assign altogether,
+// so editing โครงการ silently never persisted under VITE_USE_MOCKS=true -- exactly CLAUDE.md's
+// "mock omits a field the feature keys on" shape. Mirrors DealQuotationService#create/#update.
+describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-09-14)', () => {
+  it('an explicit projectName on create wins over the deal\'s own project', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการทดสอบ A', items: [ONE_ITEM],
+    });
+    expect(quotation.projectName).toBe('โครงการทดสอบ A');
+  });
+
+  it('update corrects a typo in the project name, and it round-trips on read', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'ABC', items: [ONE_ITEM],
+    });
+    const { quotation: corrected } = await api.dealQuotations.update(created.id, {
+      projectName: 'Associates By Choice', items: [ONE_ITEM],
+    });
+    expect(corrected.projectName).toBe('Associates By Choice');
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.projectName).toBe('Associates By Choice');
+  });
+
+  it('a blank projectName on update clears it -- no "missing keeps stored"', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการเดิม', items: [ONE_ITEM],
+    });
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, {
+      projectName: null, items: [ONE_ITEM],
+    });
+    expect(cleared.projectName).toBeNull();
+  });
+
+  // Second Opus follow-up nit (2026-09-14): the first pass's update() wrote
+  // `payload.projectName ?? null`, which stores an explicit ""/whitespace-only string AS-IS
+  // instead of clearing it -- diverging from the real DealQuotationService#update's
+  // `blankToNull(request.projectName())` and from this file's own create() two tests above (which
+  // already trims+blanks). An explicitly-blank string reaches update() from
+  // buildUpsertPayload's `terms.projectName || null` only when the field is whitespace-only (a
+  // plain "" is already caught by `||`), so this exercises exactly that gap.
+  it('a whitespace-only projectName on update clears it too, not stored literally', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      projectName: 'โครงการเดิม', items: [ONE_ITEM],
+    });
+    const { quotation: cleared } = await api.dealQuotations.update(created.id, {
+      projectName: '   ', items: [ONE_ITEM],
+    });
+    expect(cleared.projectName).toBeNull();
   });
 });

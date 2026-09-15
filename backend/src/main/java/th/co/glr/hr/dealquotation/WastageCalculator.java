@@ -10,10 +10,37 @@ import java.util.List;
  * its own worked reference figures (QN6900595-3 items 1/3/5 — pinned by
  * {@code WastageCalculatorTest}).
  *
- * <p>Every rounding here follows the meeting rule: pieces round UP (ceiling), money rounds to 2
- * decimal places HALF_UP. This deliberately reproduces a small divergence from a human-made
- * reference document that rounded DOWN twice on one line (869 -&gt; 870 rather than 871 -&gt;
- * 872) — the meeting rule is the one implemented; see the class-level test for item1.
+ * <p><b>Corrected 2026-09-15 (quotation arithmetic reconciliation):</b> pieces round HALF_UP, not
+ * CEILING, both for the AREA-mode piece count (R-B) and for PERCENT wastage (R-C) — and a line
+ * amount is a single rounding of the unrounded product, not a rounding of an already-rounded net
+ * price (R-D). The three rules rest on DIFFERENT evidence, stated precisely rather than as one
+ * blanket "nine documents settle it" claim — see {@code QuotationGoldenDocumentsTest} for all nine
+ * documents reproduced to the satang, but only some of the nine actually DISCRIMINATE a rule:
+ * <ul>
+ *   <li><b>R-B (AREA pieces HALF_UP)</b> is proven by two rows in two attached documents:
+ *       QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27 → printed 3,882; CEILING would give an odd
+ *       3,883 that box-rounds up again to 3,884) and QN6900648 row 4 (511 × 1.39 = 710.29 →
+ *       printed 710; CEILING would give an odd 711 that box-rounds up to 712). FLOOR is refuted by
+ *       QN6900648 row 1 (1,313.55 → printed 1,314) and QN6900981-1 row 2 (380.86 → printed 381),
+ *       both of which would floor DOWN.</li>
+ *   <li><b>R-C (PERCENT wastage HALF_UP)</b> rests on ONE line only: the spec's own recorded
+ *       reference, QN6900595-3 item1 (791 × 1.10 = 870.1 → printed 870; the old CEILING reading
+ *       gave 871 → box-rounded to 872). None of the eight ATTACHED documents (QN6900971-4,
+ *       QN6900971 ใบสรุป, QN6900981-1, QN6900902-6, QN6900704-2, QN6900933, QN6900648,
+ *       QN6900782-2) has any wastage at all, so none of them can corroborate or refute this rule —
+ *       QN6900595-3 is the sole evidence. This REVERSES the earlier judgement (recorded in this
+ *       class's git history and the old plan doc) that 870 was a human rounding error the meeting
+ *       rule deliberately diverged from; it is now read as the correct figure instead.</li>
+ *   <li><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
+ *       × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
+ *       printed amounts, where rounding the already-2dp net price first and then multiplying gives
+ *       35,799.64/16,502.44/11,445.24 instead.</li>
+ * </ul>
+ * <p>The remaining four attached documents — QN6900971 ใบสรุป, QN6900902-6, QN6900933,
+ * QN6900782-2 — discriminate NONE of R-B/R-C/R-D: they are PLAIN-row or no-wastage/no-box-rounding
+ * fixtures that reproduce identically under the old and new rules alike. They still appear in
+ * {@code QuotationGoldenDocumentsTest} as regression coverage, just not as evidence for any of the
+ * three corrections above. Money still rounds to 2 decimal places HALF_UP throughout.
  *
  * <p>No Spring wiring, no DB access, no I/O — a static-methods-only pure class, deliberately, so
  * every branch is exercised by a plain unit test rather than an integration test.
@@ -53,6 +80,15 @@ public final class WastageCalculator {
 
     public static final String CURRENCY_THB = "THB";
     public static final String CURRENCY_USD = "USD";
+
+    // ── Owner feedback, กำหนดยืนยันราคา (2026-09-14) — remark 7's second variant ───────────────
+    /** The rep types a whole number of days, counted from the document's own date. Today's
+     * behaviour and the default (every pre-V178 row stores {@code validity_mode = 'DAYS'}). */
+    public static final String VALIDITY_MODE_DAYS = "DAYS";
+    /** The rep types a specific calendar date ("ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่
+     * .../.../....") instead of a day count — for when a promotion or a factory allocation needs
+     * an exact deadline rather than "N days from now". */
+    public static final String VALIDITY_MODE_DATE = "DATE";
 
     /**
      * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
@@ -142,7 +178,7 @@ public final class WastageCalculator {
                 throw new IllegalArgumentException("areaSqm is required in AREA quantity mode");
             }
             piecesPerSqm = piecesPerSqm(in.sqmPerPiece());
-            piecesBefore = ceilToInt(in.areaSqm().multiply(piecesPerSqm));
+            piecesBefore = roundHalfUpToInt(in.areaSqm().multiply(piecesPerSqm));
         } else {
             throw new IllegalArgumentException("quantityMode must be AREA or PIECES, got: " + in.quantityMode());
         }
@@ -158,9 +194,26 @@ public final class WastageCalculator {
         }
 
         BigDecimal discountPct = in.discountPct() == null ? BigDecimal.ZERO : in.discountPct();
-        BigDecimal netUnitPrice = round2(in.unitPrice().multiply(
-            BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP))));
-        BigDecimal lineAmount = round2(netUnitPrice.multiply(BigDecimal.valueOf(piecesFinal)));
+        BigDecimal discountFactor = BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP));
+        // R-D input scale (review fix, 2026-09-15): pre-round the LIST price to 2dp before any
+        // multiplication. sales.quotation_item.unit_price is NUMERIC(14,2) (V49) and
+        // DealQuotationService persists input.unitPrice() through money2() — a 3dp-or-finer typed
+        // list price would otherwise be stored at 2dp while this method kept computing from the
+        // unrounded value, so the stored row could never reproduce the amount printed for it (a
+        // GET → recompute round-trip would disagree with what was saved). None of the nine owner
+        // documents discriminates this — every list price in them is already 2dp — so pinning it
+        // here is a forward-looking correctness fix, not a change any printed figure depends on.
+        BigDecimal listPrice = round2(in.unitPrice());
+        BigDecimal netUnitPrice = round2(listPrice.multiply(discountFactor));
+        // R-D (quotation arithmetic reconciliation, 2026-09-15): the line amount is
+        // round2(list × piecesFinal × (1 − pct/100)) — a SINGLE rounding at the end — not
+        // round2(netUnitPrice × piecesFinal), which double-rounds through the already-rounded
+        // 2dp net unit price and drifts by a satang on rows where piecesFinal is even (D1's
+        // QN6900971-4 rows 5.3-5.7: round2(netUnitPrice × qty) gives 35,799.64/16,502.44/
+        // 11,445.24 against the printed 35,799.63/16,502.43/11,445.23). netUnitPrice above stays
+        // the ROUNDED display figure printed in the ราคา/คงเหลือ column; only the line amount
+        // is computed from the unrounded product — of the already-2dp LIST price, per the note above.
+        BigDecimal lineAmount = round2(listPrice.multiply(BigDecimal.valueOf(piecesFinal)).multiply(discountFactor));
 
         return new Result(piecesPerSqm, piecesBefore, piecesAfter, piecesFinal, boxes, netUnitPrice, lineAmount);
     }
@@ -276,7 +329,7 @@ public final class WastageCalculator {
                 throw new IllegalArgumentException("wastageValue must be <= 100 percent, got: " + value);
             }
             BigDecimal factor = BigDecimal.ONE.add(value.divide(HUNDRED, 10, RoundingMode.HALF_UP));
-            return ceilToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
+            return roundHalfUpToInt(BigDecimal.valueOf(piecesBefore).multiply(factor));
         }
         throw new IllegalArgumentException("wastageMode must be PERCENT, PIECES or NONE, got: " + wastageMode);
     }
@@ -368,8 +421,10 @@ public final class WastageCalculator {
     // for the regression this guards.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    private static int ceilToInt(BigDecimal value) {
-        return value.setScale(0, RoundingMode.CEILING).intValueExact();
+    /** R-B/R-C: pieces round HALF_UP, not CEILING — see the class Javadoc. Box-multiple rounding
+     * ({@link #ceilToMultiple}) is untouched and still rounds up. */
+    private static int roundHalfUpToInt(BigDecimal value) {
+        return value.setScale(0, RoundingMode.HALF_UP).intValueExact();
     }
 
     private static int ceilToMultiple(int value, int multiple) {

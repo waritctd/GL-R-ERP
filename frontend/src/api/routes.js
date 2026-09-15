@@ -497,6 +497,10 @@ export const API_ROUTES = {
     // Per-status counts for the caller's OWN list scope, for the tab labels (F5). One request for
     // all five numbers rather than five list fetches.
     counts: '/api/deal-quotations/counts',
+    // V179 (owner feedback #4, 2026-09-14) — options list for the ผู้พิมพ์/พนักงานขาย print-name
+    // selectors: the union of active sales-division employees and can_create_quotation grant
+    // holders. Mirrors DealQuotationController#displayNameOptions.
+    displayNameOptions: '/api/deal-quotations/display-name-options',
     detail: (id) => `/api/deal-quotations/${id}`,
     calculateLine: '/api/deal-quotations/calculate-line',
     submit: (id) => `/api/deal-quotations/${id}/submit`,

@@ -70,6 +70,12 @@ public final class DealQuotationDtos {
         Integer creditDays,
         Integer validityDays,
         LocalDate validityDate,
+        /** "DAYS" (default) | "DATE" — owner feedback 2026-09-14, remark 7's second variant.
+         * Never null on the wire; a stored NULL (every pre-V178 row, and the whole legacy
+         * customer-quotation path) normalises to DAYS on read. */
+        String validityMode,
+        /** DATE mode only — the exact "ภายในวันที่" deadline the rep typed. Null in DAYS mode. */
+        LocalDate validityUntil,
         String customerNotes,
         /** "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3 (V168). Never null on the wire; a
          * stored NULL (every pre-V168 row) normalises to NET on read. Per-QUOTATION, because in
@@ -87,10 +93,84 @@ public final class DealQuotationDtos {
         BigDecimal grandTotal,
         String currency,
         boolean approverHasSignature,
+        // ── V179 (owner feedback #4, 2026-09-14) — PRINT-ONLY name override. "they should be able
+        // to select who to show for ผู้พิมพ์ and พนักงานขาย": when admin fills in a quotation on
+        // behalf of a sales rep, ผู้พิมพ์ should read the admin's name and พนักงานขาย the rep's.
+        // NOT a change of deal ownership/access/commission — createdById/salesRepId (and every
+        // access/commission decision built on them) are completely untouched; these seven fields
+        // only ever change what DealQuotationRenderAdapter prints. Null (the default) means "use
+        // the real name", i.e. today's behaviour — see that class's #printedByName /
+        // #salesRepDisplayNameOrReal / #salesRepDisplayPhoneOrReal helpers.
+        /** Overrides {@link #createdByName}/{@link #createdByNameEn} on the ผู้พิมพ์ slot when set. */
+        Long printedByDisplayId,
+        String printedByDisplayName,
+        String printedByDisplayNameEn,
+        /** Overrides {@link #salesRepName}/{@link #salesRepNameEn}/{@link #salesRepPhone} on the
+         * พนักงานขาย slot AND the header "Sales/{name} T.{phone}" line when set. */
+        Long salesRepDisplayId,
+        String salesRepDisplayName,
+        String salesRepDisplayNameEn,
+        String salesRepDisplayPhone,
         List<DealQuotationItemDto> items,
         Instant createdAt,
         Instant updatedAt
-    ) {}
+    ) {
+        /** The pre-V179 shape (no display-name override fields) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults all seven new fields to
+         * null, which reads as "use the real name" — today's behaviour for every one of those
+         * fixtures. */
+        public DealQuotationDto(
+            long id, String number, long ticketId, String docStatus, int revisionNo,
+            Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
+            long salesRepId, String salesRepName, String salesRepNameEn, String salesRepPhone,
+            Instant submittedAt, Long approvedById, String approvedByName, String approvedByNameEn,
+            Instant approvedAt, String approvalNote, LocalDate quotationDate, String customerName,
+            String customerAddress, String customerTaxId, String customerPhone, Long contactId,
+            String contactName, String contactPhone, String contactEmail, String projectName,
+            String deptCode, String unitCode, LocalDate offerDate, Integer depositPercent,
+            String remainderMode, Integer creditDays, Integer validityDays, LocalDate validityDate,
+            String validityMode, LocalDate validityUntil,
+            String customerNotes, String priceMode, String documentLanguage, BigDecimal subtotalAmount,
+            BigDecimal vatAmount, BigDecimal grandTotal, String currency, boolean approverHasSignature,
+            List<DealQuotationItemDto> items, Instant createdAt, Instant updatedAt) {
+            this(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName,
+                createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt,
+                approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate,
+                customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName,
+                contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil,
+                customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency,
+                approverHasSignature, null, null, null, null, null, null, null, items, createdAt, updatedAt);
+        }
+
+        /** The pre-V178 shape (no {@link #validityMode}/{@link #validityUntil}, and so also no
+         * V179 display-override fields) — kept so every existing construction site (tests, mostly)
+         * compiles unchanged. Defaults to {@code DAYS}/{@code null}, which reads as the day-count
+         * behaviour every one of those fixtures actually means. */
+        public DealQuotationDto(
+            long id, String number, long ticketId, String docStatus, int revisionNo,
+            Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
+            long salesRepId, String salesRepName, String salesRepNameEn, String salesRepPhone,
+            Instant submittedAt, Long approvedById, String approvedByName, String approvedByNameEn,
+            Instant approvedAt, String approvalNote, LocalDate quotationDate, String customerName,
+            String customerAddress, String customerTaxId, String customerPhone, Long contactId,
+            String contactName, String contactPhone, String contactEmail, String projectName,
+            String deptCode, String unitCode, LocalDate offerDate, Integer depositPercent,
+            String remainderMode, Integer creditDays, Integer validityDays, LocalDate validityDate,
+            String customerNotes, String priceMode, String documentLanguage, BigDecimal subtotalAmount,
+            BigDecimal vatAmount, BigDecimal grandTotal, String currency, boolean approverHasSignature,
+            List<DealQuotationItemDto> items, Instant createdAt, Instant updatedAt) {
+            this(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName,
+                createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt,
+                approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate,
+                customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName,
+                contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityDate,
+                WastageCalculator.VALIDITY_MODE_DAYS, null,
+                customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency,
+                approverHasSignature, items, createdAt, updatedAt);
+        }
+    }
 
     /**
      * Per-status counts for the caller's OWN list scope (owner feedback F5, 2026-09-10: "for

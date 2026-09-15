@@ -19,12 +19,13 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
-  estimateAdjustmentAmount, formatQuotationMoney, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
+  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
+  VALIDITY_MODE_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
@@ -91,7 +92,23 @@ function emptyTerms(defaults = null) {
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
+    // V178: the MODE remembers (see quotationPrefs.js); validityUntil never does — a brand-new
+    // quotation always starts with no date typed, even when it starts in DATE mode.
+    validityMode: defaults?.validityMode ?? 'DAYS',
+    validityUntil: '',
     customerNotes: '',
+    // V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-name override. Neither
+    // remembers a default (unlike validityMode above): the override is deal/document-specific
+    // ("admin filled this one in for the rep"), not a rep-wide preference, so a brand-new
+    // quotation always starts with "(ค่าเริ่มต้น)" — use the real names.
+    printedByDisplayId: '',
+    salesRepDisplayId: '',
+    // Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be
+    // able to correct it"): a brand-new /quotations/new visit has no ticket yet either, so this
+    // starts blank same as everything else here -- the ?ticket= path below fills it from the
+    // deal's own project name instead of leaving a rep looking at an empty box for a project the
+    // deal already has.
+    projectName: '',
   };
 }
 
@@ -198,6 +215,19 @@ export function QuotationEditorPage({ user, showToast }) {
   // What the rep just saved through CustomerDetailsFields, until the refetch catches up.
   const [customerOverride, setCustomerOverride] = useState(null);
 
+  // V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name selector options.
+  // Gated the same as who may SET the fields at all (canCreateDealQuotationStandalone: sales,
+  // sales_manager, or the canCreateQuotation grant — role/grant-only, no ticket/quotation needed),
+  // matching DealQuotationService#findQuotationDisplayNameOptions' own gate. Every branch that
+  // renders the two selectors below is already inside `isEditable`, which implies this same set,
+  // so no separate role check is needed at render time — only at fetch time.
+  const displayNameOptionsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationDisplayNameOptions(),
+    queryFn: () => api.dealQuotations.displayNameOptions().then((r) => r.items ?? []),
+    enabled: canCreateDealQuotationStandalone(user),
+  });
+  const displayNameOptions = displayNameOptionsQuery.data ?? [];
+
   // Owner ask 2026-09-10 ("inline deal creation"): /quotations/new with NEITHER an :id NOR a
   // ?ticket= is a brand-new deal that does not exist anywhere yet -- the rep picks/creates the
   // customer and project right here instead of being sent to /tickets first. Stable per-render
@@ -262,6 +292,22 @@ export function QuotationEditorPage({ user, showToast }) {
     if (next) editSeqRef.current += 1;
     setDirtyState(next);
   }, []);
+  // V178 (owner ruling 2026-09-14): ระบุวันที่ is offered only on a document with special
+  // pricing — mirrors DealQuotationRenderAdapter#hasSpecialPricing exactly (quotationMeta.js).
+  const docHasSpecialPricing = useMemo(
+    () => hasSpecialPricing(docSettings.priceMode, [...items, ...adjustments]),
+    [docSettings.priceMode, items, adjustments],
+  );
+  // If a discount is cleared, an adjustment row removed, or the price mode changed so the
+  // document no longer has special pricing WHILE ระบุวันที่ is selected, switch back to
+  // จำนวนวัน automatically — so the next save sends validityMode DAYS rather than 400ing on a
+  // mode the document no longer qualifies for.
+  useEffect(() => {
+    if (!docHasSpecialPricing && terms.validityMode === 'DATE') {
+      setTerms((t) => ({ ...t, validityMode: 'DAYS' }));
+      setDirty(true);
+    }
+  }, [docHasSpecialPricing, terms.validityMode, setDirty]);
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
   // red hints yet. A row seeded from the server (an existing DRAFT the rep reopened) is touched
@@ -317,6 +363,13 @@ export function QuotationEditorPage({ user, showToast }) {
         depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
         remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
         validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
+        // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
+        // server's own read-side default.
+        validityMode: quotation.validityMode ?? 'DAYS', validityUntil: quotation.validityUntil ?? '',
+        // V179: null (the DTO's own default) reads as "(ค่าเริ่มต้น)" — the select's own empty option.
+        printedByDisplayId: quotation.printedByDisplayId ?? '',
+        salesRepDisplayId: quotation.salesRepDisplayId ?? '',
+        projectName: quotation.projectName ?? '',
       });
       setDirty(false);
       setInitializedFor(key);
@@ -349,6 +402,31 @@ export function QuotationEditorPage({ user, showToast }) {
     contactSeededForTicket.current = ticket.id;
     if (ticket.contactId) {
       setContact({ id: ticket.contactId, firstName: ticket.contactName ?? '', lastName: '' });
+    }
+  }, [id, ticket]);
+
+  // Opus review fix (2026-09-14): the SAME race the contact-seeding effect above exists to avoid.
+  // The main seeding effect (above) marks `initializedFor` on the FIRST render of a `?ticket=`
+  // visit, before `ticketQuery` has resolved, so seeding `projectName` from `ticket.projectName`
+  // there directly was always seeding from `undefined` and that `initializedFor` guard then made
+  // the ticket dependency inert forever -- verified: a `?ticket=` visit whose deal already HAS a
+  // project name rendered โครงการ EMPTY instead of prefilled, a real regression against this
+  // card's pre-existing plain-text display (`{projectName ?? '-'}`) it replaced. A separate ref,
+  // firing once per ticket id once `ticket` genuinely resolves, functionally-updates `terms`
+  // instead of racing the main effect's own `setTerms` call.
+  //
+  // Second Opus follow-up nit (2026-09-14): unlike contactSeededForTicket above -- which cannot
+  // be raced, because the contact picker's own candidate list is itself keyed off `ticket` and so
+  // has nothing to pick from until the ticket resolves -- โครงการ is a plain, always-enabled
+  // `<input>`, so a rep who starts typing during the query window could have this effect fire
+  // afterward and clobber it. Guard by checking the CURRENT field value inside the updater, not
+  // just the ref: only seed when the rep hasn't already put something there.
+  const projectNameSeededForTicket = useRef(null);
+  useEffect(() => {
+    if (id || !ticket?.id || projectNameSeededForTicket.current === ticket.id) return;
+    projectNameSeededForTicket.current = ticket.id;
+    if (ticket.projectName) {
+      setTerms((t) => (t.projectName ? t : { ...t, projectName: ticket.projectName }));
     }
   }, [id, ticket]);
 
@@ -485,7 +563,11 @@ export function QuotationEditorPage({ user, showToast }) {
     // Prefilled with the ยืนราคา end date, so the normal case — "3% if ordered within the offer
     // period" — is one typed number. Blank when no ยืนราคา is chosen yet; the date is optional.
     const from = quotation?.quotationDate || todayIso();
-    const deadline = terms.validityDays ? addDaysIso(from, Number(terms.validityDays)) : '';
+    // V178: in DATE mode the ยืนราคา end date IS terms.validityUntil already — no arithmetic
+    // needed (and none would be right, since a rep-typed date has no relation to `from`).
+    const deadline = terms.validityMode === 'DATE'
+      ? (terms.validityUntil || '')
+      : (terms.validityDays ? addDaysIso(from, Number(terms.validityDays)) : '');
     const row = emptyAdjustment(deadline);
     setAdjustments((prev) => [...prev, row]);
     setTouchedRowIds((prev) => new Set(prev).add(row.clientId));
@@ -679,6 +761,29 @@ export function QuotationEditorPage({ user, showToast }) {
   );
   const adjustmentErrorsByRow = useMemo(() => adjustments.map((a) => validateAdjustment(a)), [adjustments]);
 
+  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+  // — SUBMIT only, deliberately a SEPARATE array from `itemErrorsByRow` above rather than the same
+  // one with `requireLeadTime` always on: `itemErrorsByRow` feeds `buildQuotationChecklist`, whose
+  // blocking set gates บันทึกร่าง too, and a draft must still save with no lead time (only submit
+  // is refused server-side). `index` here is the printed "รายการที่" number the same way
+  // buildUpsertPayload sends `items` — tiles in document order, adjustments always last.
+  const submitItemErrorsByRow = useMemo(
+    () => items.map((it) => validateQuotationItem(it, docSettings.priceMode, docSettings.documentLanguage,
+      { requireLeadTime: true })),
+    [items, docSettings.priceMode, docSettings.documentLanguage],
+  );
+  const missingLeadTimeSeqs = useMemo(
+    () => submitItemErrorsByRow
+      .map((errors, index) => (errors.leadTimeMinDays ? index + 1 : null))
+      .filter((seq) => seq != null),
+    [submitItemErrorsByRow],
+  );
+  const hasMissingLeadTimes = missingLeadTimeSeqs.length > 0;
+  // The EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses, so a rep
+  // sees the same sentence whether the client or the server catches it.
+  const leadTimeBlockMessage = hasMissingLeadTimes
+    ? `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}` : null;
+
   // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
   // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
   // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
@@ -756,12 +861,27 @@ export function QuotationEditorPage({ user, showToast }) {
     remainderMode: terms.remainderMode || null,
     creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
+    // V178: validityDays is ALWAYS sent, in both modes (the days select keeps its last value even
+    // while ระบุวันที่ is showing — see the toggle below) so DAYS mode has a real number to fall
+    // back to the moment the rep switches back, or the moment special pricing is lost and this
+    // editor auto-switches them back (see the effect near the toggle).
+    validityMode: terms.validityMode || null,
+    validityUntil: terms.validityMode === 'DATE' ? (terms.validityUntil || null) : null,
     customerNotes: terms.customerNotes || null,
     // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language
     // (the server refuses any other pairing), sent so the request states what the rep saw.
     priceMode: docSettings.priceMode,
     documentLanguage: docSettings.documentLanguage,
     currency: currencyForLanguage(docSettings.documentLanguage),
+    // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override. Always
+    // sent explicitly (like priceMode/documentLanguage above): a full PUT carries the payload's
+    // own value, null included, so there is no ambiguity between "omitted" and "cleared".
+    printedByDisplayId: terms.printedByDisplayId === '' ? null : Number(terms.printedByDisplayId),
+    salesRepDisplayId: terms.salesRepDisplayId === '' ? null : Number(terms.salesRepDisplayId),
+    // Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be
+    // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
+    // explicitly, blank included, same discipline as customerNotes just above.
+    projectName: terms.projectName || null,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -842,6 +962,9 @@ export function QuotationEditorPage({ user, showToast }) {
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,
+      // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the
+      // DATE itself never is — see quotationPrefs.js's own comment on DEFAULT_TERM_FIELDS.
+      validityMode: terms.validityMode,
       originCountry: items[items.length - 1]?.originCountry ?? '',
     });
   }
@@ -944,6 +1067,21 @@ export function QuotationEditorPage({ user, showToast }) {
       return api.dealQuotations.submit(id);
     },
     onSuccess: (res) => {
+      // Owner clarification (2026-09-15): submit() on a ตีกลับ'd draft now mints a NEW revision
+      // instead of resubmitting the SAME row (DealQuotationService#submit's own status-machine
+      // comment) -- res.quotation.id can differ from this page's OWN `id` now, where it never
+      // could before. Mirrors reviseMutation's own onSuccess just below (the createRevision
+      // button already had to solve this exact "server minted a different id" case): navigate
+      // there instead of caching the NEW quotation's data under the OLD id's query key, which
+      // would leave the rep looking at this page's stale route while the cache silently disagreed
+      // with it (and a refresh would then re-fetch the OLD, now-superseded-in-waiting row).
+      if (String(res.quotation.id) !== id) {
+        queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+        showToast('success', 'ส่งขออนุมัติแล้ว (ฉบับแก้ไขใหม่ ' + res.quotation.number + ')');
+        setSubmitConfirmOpen(false);
+        navigate(`/quotations/${res.quotation.id}`);
+        return;
+      }
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
       showToast('success', 'ส่งขออนุมัติแล้ว');
@@ -1169,8 +1307,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // (salesRepName in the document context strip).
   const customerName = quotation?.customerName ?? ticket?.customerName ?? (isInlineCreate ? dealForm.customer?.name : null) ?? null;
   const projectName = quotation?.projectName ?? ticket?.projectName ?? (isInlineCreate ? dealForm.project?.name : null) ?? null;
-  const salesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
-  const salesRepPhone = quotation?.salesRepPhone ?? null;
+  // The REAL rep's name -- what "(ค่าเริ่มต้น)" (no override) actually means on both
+  // salesRepDisplayId selects. Opus review fix (2026-09-14): this used to feed an
+  // override-AWARE salesRepName/salesRepPhone pair too, used only by the card select's empty
+  // option -- which made that option lie the moment an override was already saved (it showed the
+  // override's own name+phone right next to the choice that turns the override OFF). Both
+  // selects' options now read straight off `quotation.*`/`displayNameOptions` with no
+  // intermediate override-resolved consts.
+  const realSalesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
   const wasRejected = quotation?.docStatus === 'DRAFT' && Boolean(quotation?.approvalNote);
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
   // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
@@ -1213,8 +1357,8 @@ export function QuotationEditorPage({ user, showToast }) {
                 // handleInlineCreate — the same three `saving` already covers), so a rep cannot
                 // open the confirm dialog and submit while an autosave the dialog hasn't had a
                 // chance to suppress yet is still on the wire.
-                disabled={hasValidationErrors || saving}
-                title={hasValidationErrors ? validationErrors.join(' ') : undefined}
+                disabled={hasValidationErrors || hasMissingLeadTimes || saving}
+                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? undefined)}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
                 ส่งขออนุมัติ
@@ -1290,8 +1434,42 @@ export function QuotationEditorPage({ user, showToast }) {
             <Panel title="ข้อมูลลูกค้าและผู้ขาย">
               <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
                 <div><span className="block text-2xs font-bold uppercase text-text-muted">ลูกค้า</span><strong>{customerName ?? '-'}</strong></div>
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span><strong>{projectName ?? '-'}</strong></div>
-                <div><span className="block text-2xs font-bold uppercase text-text-muted">พนักงานขาย</span><strong>{salesRepName}{salesRepPhone ? ` · T.${salesRepPhone}` : ''}</strong></div>
+                {/* Owner feedback 2026-09-14 ("sometimes there's a typo ... they should be able to
+                    correct it") — was static text; now a real field on `terms`, same as every
+                    other เงื่อนไข input, saved on the next draft save. */}
+                <FormField label="โครงการ" htmlFor="projectNameCard">
+                  <input
+                    id="projectNameCard"
+                    value={terms.projectName}
+                    maxLength={200}
+                    onChange={(e) => { setTerms((t) => ({ ...t, projectName: e.target.value })); setDirty(true); }}
+                  />
+                </FormField>
+                {/* V179: the SAME salesRepDisplayId select as the เงื่อนไข panel below (owner,
+                    2026-09-14: "keep both") — a distinct DOM id ("...Card") since a page may not
+                    repeat an id, both bound to the one `terms.salesRepDisplayId`, so picking a
+                    value in either place updates both.
+                    Opus review fix (2026-09-14): the EMPTY option means "use the real name" — its
+                    label must show the REAL rep (realSalesRepName + quotation.salesRepPhone
+                    directly), never whatever override happens to be CURRENTLY saved — an earlier
+                    version read an override-resolved pair here, which made this option lie the
+                    moment an override was set: it showed the override's own name+phone right next
+                    to the choice that turns the override off. The phone shown when an override IS
+                    selected still comes from the last SAVED value (quotation.salesRepDisplayPhone,
+                    read inside buildDealQuotationDto/QuotationDocumentView) — the options list
+                    itself carries no phone, so an unsaved selection cannot preview one; it appears
+                    on the next successful save. */}
+                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard">
+                  <select
+                    id="salesRepDisplayIdCard"
+                    value={terms.salesRepDisplayId}
+                    disabled={displayNameOptionsQuery.isLoading}
+                    onChange={(e) => { setTerms((t) => ({ ...t, salesRepDisplayId: e.target.value })); setDirty(true); }}
+                  >
+                    <option value="">{realSalesRepName}{quotation?.salesRepPhone ? ` · T.${quotation.salesRepPhone}` : ''}</option>
+                    {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </FormField>
                 {/* Hidden when the viewer cannot open the deal page — under the release lock
                     (owner, 2026-09-11) a sales rep reaches /quotations but not /tickets, and a
                     link straight to the access-denied page is worse than no link. */}
@@ -1502,7 +1680,11 @@ export function QuotationEditorPage({ user, showToast }) {
                               groupId={group.groupId}
                               locationGroups={groups}
                               recentPicks={recentPicks}
-                              errors={touchedRowIds.has(item.clientId) ? itemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
+                              // #7: `submitItemErrorsByRow` is `itemErrorsByRow` PLUS the lead-time
+                              // check — a strict superset — so the row's own inline hints highlight
+                              // a missing lead time too, without that check feeding the (blocking)
+                              // checklist itemErrorsByRow otherwise drives.
+                              errors={touchedRowIds.has(item.clientId) ? submitItemErrorsByRow[index] : EMPTY_ITEM_ERRORS}
                               onChange={(patch) => updateItem(item.clientId, patch)}
                               onRemove={() => removeItem(item.clientId)}
                               onMove={(targetGroupId) => moveItemToGroup(item.clientId, targetGroupId)}
@@ -1651,10 +1833,87 @@ export function QuotationEditorPage({ user, showToast }) {
                   ) : null}
                 </div>
               </FormField>
-              <FormField label="ยืนราคา (วัน)" htmlFor="validityDays">
-                <select id="validityDays" value={terms.validityDays} onChange={(e) => { setTerms((t) => ({ ...t, validityDays: e.target.value })); setDirty(true); }}>
-                  <option value="">-</option>
-                  {VALIDITY_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} วัน</option>)}
+              {/* V178 (owner ruling 2026-09-14): ระบุวันที่ ("กำหนดวันที่ได้") is a SECOND way to
+                  say กำหนดยืนยันราคา, for when a promotion or a factory allocation needs an exact
+                  deadline rather than "N days from now" — but it only makes sense on a document
+                  that HAS special pricing to protect, so the option itself is hidden otherwise
+                  (docHasSpecialPricing, mirrored from the server's own gate). No `htmlFor`, same
+                  reasoning as ส่วนที่เหลือ above: this is a group of controls, not one. */}
+              <FormField label="ยืนราคา">
+                <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ยืนราคา">
+                  {(docHasSpecialPricing ? VALIDITY_MODE_OPTIONS
+                    : VALIDITY_MODE_OPTIONS.filter((opt) => opt.code === 'DAYS')).map((opt) => (
+                    <button
+                      key={opt.code}
+                      type="button"
+                      aria-pressed={terms.validityMode === opt.code}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.validityMode === opt.code ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      onClick={() => { setTerms((t) => ({ ...t, validityMode: opt.code })); setDirty(true); }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {terms.validityMode === 'DATE' ? (
+                    <input
+                      id="validityUntil"
+                      aria-label="ยืนราคาถึงวันที่"
+                      type="date"
+                      value={terms.validityUntil}
+                      onChange={(e) => { setTerms((t) => ({ ...t, validityUntil: e.target.value })); setDirty(true); }}
+                    />
+                  ) : (
+                    // จำนวนวัน keeps its OWN select even while ระบุวันที่ shows — the value is
+                    // never cleared on a mode switch (see #buildUpsertPayload's own comment), so
+                    // switching back to จำนวนวัน (by choice, or by the auto-switch effect above)
+                    // always has a real number to fall back to.
+                    // Opus review of V178 (2026-09-14): FormField's <label> is a SIBLING of its
+                    // children (FormField.jsx), not a wrapper — it labels nothing once this
+                    // conditional branch stopped passing htmlFor to FormField itself. Same
+                    // collision as the ส่วนที่เหลือ block above (see that comment): the accessible
+                    // name must NOT start with "จำนวน" or it collides with เครดิต's own field.
+                    <select id="validityDays" aria-label="ยืนราคา (จำนวนวัน)" value={terms.validityDays} onChange={(e) => { setTerms((t) => ({ ...t, validityDays: e.target.value })); setDirty(true); }}>
+                      <option value="">-</option>
+                      {VALIDITY_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} วัน</option>)}
+                    </select>
+                  )}
+                </div>
+              </FormField>
+              {/* V179 (owner feedback #4, 2026-09-14): "กรณีที่ admin ช่วยทำใบเสนอราคาแทนเซลล์
+                  อยากให้แสดงชื่อผู้พิมพ์เป็นชื่อแอดมิน ส่วนชื่อพนักงานขายเป็นชื่อเซลล์" — PRINT-ONLY
+                  name selection. Neither field changes who created/owns the deal, who may edit it,
+                  or who earns commission on it (createdById/salesRepId are untouched) — only what
+                  two names the PDF prints. "(ค่าเริ่มต้น)" (the empty option, value="") sends null,
+                  which prints exactly as today: the real creator/sales rep. Both selects share the
+                  SAME eligible-employee list (the union of ฝ่ายขาย members and can_create_quotation
+                  grant holders), fetched once above. */}
+              <FormField
+                label="แสดงชื่อผู้พิมพ์เป็น"
+                htmlFor="printedByDisplayId"
+                hint="ค่าเริ่มต้น = ชื่อผู้สร้างใบเสนอราคาจริง (ใช้เมื่อแอดมินช่วยทำใบเสนอราคาแทนเซลล์)"
+              >
+                <select
+                  id="printedByDisplayId"
+                  value={terms.printedByDisplayId}
+                  disabled={displayNameOptionsQuery.isLoading}
+                  onChange={(e) => { setTerms((t) => ({ ...t, printedByDisplayId: e.target.value })); setDirty(true); }}
+                >
+                  <option value="">(ค่าเริ่มต้น)</option>
+                  {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </FormField>
+              <FormField
+                label="แสดงชื่อพนักงานขายเป็น"
+                htmlFor="salesRepDisplayId"
+                hint="ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย"
+              >
+                <select
+                  id="salesRepDisplayId"
+                  value={terms.salesRepDisplayId}
+                  disabled={displayNameOptionsQuery.isLoading}
+                  onChange={(e) => { setTerms((t) => ({ ...t, salesRepDisplayId: e.target.value })); setDirty(true); }}
+                >
+                  <option value="">(ค่าเริ่มต้น)</option>
+                  {displayNameOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </FormField>
             </div>
@@ -1745,7 +2004,11 @@ export function QuotationEditorPage({ user, showToast }) {
               <Button
                 variant="primary"
                 loading={submitMutation.isPending}
-                disabled={saving}
+                // #7: defensive — the opening button above is already disabled while
+                // `hasMissingLeadTimes`, so this only matters if an edit made mid-dialog removed a
+                // lead time the rep had entered.
+                disabled={saving || hasMissingLeadTimes}
+                title={leadTimeBlockMessage ?? undefined}
                 onClick={() => submitMutation.mutate()}
               >
                 ส่งขออนุมัติ
@@ -1754,6 +2017,14 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
+          {/* #7: unlike checklistWarnings below, this ONE genuinely blocks — the opening button is
+              disabled while it is true, so this only shows if the dialog was already open when a
+              concurrent edit removed a lead time. */}
+          {leadTimeBlockMessage ? (
+            <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
+              {leadTimeBlockMessage}
+            </p>
+          ) : null}
           {/* The optional gaps, restated at the moment of sending — never a blocker (see
               QUOTATION_BLOCKING_CHECKS), but the last chance to notice the document will print
               without them. */}

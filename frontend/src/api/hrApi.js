@@ -1104,6 +1104,10 @@ export const api = {
     // wrong (review finding MED-3). Scoped exactly like list() above (owner feedback F5,
     // 2026-09-10). No parameters: the scope is the caller's session, same as the list.
     counts: () => apiRequest(API_ROUTES.dealQuotations.counts),
+    // V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name selector options:
+    // the union of active sales-division employees and can_create_quotation grant holders.
+    // `{ items: [{ id, name }] }`, same CommissionRepOptionDto shape as the commission rep picker.
+    displayNameOptions: () => apiRequest(API_ROUTES.dealQuotations.displayNameOptions),
     get: (id) => apiRequest(API_ROUTES.dealQuotations.detail(id)),
     create: (ticketId, payload) => apiRequest(API_ROUTES.dealQuotations.create(ticketId), { method: 'POST', body: payload }),
     update: (id, payload) => apiRequest(API_ROUTES.dealQuotations.detail(id), { method: 'PUT', body: payload }),

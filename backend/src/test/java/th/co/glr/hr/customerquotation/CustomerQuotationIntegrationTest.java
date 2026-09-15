@@ -941,6 +941,71 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // R-H (quotation arithmetic reconciliation, 2026-09-15): document-level VAT/grand total
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * {@code vatAmount}/{@code grandTotal} must be {@code round2(subtotal × 7%)} /
+     * {@code subtotal + vatAmount} — a SINGLE document-level rounding — never
+     * {@code Σ item.vat}/{@code Σ item.lineTotal}, which double-rounds through each already-2dp
+     * per-line figure and can drift a satang from the document-level rounding. Three real
+     * QN6900971-4 line amounts (47,111.78 / 9,715.14 / 35,799.63) are used here specifically
+     * because their per-line VAT sums to 6,483.85 while round2(their subtotal × 7%) is 6,483.86 —
+     * hand-verified before writing this test, not asserted on faith. Each item is priced via the
+     * CEO's "ปรับราคาเอง" selling-price override at quantity 1, so
+     * {@code lineSubtotal == finalUnitPrice == the override value} exactly, with no discount or
+     * quantity multiplication in the way of hitting these figures to the satang.
+     */
+    @Test
+    void vatAndGrandTotal_areDocumentLevelRounding_notTheSumOfPerLineFigures() {
+        long pricingRequestId = threeItemSubmittedCosting();
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, null), ceoActor);
+
+        Map<String, BigDecimal> targetPriceByModel = Map.of(
+            "Tile A4", new BigDecimal("47111.78"),
+            "Tile B4", new BigDecimal("9715.14"),
+            "Tile C4", new BigDecimal("35799.63"));
+        for (PricingDecisionItemDto item : decision.items()) {
+            BigDecimal target = targetPriceByModel.get(item.model());
+            decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
+                new UpdatePricingDecisionItemRequest(item.id(), null, target,
+                    "R-H reconciliation test fixture — fixed selling price", target, false))), ceoActor);
+        }
+        decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
+
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        assertThat(draft.items()).hasSize(3);
+        for (CustomerQuotationItemDto item : draft.items()) {
+            assertThat(item.requestedQuantity()).isEqualByComparingTo(BigDecimal.ONE);
+            assertThat(item.lineSubtotal()).isEqualByComparingTo(item.approvedUnitPrice());
+        }
+
+        BigDecimal expectedSubtotal = new BigDecimal("92626.55");
+        BigDecimal expectedVat = new BigDecimal("6483.86");
+        BigDecimal expectedGrandTotal = new BigDecimal("99110.41");
+        // Guard the fixture's own premise: the naive Σ per-line VAT this test exists to catch
+        // really does diverge from the document-level figure on these three lines — otherwise the
+        // test could pass on either implementation and prove nothing.
+        BigDecimal sumOfPerLineVat = draft.items().stream()
+            .map(CustomerQuotationItemDto::vat).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(sumOfPerLineVat).isEqualByComparingTo(new BigDecimal("6483.85"))
+            .describedAs("fixture premise: Σ per-line VAT must diverge from the document-level VAT")
+            .isNotEqualByComparingTo(expectedVat);
+
+        assertThat(draft.subtotalAmount()).isEqualByComparingTo(expectedSubtotal);
+        assertThat(draft.vatAmount()).isEqualByComparingTo(expectedVat);
+        assertThat(draft.grandTotal()).isEqualByComparingTo(expectedGrandTotal);
+
+        // Re-read from the DB (not just the create() response) — mapQuotation is exercised on
+        // every read path, not only the one right after INSERT.
+        CustomerQuotationDto reloaded = quotationService.get(draft.id(), salesActor);
+        assertThat(reloaded.vatAmount()).isEqualByComparingTo(expectedVat);
+        assertThat(reloaded.grandTotal()).isEqualByComparingTo(expectedGrandTotal);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -1080,11 +1145,40 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 pricingItem("Cotto", "Tile B4", "Factory B4", new BigDecimal("5"))));
     }
 
+    private PricingRequestRequests.CreatePricingRequestRequest threeItemPricingRequest() {
+        return new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            new BigDecimal("1000.00"), "THB", "step 4 VAT reconciliation request", UUID.randomUUID().toString(),
+            List.of(
+                pricingItem("SCG", "Tile A4", "Factory A4", new BigDecimal("1")),
+                pricingItem("Cotto", "Tile B4", "Factory B4", new BigDecimal("1")),
+                pricingItem("Marazzi", "Tile C4", "Factory C4", new BigDecimal("1"))));
+    }
+
+    /** Like {@link #twoItemSubmittedCosting} but with three items (Factory A4/B4/C4), for the
+     * document-level-VAT-vs-Σper-line-VAT reconciliation test (R-H), which needs to set each
+     * item's price independently. */
+    private long threeItemSubmittedCosting() {
+        long pricingRequestId = pricingRequestService.createDraft(ticketId, threeItemPricingRequest(), salesActor)
+            .summary().id();
+        pricingRequestService.submit(pricingRequestId, salesActor);
+        pricingRequestService.pickup(pricingRequestId, importActor);
+        List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
+        for (FactoryQuoteDto draft : drafts) {
+            FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(),
+                response("REF-" + draft.factoryName(), "THB", "100.00", draft.items().get(0).pricingRequestItemId()),
+                importActor);
+            factoryQuoteService.markReadyForCosting(responded.id(), importActor);
+        }
+        return pricingRequestId;
+    }
+
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(
         String brand, String model, String factory, BigDecimal qty
     ) {
         Long productId = "Factory A4".equals(factory) ? catalogProductIdFactoryA
-            : "Factory B4".equals(factory) ? catalogProductIdFactoryB : null;
+            : "Factory B4".equals(factory) ? catalogProductIdFactoryB
+            : "Factory C4".equals(factory) ? catalogProductIdFactoryC : null;
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
             brand + " " + model, null, null, "60x60", factory, qty, qty, "piece", UnitBasis.PER_PIECE,
             QuantityType.CONFIRMED, null, null, null);

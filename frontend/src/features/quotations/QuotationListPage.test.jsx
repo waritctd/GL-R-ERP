@@ -96,13 +96,15 @@ describe('QuotationListPage', () => {
   });
 
   // F5: the five tabs the owner asked for, in order — ร่าง and ถูกแทนที่ are deliberately gone.
-  it('renders exactly ทั้งหมด · รออนุมัติ · แก้ · ยกเลิก · อนุมัติแล้ว', async () => {
+  it('renders exactly ทั้งหมด · รออนุมัติ · ฉบับแก้ · ยกเลิก · อนุมัติแล้ว', async () => {
     renderListPage(salesUser);
     await screen.findByText('QD69-0001');
 
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent.replace(/\d+$/, ''));
-    expect(labels).toEqual(['ทั้งหมด', 'รออนุมัติ', 'แก้', 'ยกเลิก', 'อนุมัติแล้ว']);
-    expect(screen.queryByRole('tab', { name: /ถูกแทนที่/ })).toBeNull();
+    expect(labels).toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
+    // Owner rewording (2026-09-15): the SUPERSEDED status label is now "ฉบับที่ไม่ได้ใช้แล้ว" --
+    // still no tab of its own (unchanged decision; see QuotationListPage.jsx's own comment).
+    expect(screen.queryByRole('tab', { name: /ฉบับที่ไม่ได้ใช้แล้ว/ })).toBeNull();
   });
 
   it('shows each tab its own count from GET /deal-quotations/counts', async () => {
@@ -113,7 +115,7 @@ describe('QuotationListPage', () => {
     const tabs = await screen.findAllByRole('tab');
     // Label + count, concatenated, in DEAL_QUOTATION_STATUS_TABS order.
     await waitFor(() => expect(tabs.map((t) => t.textContent)).toEqual([
-      'ทั้งหมด7', 'รออนุมัติ2', 'แก้3', 'ยกเลิก1', 'อนุมัติแล้ว4',
+      'ทั้งหมด7', 'รออนุมัติ2', 'ฉบับแก้3', 'ยกเลิก1', 'อนุมัติแล้ว4',
     ]));
   });
 
@@ -125,14 +127,14 @@ describe('QuotationListPage', () => {
 
     expect(await screen.findByText('QD69-0001')).not.toBeNull();
     const tabs = await screen.findAllByRole('tab');
-    expect(tabs.map((t) => t.textContent)).toEqual(['ทั้งหมด', 'รออนุมัติ', 'แก้', 'ยกเลิก', 'อนุมัติแล้ว']);
+    expect(tabs.map((t) => t.textContent)).toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
   });
 
-  it('drives the แก้ tab off needsRework=true, not a docStatus, and writes it to the URL', async () => {
+  it('drives the ฉบับแก้ tab off needsRework=true, not a docStatus, and writes it to the URL', async () => {
     renderListPage(salesUser);
     await screen.findByText('QD69-0001');
 
-    fireEvent.click(screen.getByRole('tab', { name: /^แก้/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^ฉบับแก้/ }));
 
     await waitFor(() => expect(api.dealQuotations.list).toHaveBeenCalledWith({ needsRework: true }));
     await waitFor(() => expect(screen.getByTestId('location-search').textContent).toBe('?status=NEEDS_REWORK'));

@@ -21,11 +21,21 @@
 // APPROVED -> (revise) -> a NEW DRAFT child; the parent becomes SUPERSEDED only once THAT child is
 // itself APPROVED (not before -- the customer's last approved document stays valid until
 // replaced). Editing is DRAFT-only.
+//
+// Owner clarification (2026-09-15): ตีกลับ ITSELF never renumbers -- the reject edge above is
+// the WHOLE of "DRAFT -> (reject+reason) -> DRAFT", same row/number. Renumbering happens one step
+// LATER, the next time submit() runs on that now-rejected DRAFT (approvalNote != null): it mints
+// a revision of ITSELF instead of resubmitting the same row, exactly the same "new DRAFT child;
+// parent -> SUPERSEDED once the child reaches APPROVED, not before" shape the APPROVED/(revise)
+// edge already has -- just reached from a DRAFT parent instead of an APPROVED one. Hence DRAFT's
+// own SUPERSEDED edge below (mirrors DealQuotationRepository#supersede's own WHERE clause, widened
+// the same way and for the same reason).
 export const DEAL_QUOTATION_TRANSITIONS = {
-  DRAFT: ['PENDING_APPROVAL', 'CANCELLED'],
+  DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
   PENDING_APPROVAL: ['APPROVED', 'DRAFT'],
-  // The APPROVED -> SUPERSEDED edge is the side effect of a child revision being approved, not a
-  // status a caller ever requests directly (there is no "supersede" endpoint in the plan).
+  // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being
+  // approved, not a status a caller ever requests directly (there is no "supersede" endpoint in
+  // the plan).
   APPROVED: ['SUPERSEDED'],
   SUPERSEDED: [],
   CANCELLED: [],
@@ -44,7 +54,11 @@ const DEAL_QUOTATION_STATUS_LABELS = {
   DRAFT: { label: 'ร่าง', tone: 'neutral' },
   PENDING_APPROVAL: { label: 'รออนุมัติ', tone: 'warning' },
   APPROVED: { label: 'อนุมัติแล้ว', tone: 'success' },
-  SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
+  // Owner rewording (2026-09-15): "ถูกแทนที่" read as a state worth its own filter/queue; this
+  // status needs neither (see QuotationListPage.jsx's own "ร่าง and ถูกแทนที่ are deliberately
+  // GONE as tabs" comment -- a superseded document is history) -- "ฉบับที่ไม่ได้ใช้แล้ว" reads as
+  // the plain, unremarkable end state it actually is.
+  SUPERSEDED: { label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' },
   CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
 };
 
@@ -174,6 +188,15 @@ export function remainderModeLabel(value) {
 
 export const VALIDITY_DAYS_OPTIONS = [15, 30, 45, 60];
 
+/** V178 (owner feedback 2026-09-14): กำหนดยืนยันราคา (remark 7) as a day count from the document
+ * date, or a specific calendar date — mirrors {@code WastageCalculator.VALIDITY_MODE_*} and the
+ * remainderMode toggle's own shape exactly. DATE is offered only when {@link hasSpecialPricing}
+ * is true — see the toggle in QuotationEditorPage's เงื่อนไข panel. */
+export const VALIDITY_MODE_OPTIONS = [
+  { code: 'DAYS', label: 'จำนวนวัน' },
+  { code: 'DATE', label: 'ระบุวันที่' },
+];
+
 // ── Item row options (editor) ────────────────────────────────────────────────────────────────
 
 export const QUANTITY_MODE_OPTIONS = [
@@ -238,7 +261,11 @@ export function originCountryFromCode(originCountryCode) {
 export const DEAL_QUOTATION_STATUS_TABS = [
   { key: 'all', label: 'ทั้งหมด', countKey: 'all', params: {} },
   { key: 'PENDING_APPROVAL', label: 'รออนุมัติ', countKey: 'pendingApproval', params: { status: 'PENDING_APPROVAL' } },
-  { key: 'NEEDS_REWORK', label: 'แก้', countKey: 'needsRework', params: { needsRework: true } },
+  // Owner rewording (2026-09-15): "แก้" -> "ฉบับแก้" -- names the DOCUMENT, not the verb, and
+  // covers both cases this tab bundles: sales แก้ ฉบับที่ถูกอนุมัติแล้ว (a DRAFT revision of an
+  // APPROVED document, in progress) OR ceo ตีกลับแล้วต้องแก้ (a rejected DRAFT). Same
+  // needsRework=true filter, unchanged.
+  { key: 'NEEDS_REWORK', label: 'ฉบับแก้', countKey: 'needsRework', params: { needsRework: true } },
   { key: 'CANCELLED', label: 'ยกเลิก', countKey: 'cancelled', params: { status: 'CANCELLED' } },
   { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: 'APPROVED' } },
 ];
@@ -487,7 +514,13 @@ export function sqmPerPieceFromSizeCm(sizeText) {
 // ราคาพิเศษ, DIRECT_NET needs the net per piece and treats the list price as optional (a blank one
 // is sent as the net itself, which prints "Net" — see itemInputFromRow). A PLAIN row is validated
 // by validatePlainItem instead; an ADJUSTMENT row never reaches here (it lives in its own list).
-export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH') {
+//
+// `requireLeadTime` (owner feedback #7, 2026-09-14) is OFF by default deliberately: a draft may
+// still be saved with no lead time (DealQuotationService#submit is the only backend gate), so the
+// checklist that blocks บันทึกร่าง/ส่งขออนุมัติ alike (buildQuotationChecklist's `itemErrorsByRow`)
+// must keep calling this with the default. Only a SUBMIT-specific caller passes `true` — see
+// QuotationEditorPage's own `submitItemErrorsByRow`.
+export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH', { requireLeadTime = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price, and the quantity
   // needs both box figures — DealQuotationService#requireItemComplete's perSqm branch.
@@ -524,6 +557,11 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   } else if (!(Number(item?.areaSqm) > 0)) {
     errors.areaSqm = 'กรุณาระบุพื้นที่ (ตร.ม.)';
   }
+  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+  // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
+  if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
+    errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
+  }
   return errors;
 }
 
@@ -534,7 +572,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
-  'adjustmentPct', 'adjustmentAmount',
+  'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
@@ -544,6 +582,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   description: 'รายละเอียด', quantity: 'จำนวน', unit: 'หน่วย',
   specialPriceSqm: 'ราคาต่อ ตร.ม.', directNetPrice: 'ราคาสุทธิ/แผ่น',
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
+  // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
+  leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -820,6 +860,44 @@ export function documentDiscountLabel(item, priceMode, documentLanguage = 'TH') 
   return !pct ? 'Net' : `${formatPlainNumber(pct)}%`;
 }
 
+/**
+ * V178 (owner ruling 2026-09-14): remark 7's ระบุวันที่ (DATE) validity variant — and the
+ * จำนวนวัน / ระบุวันที่ toggle offering it at all — is gated on the document having special
+ * pricing. Mirrors {@code th.co.glr.hr.dealquotation.DealQuotationRenderAdapter#hasSpecialPricing}
+ * EXACTLY: same five rules, same TILE/PLAIN/ADJUSTMENT split (via {@link lineTypeOf}), decided
+ * from the DATA rather than from {@link documentDiscountLabel}'s printed word — an English
+ * per-sqm SPECIAL_SQM row prints "Net" but rule (a) still counts it. A quotation has special
+ * pricing when ANY row satisfies:
+ *   a. priceMode SPECIAL_SQM and the row is a TILE (any TILE row counts, discount aside);
+ *   b. priceMode DIRECT_NET and the row is a TILE whose netUnitPrice differs from its unitPrice
+ *      (the row whose ส่วนลด cell reads พิเศษ — see documentDiscountLabel's own DIRECT_NET branch);
+ *   c. priceMode NET (i.e. neither of the above) and the row is a TILE with discountPct > 0;
+ *   d. the row is PLAIN with discountPct > 0;
+ *   e. the row is an ADJUSTMENT (ส่วนลดพิเศษ) row.
+ */
+export function hasSpecialPricing(priceMode, rows) {
+  const isPositive = (value) => value != null && value !== '' && Number(value) > 0;
+  for (const row of rows ?? []) {
+    const type = lineTypeOf(row);
+    if (type === LINE_TYPE_ADJUSTMENT) return true; // (e)
+    if (type === LINE_TYPE_PLAIN) {
+      if (isPositive(row?.discountPct)) return true; // (d)
+      continue;
+    }
+    // TILE (lineTypeOf's own default when lineType is null/blank)
+    if (priceMode === 'SPECIAL_SQM') return true; // (a)
+    if (priceMode === 'DIRECT_NET') {
+      if (row?.unitPrice != null && row?.netUnitPrice != null
+        && Number(row.unitPrice) !== Number(row.netUnitPrice)) {
+        return true; // (b)
+      }
+    } else if (isPositive(row?.discountPct)) {
+      return true; // (c)
+    }
+  }
+  return false;
+}
+
 /** Up to `places` decimals — the backend's `@Digits(fraction = N)` bounds (quantity 2, the
  * ราคาพิเศษ 2, adjustmentPct 3). A value beyond them is a 400 from bean validation, so the editor
  * says so on the field instead of letting the save fail. */
@@ -908,6 +986,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
 export const QUOTATION_FIELD_IDS = Object.freeze({
   customer: 'deal-customer',
   project: 'deal-project',
+  customerName: 'deal-customer-name',
   customerAddress: 'deal-customer-address',
   customerTaxId: 'deal-customer-tax-id',
   customerPhone: 'deal-customer-phone',
@@ -921,6 +1000,8 @@ const ITEM_FIELD_ID_PREFIX = {
     model: 'model', color: 'color', texture: 'texture', sizeText: 'size', thicknessMm: 'thickness',
     sqmPerPiece: 'sqm', piecesPerBox: 'ppb', unitPrice: 'price', specialPriceSqm: 'special',
     directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
+    // Matches QuotationItemRow's `lead-${index}` input id.
+    leadTimeMinDays: 'lead',
   },
   PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },

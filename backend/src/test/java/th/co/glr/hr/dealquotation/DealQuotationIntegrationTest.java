@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Assumptions;
@@ -60,6 +61,7 @@ import th.co.glr.hr.ticket.TicketService;
  * customerquotation/CustomerQuotationIntegrationTest} (its own {@code @BeforeEach}/helpers).
  */
 class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
+    private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private TicketRepository tickets;
     private TicketService ticketService;
     private CustomerRepository customers;
@@ -196,6 +198,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED"));
         assertThat(notifications.findByEmployeeId(ceoId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED"));
+        // Owner request (2026-09-15): the submitting rep gets their own confirmation too, not just
+        // the two approvers -- same event kind, but the message reads from the rep's own side ("ส่ง
+        // ... แล้ว" rather than "... รอการอนุมัติ").
+        assertThat(notifications.findByEmployeeId(salesRepId))
+            .anyMatch(n -> n.type().equals("DEAL_QUOTATION_SUBMITTED") && n.message().contains("ส่งใบเสนอราคา"));
 
         DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest("อนุมัติแล้ว"), salesManagerActor);
         assertThat(approved.docStatus()).isEqualTo(QuotationStatus.APPROVED);
@@ -214,10 +221,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(notifications.findByEmployeeId(salesRepId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_APPROVED"));
 
-        // Email attempted via the capturing mailer, synchronously (no active transaction in this
-        // hand-wired call — see DealQuotationService#afterCommit's "no transaction, no deferral").
-        assertThat(mailer.attachmentsSent).isNotEmpty();
-        assertThat(mailer.attachmentsSent.get(0)[1]).contains(approved.number());
+        // Owner request (2026-09-15): approval used to ALSO send a second, plain-text email with
+        // the PDF attached (via #sendApprovalEmail's own mailer) alongside the branded HTML one
+        // notifyRepAndCreator already sends — the same recipient got two emails for one approval.
+        // That second send is now gone; only the in-app row (and its own HTML email, asserted via
+        // notifyRepAndCreator above) fires.
+        assertThat(mailer.attachmentsSent).isEmpty();
     }
 
     /**
@@ -417,14 +426,286 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto rejected = quotationService.reject(submitted.id(),
             new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
 
+        // ตีกลับ ITSELF never renumbers -- SAME row, SAME number, back to DRAFT with the reason
+        // recorded as its note (owner clarification 2026-09-15, this class's own header comment).
+        assertThat(rejected.id()).isEqualTo(created.id());
+        assertThat(rejected.number()).isEqualTo(created.number());
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(rejected.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
         assertThat(notifications.findByEmployeeId(salesRepId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_REJECTED") && n.message().contains("ราคาผิดพลาด"));
+    }
 
-        // A rejected-then-resubmitted draft clears the stale note.
+    // ── owner clarification (2026-09-15): resubmitting a ตีกลับ'd draft mints a NEW revision ──
+    //
+    // "ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (this row, this number, back to DRAFT) — but resubmitting
+    // it, once sales has fixed it, ออกใบใหม่ เลขเปลี่ยน (a new row/number), the SAME way revising
+    // an already-APPROVED document always has." reject() itself is unchanged (see the test above);
+    // everything below pins what submit() now does to a DRAFT that carries a rejection.
+
+    /** The core new behaviour: submit() on a rejected draft mints a revision of it instead of
+     * flipping the SAME row to PENDING_APPROVAL -- new id, new number ({base}-{n+1}, exactly the
+     * numbering scheme #createRevision already uses), parent = the rejected row, and the REJECTED
+     * row itself is left exactly as reject() put it (still DRAFT, its approval_note untouched --
+     * a permanent record of why THAT number was retired, not cleared the way a same-row resubmit
+     * used to clear it). */
+    @Test
+    void submit_afterRejection_mintsANewRevision_notTheSameRow() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
+
         DealQuotationDto resubmitted = quotationService.submit(rejected.id(), salesActor);
-        assertThat(resubmitted.approvalNote()).isNull();
+
+        assertThat(resubmitted.id()).as("a NEW row, not the rejected one").isNotEqualTo(rejected.id());
+        assertThat(resubmitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(resubmitted.parentQuotationId()).isEqualTo(rejected.id());
+        assertThat(resubmitted.revisionNo()).isEqualTo(rejected.revisionNo() + 1);
+        String base = DealQuotationRepository.baseNumber(rejected.number(), rejected.revisionNo());
+        assertThat(resubmitted.number()).isEqualTo(base + "-" + resubmitted.revisionNo());
+        assertThat(resubmitted.number()).as("a genuinely different number").isNotEqualTo(rejected.number());
+
+        // The rejected row itself: untouched by this call -- still DRAFT, still carrying the SAME
+        // reason it always did (not cleared, unlike the old same-row-resubmit behaviour this
+        // supersedes).
+        DealQuotationDto rejectedReread = quotationService.get(rejected.id(), salesActor);
+        assertThat(rejectedReread.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(rejectedReread.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
+    }
+
+    /** Mirrors {@link #approve_supersedesParentOnlyWhenRevisionItselfReachesApproved} exactly, for
+     * a DRAFT (rejected) parent instead of an APPROVED one -- the SAME timing rule
+     * ({@code DealQuotationRepository#supersede}'s own Javadoc), now reachable from a second
+     * starting status. */
+    @Test
+    void submit_afterRejection_theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.submit(rejected.id(), salesActor);
+        // Still DRAFT, not yet SUPERSEDED -- the revision itself hasn't been approved yet.
+        assertThat(quotationService.get(rejected.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.DRAFT);
+
+        quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(quotationService.get(rejected.id(), salesActor).docStatus())
+            .as("only NOW, once the revision itself reaches APPROVED")
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    /** Mirrors {@link #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash}
+     * -- the SAME {@code hasOpenRevision} guard, reached from submit()'s new branch instead of
+     * {@code createRevision} directly. A rep double-clicking "ส่งใหม่" (a slow network, an
+     * impatient double-tap) must not either crash on the unique-index violation or silently mint
+     * two revisions of the same rejected draft. */
+    @Test
+    void submit_afterRejection_twiceOnTheSameRejectedRow_secondIs409NotADuplicateKeyCrash() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        DealQuotationDto firstRevision = quotationService.submit(rejected.id(), salesActor);
+        assertThat(firstRevision.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+
+        assertThatThrownBy(() -> quotationService.submit(rejected.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
+    }
+
+    /** The negative space of the new behaviour: a plain first-ever submit (never decided on --
+     * {@code approval_note} is null) must be COMPLETELY untouched -- same row, same number, still
+     * the ordinary DRAFT -> PENDING_APPROVAL compare-and-set. Guards against the new branch's
+     * condition ever being loosened to fire on every DRAFT rather than only a REJECTED one. */
+    @Test
+    void submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.approvalNote()).isNull();
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+
+        assertThat(submitted.id()).isEqualTo(created.id());
+        assertThat(submitted.number()).isEqualTo(created.number());
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(submitted.parentQuotationId()).isNull();
+    }
+
+    /** The revision must copy the rejected draft's CURRENT (edited-after-rejection) data, not a
+     * stale snapshot from before the rework -- the same verbatim-copy contract
+     * {@code createRevision_carriesPriceModeAndEveryRowTypeVerbatim} pins for an ordinary
+     * revision, exercised here through the OTHER path that now shares its copying code. */
+    @Test
+    void submit_afterRejection_copiesTheDraftsPostRejectionEditsVerbatim() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = quotationService.reject(submitted.id(),
+            new RejectRequest("แก้ราคา"), salesManagerActor);
+
+        // Sales fixes the price AFTER the rejection -- the edit reject() itself asked for.
+        DealQuotationDto edited = quotationService.update(rejected.id(),
+            upsertRequest(List.of(sampleItem("250.00", 4))), salesActor);
+        assertThat(edited.items()).hasSize(1);
+
+        DealQuotationDto revision = quotationService.submit(rejected.id(), salesActor);
+
+        // Mutation-check note: item data alone doesn't discriminate "copied into a new revision"
+        // from "the same row, still holding update()'s own edit" -- both would read identically
+        // here. id/parentQuotationId are what actually pin THIS test to the revision mechanism
+        // specifically (mintsANewRevision_notTheSameRow already covers this more directly, but a
+        // reader of THIS test alone should not be misled into thinking it proves that on its own).
+        assertThat(revision.id()).isNotEqualTo(rejected.id());
+        assertThat(revision.parentQuotationId()).isEqualTo(rejected.id());
+        assertThat(revision.items()).hasSize(1);
+        assertThat(revision.items().get(0).unitPrice()).isEqualByComparingTo("250.00");
+        assertThat(revision.items().get(0).quantity()).isEqualByComparingTo("4");
+    }
+
+    /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles, the
+     * same way {@link #revisionNumbering_chainsOffTheOriginalBaseNumber_notTheImmediateParent}
+     * already pins for ordinary approve-then-revise cycles -- never "{base}-1-2-3" and never
+     * colliding with a fresh quotation's own "{base}-1". */
+    @Test
+    void submit_afterRejection_numberingChainsThroughMultipleRejectCycles() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String base = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
+
+        DealQuotationDto submitted1 = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected1 = quotationService.reject(submitted1.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revision2 = quotationService.submit(rejected1.id(), salesActor);
+        assertThat(revision2.number()).isEqualTo(base + "-2");
+
+        DealQuotationDto rejected2 = quotationService.reject(revision2.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revision3 = quotationService.submit(rejected2.id(), salesActor);
+        // Must chain off the ORIGINAL base ("QT-...-3"), never off rejected2's own number as if it
+        // were itself a base ("QT-...-2-3").
+        assertThat(revision3.number()).isEqualTo(base + "-3");
+        assertThat(revision3.revisionNo()).isEqualTo(3);
+        assertThat(revision3.parentQuotationId()).isEqualTo(rejected2.id());
+    }
+
+    /** Opus review (2026-09-15), REQUIRED: {@code approve}'s supersede used to walk only ONE hop
+     * up {@code parent_quotation_id}, so a SECOND (or later) reject/resubmit cycle left every
+     * ancestor ABOVE the immediate parent stranded in DRAFT forever the moment the FINAL revision
+     * was approved -- proven against real Postgres by a since-removed probe. Continues the exact
+     * chain {@link #submit_afterRejection_numberingChainsThroughMultipleRejectCycles} builds
+     * (created -> reject -> revision2 -> reject -> revision3) one step further: approves
+     * revision3 and asserts EVERY ancestor in the chain is SUPERSEDED, not just revision2 (the
+     * immediate parent) -- and that the whole chain has therefore left the "ฉบับแก้" bucket,
+     * which is exactly the symptom ("A sits in the rep's ฉบับแก้ bucket forever on a deal whose
+     * quotation is already approved") the missing walk produced. */
+    @Test
+    void approve_supersedesEveryAncestorInAMultiCycleRejectChain_notJustTheImmediateParent() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        long originalId = created.id();
+
+        DealQuotationDto submitted1 = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected1 = quotationService.reject(submitted1.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revision2 = quotationService.submit(rejected1.id(), salesActor);
+        long revision2Id = revision2.id();
+
+        DealQuotationDto rejected2 = quotationService.reject(revision2.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revision3 = quotationService.submit(rejected2.id(), salesActor);
+
+        // Before approval: both ancestors still sit in ฉบับแก้ (needsRework), same as ever.
+        assertThat(quotationService.search(null, true, salesActor)).extracting(DealQuotationDto::id)
+            .contains(originalId, revision2Id);
+
+        quotationService.approve(revision3.id(), new ApproveRequest(null), salesManagerActor);
+
+        // The IMMEDIATE parent (revision2) -- already covered by
+        // theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved, re-asserted here as
+        // part of the SAME chain this test is actually about.
+        assertThat(quotationService.get(revision2Id, salesActor).docStatus())
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+        // The GRANDPARENT (the original) -- THIS is what the single-hop version left stranded.
+        assertThat(quotationService.get(originalId, salesActor).docStatus())
+            .as("the original must ALSO become SUPERSEDED, not stay DRAFT forever")
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+
+        // Neither ancestor is reachable through ฉบับแก้ any more -- the whole chain retired.
+        assertThat(quotationService.search(null, true, salesActor)).extracting(DealQuotationDto::id)
+            .doesNotContain(originalId, revision2Id);
+    }
+
+    /** Opus review (2026-09-15), REQUIRED, wrong-way-round: the ancestry a rejected-and-resubmitted
+     * row can grow is a TREE, not a straight line -- {@link DealQuotationRepository#hasOpenRevision}
+     * only looks at DIRECT children, so cancelling a DRAFT row that itself has an OPEN child used to
+     * make that child's GRANDPARENT look "free" again (the direct child is now CANCELLED, not
+     * open), letting the grandparent mint a SECOND, sibling branch while the first branch (the
+     * cancelled row's own child) was still alive. Approving one branch's leaf only ever walks
+     * UPWARD from that leaf -- it can never reach across to supersede a SIBLING branch -- so BOTH
+     * branches could end APPROVED: two independently-approved quotations on the same ticket.
+     * Proves the fix (cancel() now refuses a row with an open child) blocks the exact sequence
+     * that produced this. */
+    @Test
+    void cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        long originalId = created.id();
+
+        // A -> reject -> resubmit mints B -> reject -> resubmit mints C. B now has an open child.
+        DealQuotationDto submitted = quotationService.submit(originalId, salesActor);
+        DealQuotationDto rejectedA = quotationService.reject(submitted.id(),
+            new RejectRequest("รอบ 1"), salesManagerActor);
+        DealQuotationDto revisionB = quotationService.submit(rejectedA.id(), salesActor);
+        DealQuotationDto rejectedB = quotationService.reject(revisionB.id(),
+            new RejectRequest("รอบ 2"), salesManagerActor);
+        DealQuotationDto revisionC = quotationService.submit(rejectedB.id(), salesActor);
+
+        // THE FIX: B cannot be cancelled out from under its own open child C.
+        assertThatThrownBy(() -> quotationService.cancel(revisionB.id(), new CancelRequest(null), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
+            .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่");
+
+        // Without this guard, the ORIGINAL sequence that broke the invariant continued: cancel(B)
+        // would have succeeded, hasOpenRevision(originalId) would then have read false (B's only
+        // status is CANCELLED, not open), and submit(originalId) would have minted a SECOND
+        // branch alongside C's. Confirm that second branch is ALSO still blocked, transitively:
+        // C itself must be resolved to a terminal CANCELLED state before B can be freed.
+        DealQuotationDto rejectedC = quotationService.reject(revisionC.id(),
+            new RejectRequest("รอบ 3"), salesManagerActor);
+        quotationService.cancel(rejectedC.id(), new CancelRequest(null), salesActor);
+        // NOW B has no open child (C is CANCELLED, a terminal state) -- cancelling B is legitimate.
+        DealQuotationDto cancelledB = quotationService.cancel(revisionB.id(), new CancelRequest(null), salesActor);
+        assertThat(cancelledB.docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+
+        // The original can now legitimately be resubmitted -- its whole subtree (B, C) is
+        // terminal, so there is only ONE live path from here, not a second sibling branch.
+        DealQuotationDto revisionB2 = quotationService.submit(originalId, salesActor);
+        assertThat(revisionB2.id()).isNotEqualTo(revisionB.id());
+        quotationService.approve(revisionB2.id(), new ApproveRequest(null), salesManagerActor);
+
+        // The invariant this whole feature exists to protect: never more than ONE APPROVED
+        // quotation on the same ticket at a time.
+        assertThat(quotationService.search(List.of("APPROVED"), false, salesActor))
+            .extracting(DealQuotationDto::id).containsExactly(revisionB2.id());
+    }
+
+    /** Regression guard: cancelling an ORDINARY leaf DRAFT (no open child of its own) must still
+     * work exactly as before -- the new guard in {@link #cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole}
+     * must not block the common case. */
+    @Test
+    void cancel_stillWorksOnAPlainDraftWithNoOpenChild() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto cancelled = quotationService.cancel(created.id(), new CancelRequest(null), salesActor);
+        assertThat(cancelled.docStatus()).isEqualTo(QuotationStatus.CANCELLED);
     }
 
     /** LOW: reject() used to skip the existence check and go straight to the compare-and-set
@@ -671,6 +952,78 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รุ่น");
     }
 
+    // ── item #7 (2026-09-14): submit requires a lead time on every TILE row ────────────────
+
+    /** A deliberate sales-workflow rule change (owner feedback #7): submit now refuses a TILE row
+     * with no lead time, naming the offending row's OWN printed number -- a draft may still be
+     * saved with one missing (create/update do not enforce this at all). */
+    @Test
+    void submit_rejectsATileItemWithNoLeadTime_namingTheItemNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMissing(ItemInputBuilder::withNoLeadTime))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า")
+            .hasMessageContaining("รายการที่ 1");
+    }
+
+    /** Multiple offending rows are named together, comma-separated, by their OWN seq numbers --
+     * not just "something is wrong". */
+    @Test
+    void submit_rejectsMultipleTileItemsWithNoLeadTime_namingEveryItemNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                itemMissing(ItemInputBuilder::withNoLeadTime),
+                itemMissing(ItemInputBuilder::withNoLeadTime))),
+            salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 2, 3")
+            // Item 1 (sampleItem) HAS a lead time -- it must not be named alongside the two that don't.
+            .satisfies(e -> assertThat(((ApiException) e).getMessage()).doesNotContain("รายการที่ 1,"));
+    }
+
+    /** Wrong-way-round twin of the rejection above: PLAIN and ADJUSTMENT rows are EXEMPT -- neither
+     * has a lead-time concept at all (freight/consumables/a ส่วนลดพิเศษ line cannot "arrive"), so a
+     * document made of a TILE row (with a lead time) plus PLAIN/ADJUSTMENT rows with none still
+     * submits. */
+    @Test
+    void submit_stillAcceptsPlainAndAdjustmentRowsWithNoLeadTime() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                sampleItem("100.00", 10),
+                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
+    /** Defence-in-depth twin of {@link #submit_reChecksStoredItems_incompleteRowIsBadRequest}: the
+     * lead-time gate also re-checks the STORED rows, not just what create/update most recently
+     * wrote -- proven by nulling it out straight through the repository, the way a pre-#7 row
+     * would exist. */
+    @Test
+    void submit_reChecksStoredItems_missingLeadTimeIsBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        jdbc.update("""
+            UPDATE sales.quotation_item SET lead_time_min_days = NULL, lead_time_max_days = NULL
+             WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
@@ -709,6 +1062,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withPiecesPerBox(Integer v) { piecesPerBox = v; return this; }
         ItemInputBuilder withUnitPrice(BigDecimal v) { unitPrice = v; return this; }
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
+        // #7 (2026-09-14): submit's new lead-time requirement.
+        ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,
@@ -928,6 +1283,54 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
     }
 
+    /** Opus review fix (2026-09-14): the SAME re-snapshot guarantee as the test above, but for the
+     * customer's NAME specifically -- {@code customerSnapshot} used to take the name from the
+     * ticket's own frozen column unconditionally (never re-read), which silently defeated the
+     * owner's "correct a typo in the name" request (CustomerDetailsFields' new ชื่อลูกค้า field):
+     * the correction reached {@code customers.customer.name} but never the printed document. */
+    @Test
+    void customerSnapshot_nameIsReSnapshottedOnEveryDraftSave_butFrozenOnceApproved() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String originalName = created.customerName();
+
+        // The rep corrects a typo in the customer master (exactly what the new ชื่อลูกค้า field's
+        // PUT /api/customers/{id} does) …
+        customers.update(customer.id(), "บริษัท ชื่อที่ถูกต้อง จำกัด", null, null, null, null);
+        // … and re-saves the DRAFT.
+        DealQuotationDto resaved = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(resaved.customerName()).as("the correction reached the snapshot")
+            .isEqualTo("บริษัท ชื่อที่ถูกต้อง จำกัด");
+        assertThat(renderedStrings(resaved.id()))
+            .as("and the rendered document prints it, not the stale one")
+            .anyMatch(s -> s.contains("บริษัท ชื่อที่ถูกต้อง จำกัด"))
+            .noneMatch(s -> s.contains(originalName));
+
+        // Approve, then correct the name AGAIN: the approved document must not move.
+        DealQuotationDto approved = quotationService.approve(
+            quotationService.submit(resaved.id(), salesActor).id(), new ApproveRequest(null), salesManagerActor);
+        customers.update(customer.id(), "บริษัท เปลี่ยนอีกครั้ง จำกัด", null, null, null, null);
+
+        DealQuotationDto reread = quotationService.get(approved.id(), salesActor);
+        assertThat(reread.customerName()).as("frozen at approval").isEqualTo("บริษัท ชื่อที่ถูกต้อง จำกัด");
+        assertThat(renderedStrings(reread.id()))
+            .anyMatch(s -> s.contains("บริษัท ชื่อที่ถูกต้อง จำกัด"))
+            .noneMatch(s -> s.contains("บริษัท เปลี่ยนอีกครั้ง จำกัด"));
+    }
+
+    // The documented reason `customerSnapshot`'s name falls back to the ticket's own frozen
+    // column at all -- a deal with no resolvable customer row should still print the name it was
+    // created with, not a blank -- has NO reachable test through the public service today, tried
+    // two ways and confirmed both closed:
+    //   1. A real DELETE of the referenced customer row: refused by a live FK
+    //      (`ticket_customer_id_fkey`) while any ticket still points at it.
+    //   2. Nulling `sales.ticket.customer_id` directly: `resolveContact`'s own
+    //      `ticket.customerId() != null && ...` guard (DealQuotationService.java:896) throws
+    //      "กรุณาระบุผู้สั่งซื้อ" before `customerSnapshot` is ever reached, for the SAME reason.
+    // So this fallback is unreachable dead-code-safety today, not a live branch -- worth flagging
+    // in the PR body rather than forcing a test around it.
+
     /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X"
      * without hardcoding which cell the adapter happens to put it in. */
     private List<String> renderedStrings(long quotationId) {
@@ -1002,6 +1405,44 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(contact.id(), List.of(sampleItem("200.00", 5))), salesActor);
         assertThat(switched.contactId()).isEqualTo(contact.id());
         assertThat(switched.contactName()).isEqualTo("สมหญิง ใจดี");
+    }
+
+    // ── owner feedback 2026-09-14: โครงการ (project name) is now editable, not write-once ──────
+
+    /** Every OTHER test in this class omits {@code projectName} entirely (the oldest legacy
+     * constructor shapes) and still passes -- that already proves the create-time fallback to
+     * {@code ticket.projectName()} is unbroken. This pins the other half: an EXPLICIT value wins. */
+    @Test
+    void create_withAnExplicitProjectName_usesItInsteadOfTheTickets() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการทดสอบ A", List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.projectName()).isEqualTo("โครงการทดสอบ A");
+    }
+
+    @Test
+    void update_correctsATypoInTheProjectName_andRoundTripsOnRead() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("ABC", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto corrected = quotationService.update(created.id(),
+            upsertRequestWithProjectName("Associates By Choice", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(corrected.projectName()).isEqualTo("Associates By Choice");
+
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.projectName()).isEqualTo("Associates By Choice");
+    }
+
+    /** No "missing keeps stored" for this field (unlike priceMode/documentLanguage/validityMode):
+     * the editor always sends its current value, blank included, so a blank is a deliberate clear
+     * -- same discipline as customerNotes/deptCode/unitCode on the same call. */
+    @Test
+    void update_withABlankProjectName_clearsIt() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithProjectName("โครงการเดิม", List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto cleared = quotationService.update(created.id(),
+            upsertRequestWithProjectName("", List.of(sampleItem("200.00", 5))), salesActor);
+        assertThat(cleared.projectName()).isNull();
     }
 
     /** submit is the last gate: a row that predates V167 (no snapshot) cannot go to an approver.
@@ -1532,6 +1973,169 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.NOT_FOUND)
             .hasMessageContaining(messageFragment);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // V178 — remark 7's second กำหนดยืนยันราคา variant (an exact validity_until date, gated on
+    // the document having special pricing — owner ruling 2026-09-14).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void create_dateMode_withoutSpecialPricing_isBadRequest() {
+        // DIRECT_NET with net == list price -- no discount anywhere -- refuses DATE mode outright,
+        // before even checking for a date.
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "100.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30));
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_butNoDate_isBadRequest() {
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))), // net < list -- special pricing
+            WastageCalculator.VALIDITY_MODE_DATE, null);
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุวันที่ยืนราคา");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_dateBeforeQuotationDate_isBadRequest() {
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).minusDays(1));
+        assertThatThrownBy(() -> quotationService.create(ticketId, request, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา");
+    }
+
+    @Test
+    void create_dateMode_withSpecialPricing_roundTripsThroughSaveAndRead() {
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(45);
+        UpsertDealQuotationRequest request = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until);
+        DealQuotationDto created = quotationService.create(ticketId, request, salesActor);
+        assertThat(created.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(created.validityUntil()).isEqualTo(until);
+
+        // Re-read from Postgres, not the returned object.
+        DealQuotationDto reread = quotationService.get(created.id(), salesActor);
+        assertThat(reread.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(reread.validityUntil()).isEqualTo(until);
+    }
+
+    @Test
+    void update_dateMode_lostSpecialPricing_isBadRequest() {
+        // Created WITH special pricing (net < list) in DATE mode -- fine. The SAME save that
+        // clears the discount (net back to list) while still asking for DATE mode must 400: the
+        // gate is decided from the rows being WRITTEN, not from what was there before.
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30)), salesActor);
+
+        UpsertDealQuotationRequest noLongerSpecial = withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "100.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30));
+        assertThatThrownBy(() -> quotationService.update(created.id(), noLongerSpecial, salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+    }
+
+    @Test
+    void submit_dateModeValidityAlreadyPast_isBadRequest() {
+        // Match the service's business date: UTC CI can be a day behind Bangkok.
+        // Start with a future expiry so crossing midnight during setup cannot reject the draft.
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30)), salesActor);
+        // Time moves on after the draft is saved -- simulate that directly (create/update already
+        // refuse a date before the quotation's OWN date, so a past date cannot reach storage any
+        // other way in one test run).
+        jdbc.update("UPDATE sales.quotation SET validity_until = :d WHERE quotation_id = :id",
+            java.util.Map.of("d", LocalDate.now(BANGKOK).minusDays(1), "id", created.id()));
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("วันที่ยืนราคาผ่านไปแล้ว");
+    }
+
+    @Test
+    void approve_dateModeWithSpecialPricing_setsValidityDateToValidityUntil_notApprovalPlusDays() {
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(60);
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityDate()).isEqualTo(until);
+        // Wrong-way-round: NOT approvalDate + validityDays (30, the request's own default).
+        assertThat(approved.validityDate())
+            .isNotEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
+    }
+
+    @Test
+    void createRevision_copiesValidityModeAndUntil_verbatim() {
+        LocalDate until = LocalDate.now(BANGKOK).plusDays(60);
+        DealQuotationDto created = quotationService.create(ticketId, withValidity(
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
+                List.of(directNetItem("100.00", 10, "85.00"))),
+            WastageCalculator.VALIDITY_MODE_DATE, until), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(approved.validityUntil()).isEqualTo(until);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        assertThat(revision.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DATE);
+        assertThat(revision.validityUntil()).isEqualTo(until);
+    }
+
+    @Test
+    void daysMode_behaviourIsUnchanged() {
+        // The default shape every OTHER test in this file already relies on: no validityMode sent
+        // at all normalises to DAYS, validityUntil stays null, and approve keeps computing
+        // approvalDate + validityDays -- see #acceptanceScenario_createUpdateSubmitApprove's own
+        // assertion on this, pinned again here explicitly for V178.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DAYS);
+        assertThat(created.validityUntil()).isNull();
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DAYS);
+        assertThat(approved.validityDate())
+            .isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
+    }
+
+    /** {@code withValidity} — the ONE wither this file's {@code UpsertDealQuotationRequest}
+     * builders lack, added for V178 so every test above can start from an existing request
+     * (built by {@link #upsertRequestWithMode}) and set just the two new fields. */
+    private UpsertDealQuotationRequest withValidity(UpsertDealQuotationRequest base, String validityMode,
+                                                     LocalDate validityUntil) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
+            base.validityDays(), validityMode, validityUntil, base.customerNotes(), base.priceMode(),
+            base.documentLanguage(), base.currency(), base.items());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -2348,6 +2952,178 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("1000.00");
     }
 
+    // ── Quotation arithmetic reconciliation (2026-09-15) — service-level reproductions of five
+    // ── of the owner's real printed documents, through create()+get() against real Postgres.
+    // ── D6 (English per-sqm boxes) is already pinned in DealQuotationEnglishIntegrationTest;
+    // ── not duplicated here. D2/D4/D9 have no service-level equivalent (D2/D4 are plain-row
+    // ── totals identical in shape to D1/D8 below; D9 is pieces-only, already pinned at the
+    // ── WastageCalculator layer by WastageCalculatorTest/QuotationGoldenDocumentsTest). ────────
+
+    @Test
+    void goldenDocument_D1_QN6900971_4_plainRowsWithDiscount20pct() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItemWithDiscount("สุขภัณฑ์ 1", "1", "ชุด", "58889.72", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 2", "1", "ชุด", "12143.93", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 3", "1", "ชุด", "8900.00", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 4", "1", "ชุด", "36598.13", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5", "2", "ชุด", "35433.64", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.1", "2", "ชุด", "45581.31", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.2", "2", "ชุด", "36764.49", "20"),
+                // Bold in the plan: proves amount = round2(list × qty × (1 − pct/100)), not
+                // round2(round2(net) × qty) — the double-rounded formula gives 35,799.64 here.
+                plainItemWithDiscount("สุขภัณฑ์ 5.3", "2", "ชุด", "22374.77", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.4", "2", "ชุด", "10314.02", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.5", "2", "ชุด", "7153.27", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.6", "2", "ชุด", "10314.02", "20"),
+                plainItemWithDiscount("สุขภัณฑ์ 5.7", "2", "ชุด", "7153.27", "20"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(12);
+        String[] nets = {"47111.78", "9715.14", "7120.00", "29278.50", "28346.91", "36465.05", "29411.59",
+            "17899.82", "8251.22", "5722.62", "8251.22", "5722.62"};
+        String[] amounts = {"47111.78", "9715.14", "7120.00", "29278.50", "56693.82", "72930.10", "58823.18",
+            "35799.63", "16502.43", "11445.23", "16502.43", "11445.23"};
+        for (int i = 0; i < saved.items().size(); i++) {
+            var item = saved.items().get(i);
+            assertThat(item.netUnitPrice()).as("D1 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D1 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("373367.47");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("26135.72");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("399503.19");
+    }
+
+    @Test
+    void goldenDocument_D3_QN6900981_1_areaModeSpecialSqmNoWastage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                // Row 1: 2,793 × 1.39 = 3,882.27 HALF_UPs to the printed 3,882 (an even box
+                // multiple already) — CEILING would give 3,883, box-rounding up to 3,884.
+                areaSpecialSqmItem("2793", "0.72", 2, "790"),
+                areaSpecialSqmItem("274", "0.72", 2, "790"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(2);
+        assertThat(saved.items().get(0).piecesFinal()).isEqualTo(3882);
+        assertThat(saved.items().get(0).netUnitPrice()).isEqualByComparingTo("531.16");
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("2061963.12");
+        assertThat(saved.items().get(1).piecesFinal()).isEqualTo(382);
+        assertThat(saved.items().get(1).netUnitPrice()).isEqualByComparingTo("531.16");
+        assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("202903.12");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("2264866.24");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("158540.64");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("2423406.88");
+    }
+
+    @Test
+    void goldenDocument_D5_QN6900704_2_piecesModeSpecialSqmWithAdjustment() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                piecesTileSpecialSqmItem(329, 3, "881.46", "1350", "0.36"),
+                piecesTileSpecialSqmItem(202, 4, "843.14", "1400", "0.36"),
+                piecesTileSpecialSqmItem(1161, 4, "881.46", "1350", "0.36"),
+                piecesTileSpecialSqmItem(1100, 4, "900.63", "1350", "0.36"),
+                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(5);
+        int[] finalPieces = {330, 204, 1164, 1100};
+        String[] nets = {"453.84", "470.65", "453.84", "453.84"};
+        String[] amounts = {"149767.20", "96012.60", "528269.76", "499224.00"};
+        for (int i = 0; i < 4; i++) {
+            var item = saved.items().get(i);
+            assertThat(item.piecesFinal()).as("D5 row %s pieces", i + 1).isEqualTo(finalPieces[i]);
+            assertThat(item.netUnitPrice()).as("D5 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D5 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.items().get(4).lineAmount()).isEqualByComparingTo("-38198.21");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("1235075.35");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("86455.27");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("1321530.62");
+    }
+
+    @Test
+    void goldenDocument_D7_QN6900648_areaModeSpecialSqmNoWastage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
+                areaSpecialSqmItem("945", "0.72", 2, "1800"),
+                areaSpecialSqmItem("339", "0.72", 2, "1800"),
+                areaSpecialSqmItem("159", "0.72", 2, "860"),
+                // The OTHER headline R-B example: 511 × 1.39 = 710.29 HALF_UPs to the printed
+                // 710 (already even); CEILING gives 711, box-rounding up again to 712.
+                areaSpecialSqmItem("511", "0.72", 2, "1800"),
+                areaSpecialSqmItem("1200", "0.72", 2, "1800"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(5);
+        int[] pieces = {1314, 472, 222, 710, 1668};
+        String[] nets = {"1210.25", "1210.25", "578.23", "1210.25", "1210.25"};
+        String[] amounts = {"1590268.50", "571238.00", "128367.06", "859277.50", "2018697.00"};
+        for (int i = 0; i < 5; i++) {
+            var item = saved.items().get(i);
+            assertThat(item.piecesFinal()).as("D7 row %s pieces", i + 1).isEqualTo(pieces[i]);
+            assertThat(item.netUnitPrice()).as("D7 row %s net", i + 1).isEqualByComparingTo(nets[i]);
+            assertThat(item.lineAmount()).as("D7 row %s amount", i + 1).isEqualByComparingTo(amounts[i]);
+        }
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("5167848.06");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("361749.36");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("5529597.42");
+    }
+
+    @Test
+    void goldenDocument_D8_QN6900782_2_plainRowsNoDiscount() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItem("กระเบื้อง A", "22", "แผ่น", "1950"),
+                plainItem("กระเบื้อง B", "24", "แผ่น", "385"),
+                plainItem("กระเบื้อง C", "24", "แผ่น", "345"))),
+            salesActor);
+        DealQuotationDto saved = quotationService.get(created.id(), salesActor);
+        assertThat(saved.items()).hasSize(3);
+        assertThat(saved.items().get(0).lineAmount()).isEqualByComparingTo("42900.00");
+        assertThat(saved.items().get(1).lineAmount()).isEqualByComparingTo("9240.00");
+        assertThat(saved.items().get(2).lineAmount()).isEqualByComparingTo("8280.00");
+        assertThat(saved.subtotalAmount()).isEqualByComparingTo("60420.00");
+        assertThat(saved.vatAmount()).isEqualByComparingTo("4229.40");
+        assertThat(saved.grandTotal()).isEqualByComparingTo("64649.40");
+    }
+
+    /** D1/D8 — a PLAIN row with an explicit discount ({@link #plainItem} has none). */
+    private ItemInput plainItemWithDiscount(String description, String quantity, String unit,
+                                            String unitPrice, String discountPct) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal(unitPrice), new BigDecimal(discountPct), null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    /** D3/D7 — an AREA-mode TILE row priced SPECIAL_SQM, no wastage. {@code unitPrice} is a
+     * dummy positive value: SPECIAL_SQM pricing never reads it for the net/amount computation
+     * (only validates it is positive; the printed ราคา column instead shows the special price). */
+    private ItemInput areaSpecialSqmItem(String area, String sqmPerPiece, int piecesPerBox, String specialPerSqm) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x120",
+            new BigDecimal("10"), new BigDecimal(sqmPerPiece),
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal(area), null,
+            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox,
+            new BigDecimal("1"), null, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
+    /** D5 — a PIECES-mode TILE row priced SPECIAL_SQM, no wastage, box rounding only. */
+    private ItemInput piecesTileSpecialSqmItem(int piecesInput, int piecesPerBox, String listPrice,
+                                               String specialPerSqm, String sqmPerPiece) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal(sqmPerPiece),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, piecesInput,
+            WastageCalculator.WASTAGE_MODE_NONE, null, piecesPerBox,
+            new BigDecimal(listPrice), null, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal(specialPerSqm), null, null, null, null);
+    }
+
     // ── v3 fixtures ────────────────────────────────────────────────────────────────────────
 
     /**
@@ -2379,6 +3155,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private UpsertDealQuotationRequest upsertRequestWithMode(String priceMode, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", priceMode, items);
+    }
+
+    /** The full canonical constructor, for the one field (projectName) none of this class's other
+     * helpers thread through. Every other field left at its "use the default" value. */
+    private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
+        return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
+            null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items);
     }
 
     /** {@link #sampleItem} (60x60 -> 0.36 ตร.ม./แผ่น, piecesPerBox 1) plus a ราคาพิเศษ. */

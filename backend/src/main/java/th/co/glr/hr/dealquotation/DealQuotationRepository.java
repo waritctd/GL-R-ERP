@@ -227,7 +227,13 @@ public class DealQuotationRepository {
         ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
+        // V178 — "DAYS" | "DATE" and the exact deadline for DATE mode; see WastageCalculator's
+        // VALIDITY_MODE_* constants and DealQuotationService#requireValidityUntilForMode.
+        String validityMode, LocalDate validityUntil,
         String customerNotes, String priceMode, String documentLanguage, String currency,
+        // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
+        // printedByDisplayId/salesRepDisplayId Javadoc. Null on every path that does not set one.
+        Long printedByDisplayId, Long salesRepDisplayId,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
@@ -246,7 +252,8 @@ public class DealQuotationRepository {
                  customer_name, customer_address, customer_tax_id, customer_phone,
                  contact_id, contact_name, contact_phone, contact_email, project_name,
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
-                 validity_days, customer_notes, price_mode, document_language,
+                 validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
+                 printed_by_display_id, sales_rep_display_id,
                  parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
@@ -254,7 +261,8 @@ public class DealQuotationRepository {
                  :customerName, :customerAddress, :customerTaxId, :customerPhone,
                  :contactId, :contactName, :contactPhone, :contactEmail, :projectName,
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
-                 :validityDays, :customerNotes, :priceMode, :documentLanguage,
+                 :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
+                 :printedByDisplayId, :salesRepDisplayId,
                  :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
@@ -281,6 +289,8 @@ public class DealQuotationRepository {
                 .addValue("remainderMode", p.remainderMode())
                 .addValue("creditDays", p.creditDays())
                 .addValue("validityDays", p.validityDays())
+                .addValue("validityMode", p.validityMode())
+                .addValue("validityUntil", p.validityUntil())
                 .addValue("customerNotes", p.customerNotes())
                 .addValue("priceMode", p.priceMode())
                 // v3b: currency was a hardcoded 'THB' LITERAL in the VALUES list until V169 — it
@@ -288,6 +298,8 @@ public class DealQuotationRepository {
                 // DealQuotationService#resolveCurrency (TH->THB, EN->USD).
                 .addValue("documentLanguage", p.documentLanguage())
                 .addValue("currency", p.currency())
+                .addValue("printedByDisplayId", p.printedByDisplayId())
+                .addValue("salesRepDisplayId", p.salesRepDisplayId())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -491,19 +503,29 @@ public class DealQuotationRepository {
     public int updateHeader(long quotationId, ContactSnapshot contact, CustomerSnapshot customer,
                             String deptCode, String unitCode,
                             LocalDate offerDate, Integer depositPercent, String remainderMode, Integer creditDays,
-                            Integer validityDays, String customerNotes, String priceMode,
-                            String documentLanguage, String currency, BigDecimal subtotal) {
+                            Integer validityDays, String validityMode, LocalDate validityUntil,
+                            String customerNotes, String priceMode,
+                            String documentLanguage, String currency, BigDecimal subtotal,
+                            // V179 — print-only override; see DealQuotationDtos' Javadoc.
+                            Long printedByDisplayId, Long salesRepDisplayId,
+                            // Owner feedback 2026-09-14 — project_name was write-once at INSERT
+                            // only until now; genuinely editable on every DRAFT save, same as
+                            // customer_notes just below it.
+                            String projectName) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
                    contact_phone = :contactPhone, contact_email = :contactEmail,
                    customer_name = :customerName, customer_address = :customerAddress,
                    customer_tax_id = :customerTaxId, customer_phone = :customerPhone,
+                   project_name = :projectName,
                    dept_code = :deptCode, unit_code = :unitCode, offer_date = :offerDate,
                    deposit_percent = :depositPercent, remainder_mode = :remainderMode,
                    credit_days = :creditDays, validity_days = :validityDays,
+                   validity_mode = :validityMode, validity_until = :validityUntil,
                    customer_notes = :customerNotes, price_mode = :priceMode,
                    document_language = :documentLanguage, currency = :currency,
+                   printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
                    total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
@@ -517,6 +539,7 @@ public class DealQuotationRepository {
                 .addValue("customerAddress", customer.address())
                 .addValue("customerTaxId", customer.taxId())
                 .addValue("customerPhone", customer.phone())
+                .addValue("projectName", projectName)
                 .addValue("deptCode", deptCode)
                 .addValue("unitCode", unitCode)
                 .addValue("offerDate", offerDate)
@@ -524,10 +547,14 @@ public class DealQuotationRepository {
                 .addValue("remainderMode", remainderMode)
                 .addValue("creditDays", creditDays)
                 .addValue("validityDays", validityDays)
+                .addValue("validityMode", validityMode)
+                .addValue("validityUntil", validityUntil)
                 .addValue("customerNotes", customerNotes)
                 .addValue("priceMode", priceMode)
                 .addValue("documentLanguage", documentLanguage)
                 .addValue("currency", currency)
+                .addValue("printedByDisplayId", printedByDisplayId)
+                .addValue("salesRepDisplayId", salesRepDisplayId)
                 .addValue("subtotal", subtotal));
     }
 
@@ -601,13 +628,29 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** Compare-and-set APPROVED -> SUPERSEDED — only called once the CHILD revision itself reaches
-     * APPROVED (see {@code DealQuotationService#approve}); the parent stays a valid, live APPROVED
-     * document until then. */
+    /** Compare-and-set the parent -> SUPERSEDED — only called once the CHILD revision itself
+     * reaches APPROVED (see {@code DealQuotationService#approve}'s
+     * {@code parentQuotationId() != null} call). Two starting statuses, matching this repository's
+     * two ways a revision gets minted:
+     * <ul>
+     *   <li>{@code APPROVED} — an ordinary revision of an already-approved document
+     *       ({@code DealQuotationService#createRevision}); the parent stays a valid, live APPROVED
+     *       document until the child actually replaces it, not before.</li>
+     *   <li>{@code DRAFT} — owner clarification (2026-09-15): a revision minted by resubmitting a
+     *       ตีกลับ'd draft ({@code DealQuotationService#submitAsRevisionOfRejected}). That parent
+     *       was never a live, sent document (it was rejected, never approved), so there is no
+     *       "still valid until replaced" concern to preserve — but it still only becomes
+     *       SUPERSEDED once its own child is actually approved, the SAME timing as the APPROVED
+     *       case, for the same reason: a child that itself gets rejected must not have already
+     *       retired the row it was trying to replace.</li>
+     * </ul>
+     * A parent in any OTHER status (CANCELLED, SUPERSEDED already, itself PENDING_APPROVAL — none
+     * reachable while it has an open child, per {@code #hasOpenRevision}) matches neither branch
+     * and this simply no-ops (0 rows), which is the safe outcome either way. */
     public int supersede(long quotationId) {
         return jdbc.update("""
             UPDATE sales.quotation SET doc_status = 'SUPERSEDED', updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED'
+             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status IN ('APPROVED', 'DRAFT')
             """, Map.of("id", quotationId));
     }
 
@@ -643,6 +686,64 @@ public class DealQuotationRepository {
         }
     }
 
+    /**
+     * V179 — who may appear as a ผู้พิมพ์/พนักงานขาย print-name OPTION: the union of (a) active
+     * employees in the sales division ({@code DivisionAccessPolicy.SALES_DIVISION_CODE}, the SAME
+     * population {@code CommissionRepository#findActiveSalesRepOptions} already queries) and (b)
+     * any active employee holding the {@code hr.employee.can_create_quotation} grant (e.g.
+     * ภิญญดา, who is {@code qc} role, not sales division). ONE predicate
+     * ({@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}), shared with
+     * {@link #isEligibleQuotationDisplayName}, so the options list and the create/update
+     * validation can never disagree about who is eligible.
+     */
+    private static final String QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE = """
+        e.is_active AND (
+            EXISTS (SELECT 1 FROM hr.division d WHERE d.division_id = e.division_id
+                      AND LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(d.name_th, '-', 1))))
+                          = :salesDivisionCode)
+            OR e.can_create_quotation
+        )
+        """;
+
+    /** The options list for the ผู้พิมพ์/พนักงานขาย print-name selectors — see
+     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}'s Javadoc for who is included. Same
+     * {@code CommissionRepOptionDto} shape (id + Thai display name) as
+     * {@code CommissionRepository#findActiveSalesRepOptions}, and the same
+     * {@code COALESCE(..., employee_code)} display-name fallback / active-only / order-by-name
+     * pattern — deliberately NOT calling that method directly, since it excludes grant holders
+     * outside the sales division. */
+    public List<th.co.glr.hr.commission.CommissionRepOptionDto> findEligibleQuotationDisplayNameOptions(
+            String salesDivisionCode) {
+        return jdbc.query("""
+            SELECT e.employee_id,
+                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.employee_code)
+                       AS display_name
+              FROM hr.employee e
+             WHERE %s
+             ORDER BY display_name, e.employee_id
+            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
+            new MapSqlParameterSource().addValue("salesDivisionCode", salesDivisionCode),
+            (rs, rowNum) -> new th.co.glr.hr.commission.CommissionRepOptionDto(
+                rs.getLong("employee_id"), rs.getString("display_name")));
+    }
+
+    /** Whether {@code employeeId} is in the SAME eligible union {@link
+     * #findEligibleQuotationDisplayNameOptions} lists — the validation
+     * {@code DealQuotationService#create}/{@code #update} run before accepting a
+     * {@code printedByDisplayId}/{@code salesRepDisplayId}. Shares
+     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE} with that method so the two can never
+     * disagree about who is eligible. */
+    public boolean isEligibleQuotationDisplayName(long employeeId, String salesDivisionCode) {
+        Boolean found = jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM hr.employee e WHERE e.employee_id = :employeeId AND (%s))
+            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
+            new MapSqlParameterSource()
+                .addValue("employeeId", employeeId)
+                .addValue("salesDivisionCode", salesDivisionCode),
+            Boolean.class);
+        return Boolean.TRUE.equals(found);
+    }
+
     public Optional<DealQuotationDto> findById(long quotationId) {
         try {
             DealQuotationDto dto = jdbc.queryForObject(
@@ -665,11 +766,19 @@ public class DealQuotationRepository {
     }
 
     /**
-     * The "แก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a reason
-     * ({@code approval_note}, cleared again on the next submit) OR a revision still in progress
-     * ({@code parent_quotation_id}). ONE definition, shared by {@link #search}'s
-     * {@code needsRework} filter and {@link #counts} so the tab's count can never disagree with
-     * the rows the tab lists.
+     * The "ฉบับแก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a
+     * reason ({@code approval_note}) OR a revision still in progress ({@code parent_quotation_id}).
+     * ONE definition, shared by {@link #search}'s {@code needsRework} filter and {@link #counts}
+     * so the tab's count can never disagree with the rows the tab lists.
+     *
+     * <p>Opus review (2026-09-15): this used to say {@code approval_note} is "cleared again on
+     * the next submit" — true before that same day's owner clarification, false after it.
+     * {@code DealQuotationService#submit}'s resubmit-after-rejection path now mints a REVISION of
+     * a rejected row instead of resubmitting it, and deliberately leaves the rejected row's own
+     * {@code approval_note} untouched — a permanent record of why that number was retired — so a
+     * rejected row stays in this bucket until {@code approve}'s ancestor walk finally supersedes
+     * it (see that method's own Javadoc for why a single-hop supersede left multi-cycle chains
+     * stranded here forever).
      */
     private static final String NEEDS_REWORK_PREDICATE =
         "(q.doc_status = 'DRAFT' AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))";
@@ -876,17 +985,31 @@ public class DealQuotationRepository {
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.contact_id, q.contact_name, q.contact_phone, q.contact_email,
                    q.dept_code, q.unit_code, q.offer_date, q.deposit_percent, q.remainder_mode,
-                   q.credit_days, q.validity_days, q.validity_date, q.customer_notes, q.price_mode,
+                   q.credit_days, q.validity_days, q.validity_date, q.validity_mode, q.validity_until,
+                   q.customer_notes, q.price_mode,
                    q.document_language,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
-                   END AS approver_has_signature
+                   END AS approver_has_signature,
+                   -- V179: print-only ผู้พิมพ์/พนักงานขาย name override — see DealQuotationDtos'
+                   -- printedByDisplayId/salesRepDisplayId Javadoc. Both LEFT JOINs are null when the
+                   -- column itself is null, which is what lets #mapQuotation fall back to the real
+                   -- createdByName/salesRepName with a plain null check.
+                   q.printed_by_display_id,
+                   NULLIF(TRIM(CONCAT_WS(' ', pbd.first_name_th, pbd.last_name_th)), '') AS printed_by_display_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', pbd.first_name_en, pbd.last_name_en)), '') AS printed_by_display_name_en,
+                   q.sales_rep_display_id,
+                   NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_th, srd.last_name_th)), '') AS sales_rep_display_name,
+                   NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_en, srd.last_name_en)), '') AS sales_rep_display_name_en,
+                   srd.phone AS sales_rep_display_phone
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
               LEFT JOIN sales.quotation_approver_snapshot aps ON aps.quotation_id = q.quotation_id
+              LEFT JOIN hr.employee pbd ON pbd.employee_id = q.printed_by_display_id
+              LEFT JOIN hr.employee srd ON srd.employee_id = q.sales_rep_display_id
             """;
     }
 
@@ -954,6 +1077,11 @@ public class DealQuotationRepository {
             nullableInt(rs, "credit_days"),
             nullableInt(rs, "validity_days"),
             rs.getObject("validity_date", LocalDate.class),
+            // V178: NULL validity_mode (every pre-V178 row, and the whole legacy customer-quotation
+            // path) reads as DAYS — see the migration's own comment.
+            rs.getString("validity_mode") == null
+                ? WastageCalculator.VALIDITY_MODE_DAYS : rs.getString("validity_mode"),
+            rs.getObject("validity_until", LocalDate.class),
             rs.getString("customer_notes"),
             // NULL price_mode (every pre-V168 row) reads as NET — see V168's own comment.
             rs.getString("price_mode") == null
@@ -964,6 +1092,15 @@ public class DealQuotationRepository {
             grandTotal,
             rs.getString("currency"),
             rs.getBoolean("approver_has_signature"),
+            // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; both null unless the
+            // corresponding column is set (see #baseSelect's LEFT JOINs).
+            nullableLong(rs, "printed_by_display_id"),
+            rs.getString("printed_by_display_name"),
+            rs.getString("printed_by_display_name_en"),
+            nullableLong(rs, "sales_rep_display_id"),
+            rs.getString("sales_rep_display_name"),
+            rs.getString("sales_rep_display_name_en"),
+            rs.getString("sales_rep_display_phone"),
             items,
             createdAt,
             instant(rs, "updated_at")

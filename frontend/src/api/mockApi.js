@@ -51,6 +51,9 @@ import {
 // in the backend dealquotation/ package once it lands).
 import {
   canTransitionDealQuotation, isDealQuotationNeedingRework, adjustmentDescriptionPreview,
+  // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
+  // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
+  hasSpecialPricing,
 } from '../features/quotations/quotationMeta.js';
 // fix/commission-figures-from-backend: mock mode no longer imports the commission tier math —
 // see the fenced MOCK COMMISSION FIXTURES block near the `commissions` namespace below for why,
@@ -1496,10 +1499,14 @@ function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, pa
   return quotation;
 }
 
+// Mirrors CustomerQuotationRepository#mapQuotation (R-H, quotation arithmetic reconciliation,
+// 2026-09-15): vatAmount/grandTotal are a SINGLE document-level rounding of the subtotal, not
+// Σ per-line vat/lineTotal — summing the already-2dp per-line figures can drift a satang from the
+// document-level rounding (see that repository method's own comment for a worked example).
 function recalcMockCustomerQuotationTotals(quotation) {
   quotation.subtotalAmount = round2(quotation.items.reduce((sum, it) => sum + it.lineSubtotal, 0));
-  quotation.vatAmount = round2(quotation.items.reduce((sum, it) => sum + it.vat, 0));
-  quotation.grandTotal = round2(quotation.items.reduce((sum, it) => sum + it.lineTotal, 0));
+  quotation.vatAmount = round2(quotation.subtotalAmount * 0.07);
+  quotation.grandTotal = round2(quotation.subtotalAmount + quotation.vatAmount);
 }
 
 // Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is
@@ -4724,6 +4731,44 @@ function scopedDealQuotationsFor(user) {
   return mockDealQuotations;
 }
 
+// V179 (owner feedback #4, 2026-09-14) -- ผู้พิมพ์/พนักงานขาย print-name override. Mirrors
+// DealQuotationRepository#isEligibleQuotationDisplayName / #findEligibleQuotationDisplayNameOptions:
+// the union of active sales-division employees and can_create_quotation grant holders. This
+// fixture has no live DivisionAccessPolicy-style derivation (see the `reps()` mock above's own
+// Javadoc for why), so "sales division" is stood in for by `role === 'sales' || role ===
+// 'sales_manager'` -- the SAME substitution that method already makes, for the same reason.
+function mockEligibleQuotationDisplayNameUsers() {
+  return db.users.filter((u) => u.active && (u.role === 'sales' || u.role === 'sales_manager' || u.canCreateQuotation));
+}
+
+function isMockEligibleQuotationDisplayName(id) {
+  return mockEligibleQuotationDisplayNameUsers().some((u) => u.id === Number(id));
+}
+
+// Validates one printedByDisplayId/salesRepDisplayId candidate before it is written -- null
+// passes straight through (means "use the real name", the default); a non-null id must be in the
+// eligible union above or the request is refused with 400. Mirrors
+// DealQuotationService#requireEligibleDisplayEmployeeId, same message string.
+function resolveDealQuotationDisplayId(rawId) {
+  if (rawId == null) return null;
+  const id = Number(rawId);
+  if (!isMockEligibleQuotationDisplayName(id)) {
+    fail('พนักงานที่เลือกไม่สามารถแสดงเป็นผู้พิมพ์หรือพนักงานขายในใบเสนอราคาได้', 400);
+  }
+  return id;
+}
+
+// The display id's name (+phone) snapshot -- looked up FRESH on every read (never frozen), which
+// mirrors DealQuotationRepository#baseSelect's plain LEFT JOIN on printed_by_display_id/
+// sales_rep_display_id (unlike the V175 approver snapshot, this join is not frozen at any point).
+// This fixture's demo employees carry no English names anywhere, so `nameEn` is always null here
+// -- the same as createdByNameEn/salesRepNameEn a few lines below in buildDealQuotationDto.
+function mockDealQuotationDisplayEmployee(id) {
+  if (id == null) return { name: null, nameEn: null, phone: null };
+  const user = db.users.find((u) => u.id === Number(id));
+  return { name: user?.name ?? null, nameEn: null, phone: mockSalesRepPhone(Number(id)) };
+}
+
 // ผู้สั่งซื้อ resolution + the frozen snapshot V167 stores (owner feedback F2, 2026-09-10).
 // Mirrors DealQuotationService: `contactId` is OPTIONAL on the wire and defaults to the deal's own
 // `sales.ticket.contact_id`; what is REQUIRED is that one RESOLVES, and the chosen contact must
@@ -4819,6 +4864,84 @@ function dealQuotationRevisionNumber(baseNumber, revisionNo) {
   return `${baseNumber}-${revisionNo}`;
 }
 
+// M3 (DealQuotationRepository#hasOpenRevision's own Javadoc): a caller double-tapping "สร้าง
+// ฉบับแก้ไข"/"ส่งใหม่" on the SAME parent must not silently mint two children sharing the same
+// {base}-{n} number (the real backend's UNIQUE index would refuse the second INSERT; nothing in
+// this in-memory array does). Shared by createRevision() and submit()'s resubmit-after-rejection
+// branch below -- both mint a revision the same way.
+function hasOpenDealQuotationRevision(parentId) {
+  return mockDealQuotations.some((q) => q.parentQuotationId === parentId
+    && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'));
+}
+
+// The revision-copy step createRevision() and submit()'s owner-clarification (2026-09-15)
+// "resubmit after a ตีกลับ mints a new number" branch both need: a new DRAFT child of `parent`,
+// every header field copied VERBATIM, its items copied, at the next revision number. Callers are
+// responsible for their OWN precondition (the two paths gate on different parent statuses) and
+// for checking hasOpenDealQuotationRevision BEFORE calling this, same division of responsibility
+// as the real DealQuotationService#insertRevisionCopyOf. Returns the new row WITHOUT pushing it
+// -- the caller decides when (submit()'s branch pushes then immediately submits it; createRevision
+// just pushes it as a DRAFT).
+// Opus review nit (2026-09-15): mirrors DealQuotationRepository#nextRevisionNo's own Javadoc --
+// "NOT source.revisionNo() + 1". mintDealQuotationRevision used to compute
+// `parent.revisionNo + 1` directly, which is only correct while `parent` is always the HIGHEST
+// revision minted off this base -- true for an ordinary createRevision() chain, but NOT once a
+// row can be resubmitted-as-revision, cancelled, and its OWN parent resubmitted again: reject A
+// -> resubmit mints A's child B (revisionNo 2) -> reject B -> cancel B -> resubmit A AGAIN would
+// recompute `A.revisionNo + 1` = 2 a second time, colliding with B's already-used "-2" number,
+// where the real backend's MAX-based query correctly mints "-3". Scans every row sharing this
+// base number REGARDLESS of status (matching the real query's lack of a status filter) so a
+// cancelled sibling's number still counts as "used".
+function nextMockDealQuotationRevisionNo(ticketId, base) {
+  const max = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (q.number === base || q.number.startsWith(`${base}-`)))
+    .reduce((m, q) => Math.max(m, q.revisionNo ?? 0), 0);
+  return max + 1;
+}
+
+function mintDealQuotationRevision(parent, user) {
+  const now = new Date().toISOString();
+  const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
+  const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
+  return {
+    ...structuredClone(parent),
+    id: mockDealQuotationSeq++,
+    number: dealQuotationRevisionNumber(base, revisionNo),
+    docStatus: 'DRAFT',
+    revisionNo,
+    parentQuotationId: parent.id,
+    createdById: user.employeeId ?? null,
+    createdByName: user.name,
+    submittedAt: null, submittedBy: null,
+    approvedById: null, approvedByName: null, approvedAt: null,
+    approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+    validityDate: null,
+    quotationDate: now.slice(0, 10),
+    createdAt: now, updatedAt: now,
+    // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
+    // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
+    items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
+  };
+}
+
+// The actual DRAFT -> PENDING_APPROVAL flip shared by an ordinary first-time submit (`row` is the
+// row the caller named) and the resubmit-after-rejection branch (`row` is the freshly-minted,
+// freshly-pushed revision, not the row submit() was originally called with). All of submit()'s
+// OWN validation (ผู้สั่งซื้อ, V178 date, lead time) already ran against the PARENT's current data
+// before either branch is reached -- the revision is a verbatim copy of that same data, so it is
+// validated by construction and this never re-checks it, matching the real service.
+function submitDealQuotationRow(row, user) {
+  const now = new Date().toISOString();
+  row.docStatus = 'PENDING_APPROVAL';
+  row.submittedAt = now;
+  row.submittedBy = user.id;
+  // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment. A no-op
+  // for a freshly-minted revision, which never had one.
+  row.approvalNote = null;
+  row.updatedAt = now;
+  return delay({ quotation: buildDealQuotationDto(row) });
+}
+
 // round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
 // rather than redeclared.
 
@@ -4828,16 +4951,25 @@ function dealQuotationRevisionNumber(baseNumber, revisionNo) {
  * persisting, so the editor's live calculation line and totals have SOMETHING to render under
  * VITE_USE_MOCKS=true. It is deliberately NOT the real backend algorithm:
  *
- *   - The real WastageCalculator (backend, pure class, unit-tested against the meeting's
- *     ROUND-UP rule) uses `ceil` at every rounding step. This stub uses `Math.round` instead, so
- *     its numbers are close but NOT pinned to the reference figures QUOTATION-V2-PLAN.md records
- *     (e.g. item1: 569 sqm, 1.39 pieces/sqm, 10% wastage, 2/box -> the real engine's answer is
- *     872, not 870 -- a mock-driven test asserting either number here is asserting nothing about
- *     that engine).
+ *   - Corrected 2026-09-15 (quotation arithmetic reconciliation): the real WastageCalculator
+ *     (backend, pure class, unit-tested) rounds PIECES HALF_UP, not CEILING as this comment used
+ *     to say — the old "meeting rule" reading was wrong, settled against real owner documents;
+ *     see that class's own Javadoc for the evidence. This stub's `Math.round` for
+ *     `piecesBeforeWastage`/`wastageExtra` now happens to AGREE with the real engine's piece
+ *     rounding (both are round-half-up) — that convergence is incidental to this stub still being
+ *     a placeholder, not a claim that the two are kept in sync on purpose; box-multiple rounding
+ *     (`Math.ceil` at the ppb step) is unchanged and still correct either way.
+ *   - The MONEY math below is still NOT the real algorithm and remains a placeholder: `lineAmount`
+ *     here is `round2(piecesFinal × netUnitPrice)` — the double-rounded formula the real engine no
+ *     longer uses (R-D: the real `lineAmount` is a single rounding of `list × piecesFinal ×
+ *     (1 − pct/100)`, and `list` itself is pre-rounded to 2dp before that — see
+ *     WastageCalculator#calculate). A mock-driven test asserting a `lineAmount` figure here is
+ *     still asserting nothing about the real engine's money math.
  *   - Mirroring the exact algorithm would make a green mock-driven test look like evidence about
  *     the real rounding rule, which CLAUDE.md's "Mock API contract" section calls out by name
  *     (computeDraftEtag) as never being independent evidence once a mock mirrors a backend
- *     computation. Diverging on purpose keeps that failure mode impossible here.
+ *     computation. Diverging on purpose (on the money side, still) keeps that failure mode
+ *     impossible here.
  *
  * Every field the real ItemDto adds on top of ItemInput is still populated, so the UI has
  * something to bind to; only the NUMBERS are a placeholder.
@@ -5059,6 +5191,32 @@ function resolveDealQuotationV3Header(payload, current = null) {
   return { priceMode, documentLanguage, currency };
 }
 
+/**
+ * V178 — DealQuotationService#requireValidityUntilForMode, mirrored exactly, same message
+ * strings, same order of checks. `current` is the stored row on UPDATE (a missing
+ * `validityMode` keeps the stored one, same "missing keeps stored" discipline as priceMode/
+ * documentLanguage above); null on CREATE, where missing means DAYS. `quotationDate` is the
+ * quotation's OWN date — today on create, the frozen `current.quotationDate` on update — used
+ * for the "not before the document's own date" refusal. `items` are the rows ABOUT TO BE
+ * WRITTEN (this function's caller always passes the post-`buildDealQuotationItems` list), so
+ * "has special pricing" is decided from what is actually being saved, never from stale state.
+ */
+function resolveDealQuotationValidity(payload, priceMode, items, quotationDate, current = null) {
+  // Opus review (2026-09-14): no .toUpperCase() here — the real @Pattern(regexp = "DAYS|DATE")
+  // rejects lowercase (DealQuotationRequestsValidationTest pins this), so uppercasing here would
+  // make the mock MORE permissive than production, the dangerous direction (CLAUDE.md).
+  const validityMode = String(payload.validityMode || current?.validityMode || 'DAYS');
+  if (!['DAYS', 'DATE'].includes(validityMode)) fail('ต้องเป็น DAYS หรือ DATE', 400);
+  if (validityMode !== 'DATE') return { validityMode, validityUntil: null };
+  if (!hasSpecialPricing(priceMode, items)) {
+    fail('ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด', 400);
+  }
+  const validityUntil = payload.validityUntil || null;
+  if (!validityUntil) fail('กรุณาระบุวันที่ยืนราคา', 400);
+  if (validityUntil < quotationDate) fail('วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา', 400);
+  return { validityMode, validityUntil };
+}
+
 /** DealQuotationService#buildItems' ordering and refusals: ADJUSTMENT rows move LAST (stably),
  * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
  * and a document whose total goes negative is refused — checked only where the mock KNOWS the
@@ -5142,10 +5300,23 @@ function buildDealQuotationDto(row) {
     creditDays: row.creditDays,
     validityDays: row.validityDays,
     validityDate: row.validityDate,
+    // V178: never null on the wire — a stored null normalises to DAYS, as the DTO does.
+    validityMode: row.validityMode || 'DAYS',
+    validityUntil: row.validityUntil ?? null,
     customerNotes: row.customerNotes,
     // v3/v3b: never null on the wire — a stored null normalises to NET / TH, as the DTO does.
     priceMode: row.priceMode || 'NET',
     documentLanguage: row.documentLanguage || 'TH',
+    // V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-only name override. Looked
+    // up FRESH from row.printedByDisplayId/row.salesRepDisplayId every read — see
+    // #mockDealQuotationDisplayEmployee's own comment for why this is not a frozen snapshot.
+    printedByDisplayId: row.printedByDisplayId ?? null,
+    printedByDisplayName: mockDealQuotationDisplayEmployee(row.printedByDisplayId).name,
+    printedByDisplayNameEn: mockDealQuotationDisplayEmployee(row.printedByDisplayId).nameEn,
+    salesRepDisplayId: row.salesRepDisplayId ?? null,
+    salesRepDisplayName: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).name,
+    salesRepDisplayNameEn: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).nameEn,
+    salesRepDisplayPhone: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).phone,
     ...dealQuotationTotals(row.items, row.documentLanguage || 'TH'),
     currency: row.currency ?? (row.documentLanguage === 'EN' ? 'USD' : 'THB'),
     // Mirrors DealQuotationRepository#baseSelect (V175): frozen at approval, live only for a row
@@ -12008,6 +12179,21 @@ export const api = {
       });
     },
 
+    // V179 (owner feedback #4, 2026-09-14) — options list for the ผู้พิมพ์/พนักงานขาย print-name
+    // selectors. Gated like every other quotation WRITE action (EDIT_ROLES or the grant), NOT
+    // requireDealQuotationWriteAccess's per-deal ownership rule -- this list carries no single
+    // deal's context. Mirrors DealQuotationService#findQuotationDisplayNameOptions.
+    async displayNameOptions() {
+      const user = requireSession();
+      if (!(user.role === 'sales' || user.role === 'sales_manager' || hasDealQuotationMockGrant(user))) {
+        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      const items = mockEligibleQuotationDisplayNameUsers()
+        .map((u) => ({ id: u.id, name: u.name }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'th') || a.id - b.id);
+      return delay({ items });
+    },
+
     async get(id) {
       const row = requireDealQuotationRowViewable(id);
       return delay({ quotation: buildDealQuotationDto(row) });
@@ -12022,6 +12208,10 @@ export const api = {
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
+      // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is
+      // set from, so the two can never disagree about "today".
+      const { validityMode, validityUntil } = resolveDealQuotationValidity(
+        payload, header.priceMode, items, now.slice(0, 10));
       const row = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
@@ -12050,7 +12240,16 @@ export const api = {
         quotationDate: now.slice(0, 10),
         ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
-        projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+        // Opus review fix (2026-09-14): mirrors DealQuotationService#create -- an EXPLICIT
+        // payload.projectName (even blank, to send no project at all on a brand-new document)
+        // wins; omitted/null (a caller that never sends the field) falls back to the deal's own
+        // project, exactly as this line unconditionally did before projectName became editable.
+        // This used to ignore payload.projectName entirely, so the mock could not exercise the
+        // override half of create() at all -- CLAUDE.md's "mock omits a field the feature keys
+        // on" shape.
+        projectName: payload.projectName != null
+          ? (String(payload.projectName).trim() || null)
+          : (ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null),
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? now.slice(0, 10),
@@ -12058,9 +12257,13 @@ export const api = {
         remainderMode: payload.remainderMode ?? null,
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
+        validityMode, validityUntil,
         validityDate: null,
         customerNotes: payload.customerNotes ?? null,
         ...header,
+        // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
+        printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
+        salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
         items,
         createdAt: now, updatedAt: now,
       };
@@ -12080,6 +12283,11 @@ export const api = {
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
+      // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems),
+      // same as DealQuotationService#update — a discount cleared on THIS save already refuses
+      // DATE mode here, before anything is persisted.
+      const { validityMode, validityUntil } = resolveDealQuotationValidity(
+        payload, header.priceMode, items, row.quotationDate, row);
       // #M7: DIRECT assignment, matching DealQuotationService.updateHeader -> DealQuotationRepository
       // .updateHeader, which writes every one of these columns straight from the request with no
       // "keep the old value" fallback at all. The previous `payload.X ?? row.X` shape meant an
@@ -12094,11 +12302,29 @@ export const api = {
         remainderMode: payload.remainderMode ?? null,
         creditDays: payload.creditDays ?? null,
         validityDays: payload.validityDays ?? null,
+        validityMode, validityUntil,
         customerNotes: payload.customerNotes ?? null,
         // F7: re-snapshot the ลูกค้า columns on every DRAFT save — DealQuotationService#update.
         ...mockDealQuotationCustomerSnapshot(ticket),
         ...contactSnapshot,
         ...header,
+        // V179 (owner feedback #4, 2026-09-14) — same DIRECT-assignment discipline as #M7 above:
+        // a full PUT always carries the payload's own value (null included, meaning "use the real
+        // name"), so there is no "missing keeps stored" fallback here either.
+        printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
+        salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Opus review fix (2026-09-14): was missing entirely, so editing โครงการ silently never
+        // persisted under VITE_USE_MOCKS=true -- CLAUDE.md's "mock omits a field the feature keys
+        // on" shape. Same #M7 DIRECT-assignment discipline as every other field in this
+        // Object.assign: no "missing keeps stored". Second Opus follow-up nit (2026-09-14): the
+        // first pass wrote `payload.projectName ?? null` here, which stores an explicit ""/"   "
+        // as-is instead of clearing it -- diverging from the real DealQuotationService#update's
+        // `blankToNull(request.projectName())` and from `create`'s own handling two blocks above.
+        // Use blankToNullMock, the file's shared top-level helper (mirrors PriceImportService.
+        // blankToNull) -- not the same-named local const inside mockDepositNoticeHeaderAutofill
+        // above, which is out of scope here -- so "" and whitespace-only both clear the field
+        // exactly as they do against the real backend.
+        projectName: blankToNullMock(payload.projectName),
         items,
         updatedAt: new Date().toISOString(),
       });
@@ -12130,14 +12356,38 @@ export const api = {
       // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
       // none, and that document cannot go for approval with an empty signature slot.
       if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
-      const now = new Date().toISOString();
-      row.docStatus = 'PENDING_APPROVAL';
-      row.submittedAt = now;
-      row.submittedBy = user.id;
-      // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment.
-      row.approvalNote = null;
-      row.updatedAt = now;
-      return delay({ quotation: buildDealQuotationDto(row) });
+      // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
+      // date before the quotation's OWN date, so this is the re-check against TODAY, the last
+      // gate before an approver ever sees the document. Mirrors DealQuotationService#submit.
+      if (row.validityMode === 'DATE' && row.validityUntil && row.validityUntil < bangkokTodayIso()) {
+        fail('วันที่ยืนราคาผ่านไปแล้ว', 400);
+      }
+      // Owner feedback #7 (2026-09-14). Mirrors DealQuotationService#requireEveryTileItemHasALeadTime
+      // -- submit only, exactly like the ผู้สั่งซื้อ check above; a DRAFT may still be saved with no
+      // lead time. PLAIN/ADJUSTMENT rows are exempt, same as the Java side.
+      const missingLeadTimeSeqs = row.items
+        .filter((it) => (it.lineType ?? 'TILE') === 'TILE' && (it.leadTimeMinDays == null || it.leadTimeMaxDays == null))
+        .map((it) => it.seq);
+      if (missingLeadTimeSeqs.length > 0) {
+        fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}`, 400);
+      }
+      // Owner clarification (2026-09-15): ตีกลับ itself never renumbers -- reject() below still
+      // just flips this SAME row back to DRAFT with a reason. But resubmitting one (approvalNote
+      // still set, since nothing has cleared it since) now mints a revision of ITSELF instead of
+      // resubmitting the SAME row -- mirrors DealQuotationService#submit's own branch EXACTLY,
+      // down to the signal it keys on (approvalNote != null, not the broader
+      // isDealQuotationNeedingRework, which also matches an in-progress child revision -- a
+      // different case with no rejection to resubmit FROM). A first-ever submit (approvalNote is
+      // null) is untouched below.
+      if (row.docStatus === 'DRAFT' && row.approvalNote != null) {
+        if (hasOpenDealQuotationRevision(row.id)) {
+          fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
+        }
+        const revision = mintDealQuotationRevision(row, user);
+        mockDealQuotations.push(revision);
+        return submitDealQuotationRow(revision, user);
+      }
+      return submitDealQuotationRow(row, user);
     },
 
     async approve(id, payload = {}) {
@@ -12164,16 +12414,30 @@ export const api = {
       // of bug as todayIso() in QuotationEditorPage.jsx (fixed there via utils/format.js's
       // bangkokTodayIso -- this file already had its own copy of the same fix, unrelated import).
       row.quotationDate = bangkokTodayIso();
-      row.validityDate = row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null;
+      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim
+      // (approval never recomputes it); every other case falls back to the existing day-count
+      // rule. Mirrors DealQuotationService#approve exactly, hasSpecialPricing re-checked here
+      // (rather than trusted from `validityMode` alone) for the same defensive reason the real
+      // service does.
+      row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
+        ? row.validityUntil
+        : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
       row.updatedAt = now;
       // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced.
-      if (row.parentQuotationId) {
-        const parent = mockDealQuotations.find((q) => q.id === row.parentQuotationId);
-        if (parent && canTransitionDealQuotation(parent.docStatus, 'SUPERSEDED')) {
-          parent.docStatus = 'SUPERSEDED';
-          parent.updatedAt = now;
+      // last approved document stays valid until replaced. Opus review nit (2026-09-15): walks
+      // the WHOLE ancestry chain, not just the immediate parent -- mirrors
+      // DealQuotationService#approve's own ancestor walk (see that method's Javadoc for the
+      // multi-cycle-chain bug a single hop left open: every ancestor above the immediate parent
+      // stranded forever in a 2+ reject/resubmit chain).
+      let ancestorId = row.parentQuotationId;
+      while (ancestorId) {
+        const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
+        if (!ancestor) break;
+        if (canTransitionDealQuotation(ancestor.docStatus, 'SUPERSEDED')) {
+          ancestor.docStatus = 'SUPERSEDED';
+          ancestor.updatedAt = now;
         }
+        ancestorId = ancestor.parentQuotationId;
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
@@ -12209,28 +12473,12 @@ export const api = {
       if (parent.docStatus !== 'APPROVED') {
         fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
       }
-      const now = new Date().toISOString();
-      const revisionNo = parent.revisionNo + 1;
-      const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
-      const child = {
-        ...structuredClone(parent),
-        id: mockDealQuotationSeq++,
-        number: dealQuotationRevisionNumber(base, revisionNo),
-        docStatus: 'DRAFT',
-        revisionNo,
-        parentQuotationId: parent.id,
-        createdById: user.employeeId ?? null,
-        createdByName: user.name,
-        submittedAt: null, submittedBy: null,
-        approvedById: null, approvedByName: null, approvedAt: null,
-        approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
-        validityDate: null,
-        quotationDate: now.slice(0, 10),
-        createdAt: now, updatedAt: now,
-        // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
-        // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
-        items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
-      };
+      // M3: mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not
+      // silently mint two children sharing the same {base}-{n} number.
+      if (hasOpenDealQuotationRevision(parent.id)) {
+        fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
+      }
+      const child = mintDealQuotationRevision(parent, user);
       mockDealQuotations.push(child);
       return delay({ quotation: buildDealQuotationDto(child) });
     },
@@ -12244,6 +12492,13 @@ export const api = {
       requireDealQuotationWriteAccess(ticket, user);
       if (!canTransitionDealQuotation(row.docStatus, 'CANCELLED')) {
         fail(`ยกเลิกไม่ได้ในสถานะ '${row.docStatus}'`, 409);
+      }
+      // Opus review (2026-09-15), REQUIRED: mirrors DealQuotationService#cancel's own guard --
+      // see that method's Javadoc for the double-approve hole this closes (cancelling a DRAFT
+      // row that itself has an open child let that child's grandparent mint a SECOND, sibling
+      // branch once the direct child was no longer "open").
+      if (hasOpenDealQuotationRevision(row.id)) {
+        fail('ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน', 409);
       }
       row.docStatus = 'CANCELLED';
       row.updatedAt = new Date().toISOString();

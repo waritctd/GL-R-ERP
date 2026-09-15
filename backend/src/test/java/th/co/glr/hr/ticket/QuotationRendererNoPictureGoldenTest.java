@@ -131,17 +131,32 @@ class QuotationRendererNoPictureGoldenTest {
         // Every one of these five diffs is a style-table index shift only (one new CellStyle
         // created earlier in the render bumps every later-created style's index by +1) -- no
         // fixture's phoneLine TEXT changed (none of these fixtures carry a customer address).
+        //
+        // Re-pinned AGAIN 2026-09-14, owner feedback #3 (pieces-per-box wrap fix): every fixture's
+        // item calculation line ends "...= 37 แผ่น (N กล่อง)" -- e.g. 71 String.length() chars for
+        // the "(1 กล่อง)" case but only 61 VISIBLE ones (see QuotationRenderer#visibleLength's
+        // Javadoc), so it used to wrap into a head row ("...= 37 แผ่น") plus a continuation row
+        // ("(N กล่อง)") under the OLD String.length()-based budget check (62), and now fits on ONE
+        // row under the new visible-length check (still budget 62). Confirmed by diffing every
+        // regenerated fixture (`git diff` on the .txt files)
+        // against its prior version: EVERY diff is that one continuation row disappearing per item
+        // (rows shift up by one per item), the resulting page-break/print-area/scale figures
+        // moving to match the now-shorter sheet, and the style-table indices the removed rows'
+        // styles shift by. legacy-shape is untouched (byte-identical) -- the legacy (non-v2) item
+        // path never runs the width-aware wrap at all (DealQuotationRenderAdapter's `alwaysShowSeq`
+        // is v2-only). No row's TEXT content changed beyond the two lines above merging into one;
+        // no border, font, merge, or unrelated cell moved.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "af5266e8f88e87aa2f1e0a86ff6271c4c9c69b5651cdba4228ca196431e7a1c3",
-            "one-page-scaled", "0a7220977dcbeed5448947a44ed05088c3fe27c9392b9d41b113b90cdfcd69cf",
-            "paginated", "6bf8b43b36989dc1034701964f3a0024895bb883cd4d63407fc9ce7752a34564",
+            "single-page", "e918482710fd7132e186b5dbedb4329812f3221b24b00771f8cea6b13300d071",
+            "one-page-scaled", "c651afd682ebb8ad6ecf59bcf2b8aa55dd842b34cc5ef634b9e3ec30c92b3fc2",
+            "paginated", "e85b9df1fdd2d9dccb5bd6a300bb6afb22f62e7ab862c1ea124a4ea9ca3d5317",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
             // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "caae41a4a0ea2e3011e2017ef40c86b4fde6ee0c84c92afff7b078da467b90e7",
+            "english", "33533c1b3001eceadb195e3c8c96723a043be9f19b04948cc9deb60d51793641",
             "legacy-shape", "463bf902752a732c69b01b1f6baafd7a72e524ae7de526f41cf42e1f62103e49");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),

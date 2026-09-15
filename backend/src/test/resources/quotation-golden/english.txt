@@ -149,7 +149,7 @@ row 10 h=450
   c12 BLANK style=116 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
 row 11 h=465
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น"
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น (1 กล่อง)"
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -161,19 +161,6 @@ row 11 h=465
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c12 BLANK style=116 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
 row 12 h=450
-  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "(1 กล่อง)"
-  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
-  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
-  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
-  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
-  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
-  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
-row 13 h=450
   c0 NUMERIC style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 2.0
   c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "กระเบื้อง รุ่น Model 2 สี White ผิว Matte"
   c2 NUMERIC style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 37.0
@@ -184,8 +171,9 @@ row 13 h=450
   c7 NUMERIC style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 405.0
   c8 NUMERIC style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 14985.0
   c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
-row 14 h=450
+  c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c12 BLANK style=94 b=NONE/NONE/NONE/NONE font=15 wrap=false al=LEFT : 
+row 13 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "ขนาด 60x60 cm. หนา 10 มม."
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
@@ -197,9 +185,21 @@ row 14 h=450
   c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
   c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
   c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+row 14 h=450
+  c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น (2 กล่อง)"
+  c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
+  c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
+  c5 BLANK style=77 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
+  c6 BLANK style=83 b=NONE/NONE/NONE/THIN font=13 wrap=false al=CENTER : 
+  c7 BLANK style=76 b=NONE/NONE/NONE/THIN font=13 wrap=false al=GENERAL : 
+  c8 BLANK style=72 b=NONE/NONE/THIN/THIN font=13 wrap=false al=GENERAL : 
+  c9 BLANK style=101 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
+  c10 BLANK style=100 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 15 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "พื้นที่ 12.50 ตร.ม. ÷ 0.36 = 35 แผ่น + เผื่อเสีย 5% = 37 แผ่น"
+  c1 BLANK style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : 
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 
@@ -211,7 +211,7 @@ row 15 h=450
   c10 BLANK style=115 b=NONE/NONE/NONE/NONE font=13 wrap=false al=GENERAL : 
 row 16 h=450
   c0 BLANK style=81 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
-  c1 STRING style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : "(2 กล่อง)"
+  c1 BLANK style=124 b=NONE/NONE/THIN/NONE font=15 wrap=false al=LEFT : 
   c2 BLANK style=86 b=NONE/NONE/THIN/THIN font=13 wrap=false al=CENTER : 
   c3 BLANK style=82 b=NONE/NONE/THIN/NONE font=13 wrap=false al=CENTER : 
   c4 BLANK style=85 b=NONE/NONE/THIN/NONE font=13 wrap=false al=GENERAL : 

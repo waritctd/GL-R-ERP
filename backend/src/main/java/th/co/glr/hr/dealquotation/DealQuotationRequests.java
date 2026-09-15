@@ -208,6 +208,21 @@ public final class DealQuotationRequests {
         String remainderMode,
         @Min(0) @Max(365) Integer creditDays,
         @Min(1) @Max(365) Integer validityDays,
+        /**
+         * Owner feedback 2026-09-14 (V178): "DAYS" (default when null) | "DATE" — remark 7's
+         * second variant, กำหนดยืนยันราคา by an exact calendar date rather than a day count.
+         * {@code null}/blank means DAYS, same device as {@code priceMode}/{@code
+         * documentLanguage} above. On UPDATE a missing value keeps the STORED mode, for the SAME
+         * reason those two fields do (see {@code DealQuotationService#update}) — a client that
+         * omits it must not silently flip a DATE document back to counting days from today.
+         */
+        @Pattern(regexp = "DAYS|DATE", message = "ต้องเป็น DAYS หรือ DATE") String validityMode,
+        /**
+         * DATE mode only — the exact "ภายในวันที่" deadline. Required by
+         * {@code DealQuotationService} when {@code validityMode} resolves to DATE; ignored
+         * (stored NULL) in DAYS mode.
+         */
+        LocalDate validityUntil,
         @Size(max = 4000) String customerNotes,
         /**
          * "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3, owner feedback pass 3.
@@ -242,8 +257,68 @@ public final class DealQuotationRequests {
          */
         @Pattern(regexp = "THB|USD", message = "ต้องเป็น THB หรือ USD")
         String currency,
+        /**
+         * V179 (owner feedback #4, 2026-09-14) — PRINT-ONLY override: when non-null, the ผู้พิมพ์
+         * signature slot prints THIS employee's name instead of the real {@code createdBy}'s. Does
+         * NOT change who created the document, who may edit it, or anything about access/commission.
+         * Must name an active employee in the eligible union (sales-division member OR a
+         * {@code can_create_quotation} grant holder — {@code DealQuotationService}
+         * {@code #requireEligibleDisplayEmployeeId}) or the request is refused with 400. Null (the
+         * default) means "use the real name", i.e. today's behaviour.
+         */
+        Long printedByDisplayId,
+        /**
+         * V179 — PRINT-ONLY override: when non-null, the พนักงานขาย signature slot AND the header
+         * "Sales/{name} T.{phone}" line print THIS employee's name+phone instead of the real
+         * {@code salesRepId}'s. Does NOT change who owns the deal or who earns commission on it.
+         * Same eligibility rule and validation as {@link #printedByDisplayId}. Null (the default)
+         * means "use the real name".
+         */
+        Long salesRepDisplayId,
+        /**
+         * Owner feedback 2026-09-14: "sometimes there's a typo in the ... project so they should
+         * be able to correct it". Was write-once at CREATE (always {@code ticket.projectName()},
+         * never updatable) — now a genuinely editable header field, same "no missing-keeps-stored"
+         * discipline as {@link #printedByDisplayId}/{@link #salesRepDisplayId} just above: the
+         * editor always sends its current value (blank included), so a null here is a real
+         * request to CLEAR it, not "leave alone". {@code null} on CREATE falls back to the deal's
+         * own {@code ticket.projectName()} (today's behaviour, for any caller that does not send
+         * this field at all — see {@code DealQuotationService#create}).
+         */
+        @Size(max = 200) String projectName,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-projectName shape — kept so every existing construction site (tests, mostly)
+         * compiles unchanged. Defaults to null, which on create falls back to the ticket's own
+         * project name (today's behaviour for every one of those fixtures) and on update would
+         * clear it — but nothing pre-existing calls update() through this overload with a
+         * genuinely different project already stored, so that edge is theoretical here. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, null, items);
+        }
+
+        /** The pre-V179 shape (no display-name override fields) — kept so every existing
+         * construction site (tests, mostly) compiles unchanged. Defaults both to null, which
+         * means "use the real name" — today's behaviour for every one of those fixtures. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, null, null, items);
+        }
+
         /** The pre-v3 shape (no {@code priceMode}) — same legacy-constructor device as
          * {@link ItemInput}'s, defaulting the mode to null, which reads as {@code NET}. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
@@ -264,6 +339,21 @@ public final class DealQuotationRequests {
                                           String priceMode, List<ItemInput> items) {
             this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
                 creditDays, validityDays, customerNotes, priceMode, null, null, items);
+        }
+
+        /** The pre-V178 shape (no {@code validityMode}/{@code validityUntil}) — the canonical
+         * shape from v3b until this change, kept so every existing call site (mostly tests)
+         * compiles unchanged. Defaults both to null, which reads as DAYS mode — exactly what
+         * every one of those fixtures means. */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String customerNotes,
+                                          String priceMode, String documentLanguage, String currency,
+                                          List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, null, null, customerNotes, priceMode, documentLanguage,
+                currency, items);
         }
     }
 

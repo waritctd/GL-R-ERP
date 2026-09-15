@@ -209,6 +209,12 @@ public class QuotationRenderer {
         REMARK_HEAD_ROWS[REMARK_HEAD_ROWS.length - 1] + 1; // 37 — the always-blank trailing row
     private static final int REMARK_V2_COMPACT_SHIFT =
         -(REMARK_V2_COMPACT_LAST_UNUSED - REMARK_V2_COMPACT_FIRST_UNUSED + 1); // -7
+    // Owner feedback (2026-09-14): DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber may now
+    // hand this renderer a 7-line v2 remarks list (the lead-time line dropped when nothing on the
+    // document carries one) instead of always exactly 8. A v2/full-remarks render is therefore
+    // recognised at "8 lines, OR one fewer" — never at the legacy 3-line count, which stays on the
+    // untouched continuation-row path below.
+    private static final int REMARK_V2_MIN_LINES = REMARK_HEAD_ROWS.length - 1; // 7
     // html-fidelity-spec §8 (owner, 2026-09-10): the remark block is its OWN closed box inside the
     // form — "หมายเหตุ :" (FOOTER_START) plus lines 1–8 — spanning columns B..H: a top rule B..H
     // directly under the last item line, the A|B separator as its left edge, the H|I separator as
@@ -338,11 +344,13 @@ public class QuotationRenderer {
             // Javadoc) — must also run before anything touches a row ≥ REMARK_V2_COMPACT_FIRST_UNUSED.
             // footerShift folds into every footer-block row constant used below, exactly like
             // insertLine3ContinuationRow's shift already folds into FOOTER_END etc.
-            boolean v2CompactRemarks = model.signatureLabelsV2() && model.remarkLines() != null
-                && model.remarkLines().size() >= REMARK_HEAD_ROWS.length;
-            int footerShift = v2CompactRemarks ? REMARK_V2_COMPACT_SHIFT : 0;
+            int remarkLineCount = model.remarkLines() != null ? model.remarkLines().size() : 0;
+            boolean v2CompactRemarks = model.signatureLabelsV2() && remarkLineCount >= REMARK_V2_MIN_LINES;
+            // Owner feedback (2026-09-14): a 7-line render (the lead-time line dropped) removes ONE
+            // extra row versus today's fixed -7 — see #remarkV2CompactShift/#compactRemarksSection.
+            int footerShift = v2CompactRemarks ? remarkV2CompactShift(remarkLineCount) : 0;
             if (v2CompactRemarks) {
-                compactRemarksSection(sh);
+                compactRemarksSection(sh, remarkLineCount);
             }
 
             // Title cell H1 (row 0, col 7) — "ใบเสนอราคา" carries ~25 leading spaces to
@@ -834,8 +842,12 @@ public class QuotationRenderer {
     private List<String> wrapDescriptionLines(List<String> lines, int budget) {
         List<String> out = new ArrayList<>();
         for (String line : lines) {
-            if (line != null && line.length() > budget) {
-                out.addAll(wrapToWidth(line, budget));
+            // Owner feedback #3 (2026-09-14): measure by VISIBLE length, not String.length() — see
+            // #visibleLength's Javadoc for why 62 still tripped on a line with only 59 real visible
+            // characters. This is the ITEM path only; #writeRemarks' legacy 3-line path keeps
+            // calling #wrapToWidth directly with String.length(), untouched.
+            if (line != null && visibleLength(line) > budget) {
+                out.addAll(wrapItemLineToWidth(line, budget));
             } else {
                 out.add(line);
             }
@@ -1150,20 +1162,27 @@ public class QuotationRenderer {
      */
     private void writeRemarks(Sheet sh, List<String> remarkLines) {
         if (remarkLines == null) return;
-        boolean full = remarkLines.size() >= REMARK_HEAD_ROWS.length;
+        boolean full = remarkLines.size() >= REMARK_V2_MIN_LINES;
         if (full) {
-            // layout-spec §3: 8 lines, 8 CONSECUTIVE rows (REMARK_HEAD_ROWS[0]..+7 — the compaction
-            // in #compactRemarksSection has already removed the now-unused continuation/trailing
-            // rows, so this range abuts the totals block with no gap), each ONE merged B..I cell,
-            // never wrapped/split — see REMARK_V2_COMPACT_SHIFT's Javadoc for why a wrap is neither
-            // needed (8x the width of column B alone) nor safe (it would re-open the gap the
-            // compaction just closed).
+            // layout-spec §3: 8 (or, owner feedback 2026-09-14, 7 when the lead-time line was
+            // dropped) CONSECUTIVE rows starting at REMARK_HEAD_ROWS[0] — the compaction in
+            // #compactRemarksSection has already removed the now-unused continuation/trailing rows
+            // (plus, in the 7-line case, the now-unused 8th packed slot too), so this range abuts
+            // the totals block with no gap, each ONE merged B..I cell, never wrapped/split — see
+            // REMARK_V2_COMPACT_SHIFT's Javadoc for why a wrap is neither needed (8x the width of
+            // column B alone) nor safe (it would re-open the gap the compaction just closed).
             for (int i = 0; i < remarkLines.size() && i < REMARK_HEAD_ROWS.length; i++) {
                 int row = REMARK_HEAD_ROWS[0] + i;
                 setStr(sh, row, LABEL_VALUE_COL, remarkLines.get(i));
                 mergeRemarkRow(sh, row);
             }
-            openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + REMARK_HEAD_ROWS.length - 1);
+            // Owner feedback (2026-09-14): the box's bottom edge sits on the LAST line actually
+            // written, not always REMARK_HEAD_ROWS[0] + 7 — a 7-line list would otherwise leave the
+            // (unwritten) 8th packed row sitting inside the box as a blank gap. Clamped to
+            // REMARK_HEAD_ROWS.length (Opus review nit, 2026-09-15): a caller that ever handed this
+            // MORE than 8 lines would otherwise open the box past the packed slots entirely — see
+            // #clampToPackedSlots.
+            openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + clampToPackedSlots(remarkLines.size()) - 1);
             return;
         }
         // Legacy (3 lines): unchanged — template's own head+continuation rows, single column B,
@@ -1183,26 +1202,70 @@ public class QuotationRenderer {
     }
 
     /**
+     * The v2/full-remarks compaction shift for a render whose ACTUAL packed line count is
+     * {@code actualLineCount} (7 or 8 — see {@link #REMARK_V2_MIN_LINES}). Reduces to today's fixed
+     * {@code -7} when {@code actualLineCount == REMARK_HEAD_ROWS.length} (8); when it is one fewer
+     * (the lead-time line dropped — owner feedback 2026-09-14), one MORE row (the now-unused 8th
+     * packed slot) is also removed, so the shift becomes {@code -8}.
+     *
+     * <p>Opus review nit (2026-09-15): {@code actualLineCount} is clamped to
+     * {@code REMARK_HEAD_ROWS.length} first — uncapped, a count ABOVE 8 (never produced today, but
+     * not otherwise prevented) would make {@code REMARK_HEAD_ROWS.length - actualLineCount}
+     * negative and shrink the shift below {@code -7} instead of growing it, leaving a leftover
+     * template row inside the box and mis-siting the totals block below it. Before this whole
+     * feature, a &gt;8 list rendered identically to exactly 8 (a hardcoded {@code -7} either way);
+     * the clamp preserves that instead of making the out-of-range case worse.
+     */
+    private int remarkV2CompactShift(int actualLineCount) {
+        int n = clampToPackedSlots(actualLineCount);
+        return REMARK_V2_COMPACT_SHIFT - (REMARK_HEAD_ROWS.length - n);
+    }
+
+    /** Caps a packed remark-line count at {@link #REMARK_HEAD_ROWS}{@code .length} (8) — the
+     * physical number of packed slots the template has. Shared by every row-math call site that
+     * turns a line count into a row offset, so none of them can be driven past the slots that
+     * actually exist. See {@link #remarkV2CompactShift}'s Javadoc for what goes wrong without it. */
+    private static int clampToPackedSlots(int actualLineCount) {
+        return Math.min(actualLineCount, REMARK_HEAD_ROWS.length);
+    }
+
+    /**
      * v2/full-remarks render only — see {@link #REMARK_V2_COMPACT_SHIFT}'s Javadoc for why this is
      * needed. Physically removes the {@code [REMARK_V2_COMPACT_FIRST_UNUSED, REMARK_V2_COMPACT_LAST_UNUSED]}
      * row range (the template's now-unused remark continuation rows plus the always-blank trailing
      * row) by shifting every row at or below it up by {@code -REMARK_V2_COMPACT_SHIFT}, so the
-     * totals block lands immediately after the 8 packed remark rows with no gap and no leftover
+     * totals block lands immediately after the packed remark rows with no gap and no leftover
      * bordered "phantom" row. Must run once, immediately after {@link #insertLine3ContinuationRow},
      * before anything else reads a row ≥ {@link #REMARK_V2_COMPACT_FIRST_UNUSED}.
+     *
+     * <p>Owner feedback (2026-09-14): when {@code actualLineCount} is 7 (one fewer than the usual
+     * 8 — the lead-time line dropped), the removed range widens by ONE extra row at its START
+     * (the now-genuinely-unused 8th packed slot, physical row {@code REMARK_HEAD_ROWS[0] + 7} = 30)
+     * rather than a second hardcoded constant — {@code REMARK_HEAD_ROWS.length - actualLineCount}
+     * is 0 for the ordinary 8-line case and 1 for the 7-line case, so this reduces to today's exact
+     * behaviour when nothing changed.
      */
-    private void compactRemarksSection(Sheet sh) {
+    private void compactRemarksSection(Sheet sh, int actualLineCount) {
         int lastRow = sh.getLastRowNum();
-        sh.shiftRows(REMARK_V2_COMPACT_LAST_UNUSED + 1, lastRow, REMARK_V2_COMPACT_SHIFT);
+        // The shiftRows START stays fixed at REMARK_V2_COMPACT_LAST_UNUSED + 1 (38) — that is the
+        // first row of REAL content (the totals block) either way. Only the SHIFT MAGNITUDE grows
+        // by one when actualLineCount is 7, which is what erases one extra row (30, the
+        // now-unused 8th packed slot) by overwriting it with content shifted up from below —
+        // exactly the same "widen the removed range at its START" effect, achieved without moving
+        // the startRow argument itself.
+        sh.shiftRows(REMARK_V2_COMPACT_LAST_UNUSED + 1, lastRow, remarkV2CompactShift(actualLineCount));
         // The removed range's LAST row (template row 37 post-H3 / raw 36) was not merely blank: it
         // was the row that CLOSED the item+remark box — every cell A..I carries the box's bottom
         // rule (POI dump: `.tt.` A..F, `.t.t` G..I), and รวมเป็นเงิน sits directly under it in the
         // customer's form. Shifting it away left the box open above the totals in BOTH engines
         // (the HTML draws this sheet's own borders). layout-spec §3 wants the box to close directly
-        // under line 8 with no blank row, so the last packed remark row carries that bottom rule
-        // instead of re-creating the blank row — across A..I, so a merged B..I remark row draws it
-        // whichever cell an engine reads a merged region's bottom edge from.
-        closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + REMARK_HEAD_ROWS.length - 1);
+        // under the last remark line with no blank row, so the ACTUAL last packed remark row
+        // carries that bottom rule instead of re-creating the blank row — across A..I, so a merged
+        // B..I remark row draws it whichever cell an engine reads a merged region's bottom edge
+        // from. Owner feedback (2026-09-14): this is {@code actualLineCount} rows past the first
+        // packed row, NOT always the 8th slot — a 7-line render's box closes on row 29, not 30.
+        // Clamped (Opus review nit, 2026-09-15) for the same reason remarkV2CompactShift is.
+        closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + clampToPackedSlots(actualLineCount) - 1);
     }
 
     // layout-spec §3 + html-fidelity-spec §8: each remark line is ONE merged B..H cell (see
@@ -1296,6 +1359,76 @@ public class QuotationRenderer {
             }
             if (current.length() > 0) current.append(' ');
             current.append(word);
+        }
+        if (current.length() > 0) lines.add(current.toString());
+        return lines.isEmpty() ? List.of(text) : lines;
+    }
+
+    // A boundary between two parenthesised groups: a ")" followed by whitespace followed by "(" —
+    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
+    // Owner feedback #3 (2026-09-14): {@link #wrapItemLineToWidth} prefers to break HERE, so a
+    // group like "(บรรจุ N แผ่น/กล่อง)" moves to the next physical row whole rather than splitting
+    // its own words across two rows.
+    private static final java.util.regex.Pattern PAREN_GROUP_BOUNDARY =
+        java.util.regex.Pattern.compile("(?<=\\))\\s+(?=\\()");
+
+    /**
+     * Owner feedback #3 (2026-09-14): wraps ONE over-budget item description/calculation line for
+     * {@link #wrapDescriptionLines} — the ITEM path only. {@link #wrapToWidth} (the legacy remark
+     * continuation-row path, called directly from {@link #writeRemarks}) is UNTOUCHED and stays
+     * measured by {@code String.length()}; this is deliberately its own method rather than a
+     * shared one with a width-function parameter threaded through, so the legacy path can never
+     * accidentally pick up the visible-width measurement.
+     *
+     * <p>Prefers breaking at a {@link #PAREN_GROUP_BOUNDARY} — packing whole parenthesised groups
+     * onto each physical line — so a group like "(บรรจุ 4 แผ่น/กล่อง)" moves to the next row intact
+     * instead of splitting across rows the way the old character-length wrap did (the bug this
+     * fixes: "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
+     * a plain greedy word wrap ({@link #wrapGreedyByVisibleWidth}) only for a single group that by
+     * itself is longer than the budget, or for a line with no parenthesised groups at all.
+     */
+    List<String> wrapItemLineToWidth(String line, int maxVisibleChars) {
+        String[] groups = PAREN_GROUP_BOUNDARY.split(line);
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String group : groups) {
+            String candidate = current.length() == 0 ? group : current + " " + group;
+            if (visibleLength(candidate) <= maxVisibleChars) {
+                current = new StringBuilder(candidate);
+                continue;
+            }
+            if (current.length() > 0) {
+                result.add(current.toString());
+                current = new StringBuilder();
+            }
+            if (visibleLength(group) <= maxVisibleChars) {
+                current = new StringBuilder(group);
+            } else {
+                result.addAll(wrapGreedyByVisibleWidth(group, maxVisibleChars));
+            }
+        }
+        if (current.length() > 0) {
+            result.add(current.toString());
+        }
+        return result.isEmpty() ? List.of(line) : result;
+    }
+
+    /** The item-path twin of {@link #wrapToWidth} — same plain greedy word-wrap at whitespace,
+     * never splitting a single word, but measured by {@link #visibleLength} rather than
+     * {@code String.length()}. {@link #wrapToWidth} itself stays untouched (byte-identical) for
+     * the legacy remark continuation-row path. */
+    List<String> wrapGreedyByVisibleWidth(String text, int maxVisibleChars) {
+        List<String> lines = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String word : text.trim().split("\\s+")) {
+            if (word.isEmpty()) continue;
+            String candidate = current.length() == 0 ? word : current + " " + word;
+            if (visibleLength(candidate) > maxVisibleChars && current.length() > 0) {
+                lines.add(current.toString());
+                current = new StringBuilder(word);
+            } else {
+                current = new StringBuilder(candidate);
+            }
         }
         if (current.length() > 0) lines.add(current.toString());
         return lines.isEmpty() ? List.of(text) : lines;
@@ -1578,8 +1711,9 @@ public class QuotationRenderer {
     /** Counts Thai-combining-mark-aware "character units" (every code point counts as 1 EXCEPT a
      * {@link #THAI_COMBINING_MARK}, which stacks on the previous base character and costs 0) — the
      * layout-spec §5 fallback estimate, used only when {@link #textWidthPx} can't get real AWT font
-     * metrics. */
-    private int textUnits(String s) {
+     * metrics. Static: uses no instance state, and owner feedback #3 (2026-09-14, see
+     * {@link #visibleLength}) reuses it from the item-wrap path below. */
+    private static int textUnits(String s) {
         if (s == null || s.isEmpty()) return 0;
         int units = 0;
         int i = 0;
@@ -1589,6 +1723,27 @@ public class QuotationRenderer {
             if (!THAI_COMBINING_MARK.matcher(new String(Character.toChars(cp))).matches()) units++;
         }
         return units;
+    }
+
+    /**
+     * Owner feedback #3 (2026-09-14): the number of code points in {@code s} that occupy their own
+     * glyph slot — {@code s.codePointCount()} EXCLUDING a {@link #THAI_COMBINING_MARK} (tone marks
+     * and vowel signs U+0E31, U+0E34-U+0E3A, U+0E47-U+0E4E, which stack on the preceding base
+     * character and have zero advance width). {@code String.length()} overcounts a Thai line by
+     * roughly its combining-mark count, which is why {@link #REMARK_LINE_CHAR_BUDGET} = 62 still
+     * wrapped a calculation line measured at 66 {@code length()} but only 59 VISIBLE characters —
+     * on the real PDF that line's first wrapped segment used ~359px of column B's ~527px text
+     * width, i.e. roughly 73 visible characters actually fit and 62 is conservative.
+     *
+     * <p>An alias for {@link #textUnits} — same computation, same Thai ranges — kept as its own
+     * package-private static method (with its own unit test) because it now has a SECOND caller
+     * with a different reason to exist: {@link #wrapDescriptionLines}'s item path, which needs the
+     * visible width rather than {@code String.length()} for its wrap DECISION and inside its own
+     * wrap. {@link #wrapToWidth} (the legacy remark continuation-row path) is untouched and keeps
+     * measuring with {@code String.length()} — see that method's own Javadoc.
+     */
+    static int visibleLength(String s) {
+        return textUnits(s);
     }
 
     /** S1's left/underscore padding: appends {@code label} + enough '_' (at {@code underscorePx}

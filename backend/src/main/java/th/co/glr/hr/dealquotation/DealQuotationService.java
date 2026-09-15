@@ -17,10 +17,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import th.co.glr.hr.auth.DivisionAccessPolicy;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
+import th.co.glr.hr.commission.CommissionRepOptionDto;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
@@ -162,7 +164,20 @@ public class DealQuotationService {
         String currency = resolveCurrency(documentLanguage, request.currency());
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
+        // Owner feedback 2026-09-14 (V178): a brand-new document's "own date" is today (Bangkok) —
+        // the same value #mapQuotation will compute for quotationDate from issued_at = now(). Must
+        // run AFTER #buildItems: "has special pricing" (owner ruling, same date) is decided from
+        // the rows about to be written, not from the request's raw input.
+        String validityMode = resolveValidityMode(request.validityMode());
+        boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
+        LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
+            LocalDate.now(BANGKOK), specialPricing);
         CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
+        // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
+        // Validated against the SAME eligible union the options endpoint lists, so create can
+        // never persist an id no client could ever have legitimately picked.
+        Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
+        Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -175,10 +190,17 @@ public class DealQuotationService {
             customerSnapshot.name(), customerSnapshot.address(),
             customerSnapshot.taxId(), customerSnapshot.phone(),
             contact,
-            ticket.projectName(), blankToNull(request.deptCode()), blankToNull(request.unitCode()),
+            // Owner feedback 2026-09-14: a request-supplied projectName (even blank, to clear it)
+            // wins; null (a caller that never sends the field at all) falls back to the deal's own
+            // project name, exactly as this line unconditionally did before projectName existed.
+            request.projectName() != null ? blankToNull(request.projectName()) : ticket.projectName(),
+            blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
-            priceMode, documentLanguage, currency, subtotal, null, 1, items));
+            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            blankToNull(request.customerNotes()),
+            priceMode, documentLanguage, currency,
+            printedByDisplayId, salesRepDisplayId,
+            subtotal, null, 1, items));
         return requireQuotation(id);
     }
 
@@ -306,8 +328,29 @@ public class DealQuotationService {
         // the resolved language and accepts only the matching one, so the stored value can add
         // nothing. Passing it would merely turn a legitimate language switch into a spurious 400.
         String currency = resolveCurrency(documentLanguage, request.currency());
+        // V178, the SAME "missing keeps stored" discipline as priceMode/documentLanguage above —
+        // a client that omits validityMode on a PUT must not silently flip a DATE document back to
+        // counting days from today.
+        String validityMode = isBlank(request.validityMode())
+            ? resolveValidityMode(existing.validityMode())
+            : resolveValidityMode(request.validityMode());
         List<NewItem> items = buildItems(request.items(), priceMode, documentLanguage);
         BigDecimal subtotal = WastageCalculator.subtotal(items.stream().map(NewItem::lineAmount).toList());
+        // Must run AFTER #buildItems — same reasoning as #create's own comment: "has special
+        // pricing" is decided from the rows about to be written, so a discount cleared on THIS
+        // save (or an adjustment row removed) already refuses DATE mode here, before anything is
+        // persisted, rather than leaving a stale validity_until on a document that no longer has
+        // any special pricing to protect.
+        boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
+        LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
+            existing.quotationDate(), specialPricing);
+        // V179 — same validation as #create; a full PUT always carries the payload's own value
+        // (null included), so there is no "missing keeps stored" case to handle here, unlike
+        // priceMode/documentLanguage/validityMode above (those use blank-string-as-sentinel
+        // because a blank string could never be a legitimate value; null IS the legitimate
+        // "use the real name" value for these two Long fields, so it is taken at face value).
+        Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
+        Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -318,8 +361,16 @@ public class DealQuotationService {
         int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), blankToNull(request.customerNotes()),
-            priceMode, documentLanguage, currency, subtotal);
+            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            blankToNull(request.customerNotes()),
+            priceMode, documentLanguage, currency, subtotal,
+            printedByDisplayId, salesRepDisplayId,
+            // Owner feedback 2026-09-14 — a genuinely editable header field now (see this request
+            // field's own Javadoc): the editor always sends its CURRENT value, so, same as
+            // printedByDisplayId/salesRepDisplayId just above, there is no "missing keeps stored"
+            // case — blankToNull(null) clears it, exactly like every other free-text header field
+            // on this same call (customerNotes, deptCode, unitCode).
+            blankToNull(request.projectName()));
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -366,6 +417,17 @@ public class DealQuotationService {
     //                 DRAFT -> (cancel) -> CANCELLED
     //                 APPROVED -> (revise) -> new DRAFT child; parent -> SUPERSEDED once the
     //                             CHILD reaches APPROVED (not before).
+    //
+    // Owner clarification (2026-09-15): ตีกลับ ITSELF never renumbers -- reject() above is the
+    // WHOLE of "DRAFT -> (reject+reason) -> DRAFT", same row, same number, exactly as drawn. The
+    // renumbering happens one step later, the NEXT time #submit runs on that now-rejected DRAFT:
+    //     DRAFT (with a prior rejection, i.e. approval_note != null) -> (submit) ->
+    //         new DRAFT revision (parent = the rejected row) -> PENDING_APPROVAL immediately;
+    //         parent -> SUPERSEDED once THIS revision reaches APPROVED (not before) -- the
+    //         IDENTICAL rule and mechanism the APPROVED/(revise) row above already uses, just with
+    //         a DRAFT parent instead of an APPROVED one (see DealQuotationRepository#supersede).
+    // One sentence: ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted); resubmitting ที่ถูกตีกลับ
+    // = ออกใบใหม่ เลขเปลี่ยน, the same way a revision of an approved document always has.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
@@ -381,6 +443,16 @@ public class DealQuotationService {
         if (quotation.contactId() == null || isBlank(quotation.contactName())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
         }
+        // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
+        // create/update already refuse one before the quotation's OWN date, but time keeps moving
+        // after a draft is saved, so submit re-checks against TODAY (Bangkok), the last gate before
+        // an approver ever sees the document (same reasoning as the item-completeness re-check
+        // below).
+        if (WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+            && quotation.validityUntil() != null
+            && quotation.validityUntil().isBefore(LocalDate.now(BANGKOK))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาผ่านไปแล้ว");
+        }
         // Item completeness rule, re-checked over the STORED rows: create/update already enforce
         // this on write (#buildItem), but a row can predate this rule (created before this
         // migration of behaviour) or a stale client could in principle bypass the write-time
@@ -389,6 +461,52 @@ public class DealQuotationService {
         for (DealQuotationItemDto item : quotation.items()) {
             requireStoredItemComplete(item, perSqm);
         }
+        requireEveryTileItemHasALeadTime(quotation.items());
+        // Owner clarification (2026-09-15): ตีกลับ (reject) itself never renumbers -- reject()
+        // sends the SAME row back to DRAFT with a reason (see the class's own status-machine
+        // comment above). But once sales fixes it and resubmits, THIS submit is what should mint
+        // a new number: "ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted) · then ออกใบใหม่ เลข
+        // เปลี่ยน on the next submit." A DRAFT carrying a PRIOR rejection decision --
+        // approval_note IS NOT NULL, the EXACT signal DealQuotationRepository#NEEDS_REWORK_PREDICATE
+        // already keys the list page's "แก้" bucket on -- resubmits as a NEW revision of itself
+        // rather than reusing its own row, done as one atomic step so no caller can observe (or
+        // race against) an un-submitted intermediate child, exactly as if the rep had called
+        // #createRevision then #submit on the result by hand. A first-ever submit (approval_note
+        // is null -- never yet decided on) is untouched: same row, same number, as always.
+        if (QuotationStatus.DRAFT.equals(quotation.docStatus()) && quotation.approvalNote() != null) {
+            return submitAsRevisionOfRejected(quotation, actor);
+        }
+        return submitDraftRow(id, actor);
+    }
+
+    /**
+     * The resubmit-after-rejection half of {@link #submit}'s branch above: mints a revision of
+     * {@code rejected} the SAME way {@link #createRevision} does (shared
+     * {@link #insertRevisionCopyOf}, same {@link #requireNoOpenRevision} lock/guard), then submits
+     * THAT new row via the ordinary {@link #submitDraftRow} -- so the parent (still whatever
+     * status it already was, DRAFT) becomes {@code SUPERSEDED} the SAME way and at the SAME time
+     * an ordinary revision's parent does: {@link #approve}'s existing
+     * {@code parentQuotationId() != null -> supersede()} call, once THIS child reaches APPROVED,
+     * not before. {@link DealQuotationRepository#supersede} accepts a {@code DRAFT} parent for
+     * exactly this reason (widened alongside {@code APPROVED}, which is all it needed before this
+     * feature).
+     */
+    private DealQuotationDto submitAsRevisionOfRejected(DealQuotationDto rejected, UserPrincipal actor) {
+        requireNoOpenRevision(rejected);
+        long revisionId = insertRevisionCopyOf(rejected, actor);
+        String revisionNumber = requireQuotation(revisionId).number();
+        tickets.addEvent(rejected.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED,
+            null, null,
+            "สร้างใบเสนอราคาฉบับแก้ไข " + revisionNumber + " จาก " + rejected.number()
+                + " ที่ถูกตีกลับ — " + rejected.approvalNote());
+        return submitDraftRow(revisionId, actor);
+    }
+
+    /** The actual DRAFT -> PENDING_APPROVAL compare-and-set, its ticket event and its
+     * notification -- shared by an ordinary first-time submit ({@code id} is the row the caller
+     * named) and {@link #submitAsRevisionOfRejected} (where {@code id} is the freshly-minted
+     * revision, not the row {@link #submit} was originally called with). */
+    private DealQuotationDto submitDraftRow(long id, UserPrincipal actor) {
         int rows = quotations.submit(id, actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงส่งขออนุมัติไม่ได้");
@@ -420,6 +538,14 @@ public class DealQuotationService {
         String link = "/quotations/" + submitted.id();
         notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
         notifications.notifyByRoleAtLink("ceo", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
+        // Owner request (2026-09-15): the rep who submitted (and the creator, if different -- same
+        // dedupe #notifyRepAndCreator already gives approve()/reject()) gets their own confirmation
+        // that the submission actually went through, not just a bell/mail for the two approvers.
+        // Same event kind/title as the approver-facing notification above -- reusing it rather than
+        // minting a second TicketEventKind keeps this to a one-line addition; the message text is
+        // still written from the rep's own point of view.
+        notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
+            "ส่งใบเสนอราคา " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
     }
 
     @Transactional
@@ -427,8 +553,21 @@ public class DealQuotationService {
         requireApproveAccess(actor);
         DealQuotationDto quotation = requireQuotation(id);
         LocalDate approvalDate = LocalDate.now(BANGKOK);
-        LocalDate validityDate = quotation.validityDays() != null
-            ? approvalDate.plusDays(quotation.validityDays()) : null;
+        // V178: a DATE-mode document WITH special pricing names its OWN validity_date (the rep's
+        // ภายในวันที่, verbatim — approval never recomputes it); every other case (DAYS mode, or a
+        // stale DATE mode that lost its special pricing — create/update refuse THAT combination
+        // going forward, but an already-PENDING_APPROVAL row from before this change could still
+        // carry it) falls back to the existing day-count rule.
+        // Opus review (2026-09-14): mirror the render adapter's own null guard (DealQuotation
+        // RenderAdapter:372/475) rather than trusting validityUntil is non-null just because the
+        // mode says DATE — unreachable through create/update/createRevision today, but a stray
+        // NULL here would otherwise skip the DAYS fallback entirely and leave validity_date NULL
+        // despite validity_days being set.
+        LocalDate validityDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+                && quotation.validityUntil() != null
+                && DealQuotationRenderAdapter.hasSpecialPricing(quotation)
+            ? quotation.validityUntil()
+            : (quotation.validityDays() != null ? approvalDate.plusDays(quotation.validityDays()) : null);
         int rows = quotations.approve(id, actor.id(), blankToNull(request.note()), validityDate);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
@@ -437,14 +576,45 @@ public class DealQuotationService {
         // The customer's last approved document stays valid until a REVISION actually reaches
         // APPROVED — see the class Javadoc's status-machine note. Only fires for a revision (a
         // first-ever quotation has no parent).
-        if (approved.parentQuotationId() != null) {
-            quotations.supersede(approved.parentQuotationId());
+        //
+        // Opus review (2026-09-15): walks the WHOLE ancestry chain, not just the immediate
+        // parent. The single-hop version only ever superseded approved.parentQuotationId()
+        // itself, so a SECOND (or later) reject/resubmit cycle left every ancestor ABOVE the
+        // immediate parent stranded in DRAFT forever once THIS approval landed -- proven by a
+        // real-DB probe: reject A -> resubmit mints B -> reject B -> resubmit mints C -> approve
+        // C left A in DRAFT permanently (parent_quotation_id chains straight through B, which
+        // this approval DOES supersede, but nothing ever walked past B to A). Two consequences
+        // that made this a required fix, not a nit: (1) A sits in the rep's "ฉบับแก้" bucket
+        // forever on a deal whose quotation is already approved -- NEEDS_REWORK_PREDICATE keeps
+        // matching it (still DRAFT, approval_note still set) and hasOpenRevision stops blocking
+        // it the moment B leaves DRAFT/PENDING_APPROVAL, so nothing ever clears it; (2) the rep
+        // can then resubmit A, and approving THAT mints a second, independently-APPROVED
+        // quotation on the same ticket alongside C, with neither superseding the other --
+        // contradicting the owner's own constraint that a rejected row's eventual fate is
+        // SUPERSEDED. Each hop is its own compare-and-set (supersede()'s WHERE already guards
+        // against a non-APPROVED/DRAFT row), so walking past an already-terminal ancestor
+        // (already SUPERSEDED from a sibling branch, or CANCELLED) is a safe no-op -- and the
+        // loop terminates at the first-ever quotation in the chain, whose parentQuotationId is
+        // null by construction.
+        Long ancestorId = approved.parentQuotationId();
+        while (ancestorId != null) {
+            DealQuotationDto ancestor = requireQuotation(ancestorId);
+            quotations.supersede(ancestorId);
+            ancestorId = ancestor.parentQuotationId();
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
+        // Owner request (2026-09-15): this used to ALSO fire #sendApprovalEmail below — a second,
+        // plain-text email with the PDF attached, from a completely separate mailer
+        // (approvalMailer/Mailer#sendWithAttachment) than the one notifyRepAndCreator uses
+        // (salesMailer -> NotificationEmailService#send, the branded HTML template). Two emails
+        // landed for one approval. Keep only the HTML one; #sendApprovalEmail/
+        // #sendToEmployeeIfPossible are left in place (dead) rather than deleted outright, since
+        // several integration tests still construct a mailer fake around them -- removing the
+        // call is the actual fix, not a reason to also cascade a constructor-signature change
+        // through every test file in the same pass.
         notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
-        afterCommit(() -> sendApprovalEmail(approved));
         return approved;
     }
 
@@ -473,6 +643,31 @@ public class DealQuotationService {
     public DealQuotationDto cancel(long id, CancelRequest request, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
+        // Opus review (2026-09-15), REQUIRED: the ancestry a rejected-and-resubmitted row can grow
+        // is a TREE, not a straight line -- cancelling a DRAFT row that itself has an OPEN child
+        // let that child's grandparent look "free" again (hasOpenRevision checks DIRECT children
+        // only, and CANCELLED is not open), so the grandparent could mint a SECOND, sibling branch
+        // while the first branch (this row's own child) was still alive. Approving one branch's
+        // leaf only ever walks UPWARD from that leaf -- it can never reach across to supersede a
+        // SIBLING branch -- so both branches could end APPROVED: two independently-approved
+        // quotations on the same ticket, proven against real Postgres. Requiring every cancel to
+        // be a LEAF (no open child of its own) closes this by induction: a rep can only ever
+        // cancel a row whose own subtree is already fully terminal (rejecting a child just
+        // reopens it as DRAFT, which is itself "open" and blocks the parent's cancel too, so the
+        // whole subtree must be walked down to CANCELLED before the cancel above it succeeds) --
+        // so at most one LIVE path (DRAFT/PENDING_APPROVAL/APPROVED) can ever exist through a
+        // chain at a time, and approve()'s upward walk is always walking the ONLY live path.
+        //
+        // Locks the ticket FIRST, same as #requireNoOpenRevision -- without it, a concurrent
+        // cancel(id) and submit(id) (minting a child of id) could each read hasOpenRevision
+        // against the pre-commit state and both proceed, recreating the exact race this guard
+        // exists to close. M3's own precedent (createRevision's identical lock-then-check) is why
+        // this is a lock, not just the existence check alone.
+        quotations.lockTicket(quotation.ticketId());
+        if (quotations.hasOpenRevision(id)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยกเลิกไม่ได้ เนื่องจากมีฉบับแก้ไขของใบเสนอราคานี้อยู่ กรุณาจัดการฉบับแก้ไขนั้นก่อน");
+        }
         int rows = quotations.cancel(id);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงยกเลิกไม่ได้");
@@ -493,18 +688,26 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น (ปัจจุบัน: " + source.docStatus() + ")");
         }
-        quotations.lockTicket(source.ticketId());
-        // M3: two concurrent "create a revision" calls on the same APPROVED parent both compute
-        // the SAME deterministic child number ({base}-{revisionNo+1}, from the SAME source row),
-        // and sales.quotation.number is UNIQUE (V6) -- so the second INSERT threw
-        // DuplicateKeyException, surfaced as a bare 500 with no Thai message. The advisory lock
-        // above already serialises callers for this ticket, so the SECOND caller (once it
-        // acquires the lock after the first commits) now observes the first caller's
-        // already-inserted child here and 409s with an intelligible reason instead of racing into
-        // the unique-index violation.
-        if (quotations.hasOpenRevision(source.id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
-        }
+        requireNoOpenRevision(source);
+        long newId = insertRevisionCopyOf(source, actor);
+        DealQuotationDto revision = requireQuotation(newId);
+        tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
+            "สร้างใบเสนอราคาฉบับแก้ไข " + revision.number() + " จาก " + source.number());
+        return revision;
+    }
+
+    /**
+     * The revision-copy step {@link #createRevision} and {@link #submit}'s owner-feedback
+     * (2026-09-15) "resubmit after a ตีกลับ mints a new number" path both need: a new DRAFT child
+     * of {@code source}, every header field copied VERBATIM (see each parameter's own comment
+     * below — unchanged from {@code createRevision}'s original body), its items and item pictures
+     * copied, at the next revision number. Callers are responsible for their OWN precondition (the
+     * two paths gate on different source statuses) and for locking the ticket + checking
+     * {@link DealQuotationRepository#hasOpenRevision} BEFORE calling this — both already-serialised
+     * requirements this method assumes rather than re-does, so it stays a plain insert with no
+     * lock/guard duplicated between the two callers.
+     */
+    private long insertRevisionCopyOf(DealQuotationDto source, UserPrincipal actor) {
         // Works unchanged for BOTH a post-2026-09-11 parent ("QT-2026-0014-1", revisionNo 1 -> base
         // "QT-2026-0014") and a legacy pre-change parent ("QT-2026-0014" bare, revisionNo 1 -> base
         // itself unchanged) -- see DealQuotationRepository#baseNumber's own Javadoc for why one
@@ -526,20 +729,48 @@ public class DealQuotationService {
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
+            // V178: a revision inherits its parent's validity MODE AND DATE verbatim — a DATE-mode
+            // parent's own "ภายในวันที่" deadline is a fact about the customer's order, not
+            // something that should silently reset to a day count (or a stale date) on revise.
+            // source.validityMode() is never null (the repository normalises a stored NULL to
+            // DAYS), so resolveValidityMode is not needed on this path — same reasoning as
+            // documentLanguage below.
+            source.validityMode(), source.validityUntil(),
             // v3b: a revision inherits the parent's ภาษาเอกสาร and currency verbatim, like every
             // other header field here — revising an English quotation must not silently reissue it
             // in Thai. source.documentLanguage() is never null (the repository normalises a stored
             // NULL to TH), so resolveDocumentLanguage is not needed on this path.
             source.customerNotes(), source.priceMode(), source.documentLanguage(),
             WastageCalculator.defaultCurrencyFor(source.documentLanguage()),
+            // V179 — a revision copies its parent's print-name override VERBATIM, same as every
+            // other header field here; no re-validation (an id valid at the parent's last save
+            // stays whatever it was — this mirrors how the parent's own contact/rep snapshot is
+            // copied without re-checking against a live table).
+            source.printedByDisplayId(), source.salesRepDisplayId(),
             source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
         // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
         // child's rows point at the parent's (immutable, shared) picture rows, matched by seq.
         quotations.copyPictureLinks(source.id(), newId);
-        tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
-            "สร้างใบเสนอราคาฉบับแก้ไข " + newNumber + " จาก " + source.number());
-        return requireQuotation(newId);
+        return newId;
+    }
+
+    /**
+     * M3: two concurrent callers of {@link #insertRevisionCopyOf} against the SAME source both
+     * compute the SAME deterministic child number ({base}-{revisionNo+1}, from the SAME source
+     * row), and {@code sales.quotation.number} is UNIQUE (V6) -- so the second INSERT threw
+     * DuplicateKeyException, surfaced as a bare 500 with no Thai message. Locking the ticket first
+     * serialises callers for it, so the SECOND caller (once it acquires the lock after the first
+     * commits) then observes the first caller's already-inserted child in
+     * {@link DealQuotationRepository#hasOpenRevision} and 409s with an intelligible reason instead
+     * of racing into the unique-index violation. Shared by {@link #createRevision} and
+     * {@link #submit}'s resubmit-after-rejection path — both mint a revision the same way.
+     */
+    private void requireNoOpenRevision(DealQuotationDto source) {
+        quotations.lockTicket(source.ticketId());
+        if (quotations.hasOpenRevision(source.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -755,15 +986,24 @@ public class DealQuotationService {
      * card; this is what makes an edit reach the document, since {@code updateHeader} now rewrites
      * these columns on every DRAFT save.
      *
-     * <p>{@code name} deliberately still comes from the ticket (its own join on the customer row,
-     * i.e. equally live) rather than from {@code CustomerDto}, so a deal whose customer row has been
-     * deleted out from under it still prints the name it was created with instead of a blank.
+     * <p>Opus review fix (2026-09-14): {@code name} used to come from the ticket's OWN frozen
+     * {@code customer_name} column unconditionally, on the reasoning that a deal whose customer
+     * row has been deleted out from under it should still print the name it was created with
+     * instead of a blank. That reasoning is right for the deleted-row case, but it silently
+     * defeated the owner's actual request ("sometimes there's a typo in the name so they should
+     * be able to correct it", 2026-09-14, {@code CustomerDetailsFields}'s new ชื่อลูกค้า field):
+     * a correction saved to {@code customers.customer.name} never reached the ticket's own frozen
+     * column (no cascade exists, and none should — see V167's header on why an already-issued
+     * document must stay frozen), so the printed name never changed. Now takes the LIVE
+     * {@code customer.name()} whenever the customer row still exists (the normal case, and the
+     * one this fix is FOR), falling back to the ticket's frozen name only when it does not — same
+     * fallback shape address/taxId/phone already use just below.
      */
     private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket) {
         CustomerDto customer = ticket.customerId() != null
             ? customers.findById(ticket.customerId()).orElse(null) : null;
         return new CustomerSnapshot(
-            ticket.customerName(),
+            customer != null ? customer.name() : ticket.customerName(),
             customer != null ? customer.address() : null,
             customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null);
@@ -916,6 +1156,78 @@ public class DealQuotationService {
         return currency;
     }
 
+    /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
+     * (and the whole legacy customer-quotation path) stores. */
+    private String resolveValidityMode(String validityMode) {
+        return isBlank(validityMode)
+            ? WastageCalculator.VALIDITY_MODE_DAYS : validityMode.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * V178: DAYS mode always stores {@code validity_until = NULL} — the day count in
+     * {@code validity_days} is the only thing that matters, exactly as before this change.
+     *
+     * <p>DATE mode is refused outright on a document with NO special pricing (owner ruling
+     * 2026-09-14 — a price-validity DEADLINE only makes sense when there is a special price or
+     * discount to protect; see {@link DealQuotationRenderAdapter#hasSpecialPricing}'s own rule).
+     * Otherwise it requires a date, and refuses one that predates the quotation's own document
+     * date ({@code quotationDate} — today on create, the frozen creation date on update): a
+     * validity deadline earlier than the document itself is never a fact a rep meant to type.
+     */
+    private LocalDate requireValidityUntilForMode(String validityMode, LocalDate validityUntil,
+                                                   LocalDate quotationDate, boolean hasSpecialPricing) {
+        if (!WastageCalculator.VALIDITY_MODE_DATE.equals(validityMode)) {
+            return null;
+        }
+        if (!hasSpecialPricing) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ระบุวันที่ยืนราคาได้เฉพาะใบเสนอราคาที่มีราคาพิเศษหรือส่วนลด");
+        }
+        if (validityUntil == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุวันที่ยืนราคา");
+        }
+        if (validityUntil.isBefore(quotationDate)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาต้องไม่ก่อนวันที่ใบเสนอราคา");
+        }
+        return validityUntil;
+    }
+
+    /**
+     * V179 (owner feedback #4, 2026-09-14) — validates a {@code printedByDisplayId}/
+     * {@code salesRepDisplayId} candidate before it is ever written. Null passes straight through
+     * (it means "use the real name", the default). A non-null id must be in the SAME eligible
+     * union {@link #findQuotationDisplayNameOptions} lists — active AND (a sales-division member
+     * OR a {@code can_create_quotation} grant holder) — checked by
+     * {@link DealQuotationRepository#isEligibleQuotationDisplayName}, which shares its predicate
+     * with the options query so the two can never disagree. Reused by both {@link #create} and
+     * {@link #update} so the rule is defined exactly once.
+     */
+    private Long requireEligibleDisplayEmployeeId(Long employeeId) {
+        if (employeeId == null) {
+            return null;
+        }
+        if (!quotations.isEligibleQuotationDisplayName(employeeId, DivisionAccessPolicy.SALES_DIVISION_CODE)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงานที่เลือกไม่สามารถแสดงเป็นผู้พิมพ์หรือพนักงานขายในใบเสนอราคาได้");
+        }
+        return employeeId;
+    }
+
+    /**
+     * V179 — the option list for the ผู้พิมพ์/พนักงานขาย print-name selectors. Gated the same as
+     * every other quotation WRITE action ({@link #EDIT_ROLES} or the live
+     * {@code can_create_quotation} grant) rather than {@link #requireEditAccess}'s per-deal
+     * ownership rule: this list carries no single deal's context (it backs a dropdown that can be
+     * opened before a specific quotation is even loaded), and every caller who may set the field
+     * on SOME deal is entitled to see who they may choose from.
+     */
+    public List<CommissionRepOptionDto> findQuotationDisplayNameOptions(UserPrincipal actor) {
+        if (!EDIT_ROLES.contains(actor.role()) && !hasQuotationGrant(actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        return quotations.findEligibleQuotationDisplayNameOptions(DivisionAccessPolicy.SALES_DIVISION_CODE);
+    }
+
     // v3b's requirePriceModeAvailableInLanguage (SPECIAL_SQM refused on English) is GONE — owner
     // decision 2026-09-13: an English document may be priced per square metre. SPECIAL_SQM now means
     // "the rep states one price per sqm", and what that price means follows the document's
@@ -1021,7 +1333,13 @@ public class DealQuotationService {
         BigDecimal netUnitPrice = result.netUnitPrice();
         BigDecimal discountPct = input.discountPct();
         BigDecimal specialPriceSqm = null;
-        BigDecimal unitPrice = input.unitPrice();
+        // R-D input scale (review fix, 2026-09-15): persist the same 2dp list price
+        // WastageCalculator#calculate computed netUnitPrice/lineAmount from (its own listPrice =
+        // round2(unitPrice)) — sales.quotation_item.unit_price is NUMERIC(14,2) (V49), so storing
+        // the raw, unrounded input here while the money math used the rounded value would let the
+        // stored row disagree with its own printed amount on a 3dp-or-finer typed price. Null-safe
+        // because perSqm rows legitimately omit unitPrice (specialPriceSqm stands in below).
+        BigDecimal unitPrice = input.unitPrice() == null ? null : money2(input.unitPrice());
         BigDecimal perSqmLineAmount = null;
         if (perSqm) {
             specialPriceSqm = money2(input.specialPriceSqm());
@@ -1085,9 +1403,18 @@ public class DealQuotationService {
      * No wastage, no ตร.ม./แผ่น, no แผ่น/กล่อง, no auto-composed description, no catalog link.
      * Freight (1 JOB), Mapei consumables (Bags/Barrels), the cut service, sanitary-ware ชุด rows.
      *
-     * <p>{@code amount = quantity × netPrice}, with the row's own discount applied to the unit
-     * price exactly as {@code WastageCalculator#calculate} does for a tile — the discount is
-     * normally absent, which prints "Net".
+     * <p>{@code amount = round2(list × quantity × (1 − pct/100))} — R-D (quotation arithmetic
+     * reconciliation, 2026-09-15), a single rounding of the unrounded product rather than
+     * {@code round2(netUnitPrice × quantity)}, which double-rounds through the already-2dp net
+     * unit price and drifts a satang on some rows (D1 / QN6900971-4, rows 5.3-5.7:
+     * round2(netUnitPrice × qty) gives 35,799.64 against the printed 35,799.63). {@code list} here
+     * is the input price PRE-ROUNDED to 2dp (review fix, 2026-09-15) — {@code
+     * sales.quotation_item.unit_price} is NUMERIC(14,2) (V49), so a finer-than-2dp typed price
+     * would otherwise be stored at 2dp while the amount kept computing from the unrounded value,
+     * and the stored row could never reproduce its own printed amount. netUnitPrice below stays
+     * the rounded DISPLAY figure printed in the ราคา/คงเหลือ column; the row's own discount is
+     * applied to the unit price exactly as {@code WastageCalculator#calculate} does for a tile —
+     * the discount is normally absent, which prints "Net".
      */
     private NewItem buildPlainItem(ItemInput input, Integer rowNumber, BigDecimal vatRate) {
         if (rowNumber != null) {
@@ -1102,9 +1429,15 @@ public class DealQuotationService {
         }
         BigDecimal quantity = input.quantity() == null ? BigDecimal.ONE : input.quantity();
         BigDecimal discountPct = input.discountPct() == null ? BigDecimal.ZERO : input.discountPct();
-        BigDecimal netUnitPrice = money2(input.unitPrice().multiply(
-            BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP))));
-        BigDecimal lineAmount = money2(netUnitPrice.multiply(quantity));
+        BigDecimal discountFactor = BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP));
+        // R-D input scale (review fix, 2026-09-15): pre-round the LIST price to 2dp before any
+        // multiplication AND persist that same 2dp value — see WastageCalculator#calculate's
+        // matching comment. sales.quotation_item.unit_price is NUMERIC(14,2) (V49); storing the
+        // unrounded input.unitPrice() while computing from it too would let the stored row and
+        // the computed amount silently disagree on a 3dp-or-finer typed price.
+        BigDecimal listPrice = money2(input.unitPrice());
+        BigDecimal netUnitPrice = money2(listPrice.multiply(discountFactor));
+        BigDecimal lineAmount = money2(listPrice.multiply(quantity).multiply(discountFactor));
         BigDecimal vat = money2(lineAmount.multiply(vatRate));
         return new NewItem(
             input.locationLabel(), null, null,
@@ -1113,7 +1446,7 @@ public class DealQuotationService {
             null, null, null,
             null, null, null,
             0, 0, 0, null,
-            input.unitPrice(), input.discountPct(), netUnitPrice, lineAmount,
+            listPrice, input.discountPct(), netUnitPrice, lineAmount,
             vat, lineAmount.add(vat),
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             input.description() == null ? null : input.description().trim(),
@@ -1411,6 +1744,33 @@ public class DealQuotationService {
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + rowNumber + ": ขาด " + String.join(", ", missing));
+        }
+    }
+
+    /**
+     * Owner feedback #7 (2026-09-14): a deliberate sales-workflow rule change, submit-only. Every
+     * TILE row ({@code lineType} null or {@link WastageCalculator#LINE_TYPE_TILE}) must carry both
+     * {@code leadTimeMinDays} and {@code leadTimeMaxDays} before the document can be submitted for
+     * approval — the printed remark 3 used to fall back to a China/Thailand default that was wrong
+     * for most real shipments; a later same-day owner request ("if ระยะเวลานำเข้า is not chosen
+     * remove that from the หมายเหตุ") replaced that fallback with dropping the whole line
+     * entirely (see {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}), so a rep must
+     * actually enter a lead time rather than let the document print a plausible-looking but false
+     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT
+     * rows are exempt — neither has a lead-time concept (freight/consumables/a ส่วนลดพิเศษ line
+     * cannot "arrive"). A DRAFT may still be saved with no lead times; this gate is submit only.
+     */
+    private void requireEveryTileItemHasALeadTime(List<DealQuotationItemDto> items) {
+        List<String> missingSeqs = new ArrayList<>();
+        for (DealQuotationItemDto item : items) {
+            boolean tile = item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+            if (tile && (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null)) {
+                missingSeqs.add(String.valueOf(item.seq()));
+            }
+        }
+        if (!missingSeqs.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ " + String.join(", ", missingSeqs));
         }
     }
 
