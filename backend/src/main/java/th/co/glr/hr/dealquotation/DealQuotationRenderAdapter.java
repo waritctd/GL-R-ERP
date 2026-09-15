@@ -177,7 +177,7 @@ public final class DealQuotationRenderAdapter {
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
-            blank(quotation.contactName()) ? null : quotation.contactName().trim(),
+            orderedByName(quotation),
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
@@ -748,6 +748,22 @@ public final class DealQuotationRenderAdapter {
             return english.trim();
         }
         return thai;
+    }
+
+    // ── Fix (2026-09-15, production complaint): ผู้สั่งซื้อ signature-name fallback ────────────
+
+    /** The ผู้สั่งซื้อ (F2) signature-slot name: the deal's contact snapshot when there is one,
+     * else the CUSTOMER name -- production printed the dotted {@code
+     * QuotationRenderer#BLANK_NAME_PLACEHOLDER} on the signature line whenever a deal recorded no
+     * separate contact, even though the customer being quoted to is right there on the same
+     * document. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
+     * returns null, i.e. when both fields are blank. Shared by both TH/EN documents -- {@code
+     * Signatories} is built once above for either language. */
+    static String orderedByName(DealQuotationDto quotation) {
+        if (!blank(quotation.contactName())) {
+            return quotation.contactName().trim();
+        }
+        return blank(quotation.customerName()) ? null : quotation.customerName().trim();
     }
 
     // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────

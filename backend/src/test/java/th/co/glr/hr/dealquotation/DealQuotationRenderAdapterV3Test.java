@@ -953,4 +953,40 @@ class DealQuotationRenderAdapterV3Test {
             quotationWithContact("ธนพล ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
         assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท ทดสอบ จำกัด");
     }
+
+    // ── fix (2026-09-15): the ผู้สั่งซื้อ signature name falls back to the customer name ─────────
+
+    @Test
+    void signatories_orderedBy_prefersTheContactNameWhenPresent() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.signatories().orderedBy()).isEqualTo("สมหญิง ใจดี");
+    }
+
+    /** The bug: a deal with no separate contact snapshot printed the dotted placeholder on the
+     * ผู้สั่งซื้อ signature line even though the customer being quoted to is right there on the
+     * same document. */
+    @Test
+    void signatories_orderedBy_fallsBackToTheCustomerNameWhenThereIsNoContact() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.signatories().orderedBy()).isEqualTo("บริษัท ทดสอบ จำกัด");
+    }
+
+    @Test
+    void signatories_orderedBy_nullOnlyWhenBothContactAndCustomerAreBlank() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact(null, null, null), null, null);
+        assertThat(model.signatories().orderedBy()).isNull();
+    }
+
+    @Test
+    void orderedByName_directly_mirrorsTheSameFallback() {
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null))).isEqualTo("สมหญิง ใจดี");
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null))).isEqualTo("บริษัท ทดสอบ จำกัด");
+        assertThat(DealQuotationRenderAdapter.orderedByName(
+            quotationWithContact(null, null, null))).isNull();
+    }
 }
