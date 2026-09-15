@@ -146,9 +146,18 @@ class QuotationRendererNoPictureGoldenTest {
         // path never runs the width-aware wrap at all (DealQuotationRenderAdapter's `alwaysShowSeq`
         // is v2-only). No row's TEXT content changed beyond the two lines above merging into one;
         // no border, font, merge, or unrelated cell moved.
+        // Re-pinned 2026-09-15 (Fix 5, "-1" revision-suffix column clipping): fitColumnToText now
+        // widens column I to fit the ACTUAL เลขที่อ้างอิง/Ref. text at I4, not just the grand-total
+        // figure #sizeMoneyColumns already sized it for -- every one of these fixtures' reference
+        // numbers ("QT-2026-0099"/"QT-2026-0042") needed a hair more room than their (modest) grand
+        // totals did, so column I widens by the same 66 units (3123 -> 3189) on all four; confirmed
+        // by diffing the regenerated .txt goldens above (the ONLY line that changed, anywhere, in
+        // any of the five fixtures, is that one "col 8 w=" line). paginated is excluded from this
+        // list: its case is skipped by the Assumptions.assumeTrue column-unit guard above on this
+        // machine already, independently of this fix.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
-            "single-page", "e918482710fd7132e186b5dbedb4329812f3221b24b00771f8cea6b13300d071",
-            "one-page-scaled", "c651afd682ebb8ad6ecf59bcf2b8aa55dd842b34cc5ef634b9e3ec30c92b3fc2",
+            "single-page", "a144c7d73b3ef35a672b50803eb2d66a83576a6a333bd7c52963ffa0fcd96761",
+            "one-page-scaled", "0b5d2600234181677dd118ba713badc989872fa267c46304bf94cb6d9dd678a1",
             "paginated", "e85b9df1fdd2d9dccb5bd6a300bb6afb22f62e7ab862c1ea124a4ea9ca3d5317",
             // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
             // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
@@ -156,8 +165,8 @@ class QuotationRendererNoPictureGoldenTest {
             // sits directly under the table box. The regenerated english.txt differs from its prior
             // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
             // borderless styles shift; the four Thai fixtures are byte-identical.
-            "english", "33533c1b3001eceadb195e3c8c96723a043be9f19b04948cc9deb60d51793641",
-            "legacy-shape", "463bf902752a732c69b01b1f6baafd7a72e524ae7de526f41cf42e1f62103e49");
+            "english", "0bfe7ba2d9a493026b979e991768b392773d88511d8293a8a16f7e8667f06dff",
+            "legacy-shape", "a92e576f622abb6fd0c2a49051e5513ae162adadbfb4b21636f56b7484de28fe");
         byte[] xls = renderer.toXls(model(fixture));
         String expectedUnit = Files.readString(Path.of("src/test/resources/quotation-golden", fixture + ".txt"),
             StandardCharsets.UTF_8).lines().findFirst().orElse("");

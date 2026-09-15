@@ -442,6 +442,16 @@ public class QuotationRenderer {
             // ① Size the money columns to the actual numbers so nothing ever clips to "###",
             //    whatever the magnitude. Must run before the width scale below is measured.
             sizeMoneyColumns(sh, items, subtotal.add(vat));
+            // Fix (2026-09-15, production complaint): a revision suffix ("QT-2026-0034-1") was
+            // clipped off เลขที่อ้างอิง / Ref. at I4 -- #sizeMoneyColumns above sizes column I only
+            // from the grand-total FIGURE it also shows there, and never looked at the actual
+            // TEXT already written at I4 (a few lines above, at NUMBER_VALUE_ROW/VALUE_COL). I is
+            // the LAST printed column (right margin 0; SheetHtmlRenderer clips rather than wraps
+            // overflow), so a number whose rendered width exceeds the grand total's silently lost
+            // its tail. Every golden fixture used a suffix-less number ("QT-2026-0099"), which is
+            // why nothing caught this. Must also run before the width scale below is measured, for
+            // the same reason #sizeMoneyColumns must.
+            fitColumnToText(sh, NUMBER_VALUE_ROW, VALUE_COL, model.number());
 
             // Consistent page margins (corner padding) on every layout and every page — set before
             // the scale math below so the width/height equations account for them.
@@ -2356,6 +2366,50 @@ public class QuotationRenderer {
         int chars = String.format(Locale.US, "%,.2f", value).length();
         int needed = (chars + MONEY_PAD_CHARS) * MONEY_UNITS_PER_CHAR;
         if (needed > sh.getColumnWidth(col)) sh.setColumnWidth(col, needed);
+    }
+
+    /**
+     * Widens column {@code col} so the FULL {@code text} already written at ({@code row}, {@code
+     * col}) fits — companion to {@link #fitColumnToNumber}, for a column that (unlike E/H/I's
+     * money figures) carries free text whose length this class does not otherwise predict. Fix
+     * (2026-09-15): เลขที่อ้างอิง / Ref. at I4 can carry a revision suffix ("QT-2026-0034-1") wider
+     * than the grand total {@link #sizeMoneyColumns} already sized column I for, and I is the last
+     * printed column — nothing to its right can absorb the overflow, so the tail silently clips.
+     *
+     * <p>Measured the SAME way {@link #resolveSignatureFontMetrics} measures the signature row:
+     * the font the HOST actually resolves the workbook's declared family to (fontconfig's
+     * Kinnari/Garuda substitute on a fontless image, per that method's own Javadoc), not the
+     * declared family's own metrics — measuring with a font this host cannot render both cells
+     * would put the same class of bug back that {@code LibreOfficeMetrics}'s Javadoc already
+     * documents for column sizing generally. {@link LibreOfficeMetrics#charWidthTwips}/{@link
+     * LibreOfficeMetrics#columnTwips} convert between the XLS 1/256-char column-width unit and
+     * twips; this inverts that same arithmetic to solve for the unit count a target twips width
+     * needs, then pads by {@link LibreOfficeMetrics#TEXT_INSET_TWIPS} on both sides — the same
+     * inset LibreOffice itself reserves between a cell's border and its text.
+     *
+     * <p>Never NARROWS the column (only widens past whatever {@link #sizeMoneyColumns} already
+     * set) and is a no-op — leaving that width exactly as {@link #sizeMoneyColumns} left it —
+     * when {@code text} is blank or the host has no measurable font for this cell's family at
+     * all, mirroring {@link #resolveSignatureFontMetrics}'s own "never let a font-metrics failure
+     * break the render" convention.
+     */
+    private void fitColumnToText(Sheet sh, int row, int col, String text) {
+        if (text == null || text.isEmpty()) return;
+        try {
+            Cell probe = getOrKeep(sh, row, col);
+            Font poiFont = sh.getWorkbook().getFontAt(probe.getCellStyle().getFontIndexAsInt());
+            FontResolver.Resolved resolved = FontResolver.resolve(poiFont.getFontName());
+            java.util.OptionalDouble widthPt = FontResolver.stringWidthPt(
+                resolved, text, poiFont.getFontHeightInPoints(), poiFont.getBold());
+            if (widthPt.isEmpty()) return;
+            int textTwips = (int) Math.ceil(widthPt.getAsDouble() * 20.0) + 2 * LibreOfficeMetrics.TEXT_INSET_TWIPS;
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            // Inverts LibreOfficeMetrics#columnTwips: units = (twips + 0.5) * 256 / charWidthTwips.
+            int neededUnits = (int) Math.ceil((textTwips + 0.5) * 256.0 / charWidthTwips);
+            if (neededUnits > sh.getColumnWidth(col)) sh.setColumnWidth(col, neededUnits);
+        } catch (RuntimeException e) {
+            log.debug("Column text-width fit unavailable for '{}': {}", text, e.getMessage());
+        }
     }
 
 
