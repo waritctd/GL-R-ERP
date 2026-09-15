@@ -617,21 +617,39 @@ export function sqmPerPieceFromSizeCm(sizeText) {
   return sqmPerPiece;
 }
 
-/** The bare `[width, height]` pair behind {@link compareToCatalogFaceSize}'s CATALOGUE side, without
- * `sqmPerPieceFromSizeCm`'s own area sanity bound or unit resolution — `catalogSizeText` is always
- * plain cm digits with no unit token (see `sizeTextFromCatalog` in QuotationItemRow.jsx), so its own
- * `unit` is always `null` and irrelevant. `null` on anything `SIZE_PATTERN` does not recognise as a
- * plain size pair. */
+/**
+ * The `[widthCm, heightCm]` pair behind {@link compareToCatalogFaceSize}'s CATALOGUE side, without
+ * `sqmPerPieceFromSizeCm`'s own area sanity bound.
+ *
+ * <p>⚠️ Review fix (F3, 2026-09-16): the comment this replaces claimed `catalogSizeText` "is always
+ * plain cm digits with no unit token" — that is FALSE. `sizeTextFromCatalog` (QuotationItemRow.jsx)
+ * has a THIRD branch, reached for the ~49 prod rows with no `width_mm`/`height_mm` at all, that falls
+ * back to the catalogue's raw `sizeRaw`/`size` string verbatim — dirty free text that can (and, per
+ * this repo's own "size_raw is NOT a size" note, often does) carry its own unit token, or be junk
+ * that is not a size at all. Silently reading a parsed unit token as "these must be cm digits
+ * anyway" would read a catalogue "600x1200 mm" as a 600cm x 1200cm tile — 100x too big, and (worse)
+ * would make a rep's correctly-typed "60x120" fail to match its OWN catalogue row. So an explicit
+ * unit on the catalogue side is now HONOURED (an explicit `mm` reading is converted to its actual cm
+ * face size) rather than discarded; `null` ("unspecified", the normal V174 `size_cm` /
+ * width_mm+height_mm-derived case) is unchanged.
+ *
+ * @return `[widthCm, heightCm]`, or `null` on anything `SIZE_PATTERN` does not recognise as a plain
+ *     size pair (a junk `size_raw` fallback included — that is a parse failure, never a wrong
+ *     reading).
+ */
 function parseSizeCmPair(sizeText) {
   const parsed = parseSizeText(sizeText);
-  return parsed ? [parsed.width, parsed.height] : null;
+  if (!parsed) return null;
+  const { width, height, unit } = parsed;
+  return unit === 'mm' ? [width / 10, height / 10] : [width, height];
 }
 
 /**
  * Compares `sizeText` (the rep's typed field, read via the full shared grammar — including an
- * explicit unit) against `catalogSizeText` (always plain cm digits, see {@link parseSizeCmPair})
- * order-insensitively. Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod QT-2026-0034-1,
- * 2026-09-15) and its 2026-09-16 unit-resolution fix.
+ * explicit unit) against `catalogSizeText` (typically plain cm digits, but see {@link
+ * parseSizeCmPair}'s own doc for the sizeRaw-fallback case where it isn't) order-insensitively.
+ * Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod QT-2026-0034-1, 2026-09-15) and its
+ * 2026-09-16 unit-resolution fix.
  *
  * <p><b>Unit resolution (2026-09-16):</b> `sizeText`'s parsed `unit` explicit (`'cm'` or `'mm'`)
  * checks ONLY that reading — "300x600mm" against a 60x60cm/600x600mm catalogue row is a DIFFERENT

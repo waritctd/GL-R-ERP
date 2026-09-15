@@ -741,6 +741,25 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
   });
 });
 
+// ── F3 (MEDIUM-LOW, 2026-09-16 review): the catalogue side of the comparison can carry its own
+// unit token (sizeTextFromCatalog's sizeRaw/size fallback, ~49 prod rows with no width_mm/
+// height_mm) and must honour it rather than reading the digits as bare cm -- see parseSizeCmPair's
+// own doc for the false claim this replaces and the "600x1200 mm read as 600cm x 1200cm" bug. ────
+describe('parseSizeCmPair / catalogue-side unit honouring (F3, 2026-09-16 review)', () => {
+  it('an explicit mm unit on the CATALOGUE side is converted to its actual cm face size, not read as bare cm digits', () => {
+    // Pre-fix bug: reading "600x1200 mm" as literal cm digits (600,1200) made a rep's correctly
+    // typed "60x120" (the tile's REAL cm size) fail to match its own catalogue row.
+    expect(sizeTextMatchesCatalogFaceSize('60x120', '600x1200 mm')).toBe(true);
+    // A genuinely different tile must still read as different.
+    expect(sizeTextMatchesCatalogFaceSize('30x60', '600x1200 mm')).toBe(false);
+  });
+
+  it('a junk size_raw fallback (not a size at all) is a parse failure, never a wrong reading', () => {
+    expect(sizeTextMatchesCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
+  });
+});
+
 describe('quotationItemMissingSummary', () => {
   it('returns null once an item has no errors', () => {
     expect(quotationItemMissingSummary({}, 0)).toBeNull();
