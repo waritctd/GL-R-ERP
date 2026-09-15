@@ -18,7 +18,7 @@ import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 const ENTRY_CHANNEL_CODES = ['UNSPECIFIED', 'DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
 function emptyNewCustomer() {
-  return { name: '', taxId: '', phone: '', ...emptyThaiAddress() };
+  return { name: '', taxId: '', phone: '', address: '', ...emptyThaiAddress() };
 }
 
 /**
@@ -50,6 +50,17 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCustomer, setNewCustomer] = useState(emptyNewCustomer());
   const [savingCustomer, setSavingCustomer] = useState(false);
+  // Foreign-customer toggle inside เพิ่มลูกค้าใหม่ (bug fix, prod QT-2026-0039-1): a customer
+  // outside Thailand has no จังหวัด/เขต/แขวง to pick, so ThaiAddressFields' three `required`
+  // comboboxes could never be satisfied and the rep had no way to save one — the ticket that
+  // shipped got its address hand-typed into the (Thai-only) addressLine field instead, printing
+  // as "---Vietnam--- แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110". Checking this box swaps the
+  // structured fields for a plain textarea and, on save, sends a payload with every structured
+  // field OMITTED (not merely blank -- CustomerController#structured / mockApi's own
+  // structuredCustomerAddress both treat a present-but-empty string as "structured", matching
+  // `Objects::nonNull`) so the backend takes its already-existing non-structured
+  // `customers.create(name, taxId, address, branch, phone)` path (CustomerController ~73-77).
+  const [foreignCustomer, setForeignCustomer] = useState(false);
 
   // F7 (2026-09-10) + owner 2026-09-11: the SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่
   // are edited through the shared CustomerDetailsFields (see its own doc) — the editor renders the
@@ -185,6 +196,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
     if (savingCustomer) return;
     setShowNewCustomer(false);
     setNewCustomer(emptyNewCustomer());
+    setForeignCustomer(false);
   }
 
   function closeNewProject() {
@@ -194,10 +206,19 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
   }
 
   async function handleCreateCustomer() {
-    if (!newCustomer.name.trim() || !completeThaiAddress(newCustomer)) return;
+    if (!newCustomer.name.trim()) return;
+    if (!foreignCustomer && !completeThaiAddress(newCustomer)) return;
     setSavingCustomer(true);
     try {
-      const res = await api.customers.create({
+      // Foreign mode omits every structured field entirely (not just blanks them) -- see the
+      // foreignCustomer state comment above for why that distinction is what actually reaches
+      // the backend's non-structured create() path.
+      const res = await api.customers.create(foreignCustomer ? {
+        name: newCustomer.name.trim(),
+        taxId: newCustomer.taxId.trim() || null,
+        address: newCustomer.address.trim() || null,
+        phone: newCustomer.phone.trim() || null,
+      } : {
         name: newCustomer.name.trim(),
         taxId: newCustomer.taxId.trim() || null,
         addressLine: newCustomer.addressLine.trim(),
@@ -209,6 +230,7 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
       });
       selectCustomer(res.customer);
       setNewCustomer(emptyNewCustomer());
+      setForeignCustomer(false);
     } catch (error) {
       showToast?.('error', error.message || 'เพิ่มลูกค้าใหม่ไม่สำเร็จ');
     } finally {
@@ -426,12 +448,36 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
               <span className="text-2xs">โทรศัพท์</span>
               <input value={newCustomer.phone} onChange={(e) => setNewCustomer((p) => ({ ...p, phone: e.target.value }))} placeholder="02-xxx-xxxx" />
             </label>
+            <label className="col-span-full m-0 flex items-center gap-1.5 text-2xs">
+              <input
+                type="checkbox"
+                checked={foreignCustomer}
+                disabled={savingCustomer}
+                onChange={(e) => setForeignCustomer(e.target.checked)}
+              />
+              ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย
+            </label>
             <div className="col-span-full">
-              <ThaiAddressFields value={newCustomer} onChange={(patch) => setNewCustomer((prev) => ({ ...prev, ...patch }))} disabled={savingCustomer} />
+              {foreignCustomer ? (
+                <FormField label="ที่อยู่" htmlFor="new-customer-foreign-address">
+                  <textarea
+                    id="new-customer-foreign-address"
+                    rows={3}
+                    className="min-h-20"
+                    maxLength={2000}
+                    value={newCustomer.address}
+                    disabled={savingCustomer}
+                    placeholder="ที่อยู่ลูกค้า (ภาษาใดก็ได้)"
+                    onChange={(e) => setNewCustomer((p) => ({ ...p, address: e.target.value }))}
+                  />
+                </FormField>
+              ) : (
+                <ThaiAddressFields value={newCustomer} onChange={(patch) => setNewCustomer((prev) => ({ ...prev, ...patch }))} disabled={savingCustomer} />
+              )}
             </div>
           </div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button variant="primary" size="sm" loading={savingCustomer} disabled={!newCustomer.name.trim() || !completeThaiAddress(newCustomer) || savingCustomer} onClick={handleCreateCustomer}>
+            <Button variant="primary" size="sm" loading={savingCustomer} disabled={!newCustomer.name.trim() || (!foreignCustomer && !completeThaiAddress(newCustomer)) || savingCustomer} onClick={handleCreateCustomer}>
               บันทึกลูกค้าใหม่
             </Button>
             <Button variant="secondary" size="sm" disabled={savingCustomer} onClick={closeNewCustomer}>
