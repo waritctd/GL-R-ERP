@@ -9,7 +9,9 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.*;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.location.*;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
@@ -26,7 +28,7 @@ class CustomerThaiAddressIntegrationTest extends AbstractPostgresIntegrationTest
         var projectRepo = new ProjectRepository(jdbc);
         var auth = new EmployeeAuthRepository(jdbc);
         var mvc = MockMvcBuilders.standaloneSetup(new CustomerController(repo,contactRepo,projectRepo,
-            new CustomerService(repo,contactRepo,projectRepo,auth),new SessionContext(),auth),
+            new CustomerService(repo,contactRepo,projectRepo,auth,new DealQuotationRepository(jdbc,new CatalogRepository(jdbc))),new SessionContext(),auth),
             new ThaiLocationController(locations,new SessionContext()))
             .setControllerAdvice(new ApiExceptionHandler()).build();
         var session = new MockHttpSession();

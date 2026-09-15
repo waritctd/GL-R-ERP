@@ -23,6 +23,7 @@ import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 
 // Audit gap #1 (writes): customer/contact/project CREATE endpoints were authenticated-only, so
 // any role (incl. employee) could write customer rows straight through the repository. Gated to
@@ -52,7 +53,11 @@ class CustomerControllerTest {
     // here only via its OWN role (sales/sales_manager) or an explicit per-test stub — never a
     // phantom grant. grantedQcCanCreateCustomer below stubs it true for the one test that needs it.
     private final EmployeeAuthRepository employeeAuth = mock(EmployeeAuthRepository.class);
-    private final CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
+    // Unstubbed -> refreshDraftContactSnapshot returns 0 (Mockito default for int), which is all
+    // #updateContact needs from it; no test here exercises the DRAFT-snapshot-refresh behaviour
+    // itself (see ContactUpdateRefreshesDraftQuotationsIntegrationTest for that, real-DB).
+    private final DealQuotationRepository dealQuotations = mock(DealQuotationRepository.class);
+    private final CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth, dealQuotations);
     private final MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new CustomerController(customers, contacts, projects, customerService,
             new SessionContext(), employeeAuth))

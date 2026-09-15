@@ -15,7 +15,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
@@ -71,7 +73,8 @@ class CustomerReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         ContactRepository contacts = new ContactRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeAuthRepository employeeAuth = new EmployeeAuthRepository(jdbc);
-        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
+        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth,
+            new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
 
         // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
         // (JacksonAutoConfiguration), so the MockMvc layer is wired with the same converter type.

@@ -558,6 +558,52 @@ public class DealQuotationRepository {
                 .addValue("subtotal", subtotal));
     }
 
+    /**
+     * Quotation-editor bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลัง
+     * ไม่ได้"): {@link #updateHeader}'s own re-snapshot only fires on the DRAFT's OWN next save —
+     * so correcting a typo'd email/phone on the CONTACT record itself never reached a draft the
+     * rep was not actively re-saving, and the printed PDF (rendered fresh from the DB on every
+     * download, see {@code DealQuotationService}'s render path) kept the stale value indefinitely.
+     *
+     * <p>Called from {@code CustomerService#updateContact} in the same request as the contact
+     * write itself (that method wraps both in one {@code @Transactional} boundary) — every DRAFT
+     * quotation row currently pointing at this contact id picks up its LIVE phone/email the moment
+     * the contact is corrected, not on its own next save. Reads {@code customers.contact} directly
+     * (a {@code FROM} join, not parameters) so this can never drift from whatever
+     * {@code ContactRepository#update} just committed.
+     *
+     * <p>{@code refreshName} is {@code false} for a phone/email-only edit (the common case): the
+     * printed ผู้สั่งซื้อ NAME is a bigger, more visible change than a phone/email typo fix, so it is
+     * only re-snapshotted when the caller confirms the edit actually touched {@code first_name}/
+     * {@code last_name} — never recomputed as an incidental side effect of some other field's PATCH.
+     *
+     * <p>Mirrors {@link #updateHeader}'s own {@code doc_status = 'DRAFT'} predicate exactly, so a
+     * PENDING_APPROVAL/APPROVED/REJECTED/CANCELLED row's frozen snapshot is never touched — only a
+     * quotation still open for editing moves. Same soft-reference discipline as V167's own contact
+     * columns: this UPDATE only ever runs because the contact row still exists (it was just
+     * written), so there is nothing to guard against here that {@code contact_id} being a
+     * non-FK reference would otherwise risk.
+     */
+    public int refreshDraftContactSnapshot(long contactId, boolean refreshName) {
+        return jdbc.update("""
+            UPDATE sales.quotation q
+               SET contact_phone = c.phone,
+                   contact_email = c.email,
+                   contact_name  = CASE WHEN :refreshName
+                                        THEN NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '')
+                                        ELSE q.contact_name END,
+                   updated_at = now()
+              FROM customers.contact c
+             WHERE c.contact_id = :contactId
+               AND q.contact_id = :contactId
+               AND q.origin = 'DEAL_DIRECT'
+               AND q.doc_status = 'DRAFT'
+            """,
+            new MapSqlParameterSource()
+                .addValue("contactId", contactId)
+                .addValue("refreshName", refreshName));
+    }
+
     /** Compare-and-set DRAFT -> PENDING_APPROVAL. Rowcount 0 means not open for submit. Clears any
      * stale rejection reason from a prior cycle (V165's own header comment: "cleared on the next
      * submit"). */
