@@ -19,8 +19,15 @@ import java.util.Locale;
  * rather than sharing one across this singleton-free, static-methods-only class.
  */
 public final class DealQuotationLines {
+    /** The unit-token vocabulary the shared grammar recognises — shared by {@link #SIZE_HAS_UNIT}
+     * and {@link #TWO_DIMENSIONS} so the two can never drift the way they did before 2026-09-16
+     * (review finding F4: {@code SIZE_HAS_UNIT} was missing the middle-dot Thai forms {@code ซ.ม.}/
+     * {@code ม.ม.} that {@code TWO_DIMENSIONS} already accepted, so {@code descriptionLine} printed
+     * a millimetre size labelled "cm." on a customer document). */
+    private static final String UNIT_ALTERNATION = "cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?";
+
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
-        java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
+        java.util.regex.Pattern.compile("(?i)(" + UNIT_ALTERNATION + ")\\s*$");
 
     /**
      * ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
@@ -53,9 +60,9 @@ public final class DealQuotationLines {
      * #parseTwoDimensions} for how the two unit groups resolve to one {@link SizeUnit}.
      */
     private static final java.util.regex.Pattern TWO_DIMENSIONS = java.util.regex.Pattern.compile(
-        "(?i)^\\s*(\\d+(?:[.,]\\d+)?)\\s*(cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*"
-        + "[x×*]\\s*(\\d+(?:[.,]\\d+)?)\\s*(cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*"
-        + "(?:[x×*]\\s*\\d+(?:[.,]\\d+)?\\s*(?:cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*)?"
+        "(?i)^\\s*(\\d+(?:[.,]\\d+)?)\\s*(" + UNIT_ALTERNATION + ")?\\s*"
+        + "[x×*]\\s*(\\d+(?:[.,]\\d+)?)\\s*(" + UNIT_ALTERNATION + ")?\\s*"
+        + "(?:[x×*]\\s*\\d+(?:[.,]\\d+)?\\s*(?:" + UNIT_ALTERNATION + ")?\\s*)?"
         + "(?:\\([^)]*\\))?\\s*$");
 
     /** The unit a typed size pair states — {@code null} reads as "unspecified" (today's ambiguous

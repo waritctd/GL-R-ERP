@@ -436,6 +436,24 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm.");
     }
 
+    /**
+     * F4 (LOW, 2026-09-16 review) — {@code SIZE_HAS_UNIT} used to only know {@code ซม}/{@code ซม.}/
+     * {@code มม}/{@code มม.}, not the middle-dot Thai forms {@code ซ.ม.}/{@code ม.ม.} that
+     * {@code TWO_DIMENSIONS}'s grammar already accepted, so a millimetre size typed with a dot
+     * (e.g. "30x60 ม.ม.") was read as having NO unit and got " cm." appended on top of it — a
+     * millimetre size printed as centimetres on a customer document. Fixed by sharing one
+     * {@code UNIT_ALTERNATION} constant between the two patterns so they cannot drift apart again.
+     */
+    @Test
+    void descriptionLine_recognisesTheMiddleDotThaiUnitForms_doesNotDoubleUpTheUnit() {
+        assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "30x60 ม.ม.", null))
+            .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 30x60 ม.ม.")
+            .doesNotContain("cm.");
+        assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "30x60 ซ.ม.", null))
+            .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 30x60 ซ.ม.")
+            .doesNotContain("cm.");
+    }
+
     // ── quotation v3 (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
 
     @Test
