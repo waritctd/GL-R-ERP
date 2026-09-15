@@ -153,3 +153,37 @@ describe('QuotationContactPicker — edit-in-place โทร./อีเมล', 
     expect(emailInput.value).toBe('wipa@example.com'); // rolled back
   });
 });
+
+// Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): a
+// quotation-grant holder who cannot load the ticket has `customerId` (== `contactCustomerId` on
+// the editor page) stay null even though the quotation's own frozen snapshot already seeded a
+// SELECTED contact with a real phone/email -- editing either field used to return silently: no
+// request, no toast, the rep left to guess why nothing happened.
+describe('QuotationContactPicker — missing customerId (owner re-report 2026-09-16)', () => {
+  const SELECTED_CONTACT = { id: 42, customerId: 1, firstName: 'วิภา', lastName: 'สมิทธ์', phone: '081-000-0000', email: 'wipa@example.com' };
+
+  // Resets call history AND any lingering mockRejectedValue/mockResolvedValue configuration from
+  // an earlier describe block's tests (e.g. "edit-in-place โทร./อีเมล"'s own updateContact stubs) —
+  // without this, `expect(api.customers.updateContact).not.toHaveBeenCalled()` below could see a
+  // PREVIOUS test's call still in the mock's history.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a Thai toast instead of silently no-op-ing, and keeps the typed value visible', async () => {
+    const showToast = vi.fn();
+    render(<Harness customerId={null} initial={SELECTED_CONTACT} showToast={showToast} />);
+
+    const emailInput = await screen.findByLabelText('แก้ไขอีเมลผู้สั่งซื้อ');
+    fireEvent.change(emailInput, { target: { value: 'new@example.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้',
+    ));
+    expect(api.customers.updateContact).not.toHaveBeenCalled();
+    // No request was ever sent, so there is nothing to roll back -- the typed value stays exactly
+    // as the rep left it (unlike the "rolls back" case above, which DID send a request).
+    expect(emailInput.value).toBe('new@example.com');
+  });
+});
