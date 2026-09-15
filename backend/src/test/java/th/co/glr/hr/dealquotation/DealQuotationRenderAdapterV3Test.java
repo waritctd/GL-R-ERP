@@ -129,6 +129,71 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
     }
 
+    // ── QT-2026-0032-1 (2026-09-15): the customer phone's own label ────────────────────────
+
+    /** Production bug: B6 printed "โทร. โทร 02 314 354-2" on QT-2026-0032-1. The customer master
+     * row for บริษัท อุณากรรณ จำกัด stores {@code phone = "โทร 02 314 354-2"} — the imported GL&amp;R
+     * directory kept the Thai label INSIDE the value — and this branch prefixes its own. 299 of
+     * 4320 customer rows are shaped that way, so this is every quotation for any of them. */
+    @Test
+    void thaiDocument_doesNotPrintThePhoneLabelTwiceWhenTheStoredValueCarriesItsOwn() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer(null, "โทร 02 314 354-2"), null, null);
+        assertThat(model.phoneLine()).isEqualTo("โทร. 02 314 354-2");
+    }
+
+    /** The same doubling on the English form, whose own label is "Tel." — and a Thai-labelled value
+     * on an English document is the ordinary case, because the label lives in shared master data
+     * that knows nothing about the document's language. */
+    @Test
+    void englishDocument_doesNotPrintThePhoneLabelTwiceEither() {
+        QuotationRenderModel thaiLabel = DealQuotationRenderAdapter.toRenderModel(
+            englishQuotationWithCustomerPhone("โทร 02 314 354-2"), null, null);
+        assertThat(thaiLabel.phoneLine()).isEqualTo("Tel. 02 314 354-2");
+
+        QuotationRenderModel englishLabel = DealQuotationRenderAdapter.toRenderModel(
+            englishQuotationWithCustomerPhone("Tel: 02 314 354-2"), null, null);
+        assertThat(englishLabel.phoneLine()).isEqualTo("Tel. 02 314 354-2");
+    }
+
+    /** The separator shapes the directory actually contains — bare, ":", "." and a doubled space —
+     * all strip, so the printed line is the same whichever way the row was typed. */
+    @Test
+    void stripPhoneLabel_handlesTheSeparatorShapesTheCustomerDirectoryContains() {
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทร 02 314 354-2")).isEqualTo("02 314 354-2");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทร : 091-895-6541")).isEqualTo("091-895-6541");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทร.064 245 5499")).isEqualTo("064 245 5499");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทร  061-1164584")).isEqualTo("061-1164584");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทรศัพท์ 02-711-5995")).isEqualTo("02-711-5995");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("เบอร์โทร 081-234-5678")).isEqualTo("081-234-5678");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("TEL. +66 81 339 0431")).isEqualTo("+66 81 339 0431");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("Phone: (02) 314-3542")).isEqualTo("(02) 314-3542");
+    }
+
+    /** The wrong-way-round half, which is the half that matters: the strip must never change the
+     * MEANING of a value. "โทรสาร" is a fax, not a mislabelled phone; a leading contact name is
+     * free text the rep typed on purpose; and "Tony" merely starts with the letters of "Tel". The
+     * lookahead for a digit/"+"/"(" is what keeps all three intact. */
+    @Test
+    void stripPhoneLabel_leavesAValueAloneWhenTheLabelIsNotActuallyALabel() {
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("โทรสาร 02-314-3542")).isEqualTo("โทรสาร 02-314-3542");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("คุณเจี๊ยบ โทร 081-927-9010"))
+            .isEqualTo("คุณเจี๊ยบ โทร 081-927-9010");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("Tony 081-927-9010")).isEqualTo("Tony 081-927-9010");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("02 314 354-2")).isEqualTo("02 314 354-2");
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel(null)).isEmpty();
+        assertThat(DealQuotationRenderAdapter.stripPhoneLabel("   ")).isEmpty();
+    }
+
+    /** A value that is NOTHING but a label leaves no number behind, so the line must drop entirely
+     * rather than print a bare "โทร." with nothing after it. */
+    @Test
+    void thaiDocument_aPhoneValueThatIsOnlyALabelPrintsNoPhoneLineAtAll() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithCustomer("99/1 ถนนสุขุมวิท กรุงเทพฯ 10110", "โทร."), null, null);
+        assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
+    }
+
     // ── item #1 (2026-09-14): "คุณ" prefix / contact-customer dedupe / organisation detection ──
 
     /** Bug fix: production printed "เรียน คุณบริษัท นันทวัน จำกัด   /   บริษัท นันทวัน จำกัด" because
@@ -283,6 +348,19 @@ class DealQuotationRenderAdapterV3Test {
             null, null, null, null, "โครงการทดสอบ",
             "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
             WastageCalculator.PRICE_MODE_NET, WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
+
+    /** The English mirror of {@link #quotationWithCustomer} — same customer fields, EN document. */
+    private DealQuotationDto englishQuotationWithCustomerPhone(String customerPhone) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, customerPhone,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET, WastageCalculator.DOCUMENT_LANGUAGE_EN,
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
             false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
