@@ -352,6 +352,68 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
   });
 });
 
+// Opus review fix (2026-09-16, F2): "typing 0 as a custom deposit %" used to be only VISUALLY
+// refused — depositZeroError showed a message but nothing blocked the save, so a rep could reach
+// depositPercent = 0 with no fullPaymentTerm two ways (the "ไม่รับมัดจำ" checkbox, already handled,
+// OR typing "0" into the custom "อื่นๆ" input while unticked, which was NOT) and only discover the
+// problem at ส่งขออนุมัติ's server-side 400. Mirrors DealQuotationService#submit's own gate
+// (isZeroDeposit(depositPercent) && isBlank(fullPaymentTerm)) — SUBMIT only, exactly like "lead
+// time required to submit" above: a draft with this same shape still saves.
+describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-16)', () => {
+  it('typing "0" into the custom "อื่นๆ" input (checkbox left UNticked) BLOCKS ส่งขออนุมัติ, but บันทึกร่าง stays enabled', async () => {
+    renderEditor('/quotations/5'); // draft() default: depositPercent 30, checkbox unticked
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
+
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.title).toBe('มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ');
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
+  });
+
+  it('the checklist ALSO lists the gap, alongside the block', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
+
+    const warnings = await screen.findByTestId('checklist-warnings');
+    expect(within(warnings).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+  });
+
+  it('ticking "ไม่รับมัดจำ" with no term chosen ALSO blocks ส่งขออนุมัติ (the pre-existing route, unaffected in shape)', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.title).toBe('มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ');
+  });
+
+  it('choosing a term after ticking "ไม่รับมัดจำ" clears the block', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
+  });
+
+  it('a normal 30% deposit quotation (default fixture) is unaffected — submit stays enabled, no checklist entry', async () => {
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(false);
+    expect(screen.queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
+  });
+});
+
 describe('PLAIN and ส่วนลดพิเศษ rows', () => {
   it('both travel in the payload, the ส่วนลดพิเศษ LAST and with no unitPrice', async () => {
     renderEditor('/quotations/5');

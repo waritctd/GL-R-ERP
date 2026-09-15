@@ -1118,6 +1118,23 @@ function blankValue(value) {
 }
 
 /**
+ * Whether the depositPercent this editor will actually SUBMIT is 0, mirroring
+ * {@code DealQuotationService#isZeroDeposit} exactly. Opus review fix (2026-09-16, F2): depositPercent
+ * reaches 0 on the editor two ways — ticking "ไม่รับมัดจำ" (`noDeposit`), or picking the custom
+ * "อื่นๆ" percent input (`depositPercentCustom`) and typing "0" (`depositPercent`) WITHOUT ticking
+ * the box. `buildUpsertPayload`'s own ternary (`terms.noDeposit ? 0 : Number(terms.depositPercent)`)
+ * evaluates to depositPercent = 0 either way, so both routes must be recognised identically here —
+ * exported so both {@link buildQuotationChecklist} (the visible checklist entry) and
+ * QuotationEditorPage's own submit-only guard (mirroring its pre-existing hasMissingLeadTimes
+ * pattern — a DRAFT still saves with this state; only #submit refuses it) share the ONE
+ * computation, rather than risk the two silently drifting apart.
+ */
+export function isEffectiveZeroDeposit({ noDeposit = false, depositPercentCustom = false, depositPercent = '' } = {}) {
+  if (noDeposit) return true;
+  return depositPercentCustom && depositPercent !== '' && Number(depositPercent) === 0;
+}
+
+/**
  * The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor
  * reads top to bottom. Pure: every input is editor state the caller already holds.
  *
@@ -1147,8 +1164,22 @@ export function buildQuotationChecklist({
   // ผู้สั่งซื้อ/รายการสินค้า above, DealQuotationService#create/#update accept a zero-deposit DRAFT
   // with no term chosen yet -- only #submit refuses it (this checklist's own contract is "blocks
   // ONLY when the backend already refuses the SAME state" for both บันทึกร่าง AND ส่งขออนุมัติ, and
-  // there is no create/update refusal here to mirror). A visible, non-blocking reminder instead.
+  // there is no create/update refusal here to mirror). A visible, non-blocking reminder instead —
+  // QuotationEditorPage's own SEPARATE submit-only guard (mirroring its pre-existing
+  // hasMissingLeadTimes pattern) is what actually disables ส่งขออนุมัติ for this state; see
+  // #isEffectiveZeroDeposit below, which both that guard and this check now share.
   noDeposit = false,
+  // Opus review fix (2026-09-16, F2): depositPercent reaches 0 on this editor TWO ways — the
+  // "ไม่รับมัดจำ" checkbox (`noDeposit` above) and typing "0" into the custom "อื่นๆ" input while
+  // UNticked (`depositPercentCustom` + `depositPercent`). Both were previously conflated with just
+  // `noDeposit`, so a rep who typed 0 without ticking the box got no checklist entry at all (and
+  // no submit block — see QuotationEditorPage's now-fixed depositZeroError), even though
+  // DealQuotationService#submit's isZeroDeposit() gate refuses depositPercent === 0 identically
+  // regardless of which route produced it. Both new params default to the "never triggers" shape
+  // so every existing caller/test that only ever passed `noDeposit` keeps behaving exactly as
+  // before.
+  depositPercentCustom = false,
+  depositPercent = '',
   fullPaymentTerm = '',
 } = {}) {
   const entries = [];
@@ -1195,8 +1226,8 @@ export function buildQuotationChecklist({
   if (priceModeLanguageConflict) {
     push(QUOTATION_CHECK.PRICE_MODE_LANGUAGE, 'เอกสารภาษาอังกฤษใช้ราคาพิเศษ บาท/ตร.ม. ไม่ได้ กรุณาเลือกวิธีกรอกราคาอื่น');
   }
-  if (noDeposit && blankValue(fullPaymentTerm)) {
-    push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'ติ๊ก "ไม่รับมัดจำ" แล้ว กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
+  if (isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && blankValue(fullPaymentTerm)) {
+    push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
   }
 
   if (items.length === 0) {

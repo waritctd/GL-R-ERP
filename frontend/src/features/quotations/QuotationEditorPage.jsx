@@ -19,6 +19,7 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
+  isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
@@ -321,11 +322,15 @@ export function QuotationEditorPage({ user, showToast }) {
     }
   }, [docHasSpecialPricing, terms.validityMode, setDirty]);
   // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% stops being a typeable percentage —
-  // the custom "อื่นๆ" input REJECTS it, pointing the rep at the checkbox instead. FRONTEND-only
-  // (backend @Min(0) is unchanged: 0 is still exactly how "no deposit" is stored once it arrives
-  // through the proper "ไม่รับมัดจำ" path), so this is a plain derived value, not a checklist entry
-  // — buildQuotationChecklist's own contract is "blocks only when the backend already refuses the
-  // same state", and the backend does not refuse a typed 0 at all.
+  // the custom "อื่นๆ" input points the rep at the checkbox instead. This message alone is only
+  // VISUAL, though: nothing here stops the state from being typed and saved (Opus review F2,
+  // 2026-09-16 — this comment used to claim the custom input "REJECTS" 0 and that "the backend
+  // does not refuse a typed 0 at all", and both were wrong. `onChange` below just writes whatever
+  // is typed, and DealQuotationService#submit's isZeroDeposit() gate refuses depositPercent === 0
+  // identically whether it arrived via this custom field or the checkbox — see
+  // #hasUnresolvedZeroDeposit a few lines down, which is the ACTUAL guard that now blocks ส่ง
+  // ขออนุมัติ for this exact state; this `depositZeroError` stays exactly what it always was, an
+  // inline hint on the input itself).
   const depositZeroError = !terms.noDeposit && terms.depositPercentCustom
     && terms.depositPercent !== '' && Number(terms.depositPercent) === 0
     ? 'ถ้าไม่รับมัดจำ ให้ติ๊ก “ไม่รับมัดจำ” แทนการพิมพ์ 0'
@@ -810,6 +815,23 @@ export function QuotationEditorPage({ user, showToast }) {
   const leadTimeBlockMessage = hasMissingLeadTimes
     ? `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}` : null;
 
+  // Item 4 ("ไม่รับมัดจำ", V181) + Opus review fix (2026-09-16, F2): mirrors
+  // DealQuotationService#submit's own gate (isZeroDeposit(depositPercent) &&
+  // isBlank(fullPaymentTerm)) — SUBMIT only, exactly like hasMissingLeadTimes above: a draft with
+  // this same shape still saves (buildQuotationChecklist's own FULL_PAYMENT_TERM check stays
+  // non-blocking for exactly that reason — DealQuotationService#create/#update accept it), only
+  // #submit refuses it. Previously only the "ไม่รับมัดจำ" checkbox (`terms.noDeposit`) was checked
+  // here; typing "0" into the custom "อื่นๆ" percent input while UNticked reaches the same
+  // depositPercent = 0 on save (buildUpsertPayload's own ternary) but was never gated at all — a
+  // rep hit the server's 400 with no warning beyond `depositZeroError`'s inline hint, which blocked
+  // nothing. #isEffectiveZeroDeposit (quotationMeta.js) is the ONE place both routes are recognised,
+  // shared with buildQuotationChecklist's own check below so the two can never disagree.
+  const hasUnresolvedZeroDeposit = isEffectiveZeroDeposit({
+    noDeposit: terms.noDeposit, depositPercentCustom: terms.depositPercentCustom, depositPercent: terms.depositPercent,
+  }) && (!terms.fullPaymentTerm || !terms.fullPaymentTerm.trim());
+  const zeroDepositBlockMessage = hasUnresolvedZeroDeposit
+    ? 'มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ' : null;
+
   // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
   // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
   // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
@@ -847,9 +869,15 @@ export function QuotationEditorPage({ user, showToast }) {
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
     priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
     noDeposit: terms.noDeposit,
+    // Opus review fix (2026-09-16, F2): the checklist entry now recognises BOTH routes to
+    // depositPercent = 0 (the checkbox and a custom-typed "0") — see #isEffectiveZeroDeposit's own
+    // Javadoc in quotationMeta.js for why both must feed the SAME check.
+    depositPercentCustom: terms.depositPercentCustom,
+    depositPercent: terms.depositPercent,
     fullPaymentTerm: terms.fullPaymentTerm,
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
-    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit, terms.fullPaymentTerm]);
+    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1400,8 +1428,8 @@ export function QuotationEditorPage({ user, showToast }) {
                 // handleInlineCreate — the same three `saving` already covers), so a rep cannot
                 // open the confirm dialog and submit while an autosave the dialog hasn't had a
                 // chance to suppress yet is still on the wire.
-                disabled={hasValidationErrors || hasMissingLeadTimes || saving}
-                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? undefined)}
+                disabled={hasValidationErrors || hasMissingLeadTimes || hasUnresolvedZeroDeposit || saving}
+                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined)}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
                 ส่งขออนุมัติ
@@ -2099,10 +2127,10 @@ export function QuotationEditorPage({ user, showToast }) {
                 variant="primary"
                 loading={submitMutation.isPending}
                 // #7: defensive — the opening button above is already disabled while
-                // `hasMissingLeadTimes`, so this only matters if an edit made mid-dialog removed a
-                // lead time the rep had entered.
-                disabled={saving || hasMissingLeadTimes}
-                title={leadTimeBlockMessage ?? undefined}
+                // `hasMissingLeadTimes`/`hasUnresolvedZeroDeposit`, so this only matters if an edit
+                // made mid-dialog removed a lead time or re-typed a 0% deposit.
+                disabled={saving || hasMissingLeadTimes || hasUnresolvedZeroDeposit}
+                title={leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined}
                 onClick={() => submitMutation.mutate()}
               >
                 ส่งขออนุมัติ
@@ -2111,12 +2139,17 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
-          {/* #7: unlike checklistWarnings below, this ONE genuinely blocks — the opening button is
-              disabled while it is true, so this only shows if the dialog was already open when a
-              concurrent edit removed a lead time. */}
+          {/* #7: unlike checklistWarnings below, these TWO genuinely block — the opening button is
+              disabled while either is true, so they only show if the dialog was already open when
+              a concurrent edit removed a lead time or re-typed a 0% deposit. */}
           {leadTimeBlockMessage ? (
             <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
               {leadTimeBlockMessage}
+            </p>
+          ) : null}
+          {zeroDepositBlockMessage ? (
+            <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
+              {zeroDepositBlockMessage}
             </p>
           ) : null}
           {/* The optional gaps, restated at the moment of sending — never a blocker (see

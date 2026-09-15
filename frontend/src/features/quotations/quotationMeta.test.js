@@ -1057,6 +1057,67 @@ describe('buildQuotationChecklist', () => {
   it('BLOCKS the English + ราคาพิเศษ pairing the server 400s', () => {
     expect(blocking(meta.buildQuotationChecklist({ ...complete, priceModeLanguageConflict: true }))).toEqual(['priceModeLanguage']);
   });
+
+  // ── Opus review fix (2026-09-16, F2): FULL_PAYMENT_TERM now recognises BOTH routes to
+  // depositPercent = 0 (the "ไม่รับมัดจำ" checkbox AND a custom-typed "0"), not just the checkbox —
+  // see #isEffectiveZeroDeposit's own tests below for the shared computation. The entry itself
+  // stays NON-blocking (DealQuotationService#create/#update accept a zero-deposit DRAFT with no
+  // term yet — only #submit refuses it; QuotationEditorPage's own separate hasUnresolvedZeroDeposit
+  // guard is what disables ส่งขออนุมัติ for this state).
+  it('lists (but does not block) a missing เงื่อนไขการชำระเงิน on the checkbox route', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: '' });
+    expect(entries).toEqual([{
+      check: 'fullPaymentTerm', message: 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน',
+      targetId: 'fullPaymentTerm', blocking: false,
+    }]);
+  });
+
+  it('ALSO lists it for a custom-typed 0% deposit, even with the checkbox unticked', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: '',
+    });
+    expect(blocking(entries)).toEqual([]);
+    expect(entries.map((e) => e.check)).toEqual(['fullPaymentTerm']);
+  });
+
+  it('does NOT list it for an ordinary 30% deposit', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: false, depositPercent: 30, fullPaymentTerm: '',
+    });
+    expect(entries).toEqual([]);
+  });
+
+  it('does NOT list it once a term is chosen', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30' })).toEqual([]);
+    expect(meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: 'CREDIT_30',
+    })).toEqual([]);
+  });
+});
+
+describe('isEffectiveZeroDeposit', () => {
+  it('is true when the "ไม่รับมัดจำ" checkbox is ticked, regardless of the percent fields', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: true })).toBe(true);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: true, depositPercentCustom: false, depositPercent: 30 })).toBe(true);
+  });
+
+  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be
+  // recognised identically to the checkbox — this is the exact gap that let a rep save/attempt to
+  // submit depositPercent = 0 with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
+  it('is true for a custom-typed "0" even with the checkbox unticked', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '0' })).toBe(true);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: 0 })).toBe(true);
+  });
+
+  it('is false for a non-zero custom percent, a preset percent, or an empty field', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '10' })).toBe(false);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: false, depositPercent: 30 })).toBe(false);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '' })).toBe(false);
+  });
+
+  it('defaults to false when called with no arguments', () => {
+    expect(meta.isEffectiveZeroDeposit()).toBe(false);
+  });
 });
 
 describe('joinPresent', () => {
