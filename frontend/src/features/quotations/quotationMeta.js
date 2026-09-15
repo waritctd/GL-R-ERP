@@ -452,65 +452,135 @@ export function listPricePerSqmIncVat(unitPrice, sqmPerPiece) {
   return round2(price * piecesPerSqm * 1.07);
 }
 
-// Anchored, case-insensitive: number, separator, number, an optional THIRD `separator number`
-// (thickness, e.g. "60x60x0.9" for a 9mm tile — ignored, never treated as a second dimension pair),
-// then an optional trailing unit. Separators: x / X / × / * with optional surrounding spaces.
-// Numbers: digits with an optional single `.` decimal part. Anything else — a comma anywhere,
-// letters before/between the numbers, only one number — fails the match and yields `null` rather
-// than a guess (a bare "60" or a product-name string like "JOLLY 60x60" must never resolve).
-const SIZE_CM_PATTERN = /^\s*(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)(?:\s*[xX×*]\s*\d+(?:\.\d+)?)?\s*(?:cm|ซม\.?)?\s*$/i;
+// ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
+// แต่ PDF ยังใช้ค่าเดิม"): this pattern and the backend's `DealQuotationLines#TWO_DIMENSIONS` MUST
+// stay identical. Before 2026-09-16 they had quietly drifted -- this one already tolerated a third
+// dimension and a trailing cm/ซม unit, but had no per-number unit, no decimal-comma, no mm unit and
+// no trailing free text, so a size the rep typed could recompute แผ่น/ตร.ม. on screen (this parser
+// accepted it) while the printed PDF still showed the linked catalogue's size (the backend's
+// stricter parser rejected the same text and fell back to "keep the catalogue"). The vector table
+// pinning both sides is in `quotationMeta.test.js` and `DealQuotationLinesTest` -- same inputs,
+// same {width, height, unit} result -- so the two can never drift apart again without a red test.
+//
+// One number, one separator (x / X / × / * with optional surrounding spaces), a second number, an
+// optional THIRD `separator number` (thickness, e.g. "60x60x0.9" for a 9mm tile -- ignored, never
+// treated as a second dimension pair), then optional trailing free text in parentheses (e.g.
+// "(หนา 9)" -- ignored). Numbers accept a decimal POINT OR COMMA ("29,7" is 29.7 -- this column has
+// no thousands separators to confuse it with). Each of the first two numbers may carry its OWN
+// trailing unit token, OR a single one may follow the second number (group 4) -- which is how "the
+// unit once at the end" and "unit after the second number" collapse into the same grammar position
+// when there is no third dimension: cm/cm./mm/mm. (English, case-insensitive) or ซม/ซม./ซ.ม. (Thai
+// centimetres) / มม/มม./ม.ม. (Thai millimetres) -- see `unitFamily` below. Anything else -- a
+// spelled-out shape, a comma-then-letters tail, letters before/between the numbers, only one
+// number -- fails the match and yields `null` rather than a guess (a bare "60" or a product-name
+// string like "JOLLY 60x60" must never resolve).
+//
+// Group 1 = width digits, group 2 = width's own unit token (or undefined), group 3 = height
+// digits, group 4 = height's own unit token (or undefined).
+const SIZE_PATTERN =
+  /^\s*(\d+(?:[.,]\d+)?)\s*(cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*[xX×*]\s*(\d+(?:[.,]\d+)?)\s*(cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*(?:[xX×*]\s*\d+(?:[.,]\d+)?\s*(?:cm\.?|mm\.?|ซ\.?ม\.?|ม\.?ม\.?)?\s*)?(?:\([^)]*\))?\s*$/i;
+
+/** `cm`/`cm.`/`ซม`/`ซม.`/`ซ.ม.` → `'cm'`; `mm`/`mm.`/`มม`/`มม.`/`ม.ม.` → `'mm'`; no token captured
+ * → `null` ("unspecified"). Thai ซ (cm) and ม (mm) never share a leading character, so a plain
+ * `startsWith` is unambiguous. */
+function unitFamily(token) {
+  if (!token) return null;
+  const t = token.toLowerCase();
+  if (t.startsWith('cm')) return 'cm';
+  if (t.startsWith('mm')) return 'mm';
+  if (t.startsWith('ซ')) return 'cm';
+  if (t.startsWith('ม')) return 'mm';
+  return null;
+}
+
+/**
+ * The shared size grammar — see `SIZE_PATTERN` above for the full spec (separators, per-number/
+ * trailing units, decimal comma, ignored third dimension, ignored trailing parenthetical). Exported
+ * so `quotationMeta.test.js` can pin the shared vector table directly against the parse RESULT
+ * (same inputs, same {width, height, unit} shape as the backend's package-private
+ * `DealQuotationLines#parseTwoDimensions`), not just against a derived value.
+ *
+ * Unit resolution: an explicit unit on EITHER number wins outright and becomes `unit`. When both
+ * numbers carry one and they genuinely conflict (a shape no real rep types, e.g. "30cm x 60mm")
+ * there is no sane single reading, so this falls back to `null` ("unspecified") rather than
+ * silently preferring one side.
+ *
+ * @return `{width, height, unit}` (unit is `'cm'`, `'mm'`, or `null`), or `null` when `sizeText` is
+ *     blank, does not match the grammar, or either number is not strictly positive.
+ */
+export function parseSizeText(sizeText) {
+  const match = SIZE_PATTERN.exec(sizeText ?? '');
+  if (!match) return null;
+  const width = Number(match[1].replace(',', '.'));
+  const height = Number(match[3].replace(',', '.'));
+  if (!(width > 0) || !(height > 0)) return null;
+  const widthUnit = unitFamily(match[2]);
+  const heightUnit = unitFamily(match[4]);
+  let unit = widthUnit ?? heightUnit ?? null;
+  if (widthUnit && heightUnit && widthUnit !== heightUnit) unit = null;
+  return { width, height, unit };
+}
 
 /**
  * ขนาด (ซม.) free text → ตร.ม./แผ่น, for the auto-fill-from-size fallback (owner decision
  * 2026-09-14). A 2026-09-12 ruling ("Do not infer anything") had removed inference from this same
  * field because the column mixed centimetres and millimetres with no way to tell which a given row
- * meant. That column is now explicitly labelled ขนาด (ซม.) — the unit is DECLARED by the field, not
- * guessed by this function, so the 2026-09-12 objection no longer applies to it. This is still only
- * ever a FALLBACK: a catalogue-resolved `sqmPerPiece` (`resolveTileSqmPerPiece` in
- * QuotationItemRow.jsx) is never replaced by a size-derived one, and the backend still does not
- * parse `sizeText` at all — it accepts whatever `sqmPerPiece` the editor sends.
+ * meant. That column is now explicitly labelled ขนาด (ซม.) — the unit is DECLARED by the field
+ * (defaulting to cm when unspecified, same as before 2026-09-16), not guessed by this function, so
+ * the 2026-09-12 objection no longer applies to it. This is still only ever a FALLBACK: a
+ * catalogue-resolved `sqmPerPiece` (`resolveTileSqmPerPiece` in QuotationItemRow.jsx) is never
+ * replaced by a size-derived one, and the backend still does not parse `sizeText` at all — it
+ * accepts whatever `sqmPerPiece` the editor sends.
  *
- * Reads only "widthXheight" (optionally "widthXheightXthickness", the thickness ignored) with an
- * optional trailing cm/ซม unit — see SIZE_CM_PATTERN above. Converts cm² → m² (÷ 10000) and rounds
- * to 6dp, exactly like `sqmPerPieceFromPiecesPerSqm` above (the NUMERIC(10,6) storage precision).
+ * Reads whatever `parseSizeText`/`SIZE_PATTERN` above recognises. An UNSPECIFIED or explicit `cm`
+ * unit computes cm² → m² (÷ 10000), exactly the field's pre-2026-09-16 behaviour; an explicit `mm`
+ * unit computes mm² → m² (÷ 1,000,000) instead — e.g. "300x600mm" is a genuinely small 0.18 m²/piece
+ * tile, not the 18 m²/piece a cm reading would wrongly imply. Rounds to 6dp, exactly like
+ * `sqmPerPieceFromPiecesPerSqm` above (the NUMERIC(10,6) storage precision).
  *
  * Returns `null` for a non-positive dimension or a result outside [0.001, 10] m² per piece — the
  * same sanity bound `WastageCalculator` enforces server-side (MIN_SQM_PER_PIECE / MAX_SQM_PER_PIECE,
- * WastageCalculator.java:87-88). This is what catches millimetres typed into a field labelled cm:
- * "600x1200" parses fine as a pair of numbers but yields 72 m²/piece, so it is rejected here rather
- * than silently handed to the server as a "reasonable" catalogue-scale tile.
+ * WastageCalculator.java:87-88). For an UNSPECIFIED unit this is what catches millimetres typed into
+ * a field labelled cm: "600x1200" parses fine as a pair of numbers but reads (as cm, the unspecified
+ * default) as 72 m²/piece, so it is rejected here rather than silently handed to the server as a
+ * "reasonable" catalogue-scale tile. An EXPLICIT `mm` unit is trusted and converted properly instead
+ * of being second-guessed by this same bound.
  */
 export function sqmPerPieceFromSizeCm(sizeText) {
-  const match = SIZE_CM_PATTERN.exec(sizeText ?? '');
-  if (!match) return null;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!(width > 0) || !(height > 0)) return null;
-  const sqmPerPiece = Math.round(((width * height) / 10000 + Number.EPSILON) * 1e6) / 1e6;
+  const parsed = parseSizeText(sizeText);
+  if (!parsed) return null;
+  const { width, height, unit } = parsed;
+  const areaM2 = unit === 'mm' ? (width * height) / 1e6 : (width * height) / 1e4;
+  const sqmPerPiece = Math.round((areaM2 + Number.EPSILON) * 1e6) / 1e6;
   if (sqmPerPiece < 0.001 || sqmPerPiece > 10) return null;
   return sqmPerPiece;
 }
 
-/** The bare `[width, height]` pair behind {@link sqmPerPieceFromSizeCm}, without that function's
- * own area sanity bound (0.001-10 m²/piece) — a comparison needs the raw numbers even for a pair
- * that would fail that bound, e.g. a catalogue's mm figures typed verbatim into this cm-labelled
- * field ("600x600"). `null` on anything SIZE_CM_PATTERN does not recognise as a plain size pair. */
+/** The bare `[width, height]` pair behind {@link compareToCatalogFaceSize}'s CATALOGUE side, without
+ * `sqmPerPieceFromSizeCm`'s own area sanity bound or unit resolution — `catalogSizeText` is always
+ * plain cm digits with no unit token (see `sizeTextFromCatalog` in QuotationItemRow.jsx), so its own
+ * `unit` is always `null` and irrelevant. `null` on anything `SIZE_PATTERN` does not recognise as a
+ * plain size pair. */
 function parseSizeCmPair(sizeText) {
-  const match = SIZE_CM_PATTERN.exec(sizeText ?? '');
-  if (!match) return null;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!(width > 0) || !(height > 0)) return null;
-  return [width, height];
+  const parsed = parseSizeText(sizeText);
+  return parsed ? [parsed.width, parsed.height] : null;
 }
 
 /**
- * Compares `sizeText` against `catalogSizeText` as face sizes — both read in THIS field's own
- * unit, cm (see {@link parseSizeCmPair}/{@code SIZE_CM_PATTERN}) — order-insensitively and in
- * EITHER centimetres (as both are typed/stored) or millimetres (a rep who typed the catalogue's
- * millimetre figures straight into this cm-labelled field, e.g. "600x600" against a
- * 60x60cm/600x600mm catalogue row). Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod
- * QT-2026-0034-1, 2026-09-15).
+ * Compares `sizeText` (the rep's typed field, read via the full shared grammar — including an
+ * explicit unit) against `catalogSizeText` (always plain cm digits, see {@link parseSizeCmPair})
+ * order-insensitively. Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod QT-2026-0034-1,
+ * 2026-09-15) and its 2026-09-16 unit-resolution fix.
+ *
+ * <p><b>Unit resolution (2026-09-16):</b> `sizeText`'s parsed `unit` explicit (`'cm'` or `'mm'`)
+ * checks ONLY that reading — "300x600mm" against a 60x60cm/600x600mm catalogue row is a DIFFERENT
+ * tile, full stop, never re-checked against the cm reading just because it would happen to also
+ * fail there. `null` ("unspecified", no unit typed) keeps the pre-2026-09-16 ambiguous-case rule
+ * unchanged: check BOTH the centimetre reading (as both are typed/stored) and the millimetre
+ * reading (a rep who typed the catalogue's millimetre figures straight into this cm-labelled field,
+ * e.g. "600x600" against a 60x60cm/600x600mm catalogue row) — a genuine, documented ambiguity this
+ * grammar does not resolve (a typed "60x120" with no unit reads as matching EITHER a 60x120
+ * MILLIMETRE catalogue row or a 60x120 CENTIMETRE one; only an explicit unit token disambiguates).
  *
  * @return `true` (matches), `false` (both parsed and DIFFER), or `null` ("can't tell" — either
  *     text failed to parse as a plain size pair). The `null` case is exactly where this function
@@ -520,15 +590,17 @@ function parseSizeCmPair(sizeText) {
  *     rather than collapsing it to a boolean here — see their own docs.
  */
 function compareToCatalogFaceSize(sizeText, catalogSizeText) {
-  const typed = parseSizeCmPair(sizeText);
+  const typed = parseSizeText(sizeText);
   const catalog = parseSizeCmPair(catalogSizeText);
   if (!typed || !catalog) return null;
   const closeEnough = (a, b) => Math.abs(a - b) < 1e-6;
   const matchesPair = (a, b, w, h) => (closeEnough(a, w) && closeEnough(b, h)) || (closeEnough(a, h) && closeEnough(b, w));
-  const [typedWidth, typedHeight] = typed;
+  const { width: typedWidth, height: typedHeight, unit } = typed;
   const [catalogWidth, catalogHeight] = catalog;
-  return matchesPair(typedWidth, typedHeight, catalogWidth, catalogHeight)
-    || matchesPair(typedWidth, typedHeight, catalogWidth * 10, catalogHeight * 10);
+  const checkCm = unit !== 'mm';
+  const checkMm = unit !== 'cm';
+  return (checkCm && matchesPair(typedWidth, typedHeight, catalogWidth, catalogHeight))
+    || (checkMm && matchesPair(typedWidth, typedHeight, catalogWidth * 10, catalogHeight * 10));
 }
 
 /**

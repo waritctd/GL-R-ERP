@@ -21,10 +21,57 @@ import java.util.Locale;
 public final class DealQuotationLines {
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
         java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
-    /** Matches a plain "{@code W x H}" pair — see {@link #parseTwoDimensions} for the exact shape
-     * this is meant to recognise (and, as importantly, everything it deliberately does not). */
+
+    /**
+     * ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
+     * แต่ PDF ยังใช้ค่าเดิม"): this pattern and the frontend's {@code quotationMeta.js#SIZE_PATTERN}
+     * MUST stay identical. Before 2026-09-16 they had quietly drifted — this one had no per-number
+     * unit, no decimal-comma, no mm unit, no trailing free text, while the frontend's already
+     * tolerated a third dimension — so a size the rep typed could recompute แผ่น/ตร.ม. on the
+     * screen (frontend parsed it) while the printed PDF still showed the linked catalogue's size
+     * (this one didn't parse it, so {@link #sizeLine} fell back to "unparseable, keep the
+     * catalogue"). The vector table pinning both sides is in {@code DealQuotationLinesTest} and
+     * {@code quotationMeta.test.js} — same inputs, same {width, height, unit} result — so the two
+     * can never drift apart again without a red test.
+     *
+     * <p>One number, one separator ({@code x}/{@code X}/{@code ×}/{@code *}, optional surrounding
+     * spaces), a second number, an optional THIRD {@code separator number} (thickness — e.g.
+     * "30x60x1"; ignored, never a second dimension), then optional trailing free text in
+     * parentheses (e.g. "(หนา 9)"; ignored). Numbers accept a decimal POINT OR COMMA ("29,7" is
+     * 29.7 — this column has no thousands separators to confuse it with). Each of the first two
+     * numbers may carry its OWN trailing unit token, OR a single one may follow the second number
+     * (which is how "the unit once at the end" and "unit after the second number" collapse into the
+     * same grammar position when there is no third dimension): {@code cm}/{@code cm.}/{@code
+     * mm}/{@code mm.} (English, case-insensitive) or {@code ซม}/{@code ซม.}/{@code ซ.ม.}
+     * (Thai centimetres) / {@code มม}/{@code มม.}/{@code ม.ม.} (Thai millimetres) — see {@link
+     * #unitFamily}. Anything else — a spelled-out shape, a lone number, letters before/between the
+     * numbers, a non-numeric third token — fails the match and yields {@code null} rather than a
+     * guess.
+     *
+     * <p>Group 1 = width digits, group 2 = width's own unit token (or {@code null}), group 3 =
+     * height digits, group 4 = height's own unit token (or {@code null}). See {@link
+     * #parseTwoDimensions} for how the two unit groups resolve to one {@link SizeUnit}.
+     */
     private static final java.util.regex.Pattern TWO_DIMENSIONS = java.util.regex.Pattern.compile(
-        "(?i)^\\s*(\\d+(?:\\.\\d+)?)\\s*[x×*]\\s*(\\d+(?:\\.\\d+)?)\\s*(?:cm\\.?|ซม\\.?|mm\\.?|มม\\.?)?\\s*$");
+        "(?i)^\\s*(\\d+(?:[.,]\\d+)?)\\s*(cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*"
+        + "[x×*]\\s*(\\d+(?:[.,]\\d+)?)\\s*(cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*"
+        + "(?:[x×*]\\s*\\d+(?:[.,]\\d+)?\\s*(?:cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?)?\\s*)?"
+        + "(?:\\([^)]*\\))?\\s*$");
+
+    /** The unit a typed size pair states — {@code null} reads as "unspecified" (today's ambiguous
+     * rule: compare the catalogue in BOTH cm and mm readings; see {@link #matchesCatalogFaceSize}).
+     * An explicit unit is load-bearing: known "60x120 typed as cm vs a 60x120 MILLIMETRE catalogue
+     * row" ambiguity aside (a real, tiny tile that genuinely reads "60x120mm" — nothing in free text
+     * can distinguish that from "60x120cm" typed with the unit omitted; this grammar does not try),
+     * an EXPLICIT unit token means only that reading is checked, never the other — so "300x600mm"
+     * against a 60x60cm/600x600mm catalogue row reads as a DIFFERENT tile (300mm x 600mm), never as
+     * "matches once you also allow the cm reading". */
+    enum SizeUnit { CM, MM }
+
+    /** A parsed {@code {width, height}} pair plus its resolved unit — {@code null} unit means
+     * "unspecified" (see {@link SizeUnit}). Digits only, never rounded or unit-converted here. */
+    record ParsedSize(BigDecimal width, BigDecimal height, SizeUnit unit) {}
+
     private DealQuotationLines() {}
 
     /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
@@ -157,7 +204,7 @@ public final class DealQuotationLines {
         String thicknessPart = format(thicknessMm) + " mm";
         String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
         if (facePart != null) {
-            BigDecimal[] typed = parseTwoDimensions(sizeText);
+            ParsedSize typed = parseTwoDimensions(sizeText);
             if (typed != null && !matchesCatalogFaceSize(typed, catalogWidthMm, catalogHeightMm)) {
                 // The rep typed a genuinely DIFFERENT size than the row's linked catalogue tile --
                 // print exactly what they typed rather than the (wrong-for-this-line) catalogue
@@ -177,17 +224,16 @@ public final class DealQuotationLines {
     }
 
     /**
-     * Two positive numbers separated by an "x"-like separator ({@code x}/{@code X}/{@code ×}/
-     * {@code *}), tolerating surrounding spaces, decimals ("6x24.6"), and ONE trailing unit token
-     * ({@code cm}/{@code ซม.}/{@code mm}/{@code มม.}) after the pair — not per-number, matching how
-     * reps actually type ("60 x 60 cm", never "60cm x 60cm"). Anything else (a spelled-out shape, a
-     * third number, a non-numeric token) is deliberately treated as unparseable: this method exists
-     * only to detect "the rep typed a plain WxH pair", not to understand free text in general.
+     * The shared size grammar — see {@link #TWO_DIMENSIONS}'s Javadoc for the full spec (separators,
+     * per-number/trailing units, decimal comma, ignored third dimension, ignored trailing
+     * parenthetical). Package-private (not {@code private}) so {@code DealQuotationLinesTest} can
+     * pin the shared vector table directly against the parse RESULT, not just against {@link
+     * #sizeLine}'s printed string.
      *
-     * @return the two numbers in the order typed, or {@code null} when {@code sizeText} is blank,
-     *     does not match the two-number shape, or either number is not strictly positive.
+     * @return the parsed {@link ParsedSize}, or {@code null} when {@code sizeText} is blank, does
+     *     not match the grammar, or either number is not strictly positive.
      */
-    private static BigDecimal[] parseTwoDimensions(String sizeText) {
+    static ParsedSize parseTwoDimensions(String sizeText) {
         if (blank(sizeText)) {
             return null;
         }
@@ -195,28 +241,74 @@ public final class DealQuotationLines {
         if (!m.matches()) {
             return null;
         }
-        BigDecimal a = new BigDecimal(m.group(1));
-        BigDecimal b = new BigDecimal(m.group(2));
+        BigDecimal a = new BigDecimal(m.group(1).replace(',', '.'));
+        BigDecimal b = new BigDecimal(m.group(3).replace(',', '.'));
         if (a.signum() <= 0 || b.signum() <= 0) {
             return null;
         }
-        return new BigDecimal[] {a, b};
+        SizeUnit widthUnit = unitFamily(m.group(2));
+        SizeUnit heightUnit = unitFamily(m.group(4));
+        // Unit resolution: an explicit unit on EITHER number wins outright. When both numbers carry
+        // one and they genuinely conflict (a shape no real rep types, and not in the vector table --
+        // e.g. "30cm x 60mm") there is no sane single reading, so this falls back to "unspecified"
+        // rather than silently preferring one side.
+        SizeUnit unit = widthUnit != null ? widthUnit : heightUnit;
+        if (widthUnit != null && heightUnit != null && widthUnit != heightUnit) {
+            unit = null;
+        }
+        return new ParsedSize(a, b, unit);
+    }
+
+    /** {@code cm}/{@code cm.}/{@code ซม}/{@code ซม.}/{@code ซ.ม.} → {@link SizeUnit#CM};
+     * {@code mm}/{@code mm.}/{@code มม}/{@code มม.}/{@code ม.ม.} → {@link SizeUnit#MM};
+     * {@code null} (no unit token captured) → {@code null} ("unspecified"). */
+    private static SizeUnit unitFamily(String token) {
+        if (token == null) {
+            return null;
+        }
+        String t = token.toLowerCase(Locale.ROOT);
+        if (t.startsWith("cm")) {
+            return SizeUnit.CM;
+        }
+        if (t.startsWith("mm")) {
+            return SizeUnit.MM;
+        }
+        // Thai: ซ (cm) and ม (mm) never share a leading character, so a plain startsWith is
+        // unambiguous -- "ซม."/"ซม"/"ซ.ม." all start with ซ; "มม."/"มม"/"ม.ม." all start with ม.
+        if (t.startsWith("ซ")) {
+            return SizeUnit.CM;
+        }
+        if (t.startsWith("ม")) {
+            return SizeUnit.MM;
+        }
+        return null;
     }
 
     /**
-     * Whether a typed {@code {a, b}} pair is the SAME face size as the catalogue's own
-     * {@code width_mm}/{@code height_mm}, order-insensitive (so "120x60" matches a 600x1200mm
-     * catalogue row) and checked in EITHER unit — millimetres (the pair as stored) or centimetres
-     * (the pair {@link #sizeLine} actually prints) — since a rep might type either. Compares with
-     * {@link BigDecimal#compareTo}, never {@code equals}, so a trailing ".00" never causes a false
-     * mismatch.
+     * Whether a typed size pair is the SAME face size as the catalogue's own {@code width_mm}/
+     * {@code height_mm}, order-insensitive (so "120x60" matches a 600x1200mm catalogue row).
+     * Compares with {@link BigDecimal#compareTo}, never {@code equals}, so a trailing ".00" never
+     * causes a false mismatch.
+     *
+     * <p><b>Unit resolution (2026-09-16):</b> {@code typed.unit()} explicit ({@link SizeUnit#CM} or
+     * {@link SizeUnit#MM}) checks ONLY that reading — "300x600mm" against a 60x60cm/600x600mm
+     * catalogue row is a DIFFERENT tile, full stop, never re-checked against the cm reading just
+     * because it would happen to also fail there. {@code null} ("unspecified", no unit typed) keeps
+     * today's pre-2026-09-16 ambiguous-case rule unchanged: check BOTH the millimetre reading (the
+     * pair as stored) and the centimetre reading (the pair {@link #sizeLine} prints), since a rep
+     * who typed no unit at all might have meant either. This is a genuine, documented ambiguity this
+     * grammar does not resolve — e.g. a typed "60x120" with no unit reads as matching EITHER a
+     * 60x120 MILLIMETRE catalogue row or a 60x120 CENTIMETRE one; only an explicit unit token
+     * disambiguates.
      */
-    private static boolean matchesCatalogFaceSize(BigDecimal[] typed, BigDecimal catalogWidthMm,
+    private static boolean matchesCatalogFaceSize(ParsedSize typed, BigDecimal catalogWidthMm,
                                                   BigDecimal catalogHeightMm) {
         BigDecimal catalogWidthCm = catalogWidthMm.movePointLeft(1);
         BigDecimal catalogHeightCm = catalogHeightMm.movePointLeft(1);
-        return pairMatches(typed[0], typed[1], catalogWidthMm, catalogHeightMm)
-            || pairMatches(typed[0], typed[1], catalogWidthCm, catalogHeightCm);
+        boolean checkCm = typed.unit() != SizeUnit.MM;
+        boolean checkMm = typed.unit() != SizeUnit.CM;
+        return (checkCm && pairMatches(typed.width(), typed.height(), catalogWidthCm, catalogHeightCm))
+            || (checkMm && pairMatches(typed.width(), typed.height(), catalogWidthMm, catalogHeightMm));
     }
 
     private static boolean pairMatches(BigDecimal a, BigDecimal b, BigDecimal w, BigDecimal h) {

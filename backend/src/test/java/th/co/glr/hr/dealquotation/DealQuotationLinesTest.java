@@ -172,6 +172,100 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
+    // ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
+    // แต่ PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are
+    // ALSO asserted, verbatim, in frontend/src/features/quotations/quotationMeta.test.js's own
+    // "shared size grammar" describe block, against `parseSizeText`. The two must never drift apart
+    // again without both going red. ───────────────────────────────────────────────────────────────
+
+    private static void assertParsed(String input, String width, String height,
+                                     DealQuotationLines.SizeUnit unit) {
+        DealQuotationLines.ParsedSize parsed = DealQuotationLines.parseTwoDimensions(input);
+        assertThat(parsed).as("parsing %s", input).isNotNull();
+        assertThat(parsed.width()).as("%s width", input).isEqualByComparingTo(width);
+        assertThat(parsed.height()).as("%s height", input).isEqualByComparingTo(height);
+        assertThat(parsed.unit()).as("%s unit", input).isEqualTo(unit);
+    }
+
+    private static void assertUnparsed(String input) {
+        assertThat(DealQuotationLines.parseTwoDimensions(input)).as("parsing %s", input).isNull();
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_basicSeparatorsAndCase() {
+        assertParsed("30x60", "30", "60", null);
+        assertParsed("30*60", "30", "60", null);
+        assertParsed("30 X 60", "30", "60", null);
+        assertParsed("30×60", "30", "60", null);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_englishUnits() {
+        assertParsed("30x60cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30 cm x 60 cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("300x600mm", "300", "600", DealQuotationLines.SizeUnit.MM);
+        assertParsed("600x600mm", "600", "600", DealQuotationLines.SizeUnit.MM);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_thaiUnits() {
+        assertParsed("30x60 ซม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30ซม.x60ซม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30x60 ซ.ม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_decimalCommaAndThirdDimensionAndTrailingText() {
+        // "29,7" is 29.7 -- decimal comma, not a thousands separator.
+        assertParsed("29,7x59,7", "29.7", "59.7", null);
+        // Third dimension (thickness) ignored, never a second dimension pair.
+        assertParsed("30x60x1", "30", "60", null);
+        assertParsed("60X60x0.9", "60", "60", null);
+        // Trailing free text in parentheses ignored.
+        assertParsed("30x60 (หนา 9)", "30", "60", null);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_unparseable() {
+        assertUnparsed("รูปทรงอิสระ");
+        assertUnparsed("60x");
+        assertUnparsed("JOLLY 60x60");
+        assertUnparsed("1,2X20 JOLLY COCO");
+        assertUnparsed("0x60");
+        assertUnparsed("");
+        assertUnparsed(null);
+    }
+
+    // ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a linked 60x60cm catalogue tile
+    // must print the rep's typed text, not the catalogue's -- the old TWO_DIMENSIONS grammar had no
+    // third-dimension allowance, so this typed text failed to parse and sizeLine silently kept
+    // printing the catalogue's 60x60. ────────────────────────────────────────────────────────────
+    @Test
+    void sizeLine_typedSizeWithThirdDimension_differsFromCatalogue_printsTypedText_theExact20260916Bug() {
+        assertThat(DealQuotationLines.sizeLine("30x60x1", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 30x60x1 x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
+    // ── Explicit-unit-wins (2026-09-16 fix): an explicit unit token checks ONLY that reading, never
+    // falls back to also trying the other unit the way the unspecified-unit rule always has. ─────
+    @Test
+    void sizeLine_explicitMmUnit_differsFromCatalogueEvenThoughCmReadingWouldMatch() {
+        // Catalogue is 60x60cm (600x600mm). Typed "600x600mm" is an explicit mm reading that DOES
+        // match the catalogue's own mm figures, so this still prints the catalogue (unaffected).
+        assertThat(DealQuotationLines.sizeLine("600x600mm", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60 cm x 60 cm x 9 mm (ขนาดโดยประมาณ)");
+        // Catalogue is 60x60cm (600x600mm). Typed "300x600mm" is explicitly millimetres -- a
+        // genuinely different (smaller) tile -- and must print as typed even though nothing here
+        // would ever coincidentally equal the catalogue's cm reading either.
+        assertThat(DealQuotationLines.sizeLine("300x600mm", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 300x600mm x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
     @Test

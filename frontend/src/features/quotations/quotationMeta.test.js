@@ -22,6 +22,7 @@ import {
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
   listPricePerSqmIncVat,
+  parseSizeText,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -539,6 +540,81 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
     // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile --
     // exactly the millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
     expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
+  });
+});
+
+// ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่
+// PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are ALSO
+// asserted, verbatim, in backend/src/test/java/.../DealQuotationLinesTest.java's own
+// "SHARED GRAMMAR vector table" section, against `DealQuotationLines#parseTwoDimensions`. The two
+// must never drift apart again without both going red.
+describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
+  it('basic separators and case', () => {
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30*60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30 X 60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30×60')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('english units, per-number or trailing', () => {
+    expect(parseSizeText('30x60cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30 cm x 60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('300x600mm')).toEqual({ width: 300, height: 600, unit: 'mm' });
+    expect(parseSizeText('600x600mm')).toEqual({ width: 600, height: 600, unit: 'mm' });
+  });
+
+  it('thai units (ซม / ซม. / ซ.ม.)', () => {
+    expect(parseSizeText('30x60 ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30ซม.x60ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60 ซ.ม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+  });
+
+  it('decimal comma, ignored third dimension, ignored trailing parenthetical', () => {
+    // "29,7" is 29.7 -- decimal comma, not a thousands separator.
+    expect(parseSizeText('29,7x59,7')).toEqual({ width: 29.7, height: 59.7, unit: null });
+    // Third dimension (thickness) ignored, never a second dimension pair.
+    expect(parseSizeText('30x60x1')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('60X60x0.9')).toEqual({ width: 60, height: 60, unit: null });
+    // Trailing free text in parentheses ignored.
+    expect(parseSizeText('30x60 (หนา 9)')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('unparseable', () => {
+    expect(parseSizeText('รูปทรงอิสระ')).toBeNull();
+    expect(parseSizeText('60x')).toBeNull();
+    expect(parseSizeText('JOLLY 60x60')).toBeNull();
+    expect(parseSizeText('1,2X20 JOLLY COCO')).toBeNull();
+    expect(parseSizeText('0x60')).toBeNull();
+    expect(parseSizeText('')).toBeNull();
+    expect(parseSizeText(null)).toBeNull();
+  });
+});
+
+// ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a catalog-linked 60x60 row must
+// recompute แผ่น/ตร.ม. from the TYPED size (0.18), not silently keep the catalogue's 0.36 -- the old
+// SIZE_CM_PATTERN already tolerated a third dimension, so this specific vector was never broken on
+// the frontend; it is pinned here anyway because it is the exact pairing that exposed the
+// backend/frontend disagreement (backend printed the catalogue while this recomputed from the typed
+// text -- see the matching backend test for the PDF-side half of the bug). ─────────────────────────
+describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on the 2026-09-16 bug pairing', () => {
+  it('"30x60x1" against a catalogSizeText of "60x60" recomputes 0.18 and is confirmed different', () => {
+    expect(sqmPerPieceFromSizeCm('30x60x1')).toBe(0.18);
+    expect(sizeTextDiffersFromCatalogFaceSize('30x60x1', '60x60')).toBe(true);
+  });
+
+  it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
+    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18
+    // sqm/piece and get rejected by the sanity bound, which is exactly the bug this unit-aware
+    // conversion avoids.
+    expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
+  });
+
+  it('explicit unit wins: "300x600mm" is a different tile than a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('300x600mm', '60x60')).toBe(true);
+  });
+
+  it('explicit unit wins the other way too: "600x600mm" still matches a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('600x600mm', '60x60')).toBe(false);
   });
 });
 
