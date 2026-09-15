@@ -627,6 +627,11 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   if (perSqm) {
     if (!(Number(item?.sqmPerBox) > 0)) errors.sqmPerBox = 'กรุณาระบุ ตร.ม./กล่อง';
     else if (!withinDecimals(item.sqmPerBox, 6)) errors.sqmPerBox = 'ทศนิยมได้ไม่เกิน 6 ตำแหน่ง';
+    // Owner-approved "sell loose pieces" (V182): defence in depth — the checkbox is disabled in
+    // this mode (see roundToFullBoxDisabledReason), but a row can reach here via a stale UI state
+    // or a copied row, and DealQuotationService#requireBoxDataForPerSqm refuses this combination
+    // outright, so the checklist must catch it too rather than let a 400 surprise the rep at save.
+    if (item?.roundToFullBox === false) errors.roundToFullBox = ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON;
   }
   if (item?.quantityMode === 'PIECES') {
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
@@ -725,6 +730,48 @@ const PRICE_MODE_OPTION_EN_PER_SQM = {
 /** SPECIAL_SQM on an English document — DealQuotationService's per-sqm branch. */
 export function isEnglishPerSqm(priceMode, documentLanguage) {
   return documentLanguage === 'EN' && priceMode === 'SPECIAL_SQM';
+}
+
+// ── Owner-approved "sell loose pieces" (2026-09-16, V182) ───────────────────────────────────────
+
+/** Mirrors {@code DealQuotationService#requireBoxDataForPerSqm}'s wording, verbatim — an English
+ * per-sqm quantity is `boxes × sqmPerBox` (WastageCalculator#sqmQuantityFromBoxes), which has no
+ * "loose pieces" term to express, so the option is refused together with that mode. */
+export const ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON =
+  'ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง';
+
+/** Why the "ขายแผ่นไม่เต็มกล่อง" checkbox is disabled for this row right now, or `null` when it is
+ * enabled — ONE place for both `QuotationItemRow`'s `disabled` attribute and its own hint text, so
+ * the two can never disagree about the reason. */
+export function roundToFullBoxDisabledReason(item, priceMode, documentLanguage) {
+  if (!(Number(item?.piecesPerBox) >= 1)) return 'กรอกแผ่น/กล่องก่อน';
+  if (isEnglishPerSqm(priceMode, documentLanguage)) return ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON;
+  return null;
+}
+
+/**
+ * The "sell loose pieces" checkbox's live, plain-language summary — computed ONLY from values the
+ * row already displays (`piecesPerBox`/`piecesFinal`/`boxes`, all server-computed by calculate-line
+ * and stored on the row), never a second copy of the wastage/box-rounding arithmetic itself. This
+ * is a short companion to `item.calculationLine` (the full printed sentence), meant to sit right
+ * under the checkbox for immediate feedback as the rep toggles it.
+ *
+ * @return `null` before the server has computed anything for this row yet (a half-typed row, or no
+ *     แผ่น/กล่อง entered) — the caller shows nothing rather than a stale or invented number.
+ */
+export function roundToFullBoxSummary(item) {
+  const ppb = Number(item?.piecesPerBox);
+  if (!(ppb >= 1)) return null;
+  const piecesFinal = item?.piecesFinal;
+  const boxes = item?.boxes;
+  if (piecesFinal == null || boxes == null) return null;
+  if (item?.roundToFullBox === false) {
+    const loose = piecesFinal - boxes * ppb;
+    if (boxes > 0 && loose > 0) return `${boxes} กล่อง + ${loose} แผ่น (${piecesFinal} แผ่น)`;
+    if (boxes > 0) return `${boxes} กล่อง (${piecesFinal} แผ่น)`;
+    return `${piecesFinal} แผ่น (ไม่ครบ 1 กล่อง)`;
+  }
+  return `ปัดขึ้นเต็มกล่อง → ${boxes} กล่อง (${piecesFinal} แผ่น)`;
 }
 
 /**

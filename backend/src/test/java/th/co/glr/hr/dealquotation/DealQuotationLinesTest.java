@@ -234,7 +234,7 @@ class DealQuotationLinesTest {
             242, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4);
 
         assertThat(line).isEqualTo(
-            "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดลงกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
+            "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดขึ้นเต็มกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
     }
 
     @Test
@@ -243,7 +243,7 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             100, WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("5"), 108, 12);
 
-        assertThat(line).isEqualTo("(จำนวน 100 แผ่น + เผื่อ 5 แผ่น และปัดลงกล่อง = 108 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(จำนวน 100 แผ่น + เผื่อ 5 แผ่น และปัดขึ้นเต็มกล่อง = 108 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
     }
 
     @Test
@@ -252,7 +252,7 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2"),
             20, WastageCalculator.WASTAGE_MODE_NONE, null, 24, 12);
 
-        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดลงกล่อง = 24 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 24 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
     }
 
     @Test
@@ -277,7 +277,7 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2"),
             20, WastageCalculator.WASTAGE_MODE_PERCENT, BigDecimal.ZERO, 20, 4);
 
-        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดลงกล่อง = 20 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 20 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
         assertThat(line).doesNotContain("เผื่อ");
     }
 
@@ -288,12 +288,12 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             100, WastageCalculator.WASTAGE_MODE_PIECES, BigDecimal.ZERO, 100, 12);
 
-        assertThat(line).isEqualTo("(จำนวน 100 แผ่น และปัดลงกล่อง = 100 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(จำนวน 100 แผ่น และปัดขึ้นเต็มกล่อง = 100 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
         assertThat(line).doesNotContain("เผื่อ");
     }
 
     /** "Format ตัวเลขในคำอธิบายขอ comma ด้วย" -- pinned against the owner's own export line
-     * ("รวม 4917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5180 แผ่น" must read "4,917" / "5,180"), with a
+     * ("รวม 4917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5180 แผ่น" must read "4,917" / "5,180"), with a
      * >999 area and pieces-per-box thrown in so every magnitude in the line is checked. */
     @Test
     void calculationLine_largeCounts_getThousandsCommas() {
@@ -302,13 +302,13 @@ class DealQuotationLinesTest {
             4917, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 1000);
 
         assertThat(line).isEqualTo(
-            "(พื้นที่ 1,200 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5,180 แผ่น) "
+            "(พื้นที่ 1,200 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5,180 แผ่น) "
                 + "(บรรจุ 1,000 แผ่น/กล่อง)");
     }
 
     /** The owner's own example numbers (area 300, 4917 → 5180) from her report: "(พื้นที่ 300
-     * ตร.ม.ๆละ 16.39 แผ่น รวม 4917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5180 แผ่น)" — her quote is cut off
-     * right after "= 5180 แผ่น)" with no box-count tail shown, so this pins the same "และปัดลงกล่อง"
+     * ตร.ม.ๆละ 16.39 แผ่น รวม 4917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5180 แผ่น)" — her quote is cut off
+     * right after "= 5180 แผ่น)" with no box-count tail shown, so this pins the same "และปัดขึ้นเต็มกล่อง"
      * (piecesPerBox present, matching her line) with the tail the real method always appends
      * alongside it, rather than guessing at a piecesPerBox value she did not report. */
     @Test
@@ -318,7 +318,7 @@ class DealQuotationLinesTest {
             4917, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 10);
 
         assertThat(line).isEqualTo(
-            "(พื้นที่ 300 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดลงกล่อง = 5,180 แผ่น) "
+            "(พื้นที่ 300 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5,180 แผ่น) "
                 + "(บรรจุ 10 แผ่น/กล่อง)");
     }
 
@@ -649,5 +649,186 @@ class DealQuotationLinesTest {
             10, null, null, null, BigDecimal.TEN, "SQM", new BigDecimal("64"));
         assertThat(p.quantity()).isEqualByComparingTo("10");
         assertThat(p.subLine()).isNull();
+    }
+
+    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+
+    /** The two shorter {@code calculationLine} overloads (every test above this section) default
+     * {@code roundToFullBox} true and are unaffected by this feature — proven directly rather than
+     * merely inferred from those tests still passing. */
+    @Test
+    void calculationLine_shorterOverloads_defaultRoundToFullBoxTrue() {
+        String viaShort = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            40, 10);
+        String viaExplicitTrue = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            40, 10, true);
+        assertThat(viaShort).isEqualTo(viaExplicitTrue)
+            .isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** The headline Thai example from the design: no wastage, so the intermediate "= N แผ่น"
+     * clause is skipped entirely (it would just restate quantityPart's own 32) and the line goes
+     * straight from quantityPart to the box/loose split. */
+    @Test
+    void calculationLine_thaiLoosePieces_noWastage_skipsRedundantIntermediateClause() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, 10, false);
+        assertThat(line).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** The headline Thai example WITH wastage: the intermediate "= 29 แผ่น" clause DOES print
+     * (piecesFinal differs from the quantityPart's own 28 because of the 5% allowance), followed
+     * by the box/loose split — both clauses, not either alone. */
+    @Test
+    void calculationLine_thaiLoosePieces_withAreaAndWastage_printsBothClauses() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2.78"), 28,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 29, 10, false);
+        assertThat(line).isEqualTo(
+            "(พื้นที่ 10 ตร.ม.ๆละ 2.78 แผ่น รวม 28 แผ่น + เผื่อ 5% = 29 แผ่น = 2 กล่อง + 9 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** loose = 0: an exact multiple prints "= N กล่อง" with no "+ M แผ่น" tail. */
+    @Test
+    void calculationLine_thaiLoosePieces_looseIsZero_printsBoxesOnlyNoPlusClause() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 30, WastageCalculator.WASTAGE_MODE_NONE, null,
+            30, 10, false);
+        assertThat(line).isEqualTo("(จำนวน 30 แผ่น = 3 กล่อง) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** full boxes = 0: fewer pieces than one box prints "= N แผ่น" with NO "กล่อง" wording at
+     * all — never "0 กล่อง + N แผ่น". */
+    @Test
+    void calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 7, WastageCalculator.WASTAGE_MODE_NONE, null,
+            7, 10, false);
+        assertThat(line).isEqualTo("(จำนวน 7 แผ่น = 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** PIECES-mode wastage variant of the "both clauses" case, so the intermediate-clause rule is
+     * pinned for both wastage modes, not only PERCENT. */
+    @Test
+    void calculationLine_thaiLoosePieces_piecesWastage_printsBothClauses() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 100, WastageCalculator.WASTAGE_MODE_PIECES,
+            new BigDecimal("15"), 115, 12, false);
+        assertThat(line).isEqualTo("(จำนวน 100 แผ่น + เผื่อ 15 แผ่น = 115 แผ่น = 9 กล่อง + 7 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+    }
+
+    /** No box data at all: roundToFullBox=false has nothing to change — byte-identical to the
+     * no-box default line (no "และปัดขึ้นเต็มกล่อง" wording either way, since hasBox is false). */
+    @Test
+    void calculationLine_roundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
+        String withFalse = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, null, false);
+        String withTrue = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, null, true);
+        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(จำนวน 32 แผ่น = 32 แผ่น)");
+    }
+
+    // ── English mirrors of the six Thai shapes above ──────────────────────────────────────────
+
+    @Test
+    void calculationLine_englishLoosePieces_noWastage_skipsRedundantIntermediateClause() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, 10, false);
+        assertThat(line).isEqualTo("(Quantity 32 pcs = 3 boxes + 2 pcs) (10 pcs/box)");
+    }
+
+    @Test
+    void calculationLine_englishLoosePieces_withAreaAndWastage_printsBothClauses() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2.78"), 28,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 29, 10, false);
+        assertThat(line).isEqualTo(
+            "(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs + 5% allowance = 29 pcs = 2 boxes + 9 pcs) (10 pcs/box)");
+    }
+
+    @Test
+    void calculationLine_englishLoosePieces_looseIsZero_printsBoxesOnlyNoPlusClause() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 30, WastageCalculator.WASTAGE_MODE_NONE, null,
+            30, 10, false);
+        assertThat(line).isEqualTo("(Quantity 30 pcs = 3 boxes) (10 pcs/box)");
+    }
+
+    @Test
+    void calculationLine_englishLoosePieces_fullBoxesIsZero_printsPcsOnlyNoBoxWord() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 7, WastageCalculator.WASTAGE_MODE_NONE, null,
+            7, 10, false);
+        assertThat(line).isEqualTo("(Quantity 7 pcs = 7 pcs) (10 pcs/box)");
+    }
+
+    /** Singular "box"/"pc" at exactly 1 — the one shape none of the Thai tests can pin, since Thai
+     * has no singular/plural distinction. */
+    @Test
+    void calculationLine_englishLoosePieces_singularBoxAndPcAtExactlyOne() {
+        // 1 box + 1 loose pc.
+        assertThat(DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 11, WastageCalculator.WASTAGE_MODE_NONE, null,
+            11, 10, false))
+            .isEqualTo("(Quantity 11 pcs = 1 box + 1 pc) (10 pcs/box)");
+        // 1 box, loose = 0 (no "+ N pcs" tail at all, so no loose-plural to check here).
+        assertThat(DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
+            10, 10, false))
+            .isEqualTo("(Quantity 10 pcs = 1 box) (10 pcs/box)");
+        // 0 full boxes, exactly 1 loose piece.
+        assertThat(DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 1, WastageCalculator.WASTAGE_MODE_NONE, null,
+            1, 10, false))
+            .isEqualTo("(Quantity 1 pcs = 1 pc) (10 pcs/box)");
+    }
+
+    @Test
+    void calculationLine_englishLoosePieces_piecesWastage_printsBothClauses() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 100, WastageCalculator.WASTAGE_MODE_PIECES,
+            new BigDecimal("15"), 115, 12, false);
+        assertThat(line).isEqualTo("(Quantity 100 pcs + 15 pcs allowance = 115 pcs = 9 boxes + 7 pcs) (12 pcs/box)");
+    }
+
+    @Test
+    void calculationLine_englishRoundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
+        String withFalse = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, null, false);
+        String withTrue = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, null, true);
+        // Unlike the Thai default branch's box-gated echo, the English default branch always
+        // echoes "= N pcs" regardless of hasBox (pre-existing behaviour, untouched by this
+        // feature) — so this is "(Quantity 32 pcs = 32 pcs)", not "(Quantity 32 pcs)".
+        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(Quantity 32 pcs = 32 pcs)");
+    }
+
+    /** {@code tilePrint} threads roundToFullBox into the ordinary (non-per-sqm) branch — proven
+     * once at that layer so a regression there (e.g. a dropped argument) is caught even if
+     * {@code calculationLine} itself stays correct. */
+    @Test
+    void tilePrint_threadsRoundToFullBoxIntoTheOrdinaryBranch() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(TH, "NET",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            32, 10, 3, null, new BigDecimal("32"), "แผ่น", null, false);
+        assertThat(p.calculationLine()).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** The 15-argument {@code tilePrint} overload (every test above this section) defaults
+     * roundToFullBox true and is unaffected by this feature. */
+    @Test
+    void tilePrint_fifteenArgOverload_defaultsRoundToFullBoxTrue() {
+        DealQuotationLines.TilePrint viaShort = DealQuotationLines.tilePrint(TH, "NET",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            40, 10, 4, null, new BigDecimal("40"), "แผ่น", null);
+        assertThat(viaShort.calculationLine()).isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 }

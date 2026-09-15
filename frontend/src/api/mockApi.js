@@ -4992,10 +4992,18 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;
+  // Owner-approved "sell loose pieces" (2026-09-16, V182) — mirrors WastageCalculator.Input#
+  // roundToFullBox: null/undefined reads as true (today's only prior behaviour). false skips the
+  // ceil-to-box-multiple step entirely; piecesFinal is then the wastage-adjusted count, unrounded.
+  const roundToFullBox = input.roundToFullBox !== false;
   const piecesFinal = piecesPerBox > 0
-    ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox
+    ? (roundToFullBox ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox : piecesAfterWastage)
     : piecesAfterWastage;
-  const boxes = piecesPerBox > 0 ? piecesFinal / piecesPerBox : null;
+  const boxes = piecesPerBox > 0 ? Math.floor(piecesFinal / piecesPerBox) : null;
+  // The frontend's own arithmetic (not a wire field — see DealQuotationItemDto's Javadoc on
+  // roundToFullBox): the remainder that does not make a full box. Always 0 when roundToFullBox is
+  // true (piecesFinal is then itself a multiple of piecesPerBox).
+  const loosePieces = piecesPerBox > 0 ? piecesFinal - boxes * piecesPerBox : null;
   const unitPrice = Number(input.unitPrice) || 0;
   const discountPct = Number(input.discountPct) || 0;
   const netUnitPrice = round2(unitPrice * (1 - discountPct / 100));
@@ -5019,13 +5027,47 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     : en
       ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} pcs allowance`)
       : (wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`);
-  const qtyText = en
-    ? (quantityMode === 'PIECES'
-      ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`
-      : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`)
-    : (quantityMode === 'PIECES'
-      ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`
-      : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`);
+  const hasWastage = wastageMode !== 'NONE' && wastageValue !== 0;
+  const hasBox = piecesPerBox > 0;
+  let qtyText;
+  if (hasBox && !roundToFullBox) {
+    // Owner-approved "sell loose pieces" — mirrors DealQuotationLines#thaiLoosePiecesLine/
+    // #englishLoosePiecesLine: the intermediate "= N pcs/แผ่น" clause prints only when it says
+    // something the box/loose split does not already say on its own (wastage moved the number,
+    // AND there is a full-box count to split it from); loose=0 drops the "+ N" tail; boxes=0 drops
+    // the box wording entirely.
+    const base = quantityMode === 'PIECES'
+      ? (en ? `Quantity ${piecesBeforeWastage} pcs${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
+      : (en
+        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}`
+        : `พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}`);
+    let tail = '';
+    if (hasWastage && boxes > 0) {
+      tail += en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`;
+    }
+    if (boxes > 0 && loosePieces > 0) {
+      tail += en
+        ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'} + ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}`
+        : ` = ${boxes} กล่อง + ${loosePieces} แผ่น`;
+    } else if (boxes > 0) {
+      tail += en ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'}` : ` = ${boxes} กล่อง`;
+    } else {
+      tail += en ? ` = ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}` : ` = ${loosePieces} แผ่น`;
+    }
+    qtyText = `(${base}${tail})`;
+  } else {
+    // Owner decision (2026-09-16): the Thai default was "และปัดลงกล่อง" ("rounded DOWN") — wrong
+    // about its own direction, since this ceils; corrected to "และปัดขึ้นเต็มกล่อง" ("rounded UP
+    // to a full box"), mirroring DealQuotationLines' own correction. English already said "rounded
+    // up to full boxes" and is unchanged.
+    qtyText = en
+      ? (quantityMode === 'PIECES'
+        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`
+        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`)
+      : (quantityMode === 'PIECES'
+        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดขึ้นเต็มกล่อง = ${piecesFinal} แผ่น)`
+        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดขึ้นเต็มกล่อง = ${piecesFinal} แผ่น)`);
+  }
   const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;
 
@@ -5038,6 +5080,7 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     piecesAfterWastage,
     piecesFinal,
     boxes,
+    roundToFullBox,
     netUnitPrice,
     lineAmount,
     descriptionLine,
@@ -5124,6 +5167,12 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
     if (!(Number(input.sqmPerBox) > 0)) missing.push('ตร.ม./กล่อง');
     if (missing.length) {
       fail(`ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ ${missing.join(' และ ')}`, 400);
+    }
+    // Owner-approved "sell loose pieces" (V182) — mirrors DealQuotationService#buildTileItem: a
+    // per-sqm quantity is boxes × sqm/box, which has no "loose pieces" term to express, so this
+    // combination is refused rather than silently ignored.
+    if (input.roundToFullBox === false) {
+      fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง', 400);
     }
     const price = input.specialPriceSqm == null ? null : round2(Number(input.specialPriceSqm));
     return {

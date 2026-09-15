@@ -3089,6 +3089,128 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.grandTotal()).isEqualByComparingTo("64649.40");
     }
 
+    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+
+    /** The flag persists, round-trips on GET, and defaults true for a request that never mentions
+     * it — same "null reads as true" contract as every other layer. */
+    @Test
+    void roundToFullBox_persistsAndRoundTripsOnGet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+
+        DealQuotationDto reloaded = quotationService.get(created.id(), salesActor);
+        assertThat(reloaded.items().get(0).roundToFullBox()).isTrue();
+    }
+
+    /** The headline case, end to end through the real service and Postgres: 32 pieces, box of 10,
+     * no wastage — 3 full boxes plus 2 loose, piecesFinal UNROUNDED at 32 (not the old ceiling of
+     * 40), and the printed line reflects it. Proves the column round-trips both directions, not
+     * only "does not reject false". */
+    @Test
+    void roundToFullBoxFalse_persistsAndComputesTheLooseSplit_onCreateAndGet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        var item = created.items().get(0);
+        assertThat(item.roundToFullBox()).isFalse();
+        assertThat(item.piecesFinal()).isEqualTo(32);
+        assertThat(item.boxes()).isEqualTo(3);
+        assertThat(item.calculationLine()).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+        // 50.00 * 32 (unrounded) = 1,600.00 -- NOT 50.00 * 40 (the old ceiling) = 2,000.00.
+        assertThat(item.lineAmount()).isEqualByComparingTo("1600.00");
+
+        DealQuotationDto reloaded = quotationService.get(created.id(), salesActor);
+        var reloadedItem = reloaded.items().get(0);
+        assertThat(reloadedItem.roundToFullBox()).isFalse();
+        assertThat(reloadedItem.piecesFinal()).isEqualTo(32);
+        assertThat(reloadedItem.boxes()).isEqualTo(3);
+        assertThat(reloadedItem.calculationLine()).isEqualTo(item.calculationLine());
+        assertThat(reloadedItem.lineAmount()).isEqualByComparingTo("1600.00");
+    }
+
+    /** update() can flip the flag on an existing row, in either direction, and the stored row
+     * follows — not merely accepted at create and frozen thereafter. */
+    @Test
+    void roundToFullBox_canBeToggledOnUpdate_inEitherDirection() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+        assertThat(created.items().get(0).piecesFinal()).isEqualTo(40); // ceil(32/10)*10
+
+        DealQuotationDto toggledOff = quotationService.update(created.id(),
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        assertThat(toggledOff.items().get(0).roundToFullBox()).isFalse();
+        assertThat(toggledOff.items().get(0).piecesFinal()).isEqualTo(32);
+
+        DealQuotationDto toggledBackOn = quotationService.update(created.id(),
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        assertThat(toggledBackOn.items().get(0).roundToFullBox()).isTrue();
+        assertThat(toggledBackOn.items().get(0).piecesFinal()).isEqualTo(40);
+    }
+
+    /** {@code createRevision} copies its parent's rows VERBATIM (the class's own documented
+     * contract for every other item field) — proven here for roundToFullBox specifically, in
+     * BOTH directions, so a regression that silently defaulted a revision back to true (or froze
+     * it at false) would be caught either way. */
+    @Test
+    void createRevision_copiesRoundToFullBoxVerbatim_bothDirections() {
+        DealQuotationDto createdFalse = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        quotationService.submit(createdFalse.id(), salesActor);
+        DealQuotationDto approvedFalse =
+            quotationService.approve(createdFalse.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto revisionOfFalse = quotationService.createRevision(approvedFalse.id(), salesActor);
+        assertThat(revisionOfFalse.items().get(0).roundToFullBox()).isFalse();
+        assertThat(revisionOfFalse.items().get(0).piecesFinal()).isEqualTo(32);
+        assertThat(revisionOfFalse.items().get(0).boxes()).isEqualTo(3);
+
+        DealQuotationDto createdTrue = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        quotationService.submit(createdTrue.id(), salesActor);
+        DealQuotationDto approvedTrue =
+            quotationService.approve(createdTrue.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto revisionOfTrue = quotationService.createRevision(approvedTrue.id(), salesActor);
+        assertThat(revisionOfTrue.items().get(0).roundToFullBox()).isTrue();
+        assertThat(revisionOfTrue.items().get(0).piecesFinal()).isEqualTo(40);
+    }
+
+    /** A PLAIN row is unaffected: it has no {@code piecesPerBox} concept at all, and the stored
+     * flag reads {@code true} (the moot default) rather than propagating whatever a client might
+     * have sent for a TILE row elsewhere in the same payload. */
+    @Test
+    void roundToFullBox_plainRow_isAlwaysTrue_flagIsMootWithoutABox() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+    }
+
+    /** V182 "sell loose pieces" fixture: a PIECES-mode TILE row with explicit piecesPerBox,
+     * wastage and roundToFullBox — every other field mirrors {@link #sampleItem}'s 60x60/
+     * 0.36-sqm-per-piece fixture (so it satisfies the same item-completeness rule). */
+    private ItemInput loosePiecesItem(int piecesInput, String wastageMode, String wastageValue,
+                                      int piecesPerBox, String unitPrice, boolean roundToFullBox) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, piecesInput,
+            wastageMode, wastageValue == null ? null : new BigDecimal(wastageValue), piecesPerBox,
+            new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            null, null, null, null, null,
+            null, null, roundToFullBox);
+    }
+
     /** D1/D8 — a PLAIN row with an explicit discount ({@link #plainItem} has none). */
     private ItemInput plainItemWithDiscount(String description, String quantity, String unit,
                                             String unitPrice, String discountPct) {

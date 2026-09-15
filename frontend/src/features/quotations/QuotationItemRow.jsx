@@ -10,6 +10,7 @@ import {
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
+  roundToFullBoxDisabledReason, roundToFullBoxSummary,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -168,6 +169,12 @@ export function QuotationItemRow({
   const listPerSqm = priceMode === 'SPECIAL_SQM' && !perSqm
     ? listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece)
     : null;
+  // Owner-approved "sell loose pieces" (2026-09-16, V182) -- see quotationMeta.js for both
+  // helpers' own Javadoc. `roundLooseDisabledReason` doubles as the disabled flag (non-null =
+  // disabled) and its own hint text, so the two can never disagree.
+  const roundLooseDisabledReason = roundToFullBoxDisabledReason(item, priceMode, documentLanguage);
+  const roundLooseChecked = !roundLooseDisabledReason && item.roundToFullBox === false;
+  const roundLooseSummary = roundToFullBoxSummary(item);
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
@@ -734,6 +741,46 @@ export function QuotationItemRow({
         </FormField>
       </div>
 
+      {/* Owner-approved "sell loose pieces" (2026-09-16, V182): default OFF (round up to a full
+          box, exactly today's behaviour). Checking it lets this TILE row sell exactly its
+          wastage-adjusted piece count, unrounded — split into full boxes plus a loose remainder.
+          Disabled until แผ่น/กล่อง is filled (no box multiple to round to or split by yet) and in
+          English per-sqm mode (that quantity is boxes × ตร.ม./กล่อง, with no loose-pieces term at
+          all) — `roundLooseDisabledReason` decides both the disabled state and its own hint text,
+          so the two can never disagree. The whole label is tappable (≥44px on mobile), matching
+          this row's other toggle controls above. */}
+      <div>
+        <label
+          htmlFor={`round-loose-${index}`}
+          className={`flex min-h-[38px] mobile:min-h-[44px] items-start gap-2 rounded-md border px-3 py-2 text-xs font-bold ${
+            roundLooseChecked ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text'
+          } ${roundLooseDisabledReason ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+        >
+          <input
+            id={`round-loose-${index}`}
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0"
+            disabled={readOnly || !!roundLooseDisabledReason}
+            checked={roundLooseChecked}
+            onChange={(e) => patch({ roundToFullBox: e.target.checked ? false : true })}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block">ขายแผ่นไม่เต็มกล่อง</span>
+            {roundLooseDisabledReason ? (
+              <span className="mt-0.5 block text-2xs font-normal text-text-muted">{roundLooseDisabledReason}</span>
+            ) : null}
+          </span>
+        </label>
+        {roundLooseSummary ? (
+          <p
+            className="mt-1 break-words text-2xs font-bold text-text-muted"
+            data-testid={`round-loose-summary-${index}`}
+          >
+            {roundLooseSummary}
+          </p>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
         {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
             "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
@@ -959,6 +1006,14 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
       ? Number(item.specialPriceSqm) : null,
     directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
+    // English per-sqm cannot express a loose-piece quantity in square metres (its quantity is
+    // boxes × sqmPerBox, with no remainder term) — DealQuotationService#requireBoxDataForPerSqm
+    // refuses roundToFullBox=false outright. Forced true here regardless of what the row's own
+    // state holds, so a row that had loose pieces selected under NET/TH, then had its DOCUMENT
+    // switched to an English per-sqm price mode, can never smuggle a false through and 400 at
+    // save — the checkbox is also disabled in this mode (roundToFullBoxDisabledReason), but this
+    // is the authoritative guard, not merely a UI courtesy.
+    roundToFullBox: isEnglishPerSqm(priceMode, documentLanguage) ? true : item.roundToFullBox !== false,
   };
 }
 
@@ -1000,6 +1055,11 @@ function tileInputFromRow(item) {
     wastageValue: item.wastageValue ?? 0,
     piecesPerBox: item.piecesPerBox === '' ? null : item.piecesPerBox,
     sqmPerBox: item.sqmPerBox === '' || item.sqmPerBox == null ? null : Number(item.sqmPerBox),
+    // Owner-approved "sell loose pieces" (V182): sent as an explicit boolean (never '' or null) so
+    // a PUT round-trip of an unmodified row is byte-identical to what GET returned. The English
+    // per-sqm override lives in itemInputFromRow, not here, because that decision needs priceMode/
+    // documentLanguage, which this helper does not receive.
+    roundToFullBox: item.roundToFullBox !== false,
     unitPrice: item.unitPrice === '' ? null : item.unitPrice,
     discountPct: item.discountPct ?? 0,
     originCountry: item.originCountry || null,
@@ -1041,6 +1101,9 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     catalogSqmPerPiece: null, catalogPriceUnit: null, catalogSizeText: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
+    // Owner-approved "sell loose pieces" (V182): default OFF — every new row rounds up to a full
+    // box, exactly today's only behaviour, unless the rep opts out.
+    roundToFullBox: true,
     unitPrice: '', discountPct: null,
     originCountry, ...defaultLeadTimeForOrigin(originCountry),
     itemNotes: '',
