@@ -394,10 +394,29 @@ public class QuotationRenderer {
             // the Thai template's own text and the English overwrite have already been decided —
             // handles both languages with the one guard: when filled, neither cell is touched, so a
             // filled document renders byte-for-byte as before this change.
-            if (model.deptCode() == null || model.deptCode().isBlank()) {
+            //
+            // Opus review fix (2026-09-16, F1): gated on model.signatureLabelsV2() — this fix is
+            // scoped to the v2/direct-deal render only. deptCode/unitCode became optional on the
+            // DEAL aggregate (DealQuotationRenderAdapter's caller), not on the legacy TicketDto/
+            // QuotationDto shape: #buildLegacyModel above hands this method deptCode=null/unitCode=
+            // null UNCONDITIONALLY for every legacy/PCR ticket quotation (it never reads a
+            // deptCode/unitCode off TicketDto/QuotationDto at all — there is no such field), so an
+            // ungated guard here would have started clearing H3/H5 on every legacy document ever
+            // rendered, not just the ones a rep deliberately left blank — a silent behaviour change
+            // to a document nobody asked to touch. signatureLabelsV2 is this exact class's own
+            // established discriminator for "is this the v2/direct-deal render" (see this field's
+            // Javadoc on QuotationRenderModel, and its other three uses in this method/class below:
+            // v2CompactRemarks, the Project-heading centring a few lines down, alwaysShowSeq, and
+            // writeSignatureBlock) — DealQuotationRenderAdapter#toRenderModel passes signatureLabelsV2
+            // = true (line ~208, alongside the real quotation.deptCode()/unitCode()), buildLegacyModel
+            // passes false (line ~318, alongside its hardcoded null/null) — so it is already exactly
+            // "was this model built from a real deal's dept/unit fields, or a legacy shape that never
+            // had them". Legacy documents keep the template's baked-in ฝ่าย/หน่วยงาน labels exactly as
+            // they always have.
+            if (model.signatureLabelsV2() && (model.deptCode() == null || model.deptCode().isBlank())) {
                 clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 label
             }
-            if (model.unitCode() == null || model.unitCode().isBlank()) {
+            if (model.signatureLabelsV2() && (model.unitCode() == null || model.unitCode().isBlank())) {
                 clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
             }
             // layout-spec §3: SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns

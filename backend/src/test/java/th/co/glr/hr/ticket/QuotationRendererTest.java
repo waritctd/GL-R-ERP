@@ -1524,6 +1524,35 @@ class QuotationRendererTest {
         }
     }
 
+    // ── Opus review fix (2026-09-16, F1): the label-clearing guard above is gated on
+    // signatureLabelsV2, so a LEGACY/PCR document — which #buildLegacyModel hands deptCode=null/
+    // unitCode=null UNCONDITIONALLY, for every ticket, whether or not the rep left anything blank
+    // — must keep the template's own baked-in ฝ่าย/หน่วยงาน labels exactly as before this whole
+    // feature. Exercised through the REAL legacy entry point (toXlsx(TicketDto, QuotationDto,
+    // CustomerDto)), not a hand-built QuotationRenderModel, so this actually proves
+    // #buildLegacyModel's real null/null shape rather than an assumption about it.
+    @Test
+    void deptAndUnitLabels_legacyPathKeepsTemplateLabelsEvenThoughCodesAreAlwaysBlank() throws Exception {
+        byte[] xlsx = renderer.toXlsx(
+            ticket(List.of(item(1, "Cotto", "Marble Series", BigDecimal.ONE, new BigDecimal("580.00")))),
+            quotation(), customer(null));
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // DEPT_VALUE_ROW=2/UNIT_VALUE_ROW=4, SALES_LINE_COL=7 (H3/H5) — the template's own
+            // "ฝ่าย"/"หน่วยงาน" text — must survive on a legacy render, where deptCode/unitCode are
+            // always null (buildLegacyModel never reads them off TicketDto/QuotationDto at all).
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label NOT cleared on legacy render").isFalse();
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("ฝ่าย");
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label NOT cleared on legacy render").isFalse();
+            assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("หน่วยงาน");
+            // The value cells (I3/I5) stay blank, exactly as they always have (nullSafe) — only the
+            // LABEL's untouched-ness is new coverage here.
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value blank").isEmpty();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value blank").isEmpty();
+        }
+    }
+
     private QuotationRenderModel.RenderItem renderItem(String heading, List<String> descriptionLines,
             BigDecimal qty, BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
         return new QuotationRenderModel.RenderItem(heading, descriptionLines, qty, "แผ่น", unitPrice,
