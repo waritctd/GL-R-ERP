@@ -130,10 +130,17 @@ public final class DealQuotationRenderAdapter {
             // this branch prefixed a second one unconditionally whenever the name was not an
             // organisation. #hasThaiHonorificPrefix adds the same "already has one" check
             // #looksLikeOrganisation already does for a company name.
+            // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16): the ONE
+            // override on top of the existing organisation/already-has-one detection below — a rep
+            // ticks this when the contact snapshot is genuinely a department/section name ("ฝ่าย
+            // จัดซื้อ") that #looksLikeOrganisation's markers do not catch. Only ever suppresses the
+            // honorific itself; #printContactPart's own dedupe (contact == customer name) is
+            // unaffected and still decides whether the contact part prints at all.
+            String honorific = quotation.omitContactHonorific() ? ""
+                : (looksLikeOrganisation(quotation.contactName())
+                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ");
             String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
-                ? (looksLikeOrganisation(quotation.contactName())
-                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ")
-                    + quotation.contactName().trim() + "   /   "
+                ? honorific + quotation.contactName().trim() + "   /   "
                 : "";
             String taxIdPart = !blank(quotation.customerTaxId())
                 ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
@@ -426,14 +433,44 @@ public final class DealQuotationRenderAdapter {
      * amount rather than "the remainder after the deposit". The "2." slot number is kept exactly
      * as before either way.
      */
-    private static String depositLine(int depositPct, String remainderMode, Integer creditDays,
-                                       String remainderText) {
+    private static String depositLine(int depositPct, String fullPaymentTerm, String remainderMode,
+                                       Integer creditDays, String remainderText) {
         if (depositPct != 0) {
             return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
+        }
+        // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document names ONE
+        // of three fixed payment terms — see #fullPaymentTermThaiText. A row whose fullPaymentTerm
+        // is null (every LEGACY zero-deposit row, which predates this feature and never set it —
+        // DealQuotationService#resolveFullPaymentTerm guarantees it is null on every OTHER row too,
+        // but those never reach depositPct == 0 in the first place) falls through to the ORIGINAL
+        // remainderMode/creditDays-based text below, UNCHANGED, so an already-approved legacy
+        // document keeps printing byte-for-byte what it always did.
+        String termText = fullPaymentTermThaiText(fullPaymentTerm);
+        if (termText != null) {
+            return "2." + termText;
         }
         return "CREDIT".equals(remainderMode)
             ? "2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต " + (creditDays != null ? creditDays : 0) + " วัน"
             : "2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+    }
+
+    /** The three fixed Thai payment-term sentences (owner ruling 2026-09-16), or {@code null} for
+     * any other value — including a legacy null, which lets {@link #depositLine} fall back to its
+     * ORIGINAL remainderMode-based text rather than printing nothing. */
+    private static String fullPaymentTermThaiText(String code) {
+        if (WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า";
+        }
+        // Owner correction 2026-09-16: "เมื่อ..." FIRST, then "หรือก่อน..." — the reverse order of
+        // the other two terms' own "ก่อน...หรือเมื่อ..." phrasing (and of the pre-feature legacy
+        // fallback text a few lines above, which is untouched by this correction).
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า";
+        }
+        return null;
     }
 
     private static List<String> remarkLines(DealQuotationDto quotation) {
@@ -454,7 +491,8 @@ public final class DealQuotationRenderAdapter {
 
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
-        lines.add(depositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
+        lines.add(depositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
         int leadTimeLineIndex = lines.size();
         lines.add(leadTimeLine(quotation.items()));
         lines.add(LINE4);
@@ -614,14 +652,34 @@ public final class DealQuotationRenderAdapter {
      * remainderMode} variants, English words. See that method's Javadoc for the full reasoning;
      * kept as its own method for the same "two flat methods read better than one with language
      * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
-    private static String englishDepositLine(int depositPct, String remainderMode, Integer creditDays,
-                                              String remainderText) {
+    private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
+                                              Integer creditDays, String remainderText) {
         if (depositPct != 0) {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
+        }
+        // Item 4 (V181) English twin of the Thai branch above — same legacy fallback, same reason.
+        String termText = fullPaymentTermEnglishText(fullPaymentTerm);
+        if (termText != null) {
+            return "2." + termText;
         }
         return "CREDIT".equals(remainderMode)
             ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
             : "2.Full payment is due before or upon delivery.";
+    }
+
+    /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
+     * null-for-unrecognised/legacy contract. */
+    private static String fullPaymentTermEnglishText(String code) {
+        if (WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required before delivery.";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required upon delivery.";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required upon or before delivery.";
+        }
+        return null;
     }
 
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
@@ -651,7 +709,8 @@ public final class DealQuotationRenderAdapter {
         List<String> lines = new ArrayList<>();
         lines.add("1.The quantities above are as received on " + shortEnglishDate(offerDate)
             + ". Please re-confirm the actual quantities with your installer before ordering.");
-        lines.add(englishDepositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
+        lines.add(englishDepositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
         int leadTimeLineIndex;
         if (hasBankBlock) {
             // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of

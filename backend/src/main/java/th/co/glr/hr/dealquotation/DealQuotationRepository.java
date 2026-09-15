@@ -234,6 +234,8 @@ public class DealQuotationRepository {
         // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
         // printedByDisplayId/salesRepDisplayId Javadoc. Null on every path that does not set one.
         Long printedByDisplayId, Long salesRepDisplayId,
+        // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+        boolean omitContactHonorific, String fullPaymentTerm,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
@@ -254,6 +256,7 @@ public class DealQuotationRepository {
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
                  validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
                  printed_by_display_id, sales_rep_display_id,
+                 omit_contact_honorific, full_payment_term,
                  parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
@@ -263,6 +266,7 @@ public class DealQuotationRepository {
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
                  :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
                  :printedByDisplayId, :salesRepDisplayId,
+                 :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
@@ -300,6 +304,8 @@ public class DealQuotationRepository {
                 .addValue("currency", p.currency())
                 .addValue("printedByDisplayId", p.printedByDisplayId())
                 .addValue("salesRepDisplayId", p.salesRepDisplayId())
+                .addValue("omitContactHonorific", p.omitContactHonorific())
+                .addValue("fullPaymentTerm", p.fullPaymentTerm())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -511,7 +517,15 @@ public class DealQuotationRepository {
                             // Owner feedback 2026-09-14 — project_name was write-once at INSERT
                             // only until now; genuinely editable on every DRAFT save, same as
                             // customer_notes just below it.
-                            String projectName) {
+                            String projectName,
+                            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc
+                            // on each field. Both always sent on every DRAFT save, same "no
+                            // missing-keeps-stored" discipline as printedByDisplayId/projectName
+                            // above: DealQuotationService resolves the WHOLE value (including
+                            // forcing fullPaymentTerm/remainderMode/creditDays null where they don't
+                            // apply) before calling this method, so there is nothing left to default
+                            // here.
+                            boolean omitContactHonorific, String fullPaymentTerm) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -526,6 +540,7 @@ public class DealQuotationRepository {
                    customer_notes = :customerNotes, price_mode = :priceMode,
                    document_language = :documentLanguage, currency = :currency,
                    printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
+                   omit_contact_honorific = :omitContactHonorific, full_payment_term = :fullPaymentTerm,
                    total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
@@ -555,6 +570,8 @@ public class DealQuotationRepository {
                 .addValue("currency", currency)
                 .addValue("printedByDisplayId", printedByDisplayId)
                 .addValue("salesRepDisplayId", salesRepDisplayId)
+                .addValue("omitContactHonorific", omitContactHonorific)
+                .addValue("fullPaymentTerm", fullPaymentTerm)
                 .addValue("subtotal", subtotal));
     }
 
@@ -988,6 +1005,9 @@ public class DealQuotationRepository {
                    q.credit_days, q.validity_days, q.validity_date, q.validity_mode, q.validity_until,
                    q.customer_notes, q.price_mode,
                    q.document_language,
+                   -- V180/V181 (items 2/4, 2026-09-16): "ไม่เติม “คุณ”" flag and the zero-deposit
+                   -- full-payment-term code — see each column's own COMMENT ON COLUMN.
+                   q.omit_contact_honorific, q.full_payment_term,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
@@ -1101,6 +1121,9 @@ public class DealQuotationRepository {
             rs.getString("sales_rep_display_name"),
             rs.getString("sales_rep_display_name_en"),
             rs.getString("sales_rep_display_phone"),
+            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+            rs.getBoolean("omit_contact_honorific"),
+            rs.getString("full_payment_term"),
             items,
             createdAt,
             instant(rs, "updated_at")

@@ -5192,6 +5192,35 @@ function resolveDealQuotationV3Header(payload, current = null) {
 }
 
 /**
+ * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — mirrors
+ * DealQuotationService#isZeroDeposit/#resolveFullPaymentTerm exactly: `depositPercent === 0` is
+ * the ONE signal for "no deposit" (null/undefined defaults to 30% elsewhere — see
+ * DealQuotationRenderAdapter#depositLine — so it is NOT the same as zero).
+ * remainderMode/creditDays are forced null on a zero-deposit document (irrelevant once there is
+ * no deposit to take a remainder of) and fullPaymentTerm is forced null on any OTHER deposit
+ * percentage, so a rep who unticks "ไม่รับมัดจำ" and re-enters an ordinary percentage can never
+ * leave a stale term attached. An unrecognised code 400s here, before the row is ever touched —
+ * same three codes WastageCalculator's FULL_PAYMENT_TERM_* constants declare. Called identically
+ * by create/update — a full PUT always carries the payload's own depositPercent, so there is no
+ * "missing keeps stored" case to thread through a `current` row, unlike
+ * resolveDealQuotationValidity above.
+ */
+function resolveDealQuotationDepositTerms(payload) {
+  const depositPercent = payload.depositPercent ?? null;
+  const noDeposit = depositPercent === 0;
+  const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
+  const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  let fullPaymentTerm = null;
+  if (noDeposit) {
+    fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
+    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY'].includes(fullPaymentTerm)) {
+      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY', 400);
+    }
+  }
+  return { depositPercent, remainderMode, creditDays, fullPaymentTerm };
+}
+
+/**
  * V178 — DealQuotationService#requireValidityUntilForMode, mirrored exactly, same message
  * strings, same order of checks. `current` is the stored row on UPDATE (a missing
  * `validityMode` keeps the stored one, same "missing keeps stored" discipline as priceMode/
@@ -5291,6 +5320,10 @@ function buildDealQuotationDto(row) {
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
+    // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
+    // column — a stored/never-set value normalises to false here, same device as priceMode/
+    // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
+    omitContactHonorific: row.omitContactHonorific ?? false,
     projectName: row.projectName,
     deptCode: row.deptCode,
     unitCode: row.unitCode,
@@ -5298,6 +5331,10 @@ function buildDealQuotationDto(row) {
     depositPercent: row.depositPercent,
     remainderMode: row.remainderMode,
     creditDays: row.creditDays,
+    // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): null on every row that predates this
+    // feature and on every row whose depositPercent is not exactly 0 — mirrors
+    // DealQuotationDto#fullPaymentTerm / DealQuotationService#resolveFullPaymentTerm.
+    fullPaymentTerm: row.fullPaymentTerm ?? null,
     validityDays: row.validityDays,
     validityDate: row.validityDate,
     // V178: never null on the wire — a stored null normalises to DAYS, as the DTO does.
@@ -12274,9 +12311,7 @@ export const api = {
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? now.slice(0, 10),
-        depositPercent: payload.depositPercent ?? null,
-        remainderMode: payload.remainderMode ?? null,
-        creditDays: payload.creditDays ?? null,
+        ...resolveDealQuotationDepositTerms(payload),
         validityDays: payload.validityDays ?? null,
         validityMode, validityUntil,
         validityDate: null,
@@ -12285,6 +12320,9 @@ export const api = {
         // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
+        // on CREATE, same device as DealQuotationService#create.
+        omitContactHonorific: payload.omitContactHonorific === true,
         items,
         createdAt: now, updatedAt: now,
       };
@@ -12319,9 +12357,7 @@ export const api = {
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? null,
-        depositPercent: payload.depositPercent ?? null,
-        remainderMode: payload.remainderMode ?? null,
-        creditDays: payload.creditDays ?? null,
+        ...resolveDealQuotationDepositTerms(payload),
         validityDays: payload.validityDays ?? null,
         validityMode, validityUntil,
         customerNotes: payload.customerNotes ?? null,
@@ -12334,6 +12370,9 @@ export const api = {
         // name"), so there is no "missing keeps stored" fallback here either.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Item 2 (V180) — same DIRECT-assignment discipline: the editor always sends its CURRENT
+        // value (the checkbox is always rendered), so a missing/false value clears it.
+        omitContactHonorific: payload.omitContactHonorific === true,
         // Opus review fix (2026-09-14): was missing entirely, so editing โครงการ silently never
         // persisted under VITE_USE_MOCKS=true -- CLAUDE.md's "mock omits a field the feature keys
         // on" shape. Same #M7 DIRECT-assignment discipline as every other field in this
@@ -12377,6 +12416,12 @@ export const api = {
       // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
       // none, and that document cannot go for approval with an empty signature slot.
       if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document must name a
+      // payment term before an approver ever sees it -- create/update allow a DRAFT with none
+      // chosen yet. Mirrors DealQuotationService#submit exactly.
+      if (row.depositPercent === 0 && !row.fullPaymentTerm) {
+        fail('กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน', 400);
+      }
       // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
       // date before the quotation's OWN date, so this is the re-check against TODAY, the last
       // gate before an approver ever sees the document. Mirrors DealQuotationService#submit.

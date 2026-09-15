@@ -34,7 +34,7 @@ function emptyNewCustomer() {
  * state, exactly like QuotationItemRow's catalog typeahead.
  */
 export function DealCustomerCard({ value, onChange, errors, showToast }) {
-  const { customer, project, contact, entryChannel } = value;
+  const { customer, project, contact, entryChannel, omitContactHonorific } = value;
 
   // ── ลูกค้า typeahead ──────────────────────────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState('');
@@ -514,6 +514,8 @@ export function DealCustomerCard({ value, onChange, errors, showToast }) {
           onChange={(next) => onChange({ contact: next })}
           error={errors?.contact}
           showToast={showToast}
+          omitContactHonorific={omitContactHonorific}
+          onChangeOmitContactHonorific={(next) => onChange({ omitContactHonorific: next })}
         />
 
         <div>

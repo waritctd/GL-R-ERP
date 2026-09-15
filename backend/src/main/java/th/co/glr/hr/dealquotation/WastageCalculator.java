@@ -90,6 +90,22 @@ public final class WastageCalculator {
      * an exact deadline rather than "N days from now". */
     public static final String VALIDITY_MODE_DATE = "DATE";
 
+    // ── Item 4 (V181, "ไม่รับมัดจำ", 2026-09-16) — the three 100%-payment-term codes ─────────────
+    // Only ever apply on a document whose deposit_percent = 0 ("ไม่รับมัดจำ" ticked); see
+    // DealQuotationService#resolveFullPaymentTerm. Deposit 0% stopped being expressible any other
+    // way (the editor's percent chips/custom input now reject 0), so a zero-deposit document names
+    // ONE of these instead of leaving the reader to infer why no deposit is asked. No credit-days
+    // option exists in no-deposit mode (owner ruling, 2026-09-16) — only these three fixed terms.
+    /** "บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า" */
+    public static final String FULL_PAYMENT_TERM_BEFORE_DELIVERY = "BEFORE_DELIVERY";
+    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า" */
+    public static final String FULL_PAYMENT_TERM_ON_DELIVERY = "ON_DELIVERY";
+    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า" — owner correction
+     * 2026-09-16: "เมื่อ..." first, THEN "หรือก่อน...", the reverse order of the other two terms'
+     * own "ก่อน...หรือเมื่อ..." phrasing; code renamed BEFORE_OR_ON_DELIVERY -> ON_OR_BEFORE_DELIVERY
+     * to match. */
+    public static final String FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY = "ON_OR_BEFORE_DELIVERY";
+
     /**
      * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
      * thing (ภาษาเอกสาร) and the rest follows. {@code DealQuotationService#resolveCurrency} lets an

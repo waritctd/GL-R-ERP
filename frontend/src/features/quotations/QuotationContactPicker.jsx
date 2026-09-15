@@ -40,6 +40,12 @@ function emptyNewContact() {
  */
 export function QuotationContactPicker({
   customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
+  // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — optional so a
+  // caller that has nothing to bind it to (none exists today, but future reuse of this shared
+  // picker should not be forced to wire a control it does not need) simply omits both and gets no
+  // extra UI. Both current callers (QuotationEditorPage directly, DealCustomerCard on the
+  // inline-create path) pass their own `terms.omitContactHonorific` through this.
+  omitContactHonorific = false, onChangeOmitContactHonorific,
 }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -256,6 +262,31 @@ export function QuotationContactPicker({
           )
         ) : null}
       </FormField>
+      {/* Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — directly under
+          the ผู้สั่งซื้อ picker, per the owner's own placement. Whole row is the tappable label
+          (not just the checkbox square) and grows to the mobile touch-target floor, same
+          `mobile:min-h-[44px]` convention QuotationEditorPage's own terms-card toggle buttons use. */}
+      {onChangeOmitContactHonorific ? (
+        <label
+          htmlFor={`${idPrefix}-omit-honorific`}
+          className="mt-2 flex min-h-[38px] cursor-pointer items-start gap-2 rounded-md px-1 py-1 mobile:min-h-[44px] mobile:py-2"
+        >
+          <input
+            id={`${idPrefix}-omit-honorific`}
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 shrink-0"
+            checked={!!omitContactHonorific}
+            disabled={disabled}
+            onChange={(e) => onChangeOmitContactHonorific(e.target.checked)}
+          />
+          <span className="text-xs">
+            ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ
+            <span className="mt-0.5 block text-2xs text-text-muted">
+              ใช้เมื่อผู้สั่งซื้อเป็นชื่อฝ่าย/แผนก เช่น “ฝ่ายจัดซื้อ”
+            </span>
+          </span>
+        </label>
+      ) : null}
 
       {showNew && customerId ? (
         <Modal title="เพิ่มผู้สั่งซื้อใหม่" onClose={closeNewContact}>

@@ -61,8 +61,13 @@ function writeJson(key, value) {
 // there) but `validityUntil` NEVER does — a remembered CALENDAR DATE from a previous deal would
 // silently be a date in the past, or simply the wrong one, on every quotation after the first.
 
+// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): `noDeposit` joined this list the SAME way
+// `validityMode` did for V178 — a rep who always quotes with no deposit keeps starting there.
+// `fullPaymentTerm` rides along; it only means anything while `noDeposit` is true, so remembering
+// it costs nothing for the (presumably far more common) rep who never ticks the box.
 const DEFAULT_TERM_FIELDS = [
   'depositPercent', 'remainderMode', 'creditDays', 'validityDays', 'validityMode', 'originCountry',
+  'noDeposit', 'fullPaymentTerm',
 ];
 
 /** `null` when nothing is stored (or storage threw). Never throws. */

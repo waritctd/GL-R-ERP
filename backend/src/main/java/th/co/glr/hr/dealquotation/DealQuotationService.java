@@ -178,6 +178,13 @@ public class DealQuotationService {
         // never persist an id no client could ever have legitimately picked.
         Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
         Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
+        // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): remainderMode/creditDays are
+        // irrelevant on a zero-deposit document (its whole-amount term is fullPaymentTerm instead)
+        // and fullPaymentTerm is irrelevant on any other -- see #noDeposit/#resolveFullPaymentTerm.
+        boolean noDeposit = isZeroDeposit(request.depositPercent());
+        String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
+        Integer creditDays = noDeposit ? null : request.creditDays();
+        String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -195,11 +202,12 @@ public class DealQuotationService {
             // project name, exactly as this line unconditionally did before projectName existed.
             request.projectName() != null ? blankToNull(request.projectName()) : ticket.projectName(),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
-            request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            request.offerDate(), request.depositPercent(), remainderMode,
+            creditDays, request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency,
             printedByDisplayId, salesRepDisplayId,
+            resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             subtotal, null, 1, items));
         return requireQuotation(id);
     }
@@ -351,6 +359,17 @@ public class DealQuotationService {
         // "use the real name" value for these two Long fields, so it is taken at face value).
         Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
         Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
+        // Item 4 ("ไม่รับมัดจำ", V181) — same rule as #create; a full PUT always carries the
+        // payload's own depositPercent (there is no "missing keeps stored" case for it), so there is
+        // nothing stale to preserve here either.
+        boolean noDeposit = isZeroDeposit(request.depositPercent());
+        String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
+        Integer creditDays = noDeposit ? null : request.creditDays();
+        String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // Item 2 ("ไม่เติม “คุณ”", V180) — the editor always sends its CURRENT value (the checkbox
+        // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
+        // no "missing keeps stored" case: a null on the wire means UNticked, exactly like create.
+        boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -360,8 +379,8 @@ public class DealQuotationService {
         // stays frozen at what it was approved with.
         int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
-            request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            request.offerDate(), request.depositPercent(), remainderMode,
+            creditDays, request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal,
             printedByDisplayId, salesRepDisplayId,
@@ -370,7 +389,8 @@ public class DealQuotationService {
             // printedByDisplayId/salesRepDisplayId just above, there is no "missing keeps stored"
             // case — blankToNull(null) clears it, exactly like every other free-text header field
             // on this same call (customerNotes, deptCode, unitCode).
-            blankToNull(request.projectName()));
+            blankToNull(request.projectName()),
+            omitContactHonorific, fullPaymentTerm);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -442,6 +462,18 @@ public class DealQuotationService {
         // had no contact -- it stays a draft until the rep saves it with one.
         if (quotation.contactId() == null || isBlank(quotation.contactName())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+        }
+        // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
+        // ONE of the three payment terms before an approver ever sees it — create/update allow a
+        // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
+        // so submit is the one gate that actually requires it, the same "create/update permissive,
+        // submit strict" split #requireEveryTileItemHasALeadTime and the DATE-mode check just below
+        // both already use. Deliberately NOT re-checked for a row whose depositPercent is not
+        // exactly 0 (including every pre-V181 row, which stores fullPaymentTerm = NULL regardless
+        // of its deposit): #resolveFullPaymentTerm already guarantees such a row's fullPaymentTerm
+        // is null, so this condition can only ever fire on a genuinely zero-deposit document.
+        if (isZeroDeposit(quotation.depositPercent()) && isBlank(quotation.fullPaymentTerm())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน");
         }
         // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
         // create/update already refuse one before the quotation's OWN date, but time keeps moving
@@ -747,6 +779,11 @@ public class DealQuotationService {
             // stays whatever it was — this mirrors how the parent's own contact/rep snapshot is
             // copied without re-checking against a live table).
             source.printedByDisplayId(), source.salesRepDisplayId(),
+            // V180/V181 (items 2/4) — a revision inherits its parent's honorific flag and
+            // full-payment term VERBATIM, the same "copy every header field" rule as everything
+            // else in this call — a revise must not silently re-add "คุณ" or drop a chosen
+            // zero-deposit term the rep already picked on the document being revised.
+            source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
         // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
@@ -1154,6 +1191,42 @@ public class DealQuotationService {
                 "สกุลเงิน " + currency + " ใช้กับเอกสารภาษา " + documentLanguage + " ไม่ได้ (ต้องเป็น " + expected + ")");
         }
         return currency;
+    }
+
+    /**
+     * Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16): the nullable {@code Boolean} on the
+     * wire resolves to {@code false} (UNticked, today's only behaviour) whenever it is absent —
+     * shared by {@link #create}/{@link #update} so "missing means unticked" can never drift
+     * between the two.
+     */
+    private boolean resolveOmitContactHonorific(Boolean omitContactHonorific) {
+        return Boolean.TRUE.equals(omitContactHonorific);
+    }
+
+    /**
+     * Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): {@code true} only for an EXPLICIT
+     * {@code depositPercent == 0}. A {@code null} depositPercent is NOT "no deposit" — it defaults
+     * to 30% exactly like {@code DealQuotationRenderAdapter#depositLine}'s own reasoning — so a
+     * quotation that simply never set a percent must not have its remainderMode/creditDays cleared
+     * or accept a fullPaymentTerm. Shared by {@link #create}/{@link #update} so the "0% is the ONE
+     * signal for no-deposit" rule can never drift between the two.
+     */
+    private boolean isZeroDeposit(Integer depositPercent) {
+        return depositPercent != null && depositPercent == 0;
+    }
+
+    /**
+     * Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — a {@code fullPaymentTerm} only ever
+     * applies to a zero-deposit document; on any other (including a null/unset depositPercent,
+     * which defaults to 30% — see {@link #isZeroDeposit}) it is forced back to null, so a rep who
+     * unticks "ไม่รับมัดจำ" and re-enters an ordinary percentage can never leave a stale term
+     * attached. On a genuinely zero-deposit document, null/blank passes through unchanged — a
+     * DRAFT may be saved before the rep has picked one; only {@link #submit} refuses to advance it.
+     * An unrecognised code never reaches here: {@code @Pattern} on the request field already 400s
+     * it before bean validation lets the request through.
+     */
+    private String resolveFullPaymentTerm(Integer depositPercent, String fullPaymentTerm) {
+        return isZeroDeposit(depositPercent) ? blankToNull(fullPaymentTerm) : null;
     }
 
     /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row

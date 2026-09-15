@@ -25,7 +25,7 @@ import {
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
-  VALIDITY_MODE_OPTIONS,
+  VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
@@ -85,10 +85,16 @@ function pickCalculatedFields(source) {
 // is on the server. วันที่ is deliberately never remembered: it is always today.
 function emptyTerms(defaults = null) {
   const depositPercent = defaults?.depositPercent ?? '';
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): remembers like depositPercent itself —
+  // a rep who always quotes with no deposit keeps starting there. fullPaymentTerm rides along
+  // (meaningless while noDeposit is false, so remembering it costs nothing either way).
+  const noDeposit = defaults?.noDeposit === true;
   return {
     deptCode: '', unitCode: '', offerDate: todayIso(),
     depositPercent,
     depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
+    noDeposit,
+    fullPaymentTerm: noDeposit ? (defaults?.fullPaymentTerm ?? '') : '',
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
@@ -109,6 +115,9 @@ function emptyTerms(defaults = null) {
     // deal's own project name instead of leaving a rep looking at an empty box for a project the
     // deal already has.
     projectName: '',
+    // Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16) — per-quotation, NOT remembered (see
+    // this field's own comment on the request DTO): a brand-new quotation always starts UNticked.
+    omitContactHonorific: false,
   };
 }
 
@@ -236,10 +245,13 @@ export function QuotationEditorPage({ user, showToast }) {
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // DealCustomerCard still reports ผู้สั่งซื้อ through the same one-patch-upward contract as
   // ลูกค้า/โครงการ (including `contact: null` when picking a different customer clears it), so
-  // that key is split back out to the page-level `contact` state rather than kept twice.
+  // that key is split back out to the page-level `contact` state rather than kept twice. Item 2
+  // ("ไม่เติม “คุณ”", V180) — omitContactHonorific lives on `terms` (it is saved on the quotation,
+  // not the deal), so it is split out the SAME way `contact` is, rather than kept a third time.
   function updateDealForm(patch) {
-    const { contact: nextContact, ...rest } = patch;
+    const { contact: nextContact, omitContactHonorific, ...rest } = patch;
     if ('contact' in patch) setContact(nextContact);
+    if ('omitContactHonorific' in patch) setTerms((t) => ({ ...t, omitContactHonorific }));
     if (Object.keys(rest).length) setDealForm((prev) => ({ ...prev, ...rest }));
     setDirty(true);
   }
@@ -308,6 +320,16 @@ export function QuotationEditorPage({ user, showToast }) {
       setDirty(true);
     }
   }, [docHasSpecialPricing, terms.validityMode, setDirty]);
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% stops being a typeable percentage —
+  // the custom "อื่นๆ" input REJECTS it, pointing the rep at the checkbox instead. FRONTEND-only
+  // (backend @Min(0) is unchanged: 0 is still exactly how "no deposit" is stored once it arrives
+  // through the proper "ไม่รับมัดจำ" path), so this is a plain derived value, not a checklist entry
+  // — buildQuotationChecklist's own contract is "blocks only when the backend already refuses the
+  // same state", and the backend does not refuse a typed 0 at all.
+  const depositZeroError = !terms.noDeposit && terms.depositPercentCustom
+    && terms.depositPercent !== '' && Number(terms.depositPercent) === 0
+    ? 'ถ้าไม่รับมัดจำ ให้ติ๊ก “ไม่รับมัดจำ” แทนการพิมพ์ 0'
+    : undefined;
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
   // red hints yet. A row seeded from the server (an existing DRAFT the rep reopened) is touched
@@ -361,6 +383,10 @@ export function QuotationEditorPage({ user, showToast }) {
         offerDate: quotation.offerDate ?? todayIso(),
         depositPercent: quotation.depositPercent ?? '',
         depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
+        // Item 4 ("ไม่รับมัดจำ", V181) — depositPercent === 0 is the ONE signal the server stores
+        // (see WastageCalculator's own comment); a null/other percentage is never "no deposit".
+        noDeposit: quotation.depositPercent === 0,
+        fullPaymentTerm: quotation.fullPaymentTerm ?? '',
         remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
         validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
         // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
@@ -820,8 +846,10 @@ export function QuotationEditorPage({ user, showToast }) {
     // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
     priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
+    noDeposit: terms.noDeposit,
+    fullPaymentTerm: terms.fullPaymentTerm,
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
-    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
+    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit, terms.fullPaymentTerm]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -855,9 +883,17 @@ export function QuotationEditorPage({ user, showToast }) {
     deptCode: terms.deptCode || null,
     unitCode: terms.unitCode || null,
     offerDate: terms.offerDate || null,
-    depositPercent: terms.depositPercent === '' ? null : Number(terms.depositPercent),
-    remainderMode: terms.remainderMode || null,
-    creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
+    // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): noDeposit always wins over whatever
+    // terms.depositPercent still holds from before the checkbox was ticked — depositPercent = 0 is
+    // the ONE signal the server reads as "no deposit" (mirrors DealQuotationService's own
+    // isZeroDeposit), so remainderMode/creditDays (irrelevant once there is no deposit to take a
+    // remainder of) go null and fullPaymentTerm carries the chosen term instead. The server
+    // enforces this same rule independently either way — this just avoids showing the rep briefly
+    // stale data before the next fetch.
+    depositPercent: terms.noDeposit ? 0 : (terms.depositPercent === '' ? null : Number(terms.depositPercent)),
+    remainderMode: terms.noDeposit ? null : (terms.remainderMode || null),
+    creditDays: terms.noDeposit ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
+    fullPaymentTerm: terms.noDeposit ? (terms.fullPaymentTerm || null) : null,
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
     // V178: validityDays is ALWAYS sent, in both modes (the days select keeps its last value even
     // while ระบุวันที่ is showing — see the toggle below) so DAYS mode has a real number to fall
@@ -880,6 +916,10 @@ export function QuotationEditorPage({ user, showToast }) {
     // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
     // explicitly, blank included, same discipline as customerNotes just above.
     projectName: terms.projectName || null,
+    // Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16) — always sent explicitly (same
+    // discipline as printedByDisplayId/projectName above): the checkbox is always rendered, so a
+    // full PUT always carries the payload's own current value, false included.
+    omitContactHonorific: !!terms.omitContactHonorific,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -957,6 +997,11 @@ export function QuotationEditorPage({ user, showToast }) {
   function rememberDefaults() {
     writeQuotationDefaults(user?.id, {
       depositPercent: terms.depositPercent,
+      // Item 4 ("ไม่รับมัดจำ", V181) — remembered like depositPercent itself; fullPaymentTerm
+      // rides along (writeQuotationDefaults already drops it when blank, so this costs nothing
+      // for a rep who never ticks the box).
+      noDeposit: terms.noDeposit,
+      fullPaymentTerm: terms.fullPaymentTerm,
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,
@@ -1411,7 +1456,7 @@ export function QuotationEditorPage({ user, showToast }) {
             // nothing to summarize until the first บันทึกร่าง mints the ticket.
             <>
               <DealCustomerCard
-                value={{ ...dealForm, contact }}
+                value={{ ...dealForm, contact, omitContactHonorific: terms.omitContactHonorific }}
                 onChange={updateDealForm}
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
@@ -1503,6 +1548,8 @@ export function QuotationEditorPage({ user, showToast }) {
                   error={contactError}
                   showToast={showToast}
                   idPrefix="quotation-contact"
+                  omitContactHonorific={terms.omitContactHonorific}
+                  onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
                 />
                 <QuotationDealFields
                   terms={terms}
@@ -1758,44 +1805,92 @@ export function QuotationEditorPage({ user, showToast }) {
               >
                 <input id="offerDate" type="date" value={terms.offerDate} onChange={(e) => { setTerms((t) => ({ ...t, offerDate: e.target.value })); setDirty(true); }} />
               </FormField>
-              <FormField label="มัดจำ %" htmlFor="depositPercent">
-                <div className="flex flex-wrap gap-2">
-                  {DEPOSIT_PERCENT_PRESETS.map((pct) => (
-                    <button
-                      key={pct}
-                      type="button"
-                      aria-pressed={!terms.depositPercentCustom && Number(terms.depositPercent) === pct}
-                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                      onClick={() => { setTerms((t) => ({ ...t, depositPercent: pct, depositPercentCustom: false })); setDirty(true); }}
-                    >
-                      {pct}%
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    aria-pressed={terms.depositPercentCustom}
-                    className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                    onClick={() => { setTerms((t) => ({ ...t, depositPercentCustom: true })); setDirty(true); }}
+              {/* Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% is no longer a percentage
+                  a rep types — the custom input below REJECTS it (see depositZeroError) — so a
+                  document with no deposit ticks this box instead. Ticking swaps out BOTH the %
+                  chips/custom input AND the ส่วนที่เหลือ controls (a remainder is meaningless once
+                  there is no deposit) for the fixed เงื่อนไขการชำระเงิน select. Label/htmlFor swap
+                  with it, so the one FormField always names whichever control it currently shows. */}
+              <FormField
+                label={terms.noDeposit ? 'เงื่อนไขการชำระเงิน' : 'มัดจำ %'}
+                htmlFor={terms.noDeposit ? 'fullPaymentTerm' : 'depositPercent'}
+                error={terms.noDeposit ? undefined : depositZeroError}
+              >
+                <label
+                  htmlFor="noDeposit"
+                  className="mb-2 flex min-h-[38px] w-fit cursor-pointer items-center gap-2 rounded-md px-1 py-1 mobile:min-h-[44px] mobile:py-2"
+                >
+                  <input
+                    id="noDeposit"
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0"
+                    checked={terms.noDeposit}
+                    onChange={(e) => {
+                      const noDeposit = e.target.checked;
+                      // Unticking clears fullPaymentTerm (it is about to become meaningless again,
+                      // and would otherwise resurface stale if the rep re-ticks the box later);
+                      // ticking leaves depositPercent/remainderMode/creditDays alone on screen —
+                      // #buildUpsertPayload is what actually forces them to 0/null on save, so
+                      // re-unticking mid-edit still shows the rep's last typed values, not blanks.
+                      setTerms((t) => ({ ...t, noDeposit, fullPaymentTerm: noDeposit ? t.fullPaymentTerm : '' }));
+                      setDirty(true);
+                    }}
+                  />
+                  <span className="text-xs font-bold">ไม่รับมัดจำ</span>
+                </label>
+                {terms.noDeposit ? (
+                  <select
+                    id="fullPaymentTerm"
+                    className="w-full"
+                    value={terms.fullPaymentTerm}
+                    onChange={(e) => { setTerms((t) => ({ ...t, fullPaymentTerm: e.target.value })); setDirty(true); }}
                   >
-                    อื่นๆ
-                  </button>
-                  {terms.depositPercentCustom ? (
-                    <input
-                      id="depositPercent"
-                      type="number"
-                      className="w-20"
-                      value={terms.depositPercent}
-                      onChange={(e) => { setTerms((t) => ({ ...t, depositPercent: e.target.value })); setDirty(true); }}
-                    />
-                  ) : null}
-                </div>
+                    <option value="">- เลือกเงื่อนไข -</option>
+                    {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {DEPOSIT_PERCENT_PRESETS.map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        aria-pressed={!terms.depositPercentCustom && Number(terms.depositPercent) === pct}
+                        className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                        onClick={() => { setTerms((t) => ({ ...t, depositPercent: pct, depositPercentCustom: false })); setDirty(true); }}
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      aria-pressed={terms.depositPercentCustom}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      onClick={() => { setTerms((t) => ({ ...t, depositPercentCustom: true })); setDirty(true); }}
+                    >
+                      อื่นๆ
+                    </button>
+                    {terms.depositPercentCustom ? (
+                      <input
+                        id="depositPercent"
+                        type="number"
+                        className="w-20"
+                        value={terms.depositPercent}
+                        onChange={(e) => { setTerms((t) => ({ ...t, depositPercent: e.target.value })); setDirty(true); }}
+                      />
+                    ) : null}
+                  </div>
+                )}
               </FormField>
               {/* No `htmlFor`: ส่วนที่เหลือ is a SET of toggle buttons, not one control. The label
                   used to point at `remainderMode`, an id that belongs to the เครดิต day-count
                   input below — which is a different field with a different meaning, and which only
                   exists at all while CREDIT is selected, so for the other modes the label pointed
                   at nothing. `role="group"` + aria-label is how a group of controls carries one
-                  name; the day input now carries its own. */}
+                  name; the day input now carries its own. Hidden entirely under "ไม่รับมัดจำ" — a
+                  remainder is meaningless once there is no deposit to take a remainder of. */}
+              {terms.noDeposit ? null : (
               <FormField label="ส่วนที่เหลือ">
                 <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ส่วนที่เหลือ">
                   {REMAINDER_MODE_OPTIONS.map((opt) => (
@@ -1831,6 +1926,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   ) : null}
                 </div>
               </FormField>
+              )}
               {/* V178 (owner ruling 2026-09-14): ระบุวันที่ ("กำหนดวันที่ได้") is a SECOND way to
                   say กำหนดยืนยันราคา, for when a promotion or a factory allocation needs an exact
                   deadline rather than "N days from now" — but it only makes sense on a document

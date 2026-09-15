@@ -175,6 +175,10 @@ export function isDealQuotationReadOnlyViewer(user) {
 
 // ── Terms card options (editor) ────────────────────────────────────────────────────────────────
 
+// Item 4 ("ไม่รับมัดจำ", owner ruling 2026-09-16): 0% is no longer enterable as an ordinary
+// percentage (see the custom-input validation in QuotationEditorPage) -- the presets stay 30/50,
+// and a document with no deposit ticks the checkbox instead, which shows FULL_PAYMENT_TERM_OPTIONS
+// in place of the % chips/custom input and the remainder controls below.
 export const DEPOSIT_PERCENT_PRESETS = [30, 50];
 
 export const REMAINDER_MODE_OPTIONS = [
@@ -184,6 +188,24 @@ export const REMAINDER_MODE_OPTIONS = [
 
 export function remainderModeLabel(value) {
   return REMAINDER_MODE_OPTIONS.find((o) => o.code === value)?.label ?? value ?? '-';
+}
+
+/** Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — mirrors
+ * {@code WastageCalculator.FULL_PAYMENT_TERM_*} exactly (same three codes, same order). Shown as a
+ * native `<select>` only when the "ไม่รับมัดจำ" checkbox is ticked (depositPercent resolves to 0);
+ * the deposit % chips/custom input and the remainder (เครดิต/ชำระเมื่อส่งมอบ) controls are hidden
+ * in that state instead. Owner correction 2026-09-16: the third option's Thai text reads
+ * "เมื่อ...หรือก่อน...", the REVERSE word order of the other two options' own "ก่อน...หรือเมื่อ..."
+ * phrasing -- and its code is ON_OR_BEFORE_DELIVERY, renamed from an earlier BEFORE_OR_ON_DELIVERY.
+ * No credit-days option exists in this mode (owner ruling) -- only these three fixed terms. */
+export const FULL_PAYMENT_TERM_OPTIONS = [
+  { code: 'BEFORE_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า' },
+  { code: 'ON_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า' },
+  { code: 'ON_OR_BEFORE_DELIVERY', label: 'บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า' },
+];
+
+export function fullPaymentTermLabel(value) {
+  return FULL_PAYMENT_TERM_OPTIONS.find((o) => o.code === value)?.label ?? value ?? '-';
 }
 
 export const VALIDITY_DAYS_OPTIONS = [15, 30, 45, 60];
@@ -1042,6 +1064,7 @@ export const QUOTATION_CHECK = Object.freeze({
   LOCATION_LABELS: 'locationLabels',
   PRICE_MODE_LANGUAGE: 'priceModeLanguage',
   ITEMS: 'items',
+  FULL_PAYMENT_TERM: 'fullPaymentTerm',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
@@ -1120,6 +1143,13 @@ export function buildQuotationChecklist({
   adjustmentErrorsByRow = [],
   duplicateGroupIndex = null,
   priceModeLanguageConflict = false,
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — NOT in QUOTATION_BLOCKING_CHECKS: unlike
+  // ผู้สั่งซื้อ/รายการสินค้า above, DealQuotationService#create/#update accept a zero-deposit DRAFT
+  // with no term chosen yet -- only #submit refuses it (this checklist's own contract is "blocks
+  // ONLY when the backend already refuses the SAME state" for both บันทึกร่าง AND ส่งขออนุมัติ, and
+  // there is no create/update refusal here to mirror). A visible, non-blocking reminder instead.
+  noDeposit = false,
+  fullPaymentTerm = '',
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -1164,6 +1194,9 @@ export function buildQuotationChecklist({
   }
   if (priceModeLanguageConflict) {
     push(QUOTATION_CHECK.PRICE_MODE_LANGUAGE, 'เอกสารภาษาอังกฤษใช้ราคาพิเศษ บาท/ตร.ม. ไม่ได้ กรุณาเลือกวิธีกรอกราคาอื่น');
+  }
+  if (noDeposit && blankValue(fullPaymentTerm)) {
+    push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'ติ๊ก "ไม่รับมัดจำ" แล้ว กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
   }
 
   if (items.length === 0) {

@@ -1147,4 +1147,148 @@ class DealQuotationRenderAdapterV3Test {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
             false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
+
+    // ── Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): the three fixed payment terms ────
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_beforeDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY, null), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า");
+    }
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_onDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY, null), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า");
+    }
+
+    /** Owner correction 2026-09-16: "เมื่อ..." FIRST, then "หรือก่อน...", the REVERSE order of the
+     * other two terms' own "ก่อน...หรือเมื่อ..." phrasing (and of the pre-feature legacy fallback
+     * text, {@link #thaiDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery}). */
+    @Test
+    void thaiDocument_note2_zeroDeposit_onOrBeforeDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_beforeDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment (100%) is required before delivery.");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_onDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment (100%) is required upon delivery.");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_onOrBeforeDeliveryTerm() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.Full payment (100%) is required upon or before delivery.");
+    }
+
+    /** A LEGACY zero-deposit row (fullPaymentTerm null, from before this feature) must keep
+     * printing EXACTLY what {@link #thaiDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit}
+     * and {@link #thaiDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery}
+     * already pin — no change to an already-approved document. This test exists so a future reader
+     * sees the "null falls through" contract is guarded on its OWN, not merely implied by those two
+     * pre-existing tests still passing. */
+    @Test
+    void thaiDocument_note2_zeroDeposit_nullTerm_fallsBackToLegacyRemainderModeText() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDepositAndTerm(0, null, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า");
+    }
+
+    /** {@code quotationWithDeposit} (the pre-V181 fixture above) via the CANONICAL constructor, so
+     * {@code fullPaymentTerm} — the field under test — is actually reachable. */
+    private DealQuotationDto quotationWithDepositAndTerm(int depositPercent, String fullPaymentTerm,
+                                                         String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), depositPercent, null, null, 30, null, null, null,
+            null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, null, null, null, null, null, null, null,
+            false, fullPaymentTerm,
+            List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
+
+    // ── Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) ─────────────
+
+    /** Ticked: never prefixes "คุณ", whatever {@code #looksLikeOrganisation}/
+     * {@code #hasThaiHonorificPrefix} would otherwise decide -- a plain person's name that WOULD
+     * normally get "คุณ" prints bare. */
+    @Test
+    void omitContactHonorific_true_neverPrefixesKhun_evenForAnOrdinaryPersonName() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContactAndOmitHonorific("สมชาย ใจดี", "บริษัท ทดสอบ จำกัด", true), null, null);
+        assertThat(model.attnLine()).startsWith("สมชาย ใจดี   /   ");
+        assertThat(model.attnLine()).doesNotContain("คุณสมชาย");
+    }
+
+    /** UNticked (the default/false): today's existing heuristic is completely unaffected -- an
+     * ordinary person's name still gets "คุณ". Regression guard so the ticked test above cannot
+     * pass merely because the fixture happened not to need a "คุณ" anyway. */
+    @Test
+    void omitContactHonorific_false_leavesTodaysHeuristicUnchanged() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContactAndOmitHonorific("สมชาย ใจดี", "บริษัท ทดสอบ จำกัด", false), null, null);
+        assertThat(model.attnLine()).startsWith("คุณสมชาย ใจดี   /   ");
+    }
+
+    /** English never prefixes "คุณ" regardless -- this flag has nothing to do with why. */
+    @Test
+    void omitContactHonorific_englishDocument_unaffectedEitherWay() {
+        QuotationRenderModel ticked = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContactAndOmitHonorific("สมชาย ใจดี", "บริษัท ทดสอบ จำกัด", true,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        QuotationRenderModel unticked = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContactAndOmitHonorific("สมชาย ใจดี", "บริษัท ทดสอบ จำกัด", false,
+                WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(ticked.attnLine()).isEqualTo(unticked.attnLine());
+        assertThat(ticked.attnLine()).doesNotContain("คุณ");
+    }
+
+    private DealQuotationDto quotationWithContactAndOmitHonorific(String contactName, String customerName,
+                                                                  boolean omitContactHonorific) {
+        return quotationWithContactAndOmitHonorific(contactName, customerName, omitContactHonorific, null);
+    }
+
+    private DealQuotationDto quotationWithContactAndOmitHonorific(String contactName, String customerName,
+                                                                  boolean omitContactHonorific,
+                                                                  String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), customerName, null, null, null,
+            9L, contactName, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), 30, "CREDIT", 30, 30, null, null, null,
+            null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, null, null, null, null, null, null, null,
+            omitContactHonorific, null,
+            List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
 }

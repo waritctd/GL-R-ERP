@@ -111,14 +111,63 @@ public final class DealQuotationDtos {
         String salesRepDisplayName,
         String salesRepDisplayNameEn,
         String salesRepDisplayPhone,
+        /** Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — see
+         * {@code DealQuotationRequests.UpsertDealQuotationRequest#omitContactHonorific}'s Javadoc.
+         * {@code NOT NULL DEFAULT FALSE} on the column (V180), so this is never null once read from
+         * the repository — unlike the {@code Boolean} on the request DTO, which is nullable on the
+         * wire and resolved to this primitive by
+         * {@code DealQuotationService#resolveOmitContactHonorific}. */
+        boolean omitContactHonorific,
+        /** Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — see
+         * {@code DealQuotationRequests.UpsertDealQuotationRequest#fullPaymentTerm}'s Javadoc. Null
+         * on every row whose {@link #depositPercent} is not exactly 0, and on every LEGACY
+         * zero-deposit row that predates this feature — {@code DealQuotationRenderAdapter} keeps
+         * printing such a row's existing {@link #remainderMode}/{@link #creditDays}-based text
+         * byte-for-byte when this is null, so an already-approved document never changes. */
+        String fullPaymentTerm,
         List<DealQuotationItemDto> items,
         Instant createdAt,
         Instant updatedAt
     ) {
+        /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
+         * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
+         * omitContactHonorific to {@code false} (UNticked — the only behaviour every one of those
+         * fixtures means) and fullPaymentTerm to null (no zero-deposit row had a term to carry
+         * before this change). */
+        public DealQuotationDto(
+            long id, String number, long ticketId, String docStatus, int revisionNo,
+            Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
+            long salesRepId, String salesRepName, String salesRepNameEn, String salesRepPhone,
+            Instant submittedAt, Long approvedById, String approvedByName, String approvedByNameEn,
+            Instant approvedAt, String approvalNote, LocalDate quotationDate, String customerName,
+            String customerAddress, String customerTaxId, String customerPhone, Long contactId,
+            String contactName, String contactPhone, String contactEmail, String projectName,
+            String deptCode, String unitCode, LocalDate offerDate, Integer depositPercent,
+            String remainderMode, Integer creditDays, Integer validityDays, LocalDate validityDate,
+            String validityMode, LocalDate validityUntil,
+            String customerNotes, String priceMode, String documentLanguage, BigDecimal subtotalAmount,
+            BigDecimal vatAmount, BigDecimal grandTotal, String currency, boolean approverHasSignature,
+            Long printedByDisplayId, String printedByDisplayName, String printedByDisplayNameEn,
+            Long salesRepDisplayId, String salesRepDisplayName, String salesRepDisplayNameEn,
+            String salesRepDisplayPhone,
+            List<DealQuotationItemDto> items, Instant createdAt, Instant updatedAt) {
+            this(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName,
+                createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt,
+                approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate,
+                customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName,
+                contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent,
+                remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil,
+                customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency,
+                approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn,
+                salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
+                false, null, items, createdAt, updatedAt);
+        }
+
         /** The pre-V179 shape (no display-name override fields) — kept so every existing
-         * construction site (tests, mostly) compiles unchanged. Defaults all seven new fields to
+         * construction site (tests, mostly) compiles unchanged. Defaults all seven of those fields to
          * null, which reads as "use the real name" — today's behaviour for every one of those
-         * fixtures. */
+         * fixtures — and (via the overload above) omitContactHonorific to false / fullPaymentTerm
+         * to null. */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
             Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,

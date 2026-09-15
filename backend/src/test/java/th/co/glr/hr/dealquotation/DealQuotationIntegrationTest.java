@@ -2139,6 +2139,167 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ") + Item 4 (V181, "ไม่รับมัดจำ")
+    // owner ruling 2026-09-16 — real-DB coverage through the real service.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** Item 4 wither — sets depositPercent/remainderMode/creditDays/fullPaymentTerm together,
+     * since {@code DealQuotationService} resolves the four as one unit (see
+     * #resolveFullPaymentTerm's own Javadoc). */
+    private UpsertDealQuotationRequest withDepositAndTerm(UpsertDealQuotationRequest base,
+            Integer depositPercent, String remainderMode, Integer creditDays, String fullPaymentTerm) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), depositPercent, remainderMode, creditDays,
+            base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
+            base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
+            base.salesRepDisplayId(), base.projectName(), base.omitContactHonorific(), fullPaymentTerm,
+            base.items());
+    }
+
+    /** Item 2 wither. */
+    private UpsertDealQuotationRequest withOmitContactHonorific(UpsertDealQuotationRequest base, Boolean omit) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
+            base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
+            base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
+            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items());
+    }
+
+    @Test
+    void create_omitContactHonorific_defaultsFalse_whenNotSent() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.omitContactHonorific()).isFalse();
+    }
+
+    @Test
+    void create_omitContactHonorificTrue_persists() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(upsertRequest(List.of(sampleItem("100.00", 10))), true), salesActor);
+        assertThat(created.omitContactHonorific()).isTrue();
+    }
+
+    /** No "missing keeps stored" case for this flag on UPDATE — the editor always sends its
+     * CURRENT value, so an update that omits it (or sends {@code false}) clears a previously-set
+     * {@code true} back to {@code false}, exactly like {@code printedByDisplayId}/{@code projectName}. */
+    @Test
+    void update_omitContactHonorific_clearsWhenOmittedFromThePayload() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(upsertRequest(List.of(sampleItem("100.00", 10))), true), salesActor);
+        assertThat(created.omitContactHonorific()).isTrue();
+
+        DealQuotationDto updated = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(updated.omitContactHonorific()).isFalse();
+    }
+
+    @Test
+    void create_zeroDeposit_clearsRemainderModeAndCreditDays_andStoresTheChosenTerm() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, "CREDIT", 45, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isEqualTo(0);
+        assertThat(created.remainderMode()).isNull();
+        assertThat(created.creditDays()).isNull();
+        assertThat(created.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    }
+
+    /** A rep who unticks "ไม่รับมัดจำ" (re-enters an ordinary percentage) can never leave a stale
+     * term attached, EVEN IF the request still sends one — wrong-way-round: the field the request
+     * carries is not the field the stored row ends up with. */
+    @Test
+    void create_nonZeroDeposit_forcesFullPaymentTermNull_evenIfTheRequestSendsOne() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                30, "CREDIT", 30, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isEqualTo(30);
+        assertThat(created.fullPaymentTerm()).isNull();
+        assertThat(created.remainderMode()).isEqualTo("CREDIT");
+        assertThat(created.creditDays()).isEqualTo(30);
+    }
+
+    /** A {@code null} depositPercent is NOT "no deposit" (it defaults to 30% at render time) — same
+     * refusal as an explicit non-zero percentage. */
+    @Test
+    void create_nullDepositPercent_alsoForcesFullPaymentTermNull() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                null, "CREDIT", 30, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isNull();
+        assertThat(created.fullPaymentTerm()).isNull();
+    }
+
+    @Test
+    void update_switchingToZeroDeposit_clearsRemainderModeAndCreditDays_andStoresTheChosenTerm() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // 30%, CREDIT, 30 days
+        DealQuotationDto updated = quotationService.update(created.id(),
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, "CREDIT", 45, WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY),
+            salesActor);
+        assertThat(updated.depositPercent()).isEqualTo(0);
+        assertThat(updated.remainderMode()).isNull();
+        assertThat(updated.creditDays()).isNull();
+        assertThat(updated.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY);
+    }
+
+    /** Wrong-way-round: a zero-deposit DRAFT is SAVEABLE with no term chosen yet (create/update
+     * above never refuse it) — {@link DealQuotationService#submit} is the one gate, the last check
+     * before an approver ever sees the document, same "create/update permissive, submit strict"
+     * split the DATE-mode validity check and the per-item lead-time check already use. */
+    @Test
+    void submit_zeroDepositWithNoTermChosen_isBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))), 0, null, null, null),
+            salesActor);
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("เงื่อนไขการชำระเงิน");
+    }
+
+    @Test
+    void submit_zeroDepositWithTermChosen_succeeds() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, null, null, WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY),
+            salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(submitted.fullPaymentTerm())
+            .isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY);
+    }
+
+    /** A non-zero-deposit document is NEVER blocked by the new submit gate — the condition can
+     * only ever fire on a genuinely zero-deposit document (regression guard for the guard itself). */
+    @Test
+    void submit_nonZeroDeposit_isUnaffectedByTheNewGate() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void revision_copiesOmitContactHonorificAndFullPaymentTermVerbatim() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(
+                withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                    0, null, null, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+                true),
+            salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        assertThat(revision.omitContactHonorific()).isTrue();
+        assertThat(revision.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 

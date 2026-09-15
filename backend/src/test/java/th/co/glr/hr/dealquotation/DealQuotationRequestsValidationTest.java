@@ -162,6 +162,23 @@ class DealQuotationRequestsValidationTest {
         assertThat(VALIDATOR.validate(validUpsert().validityMode("DATE").build())).isEmpty();
     }
 
+    /** Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — {@code @Pattern} accepts exactly the
+     * three codes and rejects anything else; null is allowed (means "no term chosen yet", which
+     * {@code DealQuotationService#resolveFullPaymentTerm} — not bean validation — enforces only
+     * on a zero-deposit document; see the service-level tests in {@code DealQuotationIntegrationTest}). */
+    @Test
+    void fullPaymentTermMustBeOneOfTheThreeCodes() {
+        assertViolated(validUpsert().fullPaymentTerm("SOMETHING_ELSE").build());
+        assertViolated(validUpsert().fullPaymentTerm("before_delivery").build()); // case-sensitive
+        // Owner correction 2026-09-16: the code is ON_OR_BEFORE_DELIVERY, not the earlier
+        // BEFORE_OR_ON_DELIVERY -- this pins the RENAMED code is what validates, not the old one.
+        assertViolated(validUpsert().fullPaymentTerm("BEFORE_OR_ON_DELIVERY").build());
+        assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm(null).build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("BEFORE_DELIVERY").build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("ON_DELIVERY").build())).isEmpty();
+        assertThat(VALIDATOR.validate(validUpsert().fullPaymentTerm("ON_OR_BEFORE_DELIVERY").build())).isEmpty();
+    }
+
     private void assertViolated(Object candidate) {
         assertThat(VALIDATOR.validate(candidate)).as(candidate.toString()).isNotEmpty();
     }
@@ -241,6 +258,9 @@ class DealQuotationRequestsValidationTest {
         private String validityMode = null;
         private LocalDate validityUntil = null;
         private String customerNotes = null;
+        // Item 4 (V181) — null on both by default, meaning "not ticked" / "no term chosen", the
+        // shape every OTHER test in this file (all pre-dating this feature) implicitly means.
+        private String fullPaymentTerm = null;
         private List<ItemInput> items = List.of(new ItemBuilder().build());
 
         UpsertBuilder depositPercent(Integer v) { depositPercent = v; return this; }
@@ -249,10 +269,15 @@ class DealQuotationRequestsValidationTest {
         UpsertBuilder validityDays(Integer v) { validityDays = v; return this; }
         UpsertBuilder validityMode(String v) { validityMode = v; return this; }
         UpsertBuilder validityUntil(LocalDate v) { validityUntil = v; return this; }
+        UpsertBuilder fullPaymentTerm(String v) { fullPaymentTerm = v; return this; }
 
         UpsertDealQuotationRequest build() {
+            // The CANONICAL (20-argument) constructor, not the pre-V180/V181 legacy one, so
+            // fullPaymentTerm's own @Pattern bound is actually reachable from here -- same reason
+            // ItemBuilder.build() switched to ItemInput's canonical constructor for its own v3 fields.
             return new UpsertDealQuotationRequest(null, deptCode, unitCode, offerDate, depositPercent, remainderMode,
-                creditDays, validityDays, validityMode, validityUntil, customerNotes, null, null, null, items);
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, null, null, null,
+                null, null, null, null, fullPaymentTerm, items);
         }
     }
 }
