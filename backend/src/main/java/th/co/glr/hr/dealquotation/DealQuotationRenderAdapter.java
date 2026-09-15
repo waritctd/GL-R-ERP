@@ -107,8 +107,9 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.contactEmail())) {
                 parts.add("E : " + quotation.contactEmail().trim());
             }
-            if (!blank(quotation.customerPhone())) {
-                parts.add("Tel. " + quotation.customerPhone().trim());
+            // #stripPhoneLabel — the stored value may open with its OWN label; see its Javadoc.
+            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
+                parts.add("Tel. " + stripPhoneLabel(quotation.customerPhone()));
             }
             phoneLine = String.join("   ", parts);
         } else {
@@ -140,8 +141,10 @@ public final class DealQuotationRenderAdapter {
             if (!blank(quotation.customerAddress())) {
                 parts.add("ที่อยู่ " + quotation.customerAddress().trim().replace('\n', ' '));
             }
-            if (!blank(quotation.customerPhone())) {
-                parts.add("โทร. " + quotation.customerPhone().trim());
+            // QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2" — the customer master
+            // row's own phone value opens with the label. See #stripPhoneLabel's Javadoc.
+            if (!blank(stripPhoneLabel(quotation.customerPhone()))) {
+                parts.add("โทร. " + stripPhoneLabel(quotation.customerPhone()));
             }
             phoneLine = String.join("   ", parts);
         }
@@ -863,6 +866,43 @@ public final class DealQuotationRenderAdapter {
             }
         }
         return ORG_NAME_WORD_PATTERN.matcher(lower).find();
+    }
+
+    // ── the customer phone's own label (QT-2026-0032-1, 2026-09-15) ─────────────────────────
+
+    /** A phone value that OPENS with its own label, which both header branches above then prefix a
+     * second one onto. Matched case-insensitively, with an optional "."/":" separator, and — this
+     * is the safety catch — only when what FOLLOWS is the start of an actual number ({@code 0-9},
+     * {@code +} or {@code (}), or nothing at all. Without that lookahead "โทรสาร 02-…" (fax) would
+     * lose its "สาร", which changes the meaning of the line rather than tidying it. The
+     * end-of-string alternative covers a value that is ONLY a label ("โทร."), which carries no
+     * number and so must leave nothing behind for the caller to print.
+     *
+     * <p>Alternatives are longest-first, because Java's alternation takes the first that matches:
+     * "โทรศัพท์" must be tried before "โทร", and "เบอร์โทรศัพท์" before "เบอร์โทร" before "เบอร์". */
+    private static final java.util.regex.Pattern PHONE_LABEL_PREFIX = java.util.regex.Pattern.compile(
+        "^(?:โทรศัพท์|เบอร์โทรศัพท์|เบอร์โทร|เบอร์|โทร|telephone|tel|phone)\\s*[.:：]?\\s*(?=[0-9+(]|$)",
+        java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Trims {@code phone} and drops a leading โทร./Tel.-style label off it.
+     *
+     * <p>Production bug, QT-2026-0032-1 (2026-09-15): B6 printed "โทร. โทร 02 314 354-2". Nothing
+     * printed the label twice — the customer master row itself carries {@code phone = "โทร 02 314
+     * 354-2"}, because the imported GL&amp;R customer directory stored the Thai label inside the
+     * value. It is not one bad row: 299 of 4320 {@code customers.customer} rows open their phone
+     * with a โทร/Tel label, so every quotation for any of them would print the same doubled line.
+     * The label is stripped at PRINT time rather than cleaned out of the master data: the same
+     * column also holds genuinely free-form text (contact names, e-mail addresses, "ต่อ 233"), so a
+     * blanket data migration over it would be the riskier change, and this keeps the document
+     * correct for anything typed that way in future too.
+     *
+     * <p>Only a LEADING label is touched. "คุณเจี๊ยบ โทร 081-927-9010" is a genuine free-text note,
+     * not a mislabelled number, and prints as recorded. */
+    static String stripPhoneLabel(String phone) {
+        if (blank(phone)) {
+            return "";
+        }
+        return PHONE_LABEL_PREFIX.matcher(phone.trim()).replaceFirst("").trim();
     }
 
     private static boolean blank(String s) {
