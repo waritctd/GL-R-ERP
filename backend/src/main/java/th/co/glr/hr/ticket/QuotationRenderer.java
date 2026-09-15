@@ -383,6 +383,23 @@ public class QuotationRenderer {
             setStr(sh, DEPT_VALUE_ROW, VALUE_COL, nullSafe(model.deptCode()));   // I3 — ฝ่าย / Dept.
             setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
             setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
+            // ฝ่าย/ผู้ออกแบบ optional (2026-09-16): both fields became optional on the deal (commit
+            // 3003bd0c) and the value cell above already prints blank via nullSafe when unset — but
+            // H3/H5's own LABEL never followed: it is the Thai TEMPLATE's own baked-in text ("ฝ่าย" /
+            // "หน่วยงาน", never written by the Thai branch — see this class's H3/H4/H5 comment above)
+            // or, on English, the "Dept."/"D.Co." literal #writeEnglishHeaderLabels just wrote a few
+            // lines above. Either way a blank value used to still print its label with nothing after
+            // it ("ฝ่าย" / "Dept." with an empty I3/I5), which reads as a field the rep forgot to
+            // fill rather than one that is genuinely inapplicable. Clearing H3/H5 here — AFTER both
+            // the Thai template's own text and the English overwrite have already been decided —
+            // handles both languages with the one guard: when filled, neither cell is touched, so a
+            // filled document renders byte-for-byte as before this change.
+            if (model.deptCode() == null || model.deptCode().isBlank()) {
+                clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 label
+            }
+            if (model.unitCode() == null || model.unitCode().isBlank()) {
+                clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
+            }
             // layout-spec §3: SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns
             // sizes for the "net" money figure — a previous version of this fix WIDENED that data
             // column to fit "Sales/{name} T.{phone}", which made คงเหลือ absurdly wide on every

@@ -1430,6 +1430,100 @@ class QuotationRendererTest {
         }
     }
 
+    // ── item 1 (2026-09-16): ฝ่าย/หน่วยงาน labels follow their own value's blankness ──────────
+    // Both fields became optional on the deal (commit 3003bd0c: the frontend stopped requiring
+    // them). The value cells (I3/I5, VALUE_COL) already printed blank via nullSafe — this closes
+    // the follow-on gap where the LABEL cell (H3/H5, SALES_LINE_COL) still printed with nothing
+    // after it. H3/H5 are confirmed distinct from SALES_LINE_ROW (row 6, "Sales/{name}") by this
+    // class's own row constants (DEPT_VALUE_ROW=2, UNIT_VALUE_ROW=4, SALES_LINE_ROW=5) — clearing
+    // them cannot touch the sales line.
+
+    @Test
+    void deptAndUnitLabels_clearedWhenBlank_thai() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0099", null, "", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // H3/H5 = col 7 (SALES_LINE_COL) on rows 2/4 (DEPT_VALUE_ROW/UNIT_VALUE_ROW) — the
+            // template's own baked-in "ฝ่าย"/"หน่วยงาน" label text — must be cleared.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared when deptCode null").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value stays blank").isEmpty();
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label cleared when unitCode blank").isTrue();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value stays blank").isEmpty();
+            // เลขที่อ้างอิง (row 4, i.e. index 3) is untouched by this change.
+            assertThat(sheet.getRow(3).getCell(8).getStringCellValue()).isEqualTo("QT-2026-0099");
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_thai() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0100", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // The Thai branch never writes H3/H5 itself (they are the template's own baked-in
+            // text) -- this only proves the new guard did not blank them when the value is filled.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 label untouched when deptCode filled").isFalse();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 label untouched when unitCode filled").isFalse();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_clearedWhenBlank_english() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0101", null, null, "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 'Dept.' label cleared when deptCode blank").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value stays blank").isEmpty();
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 'D.Co.' label cleared when unitCode blank").isTrue();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value stays blank").isEmpty();
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_english() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0102", "P003", "D002", "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("Dept.");
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("D.Co.");
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
+        }
+    }
+
     private QuotationRenderModel.RenderItem renderItem(String heading, List<String> descriptionLines,
             BigDecimal qty, BigDecimal unitPrice, String discountLabel, BigDecimal netUnitPrice, BigDecimal amount) {
         return new QuotationRenderModel.RenderItem(heading, descriptionLines, qty, "แผ่น", unitPrice,
