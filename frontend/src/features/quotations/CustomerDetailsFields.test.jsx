@@ -1,7 +1,7 @@
 import React, { forwardRef, useImperativeHandle, useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { api } from '../../api/index.js';
 import data from '../../data/thai-locations.json';
@@ -150,6 +150,99 @@ it('a blank name is refused by the server and rolled back', async () => {
 
   await waitFor(() => expect(name.value).toBe(legacy.name)); // rolled back
   expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุชื่อลูกค้า');
+});
+
+// Bug fix (prod customer_id 4326 "DONG NGO GROUP..." / QT-2026-0039-1): a customer already saved
+// with a Thai structured address could never become a foreign/free-text one. The shape below
+// mirrors 4326's real prod row (fake structured codes standing in for a Vietnamese address).
+const structuredForeignCandidate = {
+  id: 4326,
+  name: 'DONG NGO GROUP INVESTMENT AND DEVELOPMENT JSC',
+  taxId: '',
+  phone: '',
+  address: '---Vietnam--- แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110',
+  provinceCode: '10',
+  districtCode: '1039',
+  subdistrictCode: '103902',
+  postalCode: '10110',
+};
+
+describe('switching a structured customer to ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย', () => {
+  it('is not offered for a customer that already has no structured codes', () => {
+    render(<QueryClientProvider client={new QueryClient()}><Harness /></QueryClientProvider>);
+    expect(screen.queryByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ })).toBeNull();
+    expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(false);
+  });
+
+  it('unlocks the textarea and saves with ONLY the address key — no structured keys, not even blank', async () => {
+    const ref = React.createRef();
+    render(<QueryClientProvider client={new QueryClient()}><ResyncHarness ref={ref} initial={structuredForeignCandidate} /></QueryClientProvider>);
+    const address = screen.getByLabelText('ที่อยู่');
+    expect(address.readOnly).toBe(true);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+    expect(address.readOnly).toBe(false);
+
+    const freeText = 'No. 12 Le Loi Street, District 1, Ho Chi Minh City, Vietnam';
+    fireEvent.change(address, { target: { value: freeText } });
+    api.customers.update.mockResolvedValueOnce({
+      customer: { ...structuredForeignCandidate, address: freeText, provinceCode: null, districtCode: null, subdistrictCode: null, postalCode: null },
+    });
+    fireEvent.blur(address);
+
+    await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(4326, { address: freeText }));
+    // The exact clearing contract: no structured key at all, not even as null/blank.
+    const sentPayload = api.customers.update.mock.calls.at(-1)[1];
+    expect(Object.keys(sentPayload)).toEqual(['address']);
+
+    // Reflects the SERVER's returned record: provinceCode is now null, so readOnly drops on its
+    // own and the switch checkbox — having nothing left to switch — is gone.
+    await waitFor(() => expect(address.readOnly).toBe(false));
+    expect(screen.queryByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ })).toBeNull();
+  });
+
+  it('a refused switch rolls the address AND the checkbox back — the field returns to readOnly', async () => {
+    const showToast = vi.fn();
+    const ref = React.createRef();
+    render(<QueryClientProvider client={new QueryClient()}><ResyncHarness ref={ref} initial={structuredForeignCandidate} showToast={showToast} /></QueryClientProvider>);
+    const address = screen.getByLabelText('ที่อยู่');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+    fireEvent.change(address, { target: { value: 'a rejected free-text address' } });
+    api.customers.update.mockRejectedValueOnce(new Error('บันทึกข้อมูลลูกค้าไม่สำเร็จ'));
+    fireEvent.blur(address);
+
+    await waitFor(() => expect(address.value).toBe(structuredForeignCandidate.address)); // rolled back
+    expect(showToast).toHaveBeenCalledWith('error', 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
+    expect(address.readOnly).toBe(true); // structured again — the toggle was dropped, not left "unlocked"
+    expect(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }).checked).toBe(false);
+  });
+
+  it('unchecking before saving re-locks the field without sending any request', () => {
+    const callsBefore = api.customers.update.mock.calls.length;
+    render(<QueryClientProvider client={new QueryClient()}><ResyncHarness initial={structuredForeignCandidate} /></QueryClientProvider>);
+    const address = screen.getByLabelText('ที่อยู่');
+    const checkbox = screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ });
+
+    fireEvent.click(checkbox);
+    expect(address.readOnly).toBe(false);
+    fireEvent.click(checkbox);
+    expect(address.readOnly).toBe(true);
+    expect(api.customers.update.mock.calls.length).toBe(callsBefore); // no blur-triggered save happened
+  });
+
+  it('picking a DIFFERENT structured customer resets the toggle rather than carrying it over', () => {
+    const ref = React.createRef();
+    render(<QueryClientProvider client={new QueryClient()}><ResyncHarness ref={ref} initial={structuredForeignCandidate} /></QueryClientProvider>);
+    fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+    expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(false);
+
+    const other = { ...structuredForeignCandidate, id: 4328, name: 'คุณออย' };
+    act(() => { ref.current.setCustomer(other); });
+
+    expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true); // back to locked for the NEW customer
+    expect(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }).checked).toBe(false);
+  });
 });
 
 it('focusing and leaving a field without typing is not dirty: a refresh still applies', async () => {
