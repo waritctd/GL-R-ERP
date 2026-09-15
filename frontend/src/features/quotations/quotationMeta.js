@@ -491,6 +491,51 @@ export function sqmPerPieceFromSizeCm(sizeText) {
   return sqmPerPiece;
 }
 
+/** The bare `[width, height]` pair behind {@link sqmPerPieceFromSizeCm}, without that function's
+ * own area sanity bound (0.001-10 m²/piece) — a comparison needs the raw numbers even for a pair
+ * that would fail that bound, e.g. a catalogue's mm figures typed verbatim into this cm-labelled
+ * field ("600x600"). `null` on anything SIZE_CM_PATTERN does not recognise as a plain size pair. */
+function parseSizeCmPair(sizeText) {
+  const match = SIZE_CM_PATTERN.exec(sizeText ?? '');
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!(width > 0) || !(height > 0)) return null;
+  return [width, height];
+}
+
+/**
+ * Whether `sizeText` states the SAME face size as `catalogSizeText` — both read in THIS field's
+ * own unit, cm (see {@link parseSizeCmPair}/{@code SIZE_CM_PATTERN}) — compared order-insensitively
+ * and in EITHER centimetres (as both are typed/stored) or millimetres (a rep who typed the
+ * catalogue's millimetre figures straight into this cm-labelled field, e.g. "600x600" against a
+ * 60x60cm/600x600mm catalogue row). Mirrors `DealQuotationLines#sizeLine`'s REFINEMENT rule (prod
+ * QT-2026-0034-1, 2026-09-15) so the editor's "is this still the catalogue's size?" question and
+ * the printed document's answer to the same question never diverge.
+ *
+ * Used by `QuotationItemRow`'s ขนาด (ซม.) `onChange` to decide whether a catalogue-resolved
+ * แผ่น/ตร.ม. (`sqmPerPieceSource === 'catalog'`) needs recomputing from the newly typed size, or is
+ * still describing the same tile the catalogue pick resolved.
+ *
+ * A floating-point tolerance (1e-6) stands in for the backend's exact `BigDecimal#compareTo` — far
+ * finer than the two-decimal-place precision either side's figures actually carry.
+ *
+ * @return `false` (never `true`) when either text fails to parse as a plain size pair — an
+ *     unparseable typed size is always treated as "a different size" by the caller, exactly like
+ *     an unparseable one is on the backend.
+ */
+export function sizeTextMatchesCatalogFaceSize(sizeText, catalogSizeText) {
+  const typed = parseSizeCmPair(sizeText);
+  const catalog = parseSizeCmPair(catalogSizeText);
+  if (!typed || !catalog) return false;
+  const closeEnough = (a, b) => Math.abs(a - b) < 1e-6;
+  const matchesPair = (a, b, w, h) => (closeEnough(a, w) && closeEnough(b, h)) || (closeEnough(a, h) && closeEnough(b, w));
+  const [typedWidth, typedHeight] = typed;
+  const [catalogWidth, catalogHeight] = catalog;
+  return matchesPair(typedWidth, typedHeight, catalogWidth, catalogHeight)
+    || matchesPair(typedWidth, typedHeight, catalogWidth * 10, catalogHeight * 10);
+}
+
 // ── Item completeness (frontend pass 4, owner ruling 2026-09-10) ────────────────────────────────
 // "Autofill as much as possible when the item is in the database; sales can also fill in their own
 // item if it is not in the database, but ALL info about the tile has to be completed." A catalog

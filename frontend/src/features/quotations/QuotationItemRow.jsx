@@ -9,7 +9,7 @@ import {
   ORIGIN_COUNTRY_OPTIONS, QUANTITY_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, WASTAGE_PERCENT_PRESETS,
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
-  sqmPerPieceFromSizeCm,
+  sqmPerPieceFromSizeCm, sizeTextMatchesCatalogFaceSize,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -202,7 +202,7 @@ export function QuotationItemRow({
     // stale claim #M9 already fixed for the "จาก catalog" badge itself. `sqmPerPiece` (the actual
     // value) is deliberately left alone -- retyping รุ่น should not blank out a number the rep may
     // still want, only stop claiming it came from a catalog match.
-    patch({ model: value, catalogPriceId: null, catalogSqmPerPiece: null, catalogPriceUnit: null });
+    patch({ model: value, catalogPriceId: null, catalogSqmPerPiece: null, catalogPriceUnit: null, catalogSizeText: null });
     setCatalogOpen(true);
     debouncedCatalogSearch(value, async (q) => {
       if (!q?.trim()) { setCatalogResults([]); return; }
@@ -289,6 +289,15 @@ export function QuotationItemRow({
           : item.sqmPerPieceSource ?? null,
       catalogSqmPerPiece: resolvedSqmPerPiece,
       catalogPriceUnit: cat.priceUnit ?? null,
+      // The picked catalogue row's OWN face size (cm), recorded so a later ขนาด (ซม.) edit can
+      // tell "the rep retyped the same size in a different unit" (matched catalogue: keep the
+      // catalog-resolved แผ่น/ตร.ม.) from "the rep typed a genuinely different tile" (recompute --
+      // see the ขนาด onChange handler below, and DealQuotationLines#sizeLine's REFINEMENT javadoc
+      // for the backend half of this same rule, bug prod QT-2026-0034-1). Cleared everywhere
+      // catalogSqmPerPiece is cleared (onCatalogQuery, #M9) so it can never outlive the catalog
+      // link it describes. NEVER sent to the server -- tileInputFromRow's explicit field list
+      // below does not include it.
+      catalogSizeText: newSizeText,
       // Never inherited from a previous pick, for the same reason as sqmPerBox below: a box count
       // belongs to its own product. Keeping the old one is how QT-2026-0017 saved 66 แผ่น/กล่อง for
       // a product whose catalogue says 38 (owner feedback 2026-09-14). A missing figure (684 active
@@ -522,6 +531,27 @@ export function QuotationItemRow({
             id={`size-${index}`} disabled={readOnly} value={item.sizeText ?? ''}
             onChange={(e) => {
               const newSizeText = e.target.value;
+              // Bug fix (prod QT-2026-0034-1, 2026-09-15): a row whose แผ่น/ตร.ม. came from the
+              // catalogue pick (`sqmPerPieceSource === 'catalog'`) must NOT silently keep that
+              // catalogue figure once the rep retypes ขนาด to a genuinely DIFFERENT size -- that
+              // is exactly how a line kept a linked catalogue's 600x600mm ตร.ม./แผ่น (0.36) after
+              // being retyped to "30x60" (should be 0.18). Only when the new text parses to a
+              // DIFFERENT face size than the catalogue row that was picked (`catalogSizeText`,
+              // compared the same cm-or-mm/order-insensitive way DealQuotationLines#sizeLine's
+              // REFINEMENT does server-side) does this recompute; typing the SAME size in another
+              // unit (e.g. "600x600" over a picked 60x60cm/600x600mm row) leaves the catalog value
+              // exactly as it was, matching the backend's own "still the same tile" rule.
+              if (!readOnly && item.sqmPerPieceSource === 'catalog' && item.catalogSizeText
+                && !sizeTextMatchesCatalogFaceSize(newSizeText, item.catalogSizeText)) {
+                const recomputed = sqmPerPieceFromSizeCm(newSizeText);
+                patch({
+                  sizeText: newSizeText,
+                  sqmPerPiece: recomputed,
+                  piecesPerSqmDisplay: recomputed != null ? (piecesPerSqmFromSqmPerPiece(recomputed) ?? '') : '',
+                  sqmPerPieceSource: recomputed != null ? 'size' : null,
+                });
+                return;
+              }
               const sizeFallbackEligible = !readOnly
                 && !isLinearMCatalog
                 && item.sqmPerPieceSource !== 'catalog'
@@ -993,7 +1023,7 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     // travel to the server). `piecesPerSqmDisplay: null` rather than `''` so the field's own
     // fallback (derive from `sqmPerPiece`) kicks in for a row that has never had the reciprocal
     // typed into it directly -- see the `sqm-${index}` input's own comment in the render below.
-    catalogSqmPerPiece: null, catalogPriceUnit: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
+    catalogSqmPerPiece: null, catalogPriceUnit: null, catalogSizeText: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
     unitPrice: '', discountPct: null,

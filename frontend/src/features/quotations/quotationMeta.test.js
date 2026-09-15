@@ -27,6 +27,7 @@ import {
   remainderModeLabel,
   sqmPerPieceFromPiecesPerSqm,
   sqmPerPieceFromSizeCm,
+  sizeTextMatchesCatalogFaceSize,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -537,6 +538,41 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
     // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile --
     // exactly the millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
     expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
+  });
+});
+
+describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mirrors DealQuotationLines#sizeLine\'s REFINEMENT)', () => {
+  it('matches when the typed size equals the catalogue size exactly', () => {
+    expect(sizeTextMatchesCatalogFaceSize('60x60', '60x60')).toBe(true);
+  });
+
+  it('matches order-insensitively', () => {
+    expect(sizeTextMatchesCatalogFaceSize('120x60', '60x120')).toBe(true);
+  });
+
+  it('matches when the typed size is the catalogue size in millimetres (the exact prod bug shape)', () => {
+    // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight
+    // into this cm-labelled field.
+    expect(sizeTextMatchesCatalogFaceSize('600x600', '60x60')).toBe(true);
+    expect(sizeTextMatchesCatalogFaceSize('600x1200', '60x120')).toBe(true);
+    expect(sizeTextMatchesCatalogFaceSize('1200x600', '60x120')).toBe(true);
+  });
+
+  it('does NOT match a genuinely different size -- the exact prod bug\'s two lines', () => {
+    expect(sizeTextMatchesCatalogFaceSize('30x60', '60x60')).toBe(false);
+    expect(sizeTextMatchesCatalogFaceSize('3x60', '60x60')).toBe(false);
+  });
+
+  it('tolerates spacing, separators and a trailing unit', () => {
+    expect(sizeTextMatchesCatalogFaceSize('60 x 60 cm', '60x60')).toBe(true);
+    expect(sizeTextMatchesCatalogFaceSize('60×60', '60x60')).toBe(true);
+  });
+
+  it('is false whenever either side fails to parse as a plain size pair', () => {
+    expect(sizeTextMatchesCatalogFaceSize('รูปทรงอิสระ', '60x60')).toBe(false);
+    expect(sizeTextMatchesCatalogFaceSize('60x60', '')).toBe(false);
+    expect(sizeTextMatchesCatalogFaceSize('', '60x60')).toBe(false);
+    expect(sizeTextMatchesCatalogFaceSize(null, null)).toBe(false);
   });
 });
 
