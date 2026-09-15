@@ -240,7 +240,10 @@ public class CustomerController {
         @NotBlank @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
-        @Email @Size(max = 200) String email,
+        // Thai message (2026-09-16 fix): @Email's Jakarta default ("must be a well-formed email
+        // address") reached the picker verbatim via ApiExceptionHandler#fieldMessage, which only
+        // translates a literal `message=` — see that method's own NOTE. Format accepted unchanged.
+        @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email,
         @Size(max = 50) String phone
     ) {}
 
@@ -250,7 +253,7 @@ public class CustomerController {
         @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
-        @Email @Size(max = 200) String email,
+        @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email,
         @Size(max = 50) String phone
     ) {}
 

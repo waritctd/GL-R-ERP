@@ -273,6 +273,25 @@ class CustomerControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
+    /**
+     * 2026-09-16 fix: {@code @Email} on {@code UpdateContactRequest.email} used to carry no
+     * {@code message=}, so {@code ApiExceptionHandler#fieldMessage} surfaced Jakarta's built-in
+     * English default ("must be a well-formed email address") to the picker verbatim. Proves the
+     * Thai literal now added to the annotation reaches the response body — `@Valid` runs during
+     * argument resolution, before the controller body (and therefore before
+     * `DealEntryAccess.requireCanEnterDeal`/`customerService.updateContact`) ever executes, so
+     * `contacts`/`dealQuotations` are correctly never touched.
+     */
+    @Test
+    void updateContactWithMalformedEmail_isBadRequestWithThaiMessage() throws Exception {
+        mvc.perform(put("/api/customers/1/contacts/1").session(session("sales"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"not-an-email\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .string(org.hamcrest.Matchers.containsString("รูปแบบอีเมลไม่ถูกต้อง")));
+        verify(contacts, never()).update(anyLong(), anyLong(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void employeeCannotCreateProject() throws Exception {
         mvc.perform(post("/api/customers/1/projects").session(session("employee"))
