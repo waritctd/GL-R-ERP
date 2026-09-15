@@ -293,6 +293,81 @@ describe('DealCustomerCard', () => {
     });
   });
 
+  // ── Foreign-customer address (bug fix, prod QT-2026-0039-1) ─────────────────────────────────
+  describe('เพิ่มลูกค้าใหม่ — ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย', () => {
+    async function openNewCustomerModal() {
+      api.customers.search.mockResolvedValue({ customers: [] });
+      render(wrap(<Harness />));
+      fireEvent.focus(screen.getByLabelText(/^ลูกค้า/));
+      fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
+    }
+
+    it('Thai mode (unchanged): the structured จังหวัด/เขต/แขวง fields are required and no free-text ที่อยู่ shows', async () => {
+      await openNewCustomerModal();
+
+      expect(screen.getByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).not.toBeNull();
+      expect(screen.getByRole('combobox', { name: 'จังหวัด' })).not.toBeNull();
+      expect(screen.queryByLabelText(/^ที่อยู่/)).toBeNull();
+      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
+
+      fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'บริษัท ไทย จำกัด' } });
+      // Name alone is still not enough in Thai mode -- structured geography stays required.
+      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
+    });
+
+    it('checking ลูกค้าต่างประเทศ swaps in a free-text ที่อยู่ textarea and drops the structured requirement', async () => {
+      await openNewCustomerModal();
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+
+      expect(screen.queryByLabelText('เลขที่ / อาคาร / หมู่ / ซอย / ถนน')).toBeNull();
+      expect(screen.queryByRole('combobox', { name: 'จังหวัด' })).toBeNull();
+      const address = screen.getByLabelText(/^ที่อยู่/);
+      expect(address.tagName).toBe('TEXTAREA');
+    });
+
+    it('submits a foreign customer with a free-text address and NO structured codes, hitting the non-structured backend path', async () => {
+      api.customers.create.mockResolvedValue({ customer: { id: 101, name: 'Vietnam Tiles Co., Ltd.', taxId: null } });
+      await openNewCustomerModal();
+
+      fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'Vietnam Tiles Co., Ltd.' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+      // No tax id required for a foreign customer -- Save must not be blocked on it.
+      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(false);
+
+      fireEvent.change(screen.getByLabelText(/^ที่อยู่/), { target: { value: '123 Nguyen Hue St, District 1, Ho Chi Minh City, Vietnam' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }));
+
+      await waitFor(() => expect(api.customers.create).toHaveBeenCalledTimes(1));
+      const payload = api.customers.create.mock.calls[0][0];
+      expect(payload).toEqual({
+        name: 'Vietnam Tiles Co., Ltd.',
+        taxId: null,
+        address: '123 Nguyen Hue St, District 1, Ho Chi Minh City, Vietnam',
+        phone: null,
+      });
+      // The mechanism the fix relies on: CustomerController#structured / mockApi's
+      // structuredCustomerAddress both flag "structured" on ANY of these keys being non-null --
+      // an empty string counts. The payload must not carry them at all, not even as ''.
+      for (const key of ['addressLine', 'provinceCode', 'districtCode', 'subdistrictCode', 'postalCode']) {
+        expect(payload[key]).toBeUndefined();
+      }
+      await waitFor(() => expect(screen.getByText('Vietnam Tiles Co., Ltd.')).not.toBeNull());
+    });
+
+    it('unchecking ลูกค้าต่างประเทศ goes back to requiring structured geography', async () => {
+      await openNewCustomerModal();
+      fireEvent.change(screen.getByPlaceholderText('บริษัท … จำกัด'), { target: { value: 'บริษัท กลับไทย จำกัด' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+      fireEvent.change(screen.getByLabelText(/^ที่อยู่/), { target: { value: 'Somewhere abroad' } });
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ }));
+
+      expect(screen.getByRole('combobox', { name: 'จังหวัด' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'บันทึกลูกค้าใหม่' }).disabled).toBe(true);
+    });
+  });
+
   it('renders Thai inline error hints passed via the errors prop', () => {
     render(wrap(
       <DealCustomerCard
