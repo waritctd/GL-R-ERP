@@ -896,4 +896,61 @@ class DealQuotationRenderAdapterV3Test {
             salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
             List.<DealQuotationItemDto>of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
+
+    // ── fix (2026-09-15): "คุณ" is not doubled when the contact name already carries one ────────
+
+    /** The exact production value: contact_name = "คุณปิยพร เมืองจีน" printed "เรียน
+     * คุณคุณปิยพร เมืองจีน" because #looksLikeOrganisation correctly said this is NOT an
+     * organisation (so the "คุณ" branch fired) but nothing checked whether the name already
+     * carried its own honorific. */
+    @Test
+    void thaiDocument_attnLine_doesNotDoublePrefixAnHonorificTheContactNameAlreadyCarries() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("คุณปิยพร เมืองจีน", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณปิยพร เมืองจีน   /   บริษัท ทดสอบ จำกัด");
+        assertThat(model.attnLine()).doesNotContain("คุณคุณ");
+    }
+
+    @Test
+    void hasThaiHonorificPrefix_detectsEachSupportedHonorific() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณปิยพร เมืองจีน")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นายสมชาย ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสมหญิง ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสาวสมหญิง ใจดี")).isTrue();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("ดร.สมชาย ใจดี")).isTrue();
+    }
+
+    /** The prefix overlap the task specifically calls out: "นางสาว" must be recognised as its OWN
+     * honorific, not merely as "นาง" followed by a name that happens to start with "สาว" -- both
+     * readings currently answer {@code true} here (this method only ever detects, never strips),
+     * but the point is that a name genuinely typed as "นางสาว..." must not be misread as if only
+     * "นาง" matched and the rest were part of the name. */
+    @Test
+    void hasThaiHonorificPrefix_doesNotConfuseNangsaoForNangPlusAName() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("นางสาวปิยพร เมืองจีน")).isTrue();
+    }
+
+    @Test
+    void hasThaiHonorificPrefix_aPersonWithNoHonorificIsNotPrefixed() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("ธนพล ใจดี")).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix(null)).isFalse();
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("   ")).isFalse();
+    }
+
+    /** Only a LEADING match counts -- a name that merely contains "นาง" somewhere past the start
+     * (never at position 0 of the whitespace-normalised string) is not mistaken for one. */
+    @Test
+    void hasThaiHonorificPrefix_aMidStringOccurrenceDoesNotCount() {
+        assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("จรินางค์ ใจดี")).isFalse();
+    }
+
+    /** A genuine person contact with NO honorific at all still gets "คุณ" prefixed, exactly as
+     * before -- this fix must not remove the "คุณ" prefix for the common case, only skip it when
+     * one is already present. */
+    @Test
+    void thaiDocument_attnLine_stillPrefixesKhunWhenTheContactHasNoHonorificOfItsOwn() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithContact("ธนพล ใจดี", "บริษัท ทดสอบ จำกัด", null), null, null);
+        assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท ทดสอบ จำกัด");
+    }
 }

@@ -122,8 +122,15 @@ public final class DealQuotationRenderAdapter {
             // is omitted entirely rather than printed twice; (2) "คุณ" is prefixed only when the
             // surviving contact name does not itself look like an organisation (a company recorded
             // as its OWN contact, distinct from the customer name, still should not read "คุณ").
+            //
+            // Fix (2026-09-15): production printed "เรียน คุณคุณปิยพร เมืองจีน" for contact_name =
+            // "คุณปิยพร เมืองจีน" -- the imported/typed value already carried its own honorific, and
+            // this branch prefixed a second one unconditionally whenever the name was not an
+            // organisation. #hasThaiHonorificPrefix adds the same "already has one" check
+            // #looksLikeOrganisation already does for a company name.
             String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
-                ? (looksLikeOrganisation(quotation.contactName()) ? "" : "คุณ")
+                ? (looksLikeOrganisation(quotation.contactName())
+                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ")
                     + quotation.contactName().trim() + "   /   "
                 : "";
             String taxIdPart = !blank(quotation.customerTaxId())
@@ -866,6 +873,34 @@ public final class DealQuotationRenderAdapter {
             }
         }
         return ORG_NAME_WORD_PATTERN.matcher(lower).find();
+    }
+
+    // ── "คุณ" double-prefix fix (2026-09-15) ─────────────────────────────────────────────────
+
+    // Longest-prefix-first so "นางสาว" (Ms.) is never left matching only as far as "นาง" (Mrs.) --
+    // doesn't actually change which names match (either entry alone already answers "starts with
+    // ONE of these" correctly), but keeps the list read in the same "most specific first" order as
+    // #ORG_NAME_PREFIXES above rather than inviting a future maintainer to wonder why it isn't.
+    private static final String[] THAI_HONORIFIC_PREFIXES = {
+        "นางสาว", "นาย", "นาง", "คุณ", "ดร.",
+    };
+
+    /** {@code true} when {@code name} (whitespace-normalised) already OPENS with one of {@link
+     * #THAI_HONORIFIC_PREFIXES} -- production bug, contact_name = "คุณปิยพร เมืองจีน" printed
+     * "เรียน คุณคุณปิยพร เมืองจีน" because the value stored on the deal already carried its own
+     * honorific and the attn-line builder prefixed a second one. Checked as a PREFIX only, exactly
+     * like {@link #ORG_NAME_PREFIXES} -- a name that merely contains "นาง" mid-word does not count. */
+    static boolean hasThaiHonorificPrefix(String name) {
+        if (blank(name)) {
+            return false;
+        }
+        String trimmed = normalizeWhitespace(name);
+        for (String prefix : THAI_HONORIFIC_PREFIXES) {
+            if (trimmed.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ── the customer phone's own label (QT-2026-0032-1, 2026-09-15) ─────────────────────────
