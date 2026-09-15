@@ -255,6 +255,20 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 24 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
     }
 
+    /** Review fix F2 (2026-09-16): same as {@link #calculationLine_noneWastage_omitsWastagePhrase}
+     * but with a STALE non-zero {@code wastageValue} left over from a previous PERCENT/PIECES mode
+     * -- nothing clears it when the rep switches {@code wastageMode} to NONE. Byte-identical to the
+     * null-value case, since {@code hasWastage} must be gated on the MODE, not merely a non-zero
+     * value -- {@link WastageCalculator} never reads {@code wastageValue} in NONE mode either. */
+    @Test
+    void calculationLine_noneWastageWithStaleNonZeroValue_isUnaffected() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2"),
+            20, WastageCalculator.WASTAGE_MODE_NONE, new BigDecimal("7"), 24, 12);
+
+        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 24 แผ่น) (บรรจุ 12 แผ่น/กล่อง)");
+    }
+
     @Test
     void calculationLine_noPiecesPerBox_omitsRoundingAndBoxTail() {
         String line = DealQuotationLines.calculationLine(
@@ -429,6 +443,16 @@ class DealQuotationLinesTest {
             .isEqualTo("(Quantity 100 pcs, rounded up to full boxes = 108 pcs) (12 pcs/box)");
         assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null))
+            .isEqualTo("(Quantity 1,500 pcs = 1,500 pcs)");
+    }
+
+    /** Review fix F2 (2026-09-16): the English mirror of
+     * {@link #calculationLine_noneWastageWithStaleNonZeroValue_isUnaffected} -- a STALE non-zero
+     * wastageValue under wastageMode=NONE must not resurrect the allowance clause. */
+    @Test
+    void english_noneWastageWithStaleNonZeroValue_isUnaffected() {
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            1500, WastageCalculator.WASTAGE_MODE_NONE, new BigDecimal("9"), 1500, null))
             .isEqualTo("(Quantity 1,500 pcs = 1,500 pcs)");
     }
 
@@ -679,6 +703,19 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
+    /** Review fix F2 (2026-09-16): a STALE non-zero {@code wastageValue} under
+     * {@code wastageMode=NONE} used to make {@code hasWastage} read true here (it was gated on the
+     * value alone, not the mode), which printed the duplicate intermediate clause this method's own
+     * Javadoc says it exists to avoid: {@code (จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)} instead
+     * of the byte-identical-to-no-wastage line below. */
+    @Test
+    void calculationLine_thaiLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE,
+            new BigDecimal("12"), 32, 10, false);
+        assertThat(line).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
     /** The headline Thai example WITH wastage: the intermediate "= 29 แผ่น" clause DOES print
      * (piecesFinal differs from the quantityPart's own 28 because of the 5% allowance), followed
      * by the box/loose split — both clauses, not either alone. */
@@ -740,6 +777,16 @@ class DealQuotationLinesTest {
         String line = DealQuotationLines.calculationLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
             32, 10, false);
+        assertThat(line).isEqualTo("(Quantity 32 pcs = 3 boxes + 2 pcs) (10 pcs/box)");
+    }
+
+    /** Review fix F2 (2026-09-16): the English mirror of
+     * {@link #calculationLine_thaiLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause}. */
+    @Test
+    void calculationLine_englishLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE,
+            new BigDecimal("12"), 32, 10, false);
         assertThat(line).isEqualTo("(Quantity 32 pcs = 3 boxes + 2 pcs) (10 pcs/box)");
     }
 

@@ -299,7 +299,17 @@ public final class DealQuotationLines {
         // NOTHING for this part, in either mode, rather than "+ เผื่อ 0%" / "+ เผื่อ 0 แผ่น".
         // Printing-only: piecesFinal itself is unaffected, it is computed upstream and simply
         // echoed below exactly as it always was.
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        //
+        // Review fix F2 (2026-09-16): gated on the MODE too, not merely a non-zero value -- a row
+        // switched to wastageMode=NONE keeps whatever wastageValue it last held (WastageCalculator
+        // ignores it entirely in NONE mode, see WastageCalculator#calculate), so an ungated
+        // `hasWastage` reads true for a row applying no wastage at all. wastagePart below was
+        // already immune (its own `WASTAGE_MODE_PERCENT`/`WASTAGE_MODE_PIECES` checks exclude
+        // NONE), but thaiLoosePiecesLine's intermediate "= N แผ่น" clause is not -- it trusted this
+        // flag alone, so it printed the duplicate `(จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)` its
+        // own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + "%";
@@ -372,7 +382,11 @@ public final class DealQuotationLines {
             ? "Quantity " + format(piecesBeforeWastage) + " pcs"
             : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
                 + format(piecesBeforeWastage) + " pcs";
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        // Review fix F2 (2026-09-16): mode-gated, mirroring the Thai branch above -- see its own
+        // comment. Without this, englishLoosePiecesLine's intermediate "= N pcs" clause could print
+        // the same duplicate its own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + " + format(wastageValue) + "% allowance";
