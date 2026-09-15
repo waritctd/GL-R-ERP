@@ -582,16 +582,27 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // The message body itself (htmlSent only captures [to, subject] in this fixture) is
         // asserted through the in-app row instead -- same underlying Postgres row the real mail
         // router reads from.
-        assertThat(notifications.findByEmployeeId(salesManagerId)).anyMatch(n ->
-            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
-                && n.message().contains(salesActor.name())
-                && n.message().contains(revisionSubmitted.number())
-                && n.message().contains(approved.number()));
-        assertThat(notifications.findByEmployeeId(ceoId)).anyMatch(n ->
-            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
-                && n.message().contains(salesActor.name())
-                && n.message().contains(revisionSubmitted.number())
-                && n.message().contains(approved.number()));
+        //
+        // Opus review (2026-09-16): the revision number is ALWAYS the parent number plus a
+        // "-n" suffix (see revisionNumber(base, n) below), so it CONTAINS the parent number as a
+        // literal substring -- asserting message().contains(newNumber) makes
+        // message().contains(parentNumber) pass trivially even if "(แก้ไขจาก ...)" were dropped
+        // entirely. Pin the WHOLE message verbatim instead, so the "(แก้ไขจาก {parent})" wording
+        // and the two fixed phrases ("ฉบับแก้ไข", "กรุณาตรวจสอบและพิจารณาอนุมัติ") are all load-bearing.
+        String expectedMessage = salesActor.name() + " ได้จัดทำใบเสนอราคาฉบับแก้ไข " + revisionSubmitted.number()
+            + " (แก้ไขจาก " + approved.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("sales_manager gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+        assertThat(notifications.findByEmployeeId(ceoId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("ceo gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
     }
 
     /**
@@ -622,20 +633,70 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         DealQuotationDto resubmitted = realQuotationService.submit(rejected.id(), salesActor);
 
+        // Opus review (2026-09-16): filteredOn(...).allSatisfy(...) passes vacuously on an EMPTY
+        // list (verified against this repo's assertj-core 3.27.7) -- exactly the shape that stayed
+        // green through the documented nested-afterCommit bug (submitDraftRow's own comment above),
+        // where every revision mail was silently swallowed while the in-app bell rows still landed
+        // synchronously. Pin the recipient set FIRST so a totally-lost mail batch fails loudly here,
+        // before the filtered subject check even runs.
+        assertThat(mailer.htmlSent).hasSize(3);
+        assertThat(mailer.htmlSent).extracting(sent -> sent[0])
+            .as("sales_manager, ceo, and the rep's own confirmation each sent mail on the resubmit")
+            .containsExactlyInAnyOrder("sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
         assertThat(mailer.htmlSent)
             .filteredOn(sent -> !sent[0].equals("sales-dq@glr.co.th"))
             .as("sales_manager + ceo get the REVISION subject on a resubmit-after-ตีกลับ too")
             .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
 
-        assertThat(notifications.findByEmployeeId(salesManagerId)).anyMatch(n ->
-            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
-                && n.message().contains(salesActor.name())
-                && n.message().contains(resubmitted.number())
-                && n.message().contains(rejected.number())
-                && n.message().contains("แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข"));
-        assertThat(notifications.findByEmployeeId(ceoId)).anyMatch(n ->
-            n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED")
-                && n.message().contains("แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข"));
+        // Same reasoning as the sibling test above: pin the WHOLE message, not just substrings the
+        // revision number's own "{parent}-n" shape would satisfy regardless.
+        String expectedMessage = salesActor.name() + " ได้จัดทำใบเสนอราคาฉบับแก้ไข " + resubmitted.number()
+            + " (แก้ไขจาก " + rejected.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ"
+            + " — แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("sales_manager gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+        assertThat(notifications.findByEmployeeId(ceoId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("ceo gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+    }
+
+    /**
+     * Opus review (2026-09-16), finding 4: {@code notifyRevisionSubmitted} interpolates {@code
+     * actor.name()} with no null/blank guard, so a blank name would otherwise print the literal
+     * "  ได้จัดทำใบเสนอราคาฉบับแก้ไข ..." (an empty leading word) in both the bell row and the
+     * e-mail. Pins the blank-safe fallback this service now falls back to instead, mirroring
+     * {@link #approve}'s own {@code approvedByName() != null ? ... : "ผู้อนุมัติ"} pattern
+     * elsewhere in this class.
+     */
+    @Test
+    void createRevision_thenSubmit_byActorWithBlankName_fallsBackToARoleLabelNotBlank() {
+        UserPrincipal blankNamedSalesActor = new UserPrincipal(
+            salesRepId, "sales-dq@glr.co.th", "   ", "sales", salesRepId, true, LocalDate.now(), false, null, false);
+
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), blankNamedSalesActor);
+        DealQuotationDto revisionSubmitted = quotationService.submit(revision.id(), blankNamedSalesActor);
+
+        String expectedMessage = "ผู้เสนอราคา ได้จัดทำใบเสนอราคาฉบับแก้ไข " + revisionSubmitted.number()
+            + " (แก้ไขจาก " + approved.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("a blank actor name falls back to a role label, never a literal blank/\"null\"")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
     }
 
     /**

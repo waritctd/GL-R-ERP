@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -578,14 +579,28 @@ public class DealQuotationService {
      * (see this class's own status-machine comment above {@link #submit}) -- so the parent is
      * STILL {@code DRAFT} at this point, with {@code approvalNote} holding the rejection reason,
      * not yet superseded (that only happens once THIS revision itself reaches {@code APPROVED}).
+     *
+     * <p>Opus review (2026-09-16): the parent lookup is a plain {@link
+     * DealQuotationRepository#findById}, NOT {@link #requireQuotation}, so this notification step
+     * can never 404 the surrounding submit transaction just because the parent row is somehow
+     * unreadable -- there is no DELETE of quotations anywhere in this codebase and the parent is
+     * FK-protected, so the fallback below is not reachable today, but a notification side-effect is
+     * still the wrong place to fail a submit outright. Same reasoning for {@code actor.name()}: it
+     * is interpolated with no null/blank guard elsewhere in this class, but this is the one message
+     * that prints it verbatim as the FIRST word, so a blank name would otherwise read as the
+     * literal "null ได้จัดทำ...". Falls back to a role label, matching {@link #approve}'s own
+     * {@code approvedByName() != null ? ... : "ผู้อนุมัติ"} pattern just below in this class.
      */
     private void notifyRevisionSubmitted(DealQuotationDto submitted, long parentId, UserPrincipal actor) {
-        DealQuotationDto parent = requireQuotation(parentId);
+        Optional<DealQuotationDto> parent = quotations.findById(parentId);
+        String parentNumber = parent.map(DealQuotationDto::number).orElse("-");
+        String actorName = isBlank(actor.name()) ? "ผู้เสนอราคา" : actor.name();
         StringBuilder message = new StringBuilder()
-            .append(actor.name()).append(" ได้จัดทำใบเสนอราคาฉบับแก้ไข ").append(submitted.number())
-            .append(" (แก้ไขจาก ").append(parent.number()).append(") กรุณาตรวจสอบและพิจารณาอนุมัติ");
-        if (QuotationStatus.DRAFT.equals(parent.docStatus()) && !isBlank(parent.approvalNote())) {
-            message.append(" — แก้ไขตามที่ตีกลับ: ").append(parent.approvalNote());
+            .append(actorName).append(" ได้จัดทำใบเสนอราคาฉบับแก้ไข ").append(submitted.number())
+            .append(" (แก้ไขจาก ").append(parentNumber).append(") กรุณาตรวจสอบและพิจารณาอนุมัติ");
+        if (parent.isPresent() && QuotationStatus.DRAFT.equals(parent.get().docStatus())
+                && !isBlank(parent.get().approvalNote())) {
+            message.append(" — แก้ไขตามที่ตีกลับ: ").append(parent.get().approvalNote());
         }
         String link = "/quotations/" + submitted.id();
         notifications.notifyByRoleAtLink(
