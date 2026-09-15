@@ -1048,4 +1048,70 @@ class DealQuotationRenderAdapterV3Test {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
             false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
+
+    // ── fix (2026-09-15): 0% deposit no longer prints a phantom deposit clause ──────────────────
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "CREDIT", 45, null), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต 45 วัน");
+    }
+
+    @Test
+    void thaiDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "ON_DELIVERY", null, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "CREDIT", 45, WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment is due on 45 days credit.");
+    }
+
+    @Test
+    void englishDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(0, "ON_DELIVERY", null, WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment is due before or upon delivery.");
+    }
+
+    /** Regression guard: an ordinary POSITIVE deposit is completely untouched by this fix -- same
+     * text as before the {@code depositLine}/{@code englishDepositLine} extraction. */
+    @Test
+    void thaiDocument_note2_nonZeroDeposit_isUnchanged() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(30, "CREDIT", 30, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
+    }
+
+    /** Explicitly out of scope, per the task: a {@code null} depositPercent still defaults to 30%
+     * -- only an EXPLICIT zero takes the new branch. Kept as its own test so a future reader sees
+     * the two cases were deliberately kept apart, not merged by accident. */
+    @Test
+    void thaiDocument_note2_nullDepositPercent_stillDefaultsToThirtyPercent_notTheZeroBranch() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(null, "CREDIT", 30, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
+    }
+
+    private DealQuotationDto quotationWithDeposit(Integer depositPercent, String remainderMode,
+                                                  Integer creditDays, String documentLanguage) {
+        return new DealQuotationDto(1L, "QT-2026-0001", 1L, "DRAFT", 1, null,
+            1L, "ผู้พิมพ์", null, 1L, "พนักงานขาย", null, "081-000-0000",
+            null, null, null, null, null, null,
+            LocalDate.of(2026, 9, 11), "ลูกค้าทดสอบ", null, null, null,
+            null, null, null, null, "โครงการทดสอบ",
+            "P003", "D002", LocalDate.of(2026, 9, 11), depositPercent, remainderMode, creditDays, 30, null, null,
+            WastageCalculator.PRICE_MODE_NET,
+            documentLanguage != null ? documentLanguage : WastageCalculator.DOCUMENT_LANGUAGE_TH,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "THB",
+            false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
+    }
 }

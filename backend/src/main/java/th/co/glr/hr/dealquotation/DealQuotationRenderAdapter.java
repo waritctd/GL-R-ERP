@@ -408,6 +408,34 @@ public final class DealQuotationRenderAdapter {
     private static final String LINE7_DATE_PREFIX =
         "7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ ";
 
+    /**
+     * Note 2, remark slot -- the ONE numbered line that names the deposit. Production complaint
+     * (2026-09-15): a document with {@code deposit_percent = 0} still printed "บริษัทฯ ขอรับมัดจำ
+     * 0% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ..." -- a phantom zero-percent deposit demand, since
+     * nothing in the old text handled zero as anything other than "some positive percentage".
+     *
+     * <p>Only an EXPLICIT zero takes this branch. A {@code null} {@code depositPercent} still
+     * defaults to 30 above ({@code depositPct}), UNCHANGED -- out of scope for this fix, per the
+     * task that requested it, and mentioned here so a later reader does not conflate the two.
+     *
+     * <p>When there truly is no deposit, note 2 states the FULL-amount payment terms directly
+     * instead of naming a deposit that does not exist -- the remainder text passed in (the
+     * CREDIT-days wording, or the before/upon-delivery wording) already covers the SAME two
+     * {@code remainderMode} variants this file has ever supported (nothing else is stored in
+     * {@code remainder_mode} -- see the DB column's own comment), just now applied to the WHOLE
+     * amount rather than "the remainder after the deposit". The "2." slot number is kept exactly
+     * as before either way.
+     */
+    private static String depositLine(int depositPct, String remainderMode, Integer creditDays,
+                                       String remainderText) {
+        if (depositPct != 0) {
+            return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
+        }
+        return "CREDIT".equals(remainderMode)
+            ? "2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต " + (creditDays != null ? creditDays : 0) + " วัน"
+            : "2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+    }
+
     private static List<String> remarkLines(DealQuotationDto quotation) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
@@ -426,7 +454,7 @@ public final class DealQuotationRenderAdapter {
 
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
-        lines.add("2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText);
+        lines.add(depositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
         int leadTimeLineIndex = lines.size();
         lines.add(leadTimeLine(quotation.items()));
         lines.add(LINE4);
@@ -582,6 +610,20 @@ public final class DealQuotationRenderAdapter {
      * proforma-invoice line at 4. The bank lines themselves come from configuration, not from this
      * class — see {@code app.quotation.bank-block-line1..3}.
      */
+    /** The English twin of {@link #depositLine} -- same zero-deposit rule, same two {@code
+     * remainderMode} variants, English words. See that method's Javadoc for the full reasoning;
+     * kept as its own method for the same "two flat methods read better than one with language
+     * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
+    private static String englishDepositLine(int depositPct, String remainderMode, Integer creditDays,
+                                              String remainderText) {
+        if (depositPct != 0) {
+            return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
+        }
+        return "CREDIT".equals(remainderMode)
+            ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
+            : "2.Full payment is due before or upon delivery.";
+    }
+
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
@@ -609,8 +651,7 @@ public final class DealQuotationRenderAdapter {
         List<String> lines = new ArrayList<>();
         lines.add("1.The quantities above are as received on " + shortEnglishDate(offerDate)
             + ". Please re-confirm the actual quantities with your installer before ordering.");
-        lines.add("2.A deposit of " + depositPct + "% is required upon order confirmation, "
-            + remainderText + ".");
+        lines.add(englishDepositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
         int leadTimeLineIndex;
         if (hasBankBlock) {
             // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
