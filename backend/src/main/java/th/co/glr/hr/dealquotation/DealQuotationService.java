@@ -1474,6 +1474,18 @@ public class DealQuotationService {
                     + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
             }
         }
+        // Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number of แผ่น — a
+        // fractional value (e.g. 0.5) saved today, but WastageCalculator#applyWastage's PIECES
+        // branch silently ROUNDS it (HALF_UP) for the arithmetic while the STORED/PRINTED
+        // wastageValue stays the untouched fraction, so the printed "+ เผื่อ 0.5 แผ่น" disagrees
+        // with the piece count the document actually adds. Refused here, before the value ever
+        // reaches WastageCalculator, so it can never be stored at all. PERCENT wastage is
+        // untouched — a percentage genuinely can be fractional (2.5%).
+        if (WastageCalculator.WASTAGE_MODE_PIECES.equals(input.wastageMode()) && input.wastageValue() != null
+            && input.wastageValue().stripTrailingZeros().scale() > 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+        }
         WastageCalculator.Result result;
         try {
             result = WastageCalculator.calculate(new WastageCalculator.Input(

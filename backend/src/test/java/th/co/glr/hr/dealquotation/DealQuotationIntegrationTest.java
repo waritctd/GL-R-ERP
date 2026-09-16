@@ -1324,6 +1324,42 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
     }
 
+    // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────
+
+    /** {@code + เผื่อ 0.5 แผ่น} saved today. Refused now, whole-number PIECES wastage only. */
+    @Test
+    void create_refusesAFractionalPiecesWastageValue() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("0.5"))))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม");
+    }
+
+    /** Wrong-way-round: a whole-number PIECES wastage (including one written "2.00") is untouched. */
+    @Test
+    void create_acceptsAWholeNumberPiecesWastageValue_evenWithATrailingZeroScale() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("2.00"))))),
+            salesActor);
+        assertThat(created.items().get(0).piecesAfterWastage())
+            .isEqualTo(created.items().get(0).piecesBeforeWastage() + 2);
+    }
+
+    /** PERCENT wastage keeps accepting decimals -- this rule is PIECES-mode only. */
+    @Test
+    void create_stillAcceptsAFractionalPercentWastageValue() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m ->
+                m.withWastage(WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("2.5"))))),
+            salesActor);
+        assertThat(created.items().get(0)).isNotNull();
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
@@ -1377,6 +1413,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withAreaMode(BigDecimal area) {
             quantityMode = WastageCalculator.QUANTITY_MODE_AREA; areaSqm = area; piecesInput = null; return this;
         }
+        // Wording-scan fix 5 (2026-09-17): a caller-chosen wastage mode/value.
+        ItemInputBuilder withWastage(String mode, BigDecimal value) { wastageMode = mode; wastageValue = value; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,
