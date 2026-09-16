@@ -305,9 +305,13 @@ const SERVER_ONLY = {
   // ordinary called endpoints and this test refuses to keep an exemption for them.
 
   // GET/PUT /api/catalog/thickness-defaults stood here from #814 until the CEO settings panel
-  // landed. They are gone rather than re-worded: ThicknessDefaultsPanel now calls both through
-  // hrApi.js, so this test's own "is now called by hrApi — delete the entry" assertion fires if
+  // landed. They are gone rather than re-worded: hrApi.js's catalogThicknessDefaults.list/save
+  // call both, so this test's own "is now called by hrApi — delete the entry" assertion fires if
   // they come back. That assertion is what removed them.
+  //
+  // They moved to UNREACHABLE_FROM_UI below on 2026-09-17, when ThicknessDefaultsPanel — hrApi's
+  // only UI caller for those two methods — was itself removed on request. hrApi.js still calls the
+  // endpoints (so they stay out of this list), but no screen calls hrApi anymore.
 
   // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
   // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
@@ -567,6 +571,12 @@ describe('controller surface / hrApi.js contract', () => {
 const UNREACHABLE_FROM_UI = new Set([
   'DELETE /api/factory-quote-attachments/{}',
   'GET /api/catalog',
+  // GET/PUT /api/catalog/thickness-defaults joined this list on 2026-09-17: the CEO settings
+  // "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel — their only hrApi caller — was removed on request,
+  // frontend-only. See the removal note in CeoSettingsPage.jsx: the endpoint, its controller/
+  // repository, the underlying table, and the pricing engine's dependency on it via
+  // price_catalog.v_priceable_product are all untouched, so this is "UI unreachable", not "dead".
+  'GET /api/catalog/thickness-defaults',
   'GET /api/customer-quotations/{}',
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
@@ -613,6 +623,8 @@ const UNREACHABLE_FROM_UI = new Set([
   // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
   // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and
   // the "every UNREACHABLE_FROM_UI entry is real" test would flag a stale entry left here.
+  // PUT /api/catalog/thickness-defaults — see the GET entry above for the reason (same removal).
+  'PUT /api/catalog/thickness-defaults',
   'PUT /api/payroll/deduction-obligations/{}',
   'PUT /api/payroll/tax-allowances',
   'PUT /api/payroll/ytd-seed',
