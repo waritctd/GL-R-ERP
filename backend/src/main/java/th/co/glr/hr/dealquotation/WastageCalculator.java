@@ -441,17 +441,26 @@ public final class WastageCalculator {
     /**
      * Owner decision 2026-09-16 ("Option B") — the English per-sqm printed quantity when the row
      * carries no supplier box area (ตร.ม./กล่อง blank): {@code round2(piecesFinal × sqmPerPiece)},
-     * the same physical area basis the Thai SPECIAL_SQM mode's ตร.ม./แผ่น already uses, just applied
-     * to the FINAL piece count — post-wastage, and post box-rounding when a แผ่น/กล่อง IS present
-     * without a box area (a normal full-box round, or the exact wastage-adjusted count when the rep
-     * has ticked "sell loose pieces").
+     * applied to the FINAL piece count — post-wastage, and post box-rounding when a แผ่น/กล่อง IS
+     * present without a box area (a normal full-box round, or the exact wastage-adjusted count when
+     * the rep has ticked "sell loose pieces"). {@code sqmPerPiece} here is the RAW column value, not
+     * the 2dp {@link #piecesPerSqm} reciprocal, so this is a SINGLE rounding rather than a double
+     * one.
      *
-     * <p>Deliberately a DIFFERENT formula from {@link #sqmQuantityFromBoxes}, not a fallback that
-     * reads through it: with no supplier-stated box area there is no "1 box = N sqm" figure to
-     * multiply boxes by, so this multiplies the piece count by the piece's own physical size
-     * instead — {@code sqmPerPiece} RAW, not the 2dp {@link #piecesPerSqm} reciprocal, so a single
-     * rounding rather than a double one (the same discipline {@link #piecesPerSqm}'s own Javadoc
-     * warns divides money math apart on a knife-edge value).
+     * <p><b>Correction (2026-09-16 review) to this Javadoc's previous claim.</b> This is NOT "the
+     * same area basis the Thai SPECIAL_SQM mode uses" — Thai SPECIAL_SQM never derives a printed sqm
+     * quantity from pieces at all (its {@link DealQuotationLines#tilePrint} branch prints the stored
+     * PIECE count; only its net-price-per-piece derivation, {@link
+     * #netPerPieceFromSpecialSqm}, touches an sqm/piece figure, and it does so by DIVIDING by the
+     * 2dp {@link #piecesPerSqm} reciprocal, the opposite direction and a different rounding step from
+     * this method's raw multiplication). The two formulas are genuinely independent, and AREA
+     * quantity mode's own area→pieces step ({@code calculate}, below) already uses the ROUNDED
+     * {@link #piecesPerSqm} to go from a typed area to a piece count — so converting that piece
+     * count back to sqm via this method's RAW {@code sqmPerPiece} is not the exact inverse of that
+     * step, and a round-tripped value can print differently from what was typed: a typed 1,000 sqm
+     * (AREA mode, no wastage, no box) can print back as 1,000.80 sqm, because the pieces were
+     * derived using the rounded {@link #piecesPerSqm} while this method derives sqm going back using
+     * the raw {@code sqmPerPiece}.
      */
     public static BigDecimal sqmQuantityFromPieces(int piecesFinal, BigDecimal sqmPerPiece) {
         if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
