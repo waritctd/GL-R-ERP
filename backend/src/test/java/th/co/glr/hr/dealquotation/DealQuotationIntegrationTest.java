@@ -1288,6 +1288,42 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).leadTimeMaxDays()).isNull();
     }
 
+    // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ──────────
+
+    /** {@code (พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)} saved today -- a document line
+     * selling nothing. sqmPerPiece 0.36 (sampleItem's fixed value) -> ~2.78 pcs/sqm; 0.01 sqm
+     * rounds to 0 pieces before wastage (round2(0.01 x 2.78) = round(0.0278) = 0). */
+    @Test
+    void create_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** The same check on the LENIENT calculate-line preview -- consistent with how every other
+     * item error already behaves there (#requirePriceValidForType's own precedent). */
+    @Test
+    void calculateLine_refusesAnAreaThatComputesToZeroPieces() {
+        assertThatThrownBy(() -> quotationService.calculateLine(
+            itemMutated(m -> m.withAreaMode(new BigDecimal("0.01"))), "TH", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+    }
+
+    /** Wrong-way-round: an area that rounds to exactly 1 piece (not 0) is accepted -- this rule
+     * refuses only a genuine zero, never a small-but-real quantity. */
+    @Test
+    void create_acceptsAnAreaThatComputesToExactlyOnePiece() {
+        // 0.36 sqm/piece (sampleItem) -> 2.78 pcs/sqm; 0.36 sqm x 2.78 = 1.0008 -> rounds to 1.
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withAreaMode(new BigDecimal("0.36"))))), salesActor);
+        assertThat(created.items().get(0).piecesBeforeWastage()).isEqualTo(1);
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
@@ -1337,6 +1373,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
         // Wording-scan fix 3 (2026-09-17): an explicit (possibly invalid) lead-time range.
         ItemInputBuilder withLeadTime(Integer min, Integer max) { leadTimeMinDays = min; leadTimeMaxDays = max; return this; }
+        // Wording-scan fix 4 (2026-09-17): AREA quantity mode with a caller-chosen area.
+        ItemInputBuilder withAreaMode(BigDecimal area) {
+            quantityMode = WastageCalculator.QUANTITY_MODE_AREA; areaSqm = area; piecesInput = null; return this;
+        }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,

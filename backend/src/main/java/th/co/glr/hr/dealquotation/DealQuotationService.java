@@ -1492,6 +1492,15 @@ public class DealQuotationService {
             // otherwise reached the generic 500 handler instead of this 400.
             throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
         }
+        // Wording-scan fix 4 (2026-09-17): an AREA-mode row whose typed area rounds to ZERO pieces
+        // before wastage saves today ("(พื้นที่ 0.01 ตร.ม.ๆละ 2.78 แผ่น รวม 0 แผ่น ...)") — a document
+        // line selling nothing. Checked on every path that reaches this point, the preview
+        // (rowNumber == null) included, consistently with how #requirePriceValidForType already
+        // behaves on the preview.
+        if (WastageCalculator.QUANTITY_MODE_AREA.equals(input.quantityMode()) && result.piecesBeforeWastage() == 0) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST, where + "พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น");
+        }
 
         // v3: the PIECE arithmetic above is mode-independent — only the money changes. WastageCalculator
         // #calculate still owns netUnitPrice for NET mode (list price × (1 − discount)); the two new
