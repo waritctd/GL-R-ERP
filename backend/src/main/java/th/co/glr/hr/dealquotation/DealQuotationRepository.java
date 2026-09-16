@@ -1296,8 +1296,8 @@ public class DealQuotationRepository {
         // English per-sqm (owner decision 2026-09-13) or the ordinary pieces print — decided in
         // DealQuotationLines#tilePrint, the SAME call DealQuotationService#toItemDto makes.
         DealQuotationLines.TilePrint print = DealQuotationLines.tilePrint(documentLanguage, priceMode, quantityMode,
-            areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox,
-            nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm,
+            areaSqm, sqmPerPiece, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal,
+            piecesPerBox, nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm,
             roundToFullBox);
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),

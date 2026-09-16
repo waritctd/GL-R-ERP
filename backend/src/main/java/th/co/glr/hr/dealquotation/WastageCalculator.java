@@ -438,6 +438,28 @@ public final class WastageCalculator {
         return round2(BigDecimal.valueOf(boxes).multiply(sqmPerBox));
     }
 
+    /**
+     * Owner decision 2026-09-16 ("Option B") — the English per-sqm printed quantity when the row
+     * carries no supplier box area (ตร.ม./กล่อง blank): {@code round2(piecesFinal × sqmPerPiece)},
+     * the same physical area basis the Thai SPECIAL_SQM mode's ตร.ม./แผ่น already uses, just applied
+     * to the FINAL piece count — post-wastage, and post box-rounding when a แผ่น/กล่อง IS present
+     * without a box area (a normal full-box round, or the exact wastage-adjusted count when the rep
+     * has ticked "sell loose pieces").
+     *
+     * <p>Deliberately a DIFFERENT formula from {@link #sqmQuantityFromBoxes}, not a fallback that
+     * reads through it: with no supplier-stated box area there is no "1 box = N sqm" figure to
+     * multiply boxes by, so this multiplies the piece count by the piece's own physical size
+     * instead — {@code sqmPerPiece} RAW, not the 2dp {@link #piecesPerSqm} reciprocal, so a single
+     * rounding rather than a double one (the same discipline {@link #piecesPerSqm}'s own Javadoc
+     * warns divides money math apart on a knife-edge value).
+     */
+    public static BigDecimal sqmQuantityFromPieces(int piecesFinal, BigDecimal sqmPerPiece) {
+        if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
+            throw new IllegalArgumentException("sqmPerPiece is required for a per-sqm quantity, got: " + sqmPerPiece);
+        }
+        return round2(BigDecimal.valueOf(piecesFinal).multiply(sqmPerPiece));
+    }
+
     public static BigDecimal subtotal(List<BigDecimal> lineAmounts) {
         BigDecimal sum = BigDecimal.ZERO;
         for (BigDecimal amount : lineAmounts) {

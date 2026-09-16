@@ -811,9 +811,9 @@ class DealQuotationLinesTest {
     @Test
     void tilePrint_englishPerSqm_areaMode() {
         DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
-            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("300"), new BigDecimal("16.39"), 4917,
-            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 20, 259, new BigDecimal("0.61"),
-            new BigDecimal("5180"), "SQM", new BigDecimal("10.00"));
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("300"), new BigDecimal("0.061"),
+            new BigDecimal("16.39"), 4917, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("5"), 5180, 20,
+            259, new BigDecimal("0.61"), new BigDecimal("5180"), "SQM", new BigDecimal("10.00"));
         assertThat(p.calculationLine()).isEqualTo(
             "(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs = 259 boxes)");
         assertThat(p.subLine()).isEqualTo("(1 box = 20 pcs = 0.61 sqm)");
@@ -824,14 +824,15 @@ class DealQuotationLinesTest {
     @Test
     void tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox() {
         DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 3360, WastageCalculator.WASTAGE_MODE_NONE, null,
-            3360, 28, 120, new BigDecimal("0.6"), new BigDecimal("3360"), "SQM", new BigDecimal("64.00"));
+            WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.6"), null, 3360,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 3360, 28, 120, new BigDecimal("0.6"),
+            new BigDecimal("3360"), "SQM", new BigDecimal("64.00"));
         assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
         assertThat(p.subLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
         assertThat(p.quantity()).isEqualByComparingTo("72.00");
-        assertThat(DealQuotationLines.tilePrint(EN, "SPECIAL_SQM", WastageCalculator.QUANTITY_MODE_PIECES, null, null,
-                10, WastageCalculator.WASTAGE_MODE_NONE, null, 28, 28, 1, new BigDecimal("0.6"), BigDecimal.TEN,
-                "SQM", BigDecimal.ONE).calculationLine())
+        assertThat(DealQuotationLines.tilePrint(EN, "SPECIAL_SQM", WastageCalculator.QUANTITY_MODE_PIECES, null,
+                new BigDecimal("0.6"), null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 28, 28, 1,
+                new BigDecimal("0.6"), BigDecimal.TEN, "SQM", BigDecimal.ONE).calculationLine())
             .isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 28 pcs = 1 box)");
     }
 
@@ -840,8 +841,9 @@ class DealQuotationLinesTest {
     void tilePrint_englishOtherModes_printPiecesEvenWithBoxData() {
         for (String mode : new String[] {"NET", "DIRECT_NET"}) {
             DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, mode,
-                WastageCalculator.QUANTITY_MODE_PIECES, null, null, 3360, WastageCalculator.WASTAGE_MODE_NONE, null,
-                3360, 28, 120, new BigDecimal("0.6"), new BigDecimal("3360"), "แผ่น", null);
+                WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.6"), null, 3360,
+                WastageCalculator.WASTAGE_MODE_NONE, null, 3360, 28, 120, new BigDecimal("0.6"),
+                new BigDecimal("3360"), "แผ่น", null);
             assertThat(p.quantity()).isEqualByComparingTo("3360");
             assertThat(p.unit()).isEqualTo("PCS");
             assertThat(p.subLine()).isNull();
@@ -853,9 +855,9 @@ class DealQuotationLinesTest {
     @Test
     void tilePrint_thaiSpecialSqm_isByteIdenticalToTheLegacyPrint_evenWithBoxData() {
         DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(TH, "SPECIAL_SQM",
-            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("87"), new BigDecimal("2.78"), 242,
-            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4, 67, new BigDecimal("1.44"),
-            new BigDecimal("268"), "แผ่น", new BigDecimal("1350"));
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("87"), new BigDecimal("0.36"),
+            new BigDecimal("2.78"), 242, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4, 67,
+            new BigDecimal("1.44"), new BigDecimal("268"), "แผ่น", new BigDecimal("1350"));
         assertThat(p.calculationLine()).isEqualTo(DealQuotationLines.calculationLine(WastageCalculator.QUANTITY_MODE_AREA,
             new BigDecimal("87"), new BigDecimal("2.78"), 242, WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 268, 4));
         assertThat(p.quantity()).isEqualByComparingTo("268");
@@ -863,13 +865,67 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isEqualTo(DealQuotationLines.specialPriceLine(new BigDecimal("1350")));
     }
 
-    /** A hand-edited English per-sqm row with no box data prints pieces — it never invents an area. */
+    /** A hand-edited English per-sqm row with NO box area AND no resolved sqmPerPiece either prints
+     * pieces — it never invents an area with nothing to derive one from. */
     @Test
-    void tilePrint_englishPerSqmWithoutBoxData_printsPieces() {
+    void tilePrint_englishPerSqmWithoutBoxDataOrSqmPerPiece_printsPieces() {
         DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
             10, null, null, null, BigDecimal.TEN, "SQM", new BigDecimal("64"));
         assertThat(p.quantity()).isEqualByComparingTo("10");
+        assertThat(p.subLine()).isNull();
+    }
+
+    // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+
+    /** Blank box area, no แผ่น/กล่อง either: quantity = round2(piecesFinal × sqmPerPiece), the
+     * ordinary English piece-based calculation line (no box wording at all since hasBox is false),
+     * and no box sub-line. */
+    @Test
+    void tilePrint_englishPerSqm_noBoxArea_noPiecesPerBox_derivesSqmFromPieces() {
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("0.36"),
+            new BigDecimal("2.78"), 28, WastageCalculator.WASTAGE_MODE_NONE, null, 28, null, null, null,
+            new BigDecimal("28"), "SQM", new BigDecimal("64.00"));
+        // englishCalculationLine's pre-existing quirk (see calculationLine_englishRoundToFullBoxFalse_
+        // noPiecesPerBox_isUnaffected above): the default branch always echoes "= N pcs" even with no
+        // box and no wastage, so AREA mode's own "...= 28 pcs" gets it twice. Untouched by Option B.
+        assertThat(p.calculationLine()).isEqualTo("(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs = 28 pcs)");
+        assertThat(p.quantity()).isEqualByComparingTo("10.08"); // 28 × 0.36
+        assertThat(p.unit()).isEqualTo("SQM");
+        assertThat(p.subLine()).isNull();
+    }
+
+    /** Blank box area, แผ่น/กล่อง FILLED, full-box rounding: quantity derives from the box-rounded
+     * piecesFinal (not the pre-rounding piece count), and the ordinary English box-rounding wording
+     * prints (no "= N boxes" tail — that only exists on the box-AREA branch). */
+    @Test
+    void tilePrint_englishPerSqm_noBoxArea_piecesPerBoxFilled_roundsToFullBox() {
+        // boxes = 3 (floor(30 / 10)) — WastageCalculator#calculate always sets boxes from
+        // piecesPerBox alone, regardless of whether a box AREA is present; realistic stored data.
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.36"), null, 25,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 30, 10, 3, null, new BigDecimal("30"), "SQM",
+            new BigDecimal("64.00"), true);
+        assertThat(p.calculationLine()).isEqualTo("(Quantity 25 pcs, rounded up to full boxes = 30 pcs) (10 pcs/box)");
+        assertThat(p.quantity()).isEqualByComparingTo("10.80"); // 30 × 0.36
+        assertThat(p.unit()).isEqualTo("SQM");
+        assertThat(p.subLine()).isNull();
+    }
+
+    /** Blank box area, แผ่น/กล่อง filled, loose pieces (roundToFullBox=false): quantity derives from
+     * the EXACT wastage-adjusted piece count (unrounded), and the loose-pieces phrasing prints —
+     * proving English per-sqm can now reach that branch, unlike before Option B. */
+    @Test
+    void tilePrint_englishPerSqm_noBoxArea_loosePieces_derivesSqmFromExactPieces() {
+        // boxes = 3 (floor(32 / 10)) — same realism note as the full-box test above.
+        DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(EN, "SPECIAL_SQM",
+            WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.36"), null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 32, 10, 3, null, new BigDecimal("32"), "SQM",
+            new BigDecimal("64.00"), false);
+        assertThat(p.calculationLine()).isEqualTo("(Quantity 32 pcs = 3 boxes + 2 pcs) (10 pcs/box)");
+        assertThat(p.quantity()).isEqualByComparingTo("11.52"); // 32 × 0.36, NOT the box-rounded 40 × 0.36
+        assertThat(p.unit()).isEqualTo("SQM");
         assertThat(p.subLine()).isNull();
     }
 
@@ -1062,17 +1118,17 @@ class DealQuotationLinesTest {
     @Test
     void tilePrint_threadsRoundToFullBoxIntoTheOrdinaryBranch() {
         DealQuotationLines.TilePrint p = DealQuotationLines.tilePrint(TH, "NET",
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
             32, 10, 3, null, new BigDecimal("32"), "แผ่น", null, false);
         assertThat(p.calculationLine()).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** The 15-argument {@code tilePrint} overload (every test above this section) defaults
+    /** The 16-argument {@code tilePrint} overload (every test above this section) defaults
      * roundToFullBox true and is unaffected by this feature. */
     @Test
-    void tilePrint_fifteenArgOverload_defaultsRoundToFullBoxTrue() {
+    void tilePrint_sixteenArgOverload_defaultsRoundToFullBoxTrue() {
         DealQuotationLines.TilePrint viaShort = DealQuotationLines.tilePrint(TH, "NET",
-            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
             40, 10, 4, null, new BigDecimal("40"), "แผ่น", null);
         assertThat(viaShort.calculationLine()).isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }

@@ -1444,18 +1444,26 @@ public class DealQuotationService {
         // behaviour. Resolved ONCE here — WastageCalculator.Input, the stored NewItem and the
         // printed line all read this same boolean, never input.roundToFullBox() directly again.
         boolean roundToFullBox = input.roundToFullBox() == null || input.roundToFullBox();
-        if (perSqm) {
-            // Never a silent pieces fallback: without both box figures there is no sqm quantity.
-            // Checked on the lenient preview path too — there is no honest number to preview.
+        // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL for English per-sqm.
+        // WITH a box area, behaviour is unchanged byte-for-byte — both box figures are still
+        // required and the quantity can only ever be a whole number of boxes, so loose pieces is
+        // still refused. WITHOUT one, the printed sqm quantity instead derives from piecesFinal ×
+        // sqmPerPiece (DealQuotationLines#tilePrint), which has no box-count restriction at all —
+        // piecesPerBox becomes optional too, and loose pieces is allowed exactly like any other
+        // tile row.
+        boolean hasBoxArea = input.sqmPerBox() != null && input.sqmPerBox().signum() > 0;
+        if (perSqm && hasBoxArea) {
+            // Never a silent pieces fallback: with a box area present there is no sqm quantity
+            // without BOTH box figures. Checked on the lenient preview path too — there is no
+            // honest number to preview.
             requireBoxDataForPerSqm(input, rowNumber);
-            // English per-sqm has no way to express a loose-piece quantity in square metres — its
-            // printed quantity IS boxes × sqm/box (WastageCalculator#sqmQuantityFromBoxes), which
-            // has no "remainder pieces" term at all. Refused on the lenient preview path too, same
-            // as the box-data check just above.
+            // A box-area quantity IS boxes × sqm/box (WastageCalculator#sqmQuantityFromBoxes),
+            // which has no "remainder pieces" term at all. Refused on the lenient preview path too,
+            // same as the box-data check just above.
             if (!roundToFullBox) {
                 String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
                 throw new ApiException(HttpStatus.BAD_REQUEST, where
-                    + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
+                    + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
             }
         }
         WastageCalculator.Result result;
@@ -1499,7 +1507,11 @@ public class DealQuotationService {
             discountPct = null;
             BigDecimal qtySqm;
             try {
-                qtySqm = WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox());
+                // Same "amount = price/sqm × printed sqm quantity" formula either way (v3b, owner
+                // decision 2026-09-13) — only the quantity's OWN derivation differs by hasBoxArea.
+                qtySqm = hasBoxArea
+                    ? WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox())
+                    : WastageCalculator.sqmQuantityFromPieces(result.piecesFinal(), sqmPerPiece);
             } catch (IllegalArgumentException e) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
             }
@@ -1540,7 +1552,8 @@ public class DealQuotationService {
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             descriptionLine,
             // qty stays the PIECE count on every tile row (the read path's piecesFinal); the sqm
-            // quantity is derived from boxes × sqm_per_box when printed (DealQuotationLines#tilePrint).
+            // quantity is derived from boxes × sqm_per_box (box area present) or piecesFinal ×
+            // sqm_per_piece (Option B, box area blank) when printed (DealQuotationLines#tilePrint).
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()),
             perSqm ? DealQuotationLines.TILE_UNIT_SQM : "แผ่น",
             specialPriceSqm, null, null,
@@ -1766,8 +1779,12 @@ public class DealQuotationService {
         return null;
     }
 
-    /** Owner decision 2026-09-13: an English per-sqm row needs BOTH box figures — its quantity is
-     * boxes × sqm/box, and there is deliberately no pieces fallback. A rep-facing Thai 400. */
+    /** Owner decision 2026-09-13, narrowed by Option B (2026-09-16): an English per-sqm row WITH a
+     * box area (ตร.ม./กล่อง filled) needs BOTH box figures — its quantity is boxes × sqm/box, and
+     * there is deliberately no pieces fallback for that combination. Only called by
+     * {@link #buildTileItem} when {@code hasBoxArea} is true; a row with NO box area at all skips
+     * this entirely (piecesPerBox becomes optional too — see {@link #requireItemComplete}). A
+     * rep-facing Thai 400. */
     private void requireBoxDataForPerSqm(ItemInput input, Integer rowNumber) {
         List<String> missing = new ArrayList<>();
         if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("แผ่น/กล่อง");
@@ -1883,10 +1900,20 @@ public class DealQuotationService {
         if (isBlank(input.texture())) missing.add("ผิว");
         if (isBlank(input.sizeText())) missing.add("ขนาด");
         if (input.thicknessMm() == null || input.thicknessMm().signum() <= 0) missing.add("ความหนา");
-        if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
+        // Option B (owner decision, 2026-09-16): แผ่น/กล่อง stays required for every row EXCEPT an
+        // English per-sqm row with no box area at all — that combination needs no box multiple
+        // (its quantity derives from piecesFinal × sqmPerPiece instead, see
+        // DealQuotationLines#tilePrint), exactly like any other tile row without a pieces-per-box.
+        boolean hasBoxArea = input.sqmPerBox() != null && input.sqmPerBox().signum() > 0;
+        boolean piecesPerBoxOptional = perSqm && !hasBoxArea;
+        if (!piecesPerBoxOptional && (input.piecesPerBox() == null || input.piecesPerBox() < 1)) {
+            missing.add("จำนวนแผ่นต่อกล่อง");
+        }
         if (resolvedSqmPerPiece == null || resolvedSqmPerPiece.signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (perSqm) {
-            if (input.sqmPerBox() == null || input.sqmPerBox().signum() <= 0) missing.add("ตร.ม./กล่อง");
+            // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no separate check here. WITH one,
+            // piecesPerBox is still required (the check above), and #buildTileItem's hasBoxArea
+            // branch separately requires it be present too, refusing a partially-filled pair.
             if (input.specialPriceSqm() == null || input.specialPriceSqm().signum() <= 0) missing.add("ราคาต่อ ตร.ม.");
         } else if (input.unitPrice() == null || input.unitPrice().signum() <= 0) {
             missing.add("ราคาต่อหน่วย");
@@ -1947,10 +1974,17 @@ public class DealQuotationService {
         if (isBlank(item.texture())) missing.add("ผิว");
         if (isBlank(item.sizeText())) missing.add("ขนาด");
         if (item.thicknessMm() == null || item.thicknessMm().signum() <= 0) missing.add("ความหนา");
-        if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
+        // Same hasBoxArea exception as #requireItemComplete — see its own comment.
+        boolean hasBoxArea = item.sqmPerBox() != null && item.sqmPerBox().signum() > 0;
+        boolean piecesPerBoxOptional = perSqm && !hasBoxArea;
+        if (!piecesPerBoxOptional && (item.piecesPerBox() == null || item.piecesPerBox() < 1)) {
+            missing.add("จำนวนแผ่นต่อกล่อง");
+        }
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (item.unitPrice() == null || item.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
-        if (perSqm && (item.sqmPerBox() == null || item.sqmPerBox().signum() <= 0)) missing.add("ตร.ม./กล่อง");
+        // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no check here; a partially-filled pair
+        // (sqmPerBox set, piecesPerBox blank) is already caught by the piecesPerBoxOptional branch
+        // above, since hasBoxArea alone does not exempt piecesPerBox.
         if (!hasQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -2002,9 +2036,9 @@ public class DealQuotationService {
         // The SAME decision DealQuotationRepository#mapItemColumns makes for a stored row.
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
-                piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
-                item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(), item.specialPriceSqm(),
-                item.roundToFullBox())
+                item.sqmPerPiece(), piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(),
+                item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(),
+                item.specialPriceSqm(), item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.

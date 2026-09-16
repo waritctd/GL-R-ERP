@@ -431,6 +431,42 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
+    // ── Option B (owner decision, 2026-09-16): English per-sqm quantity with NO box area ─────────
+
+    @Test
+    void sqmQuantityFromPieces_isRound2OfPiecesTimesSqmPerPiece() {
+        assertThat(WastageCalculator.sqmQuantityFromPieces(28, new BigDecimal("0.36"))).isEqualByComparingTo("10.08");
+        assertThat(WastageCalculator.sqmQuantityFromPieces(28, new BigDecimal("0.36")).scale()).isEqualTo(2);
+        // Same rounding discipline as sqmQuantityFromBoxes: HALF_UP at the cent.
+        assertThat(WastageCalculator.sqmQuantityFromPieces(1, new BigDecimal("0.005"))).isEqualByComparingTo("0.01");
+        assertThat(WastageCalculator.sqmQuantityFromPieces(0, new BigDecimal("0.36"))).isEqualByComparingTo("0.00");
+    }
+
+    /** Multiplies the RAW sqmPerPiece, not the 2dp {@code piecesPerSqm} reciprocal — a genuinely
+     * different figure on a value that does not round-trip evenly, same discipline as
+     * {@link WastageCalculator#piecesPerSqm}'s own Javadoc warns about. */
+    @Test
+    void sqmQuantityFromPieces_multipliesRawSqmPerPiece_notThe2dpReciprocal() {
+        // sqmPerPiece = 1/2.78 = 0.359712... — piecesPerSqm(sqmPerPiece) rounds to 0.36, a
+        // DIFFERENT number from the raw value this method must actually multiply.
+        BigDecimal sqmPerPiece = BigDecimal.ONE.divide(new BigDecimal("2.78"), 10, RoundingMode.HALF_UP);
+        BigDecimal viaRaw = WastageCalculator.sqmQuantityFromPieces(1000, sqmPerPiece);
+        BigDecimal viaRounded = new BigDecimal("1000").multiply(new BigDecimal("0.36")).setScale(2, RoundingMode.HALF_UP);
+        assertThat(viaRaw).isNotEqualByComparingTo(viaRounded);
+        assertThat(viaRaw).isEqualByComparingTo("359.71"); // 1000 × 0.3597122...
+        assertThat(viaRounded).isEqualByComparingTo("360.00");
+    }
+
+    @Test
+    void sqmQuantityFromPieces_refusesMissingSqmPerPiece() {
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, null))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, BigDecimal.ZERO))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> WastageCalculator.sqmQuantityFromPieces(28, new BigDecimal("-0.6")))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void isEnglishPerSqm_isExactlySpecialSqmOnAnEnglishDocument() {
         assertThat(WastageCalculator.isEnglishPerSqm("EN", "SPECIAL_SQM")).isTrue();

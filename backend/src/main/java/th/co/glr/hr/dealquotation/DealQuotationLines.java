@@ -626,49 +626,66 @@ public final class DealQuotationLines {
      * The TILE row's calculation line, printed quantity, unit and sub-line.
      *
      * <ul>
-     *   <li><b>English per-sqm</b> ({@link WastageCalculator#isEnglishPerSqm}) with box data:
-     *       quantity = {@link WastageCalculator#sqmQuantityFromBoxes}, unit {@code SQM}, the
-     *       box-count calculation line and {@link #boxLine}.</li>
+     *   <li><b>English per-sqm</b> ({@link WastageCalculator#isEnglishPerSqm}) with a box AREA
+     *       (ตร.ม./กล่อง filled): quantity = {@link WastageCalculator#sqmQuantityFromBoxes}, unit
+     *       {@code SQM}, the box-count calculation line and {@link #boxLine}. Byte-identical to the
+     *       row's only behaviour before Option B (2026-09-16).</li>
+     *   <li><b>English per-sqm WITHOUT a box area</b> (Option B, owner decision 2026-09-16): quantity
+     *       = {@link WastageCalculator#sqmQuantityFromPieces} (pieces × ตร.ม./แผ่น, the same area
+     *       basis the Thai SPECIAL_SQM mode uses), unit {@code SQM}, the ORDINARY English piece-based
+     *       calculation line (loose-pieces phrasing included when แผ่น/กล่อง is present and
+     *       {@code roundToFullBox} is false), and NO box line — there is no supplier box area to
+     *       print one from.</li>
      *   <li>Everything else: {@link #calculationLine}, the stored quantity (pieces), the language's
      *       tile unit ({@link #printedTileUnit}) and {@link #specialPriceLine}. For Thai this is
-     *       byte-for-byte what the row always printed.</li>
+     *       byte-for-byte what the row always printed. English per-sqm reaches this branch only when
+     *       {@code sqmPerPiece} itself is missing/non-positive — a hand-edited row, since a normal
+     *       save always resolves and stores one; it prints pieces rather than inventing an area.</li>
      * </ul>
-     *
-     * <p>An English per-sqm row WITHOUT box data cannot be written (the service refuses it), so
-     * reaching the second branch for one means a hand-edited row; it prints pieces rather than
-     * inventing an area.
      */
     public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
-                                      BigDecimal areaSqm, BigDecimal piecesPerSqm, int piecesBeforeWastage,
-                                      String wastageMode, BigDecimal wastageValue, int piecesFinal,
-                                      Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
+                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
+                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
                                       BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm) {
-        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
-            wastageMode, wastageValue, piecesFinal, piecesPerBox, boxes, sqmPerBox, storedQuantity, storedUnit,
-            specialPriceSqm, true);
+        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, sqmPerPiece, piecesPerSqm,
+            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, boxes, sqmPerBox,
+            storedQuantity, storedUnit, specialPriceSqm, true);
     }
 
     /**
      * Owner-approved "sell loose pieces" (2026-09-16): the trailing {@code roundToFullBox}. The
-     * 15-argument overload above always passes {@code true} — today's only behaviour, unchanged.
-     * English per-sqm ({@link WastageCalculator#isEnglishPerSqm}) can never reach the loose-pieces
-     * branch: the service refuses {@code roundToFullBox = false} for that mode (see
-     * {@code DealQuotationService#requireBoxDataForPerSqm}), so its own box-count calculation line
-     * always rounds, exactly as before.
+     * 16-argument overload above always passes {@code true} — today's only behaviour when a box area
+     * is present, unchanged. English per-sqm WITH a box area can never reach the loose-pieces branch
+     * (the service still refuses {@code roundToFullBox = false} whenever ตร.ม./กล่อง is filled — see
+     * {@code DealQuotationService#buildTileItem}'s {@code hasBoxArea} branch), so that row's
+     * box-count calculation line always rounds, exactly as before. WITHOUT a box area, {@code
+     * roundToFullBox} is honoured normally (Option B).
      */
     public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
-                                      BigDecimal areaSqm, BigDecimal piecesPerSqm, int piecesBeforeWastage,
-                                      String wastageMode, BigDecimal wastageValue, int piecesFinal,
-                                      Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
+                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
+                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
                                       BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
                                       boolean roundToFullBox) {
-        if (WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode) && boxes != null
-            && piecesPerBox != null && piecesPerBox > 0 && sqmPerBox != null && sqmPerBox.signum() > 0) {
+        boolean perSqm = WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode);
+        boolean hasBoxArea = sqmPerBox != null && sqmPerBox.signum() > 0;
+        if (perSqm && hasBoxArea && boxes != null && piecesPerBox != null && piecesPerBox > 0) {
+            // Unchanged from before Option B — byte-identical for every existing box-area document.
             return new TilePrint(
                 englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
                     wastageValue, piecesFinal, piecesPerBox, boxes, true),
                 WastageCalculator.sqmQuantityFromBoxes(boxes, sqmPerBox), TILE_UNIT_SQM,
                 boxLine(piecesPerBox, sqmPerBox));
+        }
+        if (perSqm && !hasBoxArea && sqmPerPiece != null && sqmPerPiece.signum() > 0) {
+            // Option B (2026-09-16): no supplier box area — derive the printed sqm quantity from the
+            // FINAL piece count instead (which already reflects box rounding when piecesPerBox is
+            // present, or the exact wastage-adjusted count when it is not / loose pieces is ticked).
+            return new TilePrint(
+                calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+                    wastageMode, wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
+                WastageCalculator.sqmQuantityFromPieces(piecesFinal, sqmPerPiece), TILE_UNIT_SQM, null);
         }
         return new TilePrint(
             calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
