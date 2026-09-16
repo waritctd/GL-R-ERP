@@ -77,6 +77,32 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(patch).toMatchObject({ piecesPerBox: 28, sqmPerBox: 0.6 });
   });
 
+  // F5.2 (2026-09-16 review): a catalogue pick that FILLS ตร.ม./กล่อง must reset a ticked
+  // "ขายแผ่นไม่เต็มกล่อง" (roundToFullBox === false) the same way typing a value into the field by
+  // hand already does (the "clearing ตร.ม./กล่อง..." test and its neighbours above) — a box area
+  // forces full-box rounding server-side, so leaving the checkbox ticked would keep sending
+  // roundToFullBox=false alongside a now-present box area, and the summary line would read wrong
+  // until the rep noticed and cleared it manually.
+  it('a catalogue pick that fills ตร.ม./กล่อง resets a ticked ขายแผ่นไม่เต็มกล่อง', async () => {
+    const patch = await pick(
+      { priceId: 11, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: 0.6 },
+      { roundToFullBox: false },
+    );
+    expect(patch).toMatchObject({ sqmPerBox: 0.6, roundToFullBox: true });
+  });
+
+  /** Wrong-way-round: a pick whose product has NO box area at all must NOT force the checkbox
+   * back on — "sell loose pieces" is still perfectly legal without a box area (Option B), so
+   * nothing here should touch roundToFullBox. */
+  it('a catalogue pick with NO ตร.ม./กล่อง leaves a ticked ขายแผ่นไม่เต็มกล่อง alone', async () => {
+    const patch = await pick(
+      { priceId: 12, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: null },
+      { roundToFullBox: false },
+    );
+    expect(patch.sqmPerBox).toBeNull();
+    expect(patch).not.toHaveProperty('roundToFullBox');
+  });
+
   // Owner feedback 2026-09-14 (QT-2026-0017 saved 66 แผ่น/กล่อง; its catalogue row says 38): a pick
   // takes the NEW product's box count, and a product with none clears the field rather than
   // keeping the previous product's number.

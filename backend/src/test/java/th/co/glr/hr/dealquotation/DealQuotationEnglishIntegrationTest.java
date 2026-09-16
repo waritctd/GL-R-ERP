@@ -564,6 +564,35 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .hasMessageContaining("รายการที่ 1").hasMessageContaining("แผ่นต่อกล่อง");
     }
 
+    /**
+     * F5.1 (2026-09-16 review) — the lenient calculate-line preview of a blank-box-area English
+     * per-sqm row with no resolved ตร.ม./แผ่น used to leak the raw {@code
+     * WastageCalculator#sqmQuantityFromPieces} exception message verbatim: "ข้อมูลรายการไม่ถูกต้อง:
+     * sqmPerPiece is required for a per-sqm quantity, got: null" -- a developer-facing, English
+     * string on a screen a sales rep is typing into. {@code requireItemComplete} (which names this
+     * same field "ตร.ม./แผ่น" on create/update) is deliberately skipped on this lenient path, so
+     * nothing else names the field in Thai here. Now it reuses that same field name instead.
+     */
+    @Test
+    void calculateLine_englishPerSqm_noBoxAreaAndNoSqmPerPiece_namesTheMissingFieldInThai() {
+        ItemInput base = tileItem("1.00", 3360);
+        ItemInput row = new ItemInput(base.locationLabel(), base.catalogPriceId(), base.productCode(),
+            base.brand(), base.model(), base.color(), base.texture(), base.sizeText(), base.thicknessMm(), null,
+            base.quantityMode(), base.areaSqm(), base.piecesInput(), base.wastageMode(), base.wastageValue(),
+            null, null, null, base.originCountry(), base.leadTimeMinDays(), base.leadTimeMaxDays(),
+            base.itemNotes(), WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal("64"), null, null, null, null, null, null);
+
+        assertThatThrownBy(() -> quotationService.calculateLine(row, "EN", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ตร.ม./แผ่น")
+            .satisfies(e -> {
+                String message = ((ApiException) e).getMessage();
+                assertThat(message).doesNotContain("sqmPerPiece").doesNotContain("ข้อมูลรายการไม่ถูกต้อง");
+            });
+    }
+
     /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
     @Test
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {

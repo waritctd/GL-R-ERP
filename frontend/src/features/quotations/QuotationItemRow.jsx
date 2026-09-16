@@ -271,6 +271,10 @@ export function QuotationItemRow({
       ? sqmPerPieceFromSizeCm(newSizeText)
       : null;
     const effectiveSqmPerPiece = resolvedSqmPerPiece ?? sizeFallbackSqmPerPiece ?? item.sqmPerPiece ?? null;
+    // V176: the supplier-stated ตร.ม./กล่อง this pick fills, if any -- computed ahead of the patch
+    // below so both the field itself AND the roundToFullBox reset (F5.2, 2026-09-16 review) use
+    // the exact same resolved value, never two independently-computed reads that could disagree.
+    const effectiveSqmPerBox = cat.priceUnit === PRICE_UNIT_PER_LINEAR_M ? null : (cat.sqmPerBox ?? null);
     patch({
       catalogPriceId: cat.priceId ?? null,
       productCode: cat.productCode ?? null,
@@ -314,9 +318,16 @@ export function QuotationItemRow({
       // NEVER from a per_linear_m row (its sqm_per_box column holds LINEAR METRES, V153), and never
       // inherited from a previous pick: a box area belongs to its own product, and a stale one would
       // silently misprice every box of the new one. A missing figure stays blank for the rep.
-      sqmPerBox: cat.priceUnit === PRICE_UNIT_PER_LINEAR_M ? null : (cat.sqmPerBox ?? null),
+      sqmPerBox: effectiveSqmPerBox,
       originCountry,
       ...(originCountry && originCountry !== item.originCountry ? defaultLeadTimeForOrigin(originCountry) : {}),
+      // F5.2 (2026-09-16 review): a catalogue pick that FILLS ตร.ม./กล่อง must reset "ขายแผ่นไม่เต็ม
+      // กล่อง" the same way typing a value into the field by hand already does (the onChange handler
+      // below) — a box area forces full-box rounding server-side, so a stale roundToFullBox=false
+      // left ticked from a previous, box-area-less row would silently mismatch the printed summary
+      // line until the rep noticed and cleared it manually. Does not otherwise touch the payload:
+      // sqmPerBox itself was already always overwritten by this pick, whatever its new value.
+      ...(effectiveSqmPerBox > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
     });
     onCatalogPicked?.(cat);
     setCatalogResults([]);

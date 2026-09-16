@@ -1513,6 +1513,22 @@ public class DealQuotationService {
                     ? WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox())
                     : WastageCalculator.sqmQuantityFromPieces(result.piecesFinal(), sqmPerPiece);
             } catch (IllegalArgumentException e) {
+                if (!hasBoxArea) {
+                    // F5.1 fix (2026-09-16 review): without a box area, the ONLY way
+                    // sqmQuantityFromPieces throws here is a missing/non-positive ตร.ม./แผ่น -- and
+                    // this branch is reachable ONLY from the LENIENT calculate-line preview
+                    // (rowNumber == null), since requireItemComplete (which names this exact field
+                    // as "ตร.ม./แผ่น" on create/update) is skipped there. Before this fix, the raw
+                    // exception message leaked verbatim as "ข้อมูลรายการไม่ถูกต้อง: sqmPerPiece is
+                    // required for a per-sqm quantity, got: null" -- an English, implementation-detail
+                    // string on a screen a sales rep sees while typing. Reuse the same Thai
+                    // field-name wording the save/create path already uses instead.
+                    String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+                    throw new ApiException(HttpStatus.BAD_REQUEST, where + "ขาด ตร.ม./แผ่น");
+                }
+                // hasBoxArea: requireBoxDataForPerSqm above already validated both box figures are
+                // present, so this is not expected to be reachable -- kept as the original generic
+                // wrap, defence in depth only.
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
             }
             perSqmLineAmount = money2(qtySqm.multiply(specialPriceSqm));
