@@ -476,6 +476,15 @@ public final class DealQuotationRenderAdapter {
      */
     private static String depositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                        Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17): a 100% deposit is full payment, not "a deposit, with a
+        // remainder" -- remainderMode/creditDays describe money that, at 100%, does not exist, and
+        // printing them anyway ("...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า" on top of
+        // a 100% figure) is what 6 real quotations printed before this fix. This is a DIFFERENT
+        // sentence from Item 4's fullPaymentTerm-selected text below (which only ever applies at
+        // 0%): 100% is charged UP FRONT, 0% (Item 4) is charged with none up front at all.
+        if (depositPct == 100) {
+            return "2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า";
+        }
         if (depositPct != 0) {
             return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
         }
@@ -547,8 +556,17 @@ public final class DealQuotationRenderAdapter {
             return NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, false));
-        String depositClause = depositPct == 0 ? ""
-            : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        // Wording-scan fix 2 (2026-09-17): at 100% deposit there is no "deposit" left to name a
+        // percentage of -- the whole price was already collected -- so this states that plainly
+        // ("after full payment is received") instead of the misleading "...มัดจำ 100%...".
+        String depositClause;
+        if (depositPct == 0) {
+            depositClause = "";
+        } else if (depositPct == 100) {
+            depositClause = " หลังจากได้รับชำระเงินเรียบร้อยแล้ว";
+        } else {
+            depositClause = " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        }
         return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
     }
 
@@ -789,6 +807,11 @@ public final class DealQuotationRenderAdapter {
      * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
     private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                               Integer creditDays, String remainderText) {
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above; see its own
+        // comment for why 100% and Item 4's 0% fullPaymentTerm sentences are different cases.
+        if (depositPct == 100) {
+            return "2.Full payment (100%) is required upon order confirmation.";
+        }
         if (depositPct != 0) {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
         }
@@ -926,10 +949,15 @@ public final class DealQuotationRenderAdapter {
             return EN_NON_TILE_LINE3_FALLBACK;
         }
         String groups = String.join("  ", leadTimeGroups(items, true));
-        return depositPct == 0
-            ? "3.If the factory has the goods ready to ship, the import lead time is " + groups + "."
-            : "3.If the factory has the goods ready to ship, the import lead time is " + groups
-                + ", after the " + depositPct + "% deposit is received.";
+        String prefix = "3.If the factory has the goods ready to ship, the import lead time is " + groups;
+        // Wording-scan fix 2 (2026-09-17) — English twin of the Thai branch above.
+        if (depositPct == 0) {
+            return prefix + ".";
+        }
+        if (depositPct == 100) {
+            return prefix + ", after full payment is received.";
+        }
+        return prefix + ", after the " + depositPct + "% deposit is received.";
     }
 
     /** The English twin of {@link #nonTileRemarkLines}. */

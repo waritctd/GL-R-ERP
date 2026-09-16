@@ -1123,6 +1123,42 @@ class DealQuotationRenderAdapterV3Test {
             .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
     }
 
+    // ── Wording-scan fix 2 (2026-09-17): 100% deposit is FULL PAYMENT, not "a deposit with a
+    // remainder" -- 6 real quotations printed "...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือ..." on TOP of
+    // a 100% figure. Deliberately different from the Item 4 (0%) branch above -- 100% is charged
+    // UP FRONT, 0% is charged with none up front at all. ──────────────────────────────────────
+
+    @Test
+    void thaiDocument_note2_hundredPercentDeposit_statesFullPaymentUpFront_noRemainderText() {
+        // remainderMode/creditDays are still SET (a rep who dials the percent up to 100% without
+        // clearing an earlier CREDIT choice) -- they must not leak into the printed line either way.
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(100, "CREDIT", 45, null), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า");
+        // Wrong-way-round: none of the old remainder-mode wording survives.
+        assertThat(model.remarkLines().get(1)).doesNotContain("ส่วนที่เหลือ").doesNotContain("เครดิต 45");
+    }
+
+    @Test
+    void englishDocument_note2_hundredPercentDeposit_statesFullPaymentUpFront_noRemainderText() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(100, "CREDIT", 45, WastageCalculator.DOCUMENT_LANGUAGE_EN), null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.Full payment (100%) is required upon order confirmation.");
+        assertThat(model.remarkLines().get(1)).doesNotContain("balance").doesNotContain("45 days");
+    }
+
+    /** Deposit percentages other than 0 and 100 are completely unchanged by this fix -- proven
+     * directly here (not merely inferred from {@link #thaiDocument_note2_nonZeroDeposit_isUnchanged}
+     * still passing), at a value close to 100 so a future off-by-one in the branch condition would
+     * be caught. */
+    @Test
+    void thaiDocument_note2_ninetyNinePercentDeposit_isUnaffectedByTheHundredPercentBranch() {
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
+            quotationWithDeposit(99, "CREDIT", 30, null), null, null);
+        assertThat(model.remarkLines().get(1))
+            .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 99% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
+    }
+
     /** Explicitly out of scope, per the task: a {@code null} depositPercent still defaults to 30%
      * -- only an EXPLICIT zero takes the new branch. Kept as its own test so a future reader sees
      * the two cases were deliberately kept apart, not merged by accident. */

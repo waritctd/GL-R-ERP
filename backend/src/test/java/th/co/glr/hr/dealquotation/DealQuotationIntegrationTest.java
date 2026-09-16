@@ -2911,6 +2911,26 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
     }
 
+    /** Wording-scan fix 2 (2026-09-17): at 100% deposit the non-tile remark 3's own
+     * "หลังจากได้รับมัดจำ N% เรียบร้อยแล้ว" clause is replaced with "หลังจากได้รับชำระเงินเรียบร้อยแล้ว"
+     * -- naming a "deposit" percentage at 100% is naming money that was never separate from the
+     * full price. Exercised through the REAL create() -> render path, not a hand-built DTO. */
+    @Test
+    void plainRow_hundredPercentDeposit_nonTileRemark_statesFullPaymentReceived_notADeposit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 100, "CREDIT", 45, 30,
+                "หมายเหตุทดสอบ", List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))),
+            salesActor);
+
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อสั่งซื้อสินค้า");
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
+                + "หลังจากได้รับชำระเงินเรียบร้อยแล้ว");
+        // Wrong-way-round: no "มัดจำ 100%"/credit-days wording anywhere in the remark block.
+        assertThat(model.remarkLines()).noneMatch(l -> l.contains("มัดจำ 100%") || l.contains("เครดิต 45"));
+    }
+
     /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
      * before — the field is optional, never required, for a non-TILE row. */
     @Test
