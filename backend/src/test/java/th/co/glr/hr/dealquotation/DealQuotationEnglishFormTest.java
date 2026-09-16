@@ -857,9 +857,13 @@ class DealQuotationEnglishFormTest {
      * V182: a PLAIN-only document whose rows DO carry a lead time — reachable since D1 wired an
      * OPTIONAL ระยะเวลานำเข้า input onto {@code QuotationPlainItemRow} (see
      * {@link #plainRowWithLeadTime}'s own comment) — prints the full FOUR-line non-tile set, not
-     * the three-line dropped one. {@code DealQuotationRenderAdapter#nonTileLeadTimeRange} reads the
+     * the three-line dropped one. {@code DealQuotationRenderAdapter#leadTimeGroups} reads the
      * field off ANY item regardless of {@code lineType}, which is what lets this fixture exercise
      * the path directly at the render-adapter layer.
+     *
+     * <p>Owner ruling (review of V182, 2026-09-16): both rows share the SAME (30, 45) range and are
+     * consecutive (seq 1, 2), so they group into ONE "รายการที่ 1-2" span — the ALWAYS-per-item form
+     * (owner feedback #7) rather than a bare "30-45 วัน", even though every item here agrees.
      */
     @Test
     void remarks_aPlainOnlyThaiDocumentWithLeadTime_printsAllFourNonTileLines() throws Exception {
@@ -870,7 +874,8 @@ class DealQuotationEnglishFormTest {
         assertThat(model.remarkLines()).containsExactly(
             "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง",
             "2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน",
-            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 30-45 วัน หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว",
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1-2 ประมาณ 30-45 วัน "
+                + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว",
             "4.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า");
 
         Sheet sheet = renderLegacyModel(model);
@@ -933,7 +938,8 @@ class DealQuotationEnglishFormTest {
         return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderLeft();
     }
 
-    /** The English twin, in both bank-block layouts. */
+    /** The English twin, in both bank-block layouts — same per-item grouping as the Thai twin
+     * above (both rows share one (30, 45) range and group into ONE "items 1-2" span). */
     @Test
     void remarks_aPlainOnlyEnglishDocumentWithLeadTime_printsAllFourNonTileLines_inBothLayouts() throws Exception {
         DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
@@ -947,8 +953,8 @@ class DealQuotationEnglishFormTest {
                     "1.The price above includes delivery to the ground floor within the Bangkok "
                         + "Metropolitan Area, but excludes installation.",
                     "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
-                    "3.If the factory has the goods ready to ship, the import lead time is 30-45 days "
-                        + "after the 30% deposit is received.",
+                    "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                        + "approximately 30-45 days, after the 30% deposit is received.",
                     "4.Goods sold are not returnable or exchangeable. Please check the order carefully "
                         + "before confirming or signing for delivery.")
                 : List.of(
@@ -956,8 +962,8 @@ class DealQuotationEnglishFormTest {
                         + "Metropolitan Area, but excludes installation.",
                     "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
                     BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2),
-                    "3.If the factory has the goods ready to ship, the import lead time is 30-45 days "
-                        + "after the 30% deposit is received.",
+                    "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                        + "approximately 30-45 days, after the 30% deposit is received.",
                     "4.Goods sold are not returnable or exchangeable. Please check the order carefully "
                         + "before confirming or signing for delivery.");
             assertThat(model.remarkLines()).as("adapter, %s layout", layout).containsExactlyElementsOf(expected);
@@ -972,16 +978,45 @@ class DealQuotationEnglishFormTest {
         }
     }
 
-    /** V182: a genuinely mixed lead time across non-tile rows prints the OVERALL span (min of the
-     * mins, max of the maxes) — the sentence has room for only one {@code {min}-{max}} slot,
-     * unlike the tile set's own per-item grouped list. */
+    /**
+     * Owner ruling (review of V182, 2026-09-16, answering the reviewer's own recommendation
+     * question): a non-tile document with genuinely mixed lead times must use the SAME per-item
+     * grouping the tile set's own remark 3 uses (see {@code
+     * DealQuotationRenderAdapterV3Test#leadTime_differentRangesStaySeparateGroups}) — NOT a
+     * min-of-mins/max-of-maxes envelope, which this test used to assert (and which this class's own
+     * {@code nonTileLeadTimeLine} used to compute via the now-deleted {@code nonTileLeadTimeRange}).
+     * An envelope like "20-50 วัน" across two 20-30/40-50 rows could misstate a customer's actual
+     * wait; grouping by item — mirroring the owner's own reference text "รายการที่ 1-2 ประมาณ 75-90
+     * วัน  รายการที่ 3 ประมาณ 30-45 วัน" — cannot.
+     *
+     * <p>Three items, TWO different ranges: 1-2 share (75, 90) and are consecutive, so they group
+     * into ONE "รายการที่ 1-2"; item 3's (30, 45) is a separate group. Deposit 50% (not the 30%
+     * default) so this also pins that the grouped list and the deposit clause compose correctly.
+     */
     @Test
-    void remarks_nonTileLeadTime_spansTheOverallRangeAcrossNonUniformItems() throws Exception {
-        DealQuotationDto q = withItems(thaiQuotation(), List.of(
-            plainRowWithLeadTime(1, "A", 20, 30), plainRowWithLeadTime(2, "B", 40, 50)));
+    void remarks_nonTileLeadTime_groupsConsecutiveItemsByRange_likeTheTileSetDoes() throws Exception {
+        DealQuotationDto q = withDepositPercent(withItems(thaiQuotation(), List.of(
+            plainRowWithLeadTime(1, "A", 75, 90),
+            plainRowWithLeadTime(2, "B", 75, 90),
+            plainRowWithLeadTime(3, "C", 30, 45))), 50);
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
-        assertThat(model.remarkLines().get(2))
-            .isEqualTo("3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 20-50 วัน หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1-2 ประมาณ 75-90 วัน  "
+                + "รายการที่ 3 ประมาณ 30-45 วัน หลังจากได้รับมัดจำ 50% เรียบร้อยแล้ว");
+    }
+
+    /** The English twin — same three-item, two-range fixture, English grouping words. */
+    @Test
+    void remarks_nonTileLeadTime_englishTwin_groupsConsecutiveItemsByRange() throws Exception {
+        DealQuotationDto q = withDepositPercent(englishQuotation(qt -> withItems(qt, List.of(
+            plainRowWithLeadTime(1, "A", 75, 90),
+            plainRowWithLeadTime(2, "B", 75, 90),
+            plainRowWithLeadTime(3, "C", 30, 45)))), 50);
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null, List.of());
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                + "approximately 75-90 days  item 3 approximately 30-45 days, after the 50% deposit "
+                + "is received.");
     }
 
     /**
@@ -996,7 +1031,7 @@ class DealQuotationEnglishFormTest {
             withItems(thaiQuotation(), List.of(plainRowWithLeadTime(1, "A", 30, 45))), 0);
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
         assertThat(model.remarkLines().get(2))
-            .isEqualTo("3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 30-45 วัน");
+            .isEqualTo("3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 30-45 วัน");
     }
 
     /**
@@ -1297,7 +1332,7 @@ class DealQuotationEnglishFormTest {
      * unreachable one — see {@code DealQuotationIntegrationTest#plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks}
      * for the same shape proven through the real {@code ItemInput} → service → render path. Kept as
      * a direct-DTO fixture here (rather than going through the service in every test in this file)
-     * because {@code DealQuotationRenderAdapter#nonTileLeadTimeRange} reads the field off ANY item
+     * because {@code DealQuotationRenderAdapter#leadTimeGroups} reads the field off ANY item
      * regardless of {@code lineType} — this is a render-adapter unit test, not a save-path one. */
     private DealQuotationItemDto plainRowWithLeadTime(int seq, String description, int minDays, int maxDays) {
         return new DealQuotationItemDto((long) seq, seq,

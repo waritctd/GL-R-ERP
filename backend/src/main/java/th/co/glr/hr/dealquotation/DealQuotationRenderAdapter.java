@@ -528,44 +528,28 @@ public final class DealQuotationRenderAdapter {
     private static final String NON_TILE_LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
 
     /**
-     * The overall {@code {min, max}} lead-time span across every item that carries one — this
-     * sentence's {@code {min}-{max}} slot names ONE range (unlike the tile set's per-item grouped
-     * list at {@link #leadTimeLine}), so items that all share the same range collapse to it
-     * trivially and items with genuinely different ranges still print a single overall span
-     * rather than a per-item breakdown the sentence has no room for. {@code null} when NOTHING on
-     * the document carries a lead time — the same question {@link #hasAnyLeadTime} already asks,
-     * asked here only to also recover the actual span. Shared by the Thai and English non-tile
-     * lead-time builders.
-     */
-    private static int[] nonTileLeadTimeRange(List<DealQuotationItemDto> items) {
-        Integer min = null;
-        Integer max = null;
-        for (DealQuotationItemDto item : items) {
-            if (item.leadTimeMinDays() != null && item.leadTimeMaxDays() != null) {
-                min = min == null ? item.leadTimeMinDays() : Math.min(min, item.leadTimeMinDays());
-                max = max == null ? item.leadTimeMaxDays() : Math.max(max, item.leadTimeMaxDays());
-            }
-        }
-        return min == null ? null : new int[] {min, max};
-    }
-
-    /** {@code "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า {min}-{max} วัน หลังจากได้รับ
-      * มัดจำ {deposit}% เรียบร้อยแล้ว"} — or, when the quotation takes NO deposit ({@code
-      * depositPct == 0}), the same sentence with just the "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว"
-      * clause dropped (naming a deposit that does not exist would be nonsensical, but the
-      * lead-time claim itself still stands). Falls back to {@link #NON_TILE_LINE3_FALLBACK} when
-      * {@link #nonTileLeadTimeRange} is null — the ONLY caller ({@link #nonTileRemarkLines}) then
-      * drops the whole line via {@link #dropLeadTimeLineAndRenumber}, exactly as the tile set's own
-      * {@link #leadTimeLine} does. */
+     * {@code "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า {groups} หลังจากได้รับมัดจำ
+     * {deposit}% เรียบร้อยแล้ว"} — or, when the quotation takes NO deposit ({@code
+     * depositPct == 0}), the same sentence with just the "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว" clause
+     * dropped (naming a deposit that does not exist would be nonsensical, but the lead-time claim
+     * itself still stands).
+     *
+     * <p>Owner ruling (review of V182, 2026-09-16): {@code {groups}} is the SAME per-item grouped
+     * list the tile set's own {@link #leadTimeLine} builds ({@link #leadTimeGroups}) — NOT an
+     * overall min-of-mins/max-of-maxes envelope, which this line used to print and which the owner
+     * rejected: a genuinely mixed non-tile document (e.g. one row 75-90 days, another 30-45) could
+     * print a single misleading "30-90 วัน" span under the envelope approach. Falls back to
+     * {@link #NON_TILE_LINE3_FALLBACK} when {@link #hasAnyLeadTime} is false — the ONLY caller
+     * ({@link #nonTileRemarkLines}) then drops the whole line via {@link #dropLeadTimeLineAndRenumber},
+     * exactly as the tile set's own {@link #leadTimeLine} does. */
     private static String nonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
-        int[] range = nonTileLeadTimeRange(items);
-        if (range == null) {
+        if (!hasAnyLeadTime(items)) {
             return NON_TILE_LINE3_FALLBACK;
         }
-        String days = range[0] == range[1] ? String.valueOf(range[0]) : range[0] + "-" + range[1];
+        String groups = String.join("  ", leadTimeGroups(items, false));
         String depositClause = depositPct == 0 ? ""
             : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
-        return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + days + " วัน" + depositClause;
+        return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
     }
 
     /** Renumbers {@link #LINE6}'s own "no exchange or return" sentence to {@code number} (4
@@ -640,6 +624,24 @@ public final class DealQuotationRenderAdapter {
      * owner feedback, 2026-09-14 -- see {@link #LINE3_FALLBACK}'s own comment), so in practice this
      * value never reaches a rendered document. */
     private static String leadTimeLine(List<DealQuotationItemDto> items) {
+        return hasAnyLeadTime(items)
+            ? "3.ระยะเวลานำเข้า : " + String.join("  ", leadTimeGroups(items, false))
+            : LINE3_FALLBACK;
+    }
+
+    /**
+     * The per-item lead-time grouping shared by the tile set's {@link #leadTimeLine}/
+     * {@link #englishLeadTimeLine} AND the non-tile set's {@link #nonTileLeadTimeLine}/
+     * {@link #englishNonTileLeadTimeLine} (owner ruling, review of V182, 2026-09-16: a non-tile
+     * document with genuinely mixed lead times must use this SAME per-item grouping, not an
+     * overall min-of-mins/max-of-maxes envelope that could misstate a customer's actual wait).
+     * Consecutive item numbers sharing the same {@code (min, max)} are grouped, ALWAYS in this
+     * per-item form (owner feedback #7, 2026-09-14) even for a single group; items with no lead
+     * time are omitted and only ever act as a group boundary. Returns one formatted string per
+     * group — {@code "รายการที่ {range} ประมาณ {days} วัน"} in Thai, {@code "item(s) {range}
+     * approximately {days} days"} in English — for the caller to {@code String.join("  ", ...)}.
+     */
+    private static List<String> leadTimeGroups(List<DealQuotationItemDto> items, boolean english) {
         List<DealQuotationItemDto> ordered = items.stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
         List<String> groups = new ArrayList<>();
@@ -656,7 +658,7 @@ public final class DealQuotationRenderAdapter {
             if (continuesGroup) {
                 groupLastSeq = item.seq();
             } else {
-                flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
+                flushLeadTimeGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq, english);
                 if (hasLeadTime) {
                     groupMin = min;
                     groupMax = max;
@@ -670,9 +672,8 @@ public final class DealQuotationRenderAdapter {
                 }
             }
         }
-        flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-
-        return hasAnyLeadTime(items) ? "3.ระยะเวลานำเข้า : " + String.join("  ", groups) : LINE3_FALLBACK;
+        flushLeadTimeGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq, english);
+        return groups;
     }
 
     // ── owner feedback (2026-09-14): "if ระยะเวลานำเข้า is not chosen remove that from the
@@ -732,15 +733,25 @@ public final class DealQuotationRenderAdapter {
         return newNumber + "." + line.substring(m.end());
     }
 
-    private static void flushGroup(List<String> groups, Integer min, Integer max, Integer first, Integer last) {
+    /** Formats and appends ONE flushed group (Thai or English, per {@code english}) — shared by
+     * {@link #leadTimeGroups}, the ONE place either language's grouping traversal lives now. A
+     * {@code null min} means there is no pending group to flush (the very first item, or the item
+     * right after one that already flushed) — a no-op, not an empty group. */
+    private static void flushLeadTimeGroup(List<String> groups, Integer min, Integer max,
+                                            Integer first, Integer last, boolean english) {
         if (min == null) {
             return;
         }
-        String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
-        // Owner feedback #7 nicety: an exact lead time (min == max) reads "ประมาณ 30 วัน", not the
-        // pointless "30-30 วัน" a range formatter would print for it.
+        // Owner feedback #7 nicety: an exact lead time (min == max) reads "ประมาณ 30 วัน"/
+        // "approximately 30 days", not the pointless "30-30 วัน" a range formatter would print.
         String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
-        groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
+        if (english) {
+            String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
+            groups.add(range + " approximately " + days + " days");
+        } else {
+            String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
+            groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
+        }
     }
 
     // ── v3b: the ENGLISH remark block (F-SM-008) ─────────────────────────────────────────────
@@ -907,18 +918,18 @@ public final class DealQuotationRenderAdapter {
       * contract (see that constant's Javadoc). */
     private static final String EN_NON_TILE_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
-    /** The English twin of {@link #nonTileLeadTimeLine} — same {@link #nonTileLeadTimeRange}, same
-      * zero-deposit clause-drop rule, English words. */
+    /** The English twin of {@link #nonTileLeadTimeLine} — same {@link #leadTimeGroups} grouping
+      * (owner ruling, review of V182, 2026-09-16 — see that method's own Javadoc), same zero-deposit
+      * clause-drop rule, English words. */
     private static String englishNonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
-        int[] range = nonTileLeadTimeRange(items);
-        if (range == null) {
+        if (!hasAnyLeadTime(items)) {
             return EN_NON_TILE_LINE3_FALLBACK;
         }
-        String days = range[0] == range[1] ? String.valueOf(range[0]) : range[0] + "-" + range[1];
+        String groups = String.join("  ", leadTimeGroups(items, true));
         return depositPct == 0
-            ? "3.If the factory has the goods ready to ship, the import lead time is " + days + " days."
-            : "3.If the factory has the goods ready to ship, the import lead time is " + days
-                + " days after the " + depositPct + "% deposit is received.";
+            ? "3.If the factory has the goods ready to ship, the import lead time is " + groups + "."
+            : "3.If the factory has the goods ready to ship, the import lead time is " + groups
+                + ", after the " + depositPct + "% deposit is received.";
     }
 
     /** The English twin of {@link #nonTileRemarkLines}. */
@@ -989,53 +1000,12 @@ public final class DealQuotationRenderAdapter {
      */
     private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
-    /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
-     * Kept as its own method rather than parameterising the Thai one: the two differ in every
-     * literal, and a shared method with four language ternaries reads worse than two flat ones. */
+    /** The English twin of {@link #leadTimeLine} — same {@link #leadTimeGroups} grouping, same
+     * source data, English words. */
     private static String englishLeadTimeLine(List<DealQuotationItemDto> items) {
-        List<DealQuotationItemDto> ordered = items.stream()
-            .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
-        List<String> groups = new ArrayList<>();
-        Integer groupMin = null;
-        Integer groupMax = null;
-        Integer groupFirstSeq = null;
-        Integer groupLastSeq = null;
-        for (DealQuotationItemDto item : ordered) {
-            Integer min = item.leadTimeMinDays();
-            Integer max = item.leadTimeMaxDays();
-            boolean hasLeadTime = min != null && max != null;
-            boolean continuesGroup = hasLeadTime && groupMin != null
-                && min.equals(groupMin) && max.equals(groupMax) && item.seq() == groupLastSeq + 1;
-            if (continuesGroup) {
-                groupLastSeq = item.seq();
-            } else {
-                flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-                if (hasLeadTime) {
-                    groupMin = min;
-                    groupMax = max;
-                    groupFirstSeq = item.seq();
-                    groupLastSeq = item.seq();
-                } else {
-                    groupMin = null;
-                    groupMax = null;
-                    groupFirstSeq = null;
-                    groupLastSeq = null;
-                }
-            }
-        }
-        flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-        return hasAnyLeadTime(items) ? "3.Delivery : " + String.join("  ", groups) : EN_LINE3_FALLBACK;
-    }
-
-    private static void flushEnglishGroup(List<String> groups, Integer min, Integer max,
-                                          Integer first, Integer last) {
-        if (min == null) {
-            return;
-        }
-        String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-        // Owner feedback #7 nicety: the same min == max collapse as the Thai #flushGroup.
-        String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
-        groups.add(range + " approximately " + days + " days");
+        return hasAnyLeadTime(items)
+            ? "3.Delivery : " + String.join("  ", leadTimeGroups(items, true))
+            : EN_LINE3_FALLBACK;
     }
 
     /**

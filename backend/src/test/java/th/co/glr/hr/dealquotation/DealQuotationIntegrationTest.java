@@ -2905,7 +2905,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // now that this PLAIN row carries a lead time, remark 3 prints it rather than dropping.
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
         assertThat(model.remarkLines().get(2)).isEqualTo(
-            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 75-90 วัน หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
+                + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
     }
 
     /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
