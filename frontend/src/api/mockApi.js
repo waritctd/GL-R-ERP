@@ -5291,6 +5291,13 @@ function resolveDealQuotationDepositTerms(payload) {
   const noDeposit = depositPercent === 0;
   const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
   const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  // Wording-scan fix 6 (2026-09-17) — mirrors DealQuotationService#requireValidCreditDays: an
+  // EXPLICIT non-blank but invalid creditDays (0 or negative) is refused immediately on every
+  // save when remainderMode is CREDIT. A blank value still saves (a draft may be incomplete) --
+  // only submit() below requires it be filled in, the same split fullPaymentTerm already uses.
+  if (remainderMode === 'CREDIT' && creditDays != null && Number(creditDays) <= 0) {
+    fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
+  }
   let fullPaymentTerm = null;
   if (noDeposit) {
     fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
@@ -12502,6 +12509,12 @@ export const api = {
       // chosen yet. Mirrors DealQuotationService#submit exactly.
       if (row.depositPercent === 0 && !row.fullPaymentTerm) {
         fail('กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน', 400);
+      }
+      // Wording-scan fix 6 (2026-09-17) — the submit-time half of the credit-days rule, right
+      // after the fullPaymentTerm check above, the exact "create/update permissive, submit strict"
+      // split. Mirrors DealQuotationService#submit's new gate.
+      if (row.remainderMode === 'CREDIT' && row.creditDays == null) {
+        fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
       }
       // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
       // date before the quotation's OWN date, so this is the re-check against TODAY, the last

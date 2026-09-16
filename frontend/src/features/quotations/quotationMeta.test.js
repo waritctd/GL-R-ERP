@@ -1317,11 +1317,15 @@ describe('buildQuotationChecklist', () => {
   const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
 
   it('pins the blocking set to what the backend already refuses — nothing the owner has not ruled on', () => {
+    // Wording-scan fix 6 (2026-09-17): creditDaysInvalid joins the set — the backend already
+    // refuses an explicit invalid (<=0) creditDays on every save, not just submit. creditDays
+    // itself (the BLANK-on-draft reminder) stays a warning, same as fullPaymentTerm.
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
-      ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
+      ['contact', 'creditDaysInvalid', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
-    // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
+    // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
+    // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'creditDays']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
   });
 
@@ -1441,6 +1445,43 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30' })).toEqual([]);
     expect(meta.buildQuotationChecklist({
       ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: 'CREDIT_30',
+    })).toEqual([]);
+  });
+
+  // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ────────────
+  it('BLOCKS an explicit invalid (0) creditDays under a CREDIT remainder', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 0 });
+    expect(entries).toEqual([{
+      check: 'creditDaysInvalid', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
+      targetId: 'creditDays', blocking: true,
+    }]);
+  });
+
+  it('BLOCKS an explicit negative creditDays too', () => {
+    expect(blocking(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: -1 })))
+      .toEqual(['creditDaysInvalid']);
+  });
+
+  it('lists (but does not block) a BLANK creditDays under a CREDIT remainder', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: '' });
+    expect(entries).toEqual([{
+      check: 'creditDays', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
+      targetId: 'creditDays', blocking: false,
+    }]);
+  });
+
+  it('does NOT list it for a positive creditDays', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 1 })).toEqual([]);
+  });
+
+  it('does NOT list it for a non-CREDIT remainder mode, whatever creditDays holds', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: 'ON_DELIVERY', creditDays: 0 })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, remainderMode: '', creditDays: '' })).toEqual([]);
+  });
+
+  it('is skipped entirely at an effective zero deposit, even with a stale CREDIT/0 left on screen', () => {
+    expect(meta.buildQuotationChecklist({
+      ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30', remainderMode: 'CREDIT', creditDays: 0,
     })).toEqual([]);
   });
 });

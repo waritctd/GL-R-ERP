@@ -863,6 +863,21 @@ export function QuotationEditorPage({ user, showToast }) {
   const zeroDepositBlockMessage = hasUnresolvedZeroDeposit
     ? 'มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ' : null;
 
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService#submit's own gate
+  // (remainderMode === 'CREDIT' && creditDays == null) — SUBMIT only, exactly like
+  // hasUnresolvedZeroDeposit above: a draft with a CREDIT remainder and no creditDays typed yet
+  // still saves (buildQuotationChecklist's own CREDIT_DAYS check stays non-blocking for exactly
+  // that reason), only #submit refuses it. An explicit INVALID (<=0) value is a different,
+  // ALREADY-blocking case (QUOTATION_CHECK.CREDIT_DAYS_INVALID, in hasValidationErrors) and is not
+  // repeated here.
+  const hasMissingCreditDays = terms.remainderMode === 'CREDIT'
+    && !isEffectiveZeroDeposit({
+      noDeposit: terms.noDeposit, depositPercentCustom: terms.depositPercentCustom, depositPercent: terms.depositPercent,
+    })
+    && (terms.creditDays === '' || terms.creditDays == null);
+  const creditDaysBlockMessage = hasMissingCreditDays
+    ? 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน ก่อนส่งขออนุมัติ' : null;
+
   // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
   // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
   // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
@@ -906,9 +921,13 @@ export function QuotationEditorPage({ user, showToast }) {
     depositPercentCustom: terms.depositPercentCustom,
     depositPercent: terms.depositPercent,
     fullPaymentTerm: terms.fullPaymentTerm,
+    // Wording-scan fix 6 (2026-09-17): the credit-days rule — see QUOTATION_CHECK.CREDIT_DAYS/
+    // CREDIT_DAYS_INVALID's own comment in quotationMeta.js for the two severities.
+    remainderMode: terms.remainderMode,
+    creditDays: terms.creditDays,
   }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
-    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm]);
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1642,8 +1661,8 @@ export function QuotationEditorPage({ user, showToast }) {
                 // handleInlineCreate — the same three `saving` already covers), so a rep cannot
                 // open the confirm dialog and submit while an autosave the dialog hasn't had a
                 // chance to suppress yet is still on the wire.
-                disabled={hasValidationErrors || hasMissingLeadTimes || hasUnresolvedZeroDeposit || saving}
-                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined)}
+                disabled={hasValidationErrors || hasMissingLeadTimes || hasUnresolvedZeroDeposit || hasMissingCreditDays || saving}
+                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? zeroDepositBlockMessage ?? creditDaysBlockMessage ?? undefined)}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
                 ส่งขออนุมัติ
@@ -2342,10 +2361,11 @@ export function QuotationEditorPage({ user, showToast }) {
                 variant="primary"
                 loading={submitMutation.isPending}
                 // #7: defensive — the opening button above is already disabled while
-                // `hasMissingLeadTimes`/`hasUnresolvedZeroDeposit`, so this only matters if an edit
-                // made mid-dialog removed a lead time or re-typed a 0% deposit.
-                disabled={saving || hasMissingLeadTimes || hasUnresolvedZeroDeposit}
-                title={leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined}
+                // `hasMissingLeadTimes`/`hasUnresolvedZeroDeposit`/`hasMissingCreditDays`, so this
+                // only matters if an edit made mid-dialog removed a lead time, re-typed a 0%
+                // deposit, or blanked a CREDIT remainder's days.
+                disabled={saving || hasMissingLeadTimes || hasUnresolvedZeroDeposit || hasMissingCreditDays}
+                title={leadTimeBlockMessage ?? zeroDepositBlockMessage ?? creditDaysBlockMessage ?? undefined}
                 onClick={() => submitMutation.mutate()}
               >
                 ส่งขออนุมัติ
@@ -2354,9 +2374,10 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
-          {/* #7: unlike checklistWarnings below, these TWO genuinely block — the opening button is
-              disabled while either is true, so they only show if the dialog was already open when
-              a concurrent edit removed a lead time or re-typed a 0% deposit. */}
+          {/* #7: unlike checklistWarnings below, these THREE genuinely block — the opening button is
+              disabled while any is true, so they only show if the dialog was already open when a
+              concurrent edit removed a lead time, re-typed a 0% deposit, or blanked a CREDIT
+              remainder's days. */}
           {leadTimeBlockMessage ? (
             <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
               {leadTimeBlockMessage}
@@ -2365,6 +2386,11 @@ export function QuotationEditorPage({ user, showToast }) {
           {zeroDepositBlockMessage ? (
             <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
               {zeroDepositBlockMessage}
+            </p>
+          ) : null}
+          {creditDaysBlockMessage ? (
+            <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
+              {creditDaysBlockMessage}
             </p>
           ) : null}
           {/* The optional gaps, restated at the moment of sending — never a blocker (see

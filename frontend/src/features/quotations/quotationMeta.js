@@ -1309,6 +1309,12 @@ export const QUOTATION_CHECK = Object.freeze({
   PRICE_MODE_LANGUAGE: 'priceModeLanguage',
   ITEMS: 'items',
   FULL_PAYMENT_TERM: 'fullPaymentTerm',
+  // Wording-scan fix 6 (2026-09-17): CREDIT_DAYS is the blank-on-draft reminder (non-blocking,
+  // mirrors FULL_PAYMENT_TERM's own role above); CREDIT_DAYS_INVALID is an EXPLICIT invalid value
+  // (0 or negative) — blocking, since the backend already refuses that on every save, not just
+  // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
+  CREDIT_DAYS: 'creditDays',
+  CREDIT_DAYS_INVALID: 'creditDaysInvalid',
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
@@ -1320,6 +1326,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.LOCATION_LABELS,
   QUOTATION_CHECK.PRICE_MODE_LANGUAGE,
   QUOTATION_CHECK.ITEMS,
+  QUOTATION_CHECK.CREDIT_DAYS_INVALID,
 ]));
 
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
@@ -1431,6 +1438,10 @@ export function buildQuotationChecklist({
   depositPercentCustom = false,
   depositPercent = '',
   fullPaymentTerm = '',
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule — see
+  // QUOTATION_CHECK.CREDIT_DAYS/CREDIT_DAYS_INVALID above for the two severities.
+  remainderMode = '',
+  creditDays = '',
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -1478,6 +1489,16 @@ export function buildQuotationChecklist({
   }
   if (isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && blankValue(fullPaymentTerm)) {
     push(QUOTATION_CHECK.FULL_PAYMENT_TERM, 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน', 'fullPaymentTerm');
+  }
+  // Wording-scan fix 6 (2026-09-17): mirrors DealQuotationService's credit-days rule. Skipped
+  // entirely at effective-zero-deposit, where remainderMode is forced null server-side regardless
+  // of what is still displayed (buildUpsertPayload's own `terms.noDeposit ? null : ...` ternary).
+  if (!isEffectiveZeroDeposit({ noDeposit, depositPercentCustom, depositPercent }) && remainderMode === 'CREDIT') {
+    if (!blankValue(creditDays) && Number(creditDays) <= 0) {
+      push(QUOTATION_CHECK.CREDIT_DAYS_INVALID, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    } else if (blankValue(creditDays)) {
+      push(QUOTATION_CHECK.CREDIT_DAYS, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
+    }
   }
 
   if (items.length === 0) {
