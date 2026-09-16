@@ -1599,6 +1599,296 @@ class QuotationRendererTest {
             "PIECE", null, null);       // unitBasis, manualPrice, manualOverrideReason
     }
 
+    // ── fix (2026-09-16): large numbers ("a million pieces") printed "###" ───────────────────
+    //
+    // Owner report: "when the numbers get a lot, like a million pieces, it renders ###". Every
+    // numeric column of the quotation template is narrow enough that a big-magnitude value
+    // overflows it (confirmed with a real LibreOffice XLS→PDF round-trip in the PR body); จำนวน/
+    // Qty (C) had NO overflow guard at all before this fix, unlike E/H/I (#sizeMoneyColumns) and
+    // I4 (#fitColumnToText). Owner ruling: fix it with shrink-to-fit
+    // (#QuotationRenderer#shrinkToFitIfOverflow), not more column widening — "the column layout
+    // [must] stay consistent across every document, so column widths must not change with the
+    // size of the numbers". Every test below is POI-level (no LibreOffice): it proves the
+    // PRECONDITION for a legible cell — column-width-covers-text OR shrink-to-fit is set — the
+    // SAME check LibreOffice's own overflow rule makes. The LibreOffice/pdftotext end-to-end
+    // proof that shrink-to-fit is actually honoured (and prints the full number, not "###") lives
+    // in {@code #pdfNeverPrintsHashesForExtremeMagnitudeValues} below.
+
+    /**
+     * True if the cell at ({@code row}, {@code col}) is guaranteed not to clip to "###": either
+     * its column is already wide enough for the cell's OWN formatted text (LibreOffice's overflow
+     * rule), or the cell's style sets shrink-to-fit (which this suite's PDF probe proved
+     * LibreOffice also honours for a numeric cell — see the PR body). Uses the exact same
+     * FontResolver + LibreOfficeMetrics measurement {@code QuotationRenderer#fitColumnToText} and
+     * {@code #shrinkToFitIfOverflow} both use, so a false here is a false in the real renderer too.
+     */
+    private boolean cellNeverClips(org.apache.poi.ss.usermodel.Sheet sheet, int row, int col, String formattedText) {
+        org.apache.poi.ss.usermodel.Cell cell = sheet.getRow(row).getCell(col);
+        org.apache.poi.ss.usermodel.CellStyle style = cell.getCellStyle();
+        if (style.getShrinkToFit()) return true;
+        var poiFont = sheet.getWorkbook().getFontAt(style.getFontIndexAsInt());
+        FontResolver.Resolved resolved = FontResolver.resolve(poiFont.getFontName());
+        java.util.OptionalDouble widthPt = FontResolver.stringWidthPt(
+            resolved, formattedText, poiFont.getFontHeightInPoints(), poiFont.getBold());
+        if (widthPt.isEmpty()) return true; // unmeasurable font on this host -- can't assert either way
+        int textTwips = (int) Math.ceil(widthPt.getAsDouble() * 20.0)
+            + 2 * th.co.glr.hr.common.sheet.LibreOfficeMetrics.TEXT_INSET_TWIPS;
+        int charWidthTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sheet.getWorkbook());
+        int colTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.columnTwips(sheet.getColumnWidth(col), charWidthTwips);
+        return colTwips >= textTwips;
+    }
+
+    @Test
+    void quantityColumn_neverClipsAMillionPlusQuantity_thai() throws Exception {
+        QuotationRenderModel.RenderItem bigQty = renderItem(null, threeLines("A"),
+            new BigDecimal("12345678"), new BigDecimal("100.00"), "Net",
+            new BigDecimal("100.00"), new BigDecimal("1234567800.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0200", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(bigQty), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            var qtyCell = sheet.getRow(9).getCell(2); // ITEM_START_ROW=9, col C=2, single item -> row 9
+            assertThat(qtyCell.getNumericCellValue()).isEqualTo(12345678d);
+            assertThat(cellNeverClips(sheet, 9, 2, "12,345,678"))
+                .as("quantity column (C) must not clip a million-plus quantity to \"###\"")
+                .isTrue();
+        }
+    }
+
+    /**
+     * Companion/no-golden-regression check: an ORDINARY quantity must NEVER get shrink-to-fit —
+     * only the width check should ever make {@link #cellNeverClips} pass for it. If shrink-to-fit
+     * fired unconditionally, every existing document's style table (and therefore
+     * {@code QuotationRendererNoPictureGoldenTest}'s byte-hash pin) would change.
+     */
+    @Test
+    void quantityColumn_ordinaryQuantityNeverGetsShrinkToFit_thai() throws Exception {
+        QuotationRenderModel.RenderItem modestQty = renderItem(null, threeLines("A"),
+            new BigDecimal("300"), new BigDecimal("580.00"), "Net",
+            new BigDecimal("580.00"), new BigDecimal("174000.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0201", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(modestQty), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(9).getCell(2).getCellStyle().getShrinkToFit())
+                .as("an ordinary quantity must not trigger shrink-to-fit -- style table must stay "
+                    + "identical to before this fix for an ordinary document")
+                .isFalse();
+        }
+    }
+
+    @Test
+    void quantityColumn_neverClipsALargeDecimalSquareMetreQuantity_englishPerSqm() throws Exception {
+        // Owner decision 2026-09-13 (RenderItem#qtyFormat): the English per-sqm row prints qty to
+        // 2dp ("#,##0.00"), not the template's default whole-number format -- so the formatted
+        // preview (and the "large" threshold) differs from the Thai piece-count case above.
+        QuotationRenderModel.RenderItem bigSqm = new QuotationRenderModel.RenderItem(
+            null, threeLines("A"), new BigDecimal("1234567.89"), "sqm", new BigDecimal("25.50"),
+            "Net", new BigDecimal("25.50"), new BigDecimal("31481480.15"), null, "#,##0.00");
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0202", "P003", "D002", "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(bigSqm), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(cellNeverClips(sheet, 9, 2, "1,234,567.89"))
+                .as("English per-sqm quantity column (C) must not clip a large sqm figure to \"###\"")
+                .isTrue();
+        }
+    }
+
+    @Test
+    void unitPriceAndNetColumns_neverClipASixDigitUnitPrice_thai() throws Exception {
+        QuotationRenderModel.RenderItem bigPrice = renderItem(null, threeLines("A"),
+            BigDecimal.ONE, new BigDecimal("1234567.89"), "Net",
+            new BigDecimal("1234567.89"), new BigDecimal("1234567.89"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0203", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(bigPrice), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(cellNeverClips(sheet, 9, 4, "1,234,567.89"))
+                .as("unit price column (E) must not clip a large unit price to \"###\"").isTrue();
+            assertThat(cellNeverClips(sheet, 9, 7, "1,234,567.89"))
+                .as("net column (H) must not clip a large net price to \"###\"").isTrue();
+            assertThat(cellNeverClips(sheet, 9, 8, "1,234,567.89"))
+                .as("amount column (I) must not clip a large amount to \"###\"").isTrue();
+        }
+    }
+
+    @Test
+    void totalsColumn_neverClipsAGrandTotalAboveOneBillion_singlePageBranch_thai() throws Exception {
+        // Single item so this stays on the renderSinglePage branch, where VAT/TOTAL are left as
+        // the template's own Excel FORMULA cells (never overwritten by setNum) -- proves the
+        // shrink-to-fit guard still reaches a formula cell, not just a literal one.
+        BigDecimal amount = new BigDecimal("999990000.00"); // 1,000,000 x 999.99
+        QuotationRenderModel.RenderItem hugeItem = renderItem(null, threeLines("A"),
+            new BigDecimal("1000000"), new BigDecimal("999.99"), "Net",
+            new BigDecimal("999.99"), amount);
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0204", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(hugeItem), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        BigDecimal vat = amount.multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal total = amount.add(vat);
+        assertThat(total).isGreaterThan(new BigDecimal("1000000000")); // sanity: this IS the >1B case
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // SUBTOTAL_ROW=38, VAT_ROW=39, TOTAL_ROW=40 (0-based, footerShift=0 for a 1-line remark).
+            assertThat(cellNeverClips(sheet, 38, 8, String.format(java.util.Locale.US, "%,.2f", amount)))
+                .as("subtotal must not clip").isTrue();
+            assertThat(cellNeverClips(sheet, 39, 8, String.format(java.util.Locale.US, "%,.2f", vat)))
+                .as("VAT (formula cell) must not clip").isTrue();
+            assertThat(cellNeverClips(sheet, 40, 8, String.format(java.util.Locale.US, "%,.2f", total)))
+                .as("grand total above 1 billion (formula cell) must not clip").isTrue();
+        }
+    }
+
+    @Test
+    void quantityAndTotalsColumns_neverClipOnAPaginatedMultiPageDocument_thai() throws Exception {
+        // 30 items x 3 description lines each, no heading, pushes this well past
+        // NATIVE_ITEM_CAPACITY into the layoutFlowing (multi-page) branch -- mirrors
+        // modelPath_paginatesAndKeepsPageFooter_forManyItems's own proven shape, just with large
+        // per-item values instead of modest ones.
+        List<QuotationRenderModel.RenderItem> items = new ArrayList<>();
+        BigDecimal perItemAmount = new BigDecimal("99999999.99");
+        for (int i = 1; i <= 30; i++) {
+            items.add(renderItem(null, threeLines("Item" + i),
+                new BigDecimal("1234567"), new BigDecimal("81.00"), "Net",
+                new BigDecimal("81.00"), perItemAmount));
+        }
+        QuotationRenderModel model = modelWithItems(items, List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+
+        BigDecimal subtotal = perItemAmount.multiply(new BigDecimal(30));
+        BigDecimal vat = subtotal.multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal total = subtotal.add(vat);
+        assertThat(total).isGreaterThan(new BigDecimal("1000000000")); // sanity: >1B grand total
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // Item 1 (index 0): row = ITEM_START_ROW (9) -- always page 1.
+            assertThat(cellNeverClips(sheet, 9, 2, "1,234,567"))
+                .as("first item's qty must not clip on page 1").isTrue();
+            assertThat(cellNeverClips(sheet, 9, 8, String.format(java.util.Locale.US, "%,.2f", perItemAmount)))
+                .as("first item's amount must not clip on page 1").isTrue();
+            // Item 26 (index 25): row = 9 + 25*3 = 84 -- three description lines/item, no headings
+            // (label null) -- well past page 1's native capacity, proving a LATER page's cell is
+            // covered too, not just the first row #sizeMoneyColumns/#fitColumnToText already saw.
+            int laterRow = 9 + 25 * 3;
+            assertThat(cellNeverClips(sheet, laterRow, 2, "1,234,567"))
+                .as("a later item's qty (past page 1) must not clip").isTrue();
+            assertThat(cellNeverClips(sheet, laterRow, 8, String.format(java.util.Locale.US, "%,.2f", perItemAmount)))
+                .as("a later item's amount (past page 1) must not clip").isTrue();
+            // Footer relocates by delta = (ITEM_START_ROW + emitted) - FOOTER_START.
+            // emitted = 30 items x 3 lines = 90; delta = (9 + 90) - 22 = 77.
+            int delta = (ITEM_START_ROW_FOR_TEST + 90) - FOOTER_START_FOR_TEST;
+            assertThat(cellNeverClips(sheet, SUBTOTAL_ROW_FOR_TEST + delta, 8,
+                String.format(java.util.Locale.US, "%,.2f", subtotal))).as("subtotal must not clip").isTrue();
+            assertThat(cellNeverClips(sheet, VAT_ROW_FOR_TEST + delta, 8,
+                String.format(java.util.Locale.US, "%,.2f", vat))).as("VAT must not clip").isTrue();
+            assertThat(cellNeverClips(sheet, TOTAL_ROW_FOR_TEST + delta, 8,
+                String.format(java.util.Locale.US, "%,.2f", total)))
+                .as("grand total above 1 billion, on a paginated document, must not clip").isTrue();
+        }
+    }
+
+    // Mirrors QuotationRenderer's own private row constants (ITEM_START_ROW/FOOTER_START/
+    // SUBTOTAL_ROW/VAT_ROW/TOTAL_ROW) -- kept here rather than reflectively read so a future
+    // relayout of the template shows up as a clear compile-time constant diff in review.
+    private static final int ITEM_START_ROW_FOR_TEST = 9;
+    private static final int FOOTER_START_FOR_TEST = 22;
+    private static final int SUBTOTAL_ROW_FOR_TEST = 38;
+    private static final int VAT_ROW_FOR_TEST = 39;
+    private static final int TOTAL_ROW_FOR_TEST = 40;
+
+    /**
+     * The definitive proof, requested by the brief: an actual LibreOffice XLS→PDF round-trip
+     * (skipped, not failed, when {@code soffice} is unavailable) whose extracted text contains
+     * every large formatted number in full, and never "###", across Thai, English/USD, and a
+     * paginated multi-page document -- the exact cases from the bug report and the brief's Step 1
+     * checklist.
+     */
+    @Test
+    void pdfNeverPrintsHashesForExtremeMagnitudeValues() throws Exception {
+        requireLibreOffice();
+
+        // Thai, single page: a million-plus quantity, six-figure unit price, near-billion amount.
+        QuotationRenderModel.RenderItem thaiItem = renderItem(null, threeLines("A"),
+            new BigDecimal("1000000"), new BigDecimal("999.99"), "Net",
+            new BigDecimal("999.99"), new BigDecimal("999990000.00"));
+        QuotationRenderModel thaiModel = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0205", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(thaiItem), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+        byte[] thaiPdf = renderer.toPdf(thaiModel);
+        String thaiText = strip(thaiPdf);
+        assertThat(thaiText).as("Thai PDF must not show ###").doesNotContain("###");
+        assertThat(thaiText).contains("1,000,000"); // qty
+        assertThat(thaiText).contains("999.99");     // unit price / net
+        assertThat(thaiText).contains("999,990,000.00"); // amount + subtotal
+        assertThat(thaiText).contains("1,069,989,300.00"); // grand total (subtotal x 1.07)
+
+        // English/USD, single page: large decimal per-sqm quantity, six-figure unit price.
+        QuotationRenderModel.RenderItem enItem = new QuotationRenderModel.RenderItem(
+            null, threeLines("A"), new BigDecimal("1234567.89"), "sqm", new BigDecimal("25.50"),
+            "Net", new BigDecimal("25.50"), new BigDecimal("31481480.15"), null, "#,##0.00");
+        QuotationRenderModel enModel = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0206", "P003", "D002", "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(enItem), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+        byte[] enPdf = renderer.toPdf(enModel);
+        String enText = strip(enPdf);
+        assertThat(enText).as("English/USD PDF must not show ###").doesNotContain("###");
+        assertThat(enText).contains("1,234,567.89"); // qty (sqm, 2dp)
+        assertThat(enText).contains("31,481,480.15"); // amount / grand total (no VAT row on EN)
+
+        // Thai, paginated multi-page: same large-magnitude items repeated across many rows/pages.
+        List<QuotationRenderModel.RenderItem> manyItems = new ArrayList<>();
+        BigDecimal perItemAmount = new BigDecimal("99999999.99");
+        for (int i = 1; i <= 30; i++) {
+            manyItems.add(renderItem(null, threeLines("Item" + i),
+                new BigDecimal("1234567"), new BigDecimal("81.00"), "Net",
+                new BigDecimal("81.00"), perItemAmount));
+        }
+        QuotationRenderModel manyModel = modelWithItems(manyItems, List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null));
+        byte[] manyPdf = renderer.toPdf(manyModel);
+        String manyText = strip(manyPdf);
+        assertThat(manyText).as("paginated Thai PDF must not show ### on any page").doesNotContain("###");
+        assertThat(manyText).contains("1,234,567"); // per-item qty, repeated many times
+        assertThat(manyText).contains("99,999,999.99"); // per-item amount
+        // subtotal = 30 x 99,999,999.99 = 2,999,999,999.70; VAT 7% = 209,999,999.98 (HALF_UP);
+        // grand total = 3,209,999,999.68 -- comfortably above the ">1B" case from the brief.
+        assertThat(manyText).contains("2,999,999,999.70");
+        assertThat(manyText).contains("209,999,999.98");
+        assertThat(manyText).contains("3,209,999,999.68");
+    }
+
     // ── terms & conditions page (owner decision 2026-09-14) ──────────────────────────────────
     // toPdf(QuotationRenderModel) — the deal quotation editor's ดาวน์โหลด PDF button — now appends
     // forms/quotation_terms_and_conditions.pdf as the document's final page(s). See
