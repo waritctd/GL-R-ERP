@@ -22,6 +22,7 @@ import {
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
   listPricePerSqmIncVat,
+  parseSizeText,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -542,6 +543,154 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
   });
 });
 
+// ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่
+// PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are ALSO
+// asserted, verbatim, in backend/src/test/java/.../DealQuotationLinesTest.java's own
+// "SHARED GRAMMAR vector table" section, against `DealQuotationLines#parseTwoDimensions`. The two
+// must never drift apart again without both going red.
+describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
+  it('basic separators and case', () => {
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30*60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30 X 60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30×60')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('english units, per-number or trailing', () => {
+    expect(parseSizeText('30x60cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30 cm x 60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('300x600mm')).toEqual({ width: 300, height: 600, unit: 'mm' });
+    expect(parseSizeText('600x600mm')).toEqual({ width: 600, height: 600, unit: 'mm' });
+  });
+
+  it('thai units (ซม / ซม. / ซ.ม.)', () => {
+    expect(parseSizeText('30x60 ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30ซม.x60ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60 ซ.ม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+  });
+
+  it('decimal comma, ignored third dimension, ignored trailing parenthetical', () => {
+    // "29,7" is 29.7 -- decimal comma, not a thousands separator.
+    expect(parseSizeText('29,7x59,7')).toEqual({ width: 29.7, height: 59.7, unit: null });
+    // Third dimension (thickness) ignored, never a second dimension pair.
+    expect(parseSizeText('30x60x1')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('60X60x0.9')).toEqual({ width: 60, height: 60, unit: null });
+    // Trailing free text in parentheses ignored.
+    expect(parseSizeText('30x60 (หนา 9)')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('unparseable', () => {
+    expect(parseSizeText('รูปทรงอิสระ')).toBeNull();
+    expect(parseSizeText('60x')).toBeNull();
+    expect(parseSizeText('JOLLY 60x60')).toBeNull();
+    expect(parseSizeText('1,2X20 JOLLY COCO')).toBeNull();
+    expect(parseSizeText('0x60')).toBeNull();
+    expect(parseSizeText('')).toBeNull();
+    expect(parseSizeText(null)).toBeNull();
+  });
+
+  // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. JS's `\s` is Unicode-aware
+  // and its own `.trim()`/`\s` already treat NBSP etc. as whitespace, while Java's `\s` is
+  // ASCII-only and `String.trim()` strips only <= U+0020 -- so the two engines disagreed on every
+  // character in this class (in one direction or the other). Both must now agree, via a shared
+  // pre-fold rather than trying to reconcile two different `\s` definitions inside the pattern
+  // itself. The SAME vectors are pinned in DealQuotationLinesTest.java's own "F2" section, against
+  // `DealQuotationLines#parseTwoDimensions` -- same inputs, same result, on both sides. ───────────
+  it('agrees with the backend on every measured whitespace divergence', () => {
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // NBSP
+    expect(parseSizeText('30x60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60　cm')).toEqual({ width: 30, height: 60, unit: 'cm' }); // ideographic space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
+    expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
+    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator
+    // The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
+    // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+  });
+});
+
+// ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing vectors
+// below must stay well under 50ms; a regression in either the grammar fix or the length guard alone
+// would blow one of them up (the first is short enough to bypass the guard entirely and exercises
+// the grammar fix in isolation; the second is the reviewer's own reported shape, which also
+// exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 389ms / 3,357ms at
+// 128 / 248 chars (the reviewer's own run measured 130ms / 4,092ms). Same vectors pinned in
+// DealQuotationLinesTest.java's own "F1" section. ──────────────────────────────────────────────
+describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
+  it('pathological whitespace under the 64-char length guard does not catastrophically backtrack', () => {
+    const attack = '30' + ' '.repeat(18) + 'x60' + ' '.repeat(18) + 'x1' + ' '.repeat(18) + '!';
+    expect(attack.length).toBeLessThanOrEqual(64);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it("the reviewer's own 248-char pathological shape does not catastrophically backtrack", () => {
+    const attack = '30' + ' '.repeat(80) + 'x60' + ' '.repeat(80) + 'x1' + ' '.repeat(80) + '!';
+    expect(attack.length).toBe(248);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step
+    // could shrink it away -- this pins the length guard itself, not just the regex fix.
+    const genuineButLong = '30' + ' '.repeat(60) + 'x60';
+    expect(genuineButLong.length).toBe(65);
+    expect(parseSizeText(genuineButLong)).toBeNull();
+  });
+});
+
+// ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a catalog-linked 60x60 row must
+// recompute แผ่น/ตร.ม. from the TYPED size (0.18), not silently keep the catalogue's 0.36 -- the old
+// SIZE_CM_PATTERN already tolerated a third dimension, so this specific vector was never broken on
+// the frontend; it is pinned here anyway because it is the exact pairing that exposed the
+// backend/frontend disagreement (backend printed the catalogue while this recomputed from the typed
+// text -- see the matching backend test for the PDF-side half of the bug). ─────────────────────────
+describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on the 2026-09-16 bug pairing', () => {
+  it('"30x60x1" against a catalogSizeText of "60x60" recomputes 0.18 and is confirmed different', () => {
+    expect(sqmPerPieceFromSizeCm('30x60x1')).toBe(0.18);
+    expect(sizeTextDiffersFromCatalogFaceSize('30x60x1', '60x60')).toBe(true);
+  });
+
+  it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
+    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18
+    // sqm/piece and get rejected by the sanity bound, which is exactly the bug this unit-aware
+    // conversion avoids.
+    expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
+  });
+
+  it('explicit unit wins: "300x600mm" is a different tile than a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('300x600mm', '60x60')).toBe(true);
+  });
+
+  it('explicit unit wins the other way too: "600x600mm" still matches a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('600x600mm', '60x60')).toBe(false);
+  });
+
+  /**
+   * F5-style bonus (2026-09-16 review): the two vectors above never distinguish an explicit unit
+   * from "no unit, check both readings" -- both happen to land on the same reading regardless (the
+   * backend's own equivalent test had this exact vacuity, see DealQuotationLinesTest's F5 section).
+   * This one does: catalogue 30cm x 60cm, typed "60x30mm" -- an explicit MM reading that matches
+   * NEITHER the catalogue's mm figures (300,600) NOR its cm figures directly (30,60), but DOES match
+   * the catalogue's cm figures order-swapped (60==60, 30==30) if the explicit unit were ignored and
+   * both readings checked anyway. Mutation-checked the same way as the backend test: forcing the
+   * typed `unit` to `null` in `compareToCatalogFaceSize` turns this red (it wrongly reads as
+   * "matches"); the real unit resolution turns it green.
+   */
+  it('pins unit resolution -- mutation-discriminating (F5-style), unlike the two vectors above', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('60x30mm', '30x60')).toBe(true);
+  });
+});
+
 describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mirrors DealQuotationLines#sizeLine\'s REFINEMENT)', () => {
   it('matches when the typed size equals the catalogue size exactly', () => {
     expect(sizeTextMatchesCatalogFaceSize('60x60', '60x60')).toBe(true);
@@ -604,6 +753,25 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
     // when there is nothing reliable to compare it against.
     expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
+  });
+});
+
+// ── F3 (MEDIUM-LOW, 2026-09-16 review): the catalogue side of the comparison can carry its own
+// unit token (sizeTextFromCatalog's sizeRaw/size fallback, ~49 prod rows with no width_mm/
+// height_mm) and must honour it rather than reading the digits as bare cm -- see parseSizeCmPair's
+// own doc for the false claim this replaces and the "600x1200 mm read as 600cm x 1200cm" bug. ────
+describe('parseSizeCmPair / catalogue-side unit honouring (F3, 2026-09-16 review)', () => {
+  it('an explicit mm unit on the CATALOGUE side is converted to its actual cm face size, not read as bare cm digits', () => {
+    // Pre-fix bug: reading "600x1200 mm" as literal cm digits (600,1200) made a rep's correctly
+    // typed "60x120" (the tile's REAL cm size) fail to match its own catalogue row.
+    expect(sizeTextMatchesCatalogFaceSize('60x120', '600x1200 mm')).toBe(true);
+    // A genuinely different tile must still read as different.
+    expect(sizeTextMatchesCatalogFaceSize('30x60', '600x1200 mm')).toBe(false);
+  });
+
+  it('a junk size_raw fallback (not a size at all) is a parse failure, never a wrong reading', () => {
+    expect(sizeTextMatchesCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
   });
 });
 

@@ -172,6 +172,186 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
+    // ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
+    // แต่ PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are
+    // ALSO asserted, verbatim, in frontend/src/features/quotations/quotationMeta.test.js's own
+    // "shared size grammar" describe block, against `parseSizeText`. The two must never drift apart
+    // again without both going red. ───────────────────────────────────────────────────────────────
+
+    private static void assertParsed(String input, String width, String height,
+                                     DealQuotationLines.SizeUnit unit) {
+        DealQuotationLines.ParsedSize parsed = DealQuotationLines.parseTwoDimensions(input);
+        assertThat(parsed).as("parsing %s", input).isNotNull();
+        assertThat(parsed.width()).as("%s width", input).isEqualByComparingTo(width);
+        assertThat(parsed.height()).as("%s height", input).isEqualByComparingTo(height);
+        assertThat(parsed.unit()).as("%s unit", input).isEqualTo(unit);
+    }
+
+    private static void assertUnparsed(String input) {
+        assertThat(DealQuotationLines.parseTwoDimensions(input)).as("parsing %s", input).isNull();
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_basicSeparatorsAndCase() {
+        assertParsed("30x60", "30", "60", null);
+        assertParsed("30*60", "30", "60", null);
+        assertParsed("30 X 60", "30", "60", null);
+        assertParsed("30×60", "30", "60", null);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_englishUnits() {
+        assertParsed("30x60cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30 cm x 60 cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("300x600mm", "300", "600", DealQuotationLines.SizeUnit.MM);
+        assertParsed("600x600mm", "600", "600", DealQuotationLines.SizeUnit.MM);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_thaiUnits() {
+        assertParsed("30x60 ซม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30ซม.x60ซม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30x60 ซ.ม.", "30", "60", DealQuotationLines.SizeUnit.CM);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_decimalCommaAndThirdDimensionAndTrailingText() {
+        // "29,7" is 29.7 -- decimal comma, not a thousands separator.
+        assertParsed("29,7x59,7", "29.7", "59.7", null);
+        // Third dimension (thickness) ignored, never a second dimension pair.
+        assertParsed("30x60x1", "30", "60", null);
+        assertParsed("60X60x0.9", "60", "60", null);
+        // Trailing free text in parentheses ignored.
+        assertParsed("30x60 (หนา 9)", "30", "60", null);
+    }
+
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_unparseable() {
+        assertUnparsed("รูปทรงอิสระ");
+        assertUnparsed("60x");
+        assertUnparsed("JOLLY 60x60");
+        assertUnparsed("1,2X20 JOLLY COCO");
+        assertUnparsed("0x60");
+        assertUnparsed("");
+        assertUnparsed(null);
+    }
+
+    // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. Java's `\s` is ASCII-only
+    // and `String.trim()` strips only <= U+0020; JS's `\s` is Unicode-aware. Both engines must now
+    // agree on every one of these -- see DealQuotationLines#normalize's own doc for which direction
+    // each vector used to fail on. The SAME vectors are pinned in quotationMeta.test.js's own "F2"
+    // describe block, against `parseSizeText` -- same inputs, same result, on both sides. ─────────
+    @Test
+    void parseTwoDimensions_sharedGrammarVectors_unicodeWhitespaceNormalisation() {
+        assertParsed("30 x 60", "30", "60", null); // NBSP
+        assertParsed("30x60 cm", "30", "60", DealQuotationLines.SizeUnit.CM);
+        assertParsed("30x60　cm", "30", "60", DealQuotationLines.SizeUnit.CM); // ideographic space
+        assertParsed("30 x 60", "30", "60", null); // thin space
+        assertParsed("30 x 60", "30", "60", null); // narrow no-break space
+        assertParsed("﻿30x60", "30", "60", null); // BOM / ZWNBSP
+        assertParsed("30x60 ", "30", "60", null); // line separator
+        // The OTHER direction: a bare control byte, which String.trim() has ALWAYS stripped (it
+        // strips anything <= U+0020) -- this was never broken on the Java side, but is pinned here
+        // so the two vector tables stay byte-for-byte identical.
+        assertParsed("30x60", "30", "60", null);
+        assertParsed("30x60", "30", "60", null);
+    }
+
+    // ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing
+    // vectors below must stay well under 50ms; a regression in either the grammar fix or the length
+    // guard alone would blow one of them up (the first is short enough to bypass the guard entirely
+    // and exercises the grammar fix in isolation; the second is the reviewer's own reported shape,
+    // which also exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 253 ms /
+    // 5,026 ms at 128 / 248 chars (the reviewer's own run measured 367 ms / 12,238 ms); the fixed
+    // grammar/guard bring both down to ~0-1 ms. ─────────────────────────────────────────────────
+    @Test
+    void parseTwoDimensions_pathologicalWhitespace_underTheLengthGuard_doesNotCatastrophicallyBacktrack() {
+        String attack = "30" + " ".repeat(18) + "x60" + " ".repeat(18) + "x1" + " ".repeat(18) + "!";
+        assertThat(attack.length()).isLessThanOrEqualTo(64);
+        long start = System.nanoTime();
+        DealQuotationLines.ParsedSize result = DealQuotationLines.parseTwoDimensions(attack);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(result).as("a trailing '!' must never match").isNull();
+        assertThat(elapsedMs).as("must not catastrophically backtrack on pathological whitespace")
+            .isLessThan(50);
+    }
+
+    @Test
+    void parseTwoDimensions_pathologicalWhitespace_248chars_doesNotCatastrophicallyBacktrack() {
+        // The reviewer's own reported shape (measured pre-fix at 12,238ms on the reviewer's code,
+        // 5,026ms on this machine).
+        String attack = "30" + " ".repeat(80) + "x60" + " ".repeat(80) + "x1" + " ".repeat(80) + "!";
+        assertThat(attack).hasSize(248);
+        long start = System.nanoTime();
+        DealQuotationLines.ParsedSize result = DealQuotationLines.parseTwoDimensions(attack);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertThat(result).isNull();
+        assertThat(elapsedMs).as("must not catastrophically backtrack on pathological whitespace")
+            .isLessThan(50);
+    }
+
+    @Test
+    void parseTwoDimensions_longerThanTheLengthGuard_isRejectedOutright_evenForAGenuineShape() {
+        // 65 chars of otherwise-perfectly-parseable text (the padding is INTERNAL, between the first
+        // number and the separator, so String.trim() cannot shrink it away) -- proves the length
+        // guard itself, not just the regex fix, independent of any pathological shape.
+        String genuineButLong = "30" + " ".repeat(60) + "x60";
+        assertThat(genuineButLong.length()).isEqualTo(65);
+        assertUnparsed(genuineButLong);
+    }
+
+    // ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a linked 60x60cm catalogue tile
+    // must print the rep's typed text, not the catalogue's -- the old TWO_DIMENSIONS grammar had no
+    // third-dimension allowance, so this typed text failed to parse and sizeLine silently kept
+    // printing the catalogue's 60x60. ────────────────────────────────────────────────────────────
+    @Test
+    void sizeLine_typedSizeWithThirdDimension_differsFromCatalogue_printsTypedText_theExact20260916Bug() {
+        assertThat(DealQuotationLines.sizeLine("30x60x1", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 30x60x1 x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
+    // ── Explicit-unit-wins (2026-09-16 fix): an explicit unit token checks ONLY that reading, never
+    // falls back to also trying the other unit the way the unspecified-unit rule always has. ─────
+    @Test
+    void sizeLine_explicitMmUnit_differsFromCatalogueEvenThoughCmReadingWouldMatch() {
+        // Catalogue is 60x60cm (600x600mm). Typed "600x600mm" is an explicit mm reading that DOES
+        // match the catalogue's own mm figures, so this still prints the catalogue (unaffected).
+        assertThat(DealQuotationLines.sizeLine("600x600mm", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60 cm x 60 cm x 9 mm (ขนาดโดยประมาณ)");
+        // Catalogue is 60x60cm (600x600mm). Typed "300x600mm" is explicitly millimetres -- a
+        // genuinely different (smaller) tile -- and must print as typed even though nothing here
+        // would ever coincidentally equal the catalogue's cm reading either.
+        assertThat(DealQuotationLines.sizeLine("300x600mm", new BigDecimal("9"),
+            new BigDecimal("600"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 300x600mm x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("60 cm x 60 cm");
+    }
+
+    /**
+     * F5 (test quality, 2026-09-16 review) — the test above passes even with unit resolution
+     * DELETED from {@link DealQuotationLines#matchesCatalogFaceSize} (mutation-checked: forcing
+     * {@code typed.unit()} to {@code null} there leaves both of its assertions green), because
+     * neither of its two vectors ever lands on a DIFFERENT reading depending on whether the unit is
+     * honoured — both "600x600mm" and "300x600mm" happen to agree with the (wrong) "check both
+     * readings" answer too. This vector does not: catalogue 30cm x 60cm (300mm x 600mm), typed
+     * "60x30mm" — an explicit MM reading that matches NEITHER the catalogue's real mm figures
+     * (60,30 vs 300,600) NOR its cm figures directly (60,30 vs 30,60), but DOES match the catalogue's
+     * cm figures order-swapped (60==60, 30==30) if the explicit unit is ignored and both readings are
+     * checked regardless. Mutation-checked the same way: forcing {@code typed.unit()} to
+     * {@code null} turns this test red (it wrongly starts printing the catalogue's "30 cm x 60 cm");
+     * restoring the real unit resolution turns it green again — see the PR body for the run.
+     */
+    @Test
+    void sizeLine_explicitMmUnit_pinsUnitResolution_mutationDiscriminating() {
+        assertThat(DealQuotationLines.sizeLine("60x30mm", new BigDecimal("9"),
+            new BigDecimal("300"), new BigDecimal("600")))
+            .isEqualTo("ขนาด 60x30mm x 9 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("30 cm x 60 cm");
+    }
+
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
     @Test
@@ -354,6 +534,24 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 600x1200 mm");
         assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "60x60", null))
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm.");
+    }
+
+    /**
+     * F4 (LOW, 2026-09-16 review) — {@code SIZE_HAS_UNIT} used to only know {@code ซม}/{@code ซม.}/
+     * {@code มม}/{@code มม.}, not the middle-dot Thai forms {@code ซ.ม.}/{@code ม.ม.} that
+     * {@code TWO_DIMENSIONS}'s grammar already accepted, so a millimetre size typed with a dot
+     * (e.g. "30x60 ม.ม.") was read as having NO unit and got " cm." appended on top of it — a
+     * millimetre size printed as centimetres on a customer document. Fixed by sharing one
+     * {@code UNIT_ALTERNATION} constant between the two patterns so they cannot drift apart again.
+     */
+    @Test
+    void descriptionLine_recognisesTheMiddleDotThaiUnitForms_doesNotDoubleUpTheUnit() {
+        assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "30x60 ม.ม.", null))
+            .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 30x60 ม.ม.")
+            .doesNotContain("cm.");
+        assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "30x60 ซ.ม.", null))
+            .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 30x60 ซ.ม.")
+            .doesNotContain("cm.");
     }
 
     // ── quotation v3 (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
