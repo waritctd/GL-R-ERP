@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -38,7 +38,7 @@ function emptyNewContact() {
  * own option rather than falling back to a blank select, which would read as "nobody chosen" for
  * a quotation that in fact has one.
  */
-export function QuotationContactPicker({
+export const QuotationContactPicker = forwardRef(function QuotationContactPicker({
   customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
   // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — optional so a
   // caller that has nothing to bind it to (none exists today, but future reuse of this shared
@@ -46,7 +46,7 @@ export function QuotationContactPicker({
   // extra UI. Both current callers (QuotationEditorPage directly, DealCustomerCard on the
   // inline-create path) pass their own `terms.omitContactHonorific` through this.
   omitContactHonorific = false, onChangeOmitContactHonorific,
-}) {
+}, ref) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showNew, setShowNew] = useState(false);
@@ -115,6 +115,16 @@ export function QuotationContactPicker({
   const [contactEdits, setContactEdits] = useState(() => contactEditsFrom(selected));
   const [savingContactField, setSavingContactField] = useState(null);
   const lastSeededContactRef = useRef({ id: selected?.id ?? null, ...contactEditsFrom(selected) });
+  // Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): the ONE
+  // in-flight `saveContactField` call, if any -- exposed via `flushPendingContactSave` below so the
+  // editor's ส่งขออนุมัติ pre-save can AWAIT it before reading `contact`/building its own PUT. Without
+  // this, a rep who blurs อีเมล then immediately confirms submit could have the quotation's own
+  // pre-save PUT (which re-reads the LIVE contact row server-side) land before this field's PUT
+  // commits, freezing the OLD email into an approved document.
+  const pendingContactSaveRef = useRef(null);
+  useImperativeHandle(ref, () => ({
+    flushPendingContactSave: () => pendingContactSaveRef.current ?? Promise.resolve(),
+  }), []);
 
   useEffect(() => {
     // Still resolving (see the onResolve effect above) — โทร./อีเมล are unknown, not editable yet.
@@ -141,8 +151,20 @@ export function QuotationContactPicker({
    * created contact uses — so the parent marks the quotation dirty and the next draft save
    * re-snapshots it (DealQuotationService#resolveContact re-reads the live contact by id on
    * every save; see CustomerController#updateContact's own Javadoc). */
-  async function saveContactField(field) {
-    if (!selected?.id || !customerId) return;
+  function saveContactField(field) {
+    if (!selected?.id) return;
+    // Bug fix (owner re-report 2026-09-16): this used to return here just as silently as the
+    // `!selected?.id` case above -- no request, no toast, the typed value simply reverting to
+    // whatever it was on the next re-render with nothing telling the rep why. Happens for a
+    // quotation-grant holder who cannot load the ticket (`contactCustomerId` stays null even
+    // though the quotation's own frozen snapshot already seeded a `selected` contact with
+    // phone/email). Toast instead, and — unlike the catch block below — do NOT revert
+    // `contactEdits`: there is nothing to roll back to (no request was ever sent), so reverting
+    // here would silently discard what the rep just typed for no reason they could see.
+    if (!customerId) {
+      showToast?.('error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้');
+      return;
+    }
     const previous = (selected[field] ?? '').toString();
     const next = (contactEdits[field] ?? '').trim();
     if (next === previous.trim()) return; // untouched — no request at all
@@ -153,20 +175,26 @@ export function QuotationContactPicker({
     const optimistic = { ...selected, [field]: next || null };
     setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? { ...c, [field]: next || null } : c)));
     onChange(optimistic);
-    try {
-      const res = await api.customers.updateContact(customerId, selected.id, { [field]: next });
-      const updated = res?.contact ?? optimistic;
-      setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? updated : c)));
-      onChange(updated);
-    } catch (err) {
-      setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? restore : c)));
-      setContactEdits((prev) => ({ ...prev, [field]: previous }));
-      lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
-      onChange(restore);
-      showToast?.('error', err.message || 'บันทึกข้อมูลผู้สั่งซื้อไม่สำเร็จ');
-    } finally {
-      setSavingContactField(null);
-    }
+    // Tracked so the editor's submit pre-save can await this exact request — see
+    // `flushPendingContactSave` above.
+    const promise = (async () => {
+      try {
+        const res = await api.customers.updateContact(customerId, selected.id, { [field]: next });
+        const updated = res?.contact ?? optimistic;
+        setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? updated : c)));
+        onChange(updated);
+      } catch (err) {
+        setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? restore : c)));
+        setContactEdits((prev) => ({ ...prev, [field]: previous }));
+        lastSeededContactRef.current = { ...lastSeededContactRef.current, [field]: previous };
+        onChange(restore);
+        showToast?.('error', err.message || 'บันทึกข้อมูลผู้สั่งซื้อไม่สำเร็จ');
+      } finally {
+        setSavingContactField(null);
+        if (pendingContactSaveRef.current === promise) pendingContactSaveRef.current = null;
+      }
+    })();
+    pendingContactSaveRef.current = promise;
   }
 
   function closeNewContact() {
@@ -348,4 +376,4 @@ export function QuotationContactPicker({
       ) : null}
     </>
   );
-}
+});

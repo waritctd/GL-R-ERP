@@ -168,10 +168,18 @@ public class CustomerController {
      *
      * <p>Nothing here rewrites an already-issued document: {@code sales.quotation}'s
      * {@code contact_name}/{@code contact_phone}/{@code contact_email} (V167) are a frozen snapshot
-     * taken at DRAFT save time ({@code DealQuotationService#resolveContact} re-reads the LIVE
-     * contact row on every create/update by id, the same discipline
-     * {@code DealQuotationService#customerSnapshot} already uses for the customer master) — an
-     * edited contact reaches the next draft save/print, never an approved one.
+     * — {@code DealQuotationService#resolveContact} re-reads the LIVE contact row on every
+     * create/update by id, the same discipline {@code DealQuotationService#customerSnapshot}
+     * already uses for the customer master.
+     *
+     * <p>⚠️ Updated 2026-09-16 (owner re-report, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): this
+     * used to say an edited contact "reaches the next draft save/print, never an approved one" —
+     * true for an APPROVED/PENDING_APPROVAL document, but for a DRAFT it understated the gap: the
+     * snapshot only moved on THAT DRAFT's own next save, so a contact fixed here never reached a
+     * draft the rep was not actively re-saving. {@link CustomerService#updateContact} now also
+     * refreshes phone/email (and, when the name itself changed, the printed name) on every DRAFT
+     * quotation pointing at this contact, in the SAME transaction as this write — see that method's
+     * own Javadoc. An already-submitted document still never moves.
      */
     @PutMapping("/{customerId}/contacts/{contactId}")
     Map<String, ContactDto> updateContact(@PathVariable long customerId,
@@ -180,9 +188,8 @@ public class CustomerController {
                                           HttpSession session) {
         DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
         requireNotBlankIfPresent(req.firstName(), "กรุณาระบุชื่อผู้สั่งซื้อ");
-        ContactDto updated = contacts.update(customerId, contactId,
-                req.firstName(), req.lastName(), req.position(), req.email(), req.phone())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้สั่งซื้อรายนี้"));
+        ContactDto updated = customerService.updateContact(customerId, contactId,
+            req.firstName(), req.lastName(), req.position(), req.email(), req.phone());
         return Map.of("contact", updated);
     }
 
@@ -233,7 +240,10 @@ public class CustomerController {
         @NotBlank @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
-        @Email @Size(max = 200) String email,
+        // Thai message (2026-09-16 fix): @Email's Jakarta default ("must be a well-formed email
+        // address") reached the picker verbatim via ApiExceptionHandler#fieldMessage, which only
+        // translates a literal `message=` — see that method's own NOTE. Format accepted unchanged.
+        @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email,
         @Size(max = 50) String phone
     ) {}
 
@@ -243,7 +253,7 @@ public class CustomerController {
         @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,
         @Size(max = 100) String position,
-        @Email @Size(max = 200) String email,
+        @Email(message = "รูปแบบอีเมลไม่ถูกต้อง") @Size(max = 200) String email,
         @Size(max = 50) String phone
     ) {}
 

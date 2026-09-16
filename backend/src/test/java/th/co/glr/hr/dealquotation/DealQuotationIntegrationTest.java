@@ -26,6 +26,7 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customer.CustomerService;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
@@ -71,6 +72,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
     private EmployeeAuthRepository employeeAuth;
+    // Quotation-editor bug fix (2026-09-16) — see ContactUpdateRefreshesDraftQuotations* tests
+    // below. Wrapped in #transactional(...) at each call site, not here, so its own @Transactional
+    // is exercised through a real AOP proxy rather than being inert (this suite hand-wires with
+    // `new` everywhere else — see AbstractPostgresIntegrationTest#transactional's own Javadoc).
+    private CustomerService customerService;
     private EmployeeSignatureService signatureService;
     private CapturingMailer mailer;
 
@@ -128,6 +134,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
             // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
+        customerService = new CustomerService(customers, contacts, projects, employeeAuth, quotationRepository);
 
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 
@@ -2484,6 +2491,147 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
         assertThat(revision.omitContactHonorific()).isTrue();
         assertThat(revision.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    // Contact-update DRAFT snapshot refresh (2026-09-16 fix, owner re-report "แก้หรือเพิ่ม Email
+    // ผู้สั่งซื้อภายหลังไม่ได้") — CustomerService#updateContact /
+    // DealQuotationRepository#refreshDraftContactSnapshot. Written wrong-way-round per CLAUDE.md
+    // ("Permission changes must ship evidence" — same discipline applied to this scope guard):
+    // negative cases (a row that must NOT move) come first. Every call goes through
+    // #transactional(customerService) rather than the bare field, so #updateContact's own
+    // @Transactional is exercised through a real AOP proxy instead of being inert — see that
+    // helper's own Javadoc and the double-afterCommit-defer test above for why a bare `new`-wired
+    // service would prove nothing about the annotation.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void updateContact_approvedQuotation_snapshotNeverChanges() {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        assertThat(approved.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-after-approval@customer.test", "099-000-0000");
+
+        DealQuotationDto reloaded = quotationRepository.findById(approved.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(reloaded.contactEmail()).isEqualTo(contact.email());
+        assertThat(reloaded.contactPhone()).isEqualTo(contact.phone());
+    }
+
+    @Test
+    void updateContact_pendingApprovalQuotation_snapshotNeverChanges() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-while-pending@customer.test", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(submitted.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(reloaded.contactEmail()).isEqualTo(contact.email());
+    }
+
+    @Test
+    void updateContact_draftBelongingToADifferentContact_notChanged() {
+        ContactDto otherContact = contacts.create(customer.id(), "สมชาย", "รักดี", "ผู้จัดการ",
+            "somchai@customer.test", "082-222-3333");
+        ProjectDto otherProject = projects.create(customer.id(), "โครงการผู้สั่งซื้ออื่น");
+        long otherTicket = createTicket("ดีล DQ ผู้สั่งซื้ออื่น", otherProject.id(), otherContact.id(), salesActor);
+        DealQuotationDto otherDraft = quotationService.create(otherTicket,
+            upsertRequest(otherContact.id(), List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(otherDraft.contactEmail()).isEqualTo(otherContact.email());
+
+        // Updating the ORIGINAL contact (`contact`, not `otherContact`) must never touch a draft
+        // snapshotted against a DIFFERENT contact id.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-for-original-contact@customer.test", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(otherDraft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isEqualTo(otherContact.email());
+        assertThat(reloaded.contactId()).isEqualTo(otherContact.id());
+    }
+
+    @Test
+    void updateContact_draftQuotation_phoneAndEmailRefreshedImmediately_nameLeftAlone() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(draft.contactEmail()).isEqualTo(contact.email());
+        String originalName = draft.contactName();
+
+        // No re-save of the DRAFT itself -- the fix is that the CONTACT update alone reaches it.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "new-email@customer.test", "088-777-6666");
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(reloaded.contactEmail()).isEqualTo("new-email@customer.test");
+        assertThat(reloaded.contactPhone()).isEqualTo("088-777-6666");
+        // A phone/email-only edit never re-snapshots the printed NAME -- see
+        // DealQuotationRepository#refreshDraftContactSnapshot's own Javadoc on `refreshName`.
+        assertThat(reloaded.contactName()).isEqualTo(originalName);
+    }
+
+    @Test
+    void updateContact_draftQuotation_nameRefreshedOnlyWhenNameFieldsAreSent() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            "สมหญิง2", "ใจดี2", null, null, null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.contactName()).isEqualTo("สมหญิง2 ใจดี2");
+    }
+
+    /**
+     * D5 (Opus review 2026-09-16): {@code refreshDraftContactSnapshot}'s own {@code UPDATE} carries
+     * no actor/ownership predicate at all -- it moves EVERY DRAFT pointing at this contact id,
+     * regardless of whose ticket it belongs to, even though a DRAFT is otherwise visible only to
+     * its owning rep plus CEO/sales_manager (DealEntryAccess is role-only). Pinned here as the
+     * INTENDED behaviour, not an authz gap: the snapshot is derived data rep B's own next save on
+     * their DRAFT would reproduce verbatim anyway (same contact row, same {@code resolveContact}
+     * read), so this carries no information about rep B's ticket that rep A could not already see
+     * by looking at the (shared) contact record itself. See this test's own PR-body paragraph
+     * (in the branch's PR description) for the full reasoning a reviewer needs to tell this apart
+     * from a genuine cross-rep leak.
+     */
+    @Test
+    void updateContact_anotherRepsDraftOnTheSameContact_isAlsoRefreshed() {
+        DealQuotationDto repBsDraft = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+        assertThat(repBsDraft.contactEmail()).isEqualTo(contact.email());
+        assertThat(repBsDraft.salesRepId()).isEqualTo(otherSalesId);
+
+        // Rep A (or anyone reaching CustomerService#updateContact -- it takes no actor) corrects
+        // the SHARED contact. Rep B never touched their own draft.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "shared-contact-new-email@customer.test", "085-000-1111");
+
+        DealQuotationDto reloaded = quotationRepository.findById(repBsDraft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isEqualTo("shared-contact-new-email@customer.test");
+        assertThat(reloaded.contactPhone()).isEqualTo("085-000-1111");
+    }
+
+    /**
+     * D6 (Opus review 2026-09-16): {@code ContactRepository#update}'s own
+     * {@code COALESCE(:email, email)} treats an explicit {@code ""} (as opposed to a literal
+     * {@code null} parameter, which means "leave unchanged") as "clear this field", so
+     * {@code customers.contact.email} genuinely holds {@code ''} after this call --
+     * {@code refreshDraftContactSnapshot} must still normalise that to {@code NULL} on
+     * {@code sales.quotation}, matching every other writer of this column
+     * ({@code DealQuotationService#resolveContact}'s own {@code blankToNull}).
+     */
+    @Test
+    void updateContact_draftQuotation_clearingEmailStoresNullNotEmptyString() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(draft.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isNull();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
