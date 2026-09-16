@@ -118,6 +118,26 @@ class DealQuotationRequestsValidationTest {
             .isEmpty();
     }
 
+    /**
+     * Review fix F3 (2026-09-16) — {@code sqmPerPiece} now carries the same {@code @Digits}
+     * (integer=4, fraction=6) as {@code sqmPerBox}, matching {@code sales.quotation_item.sqm_per_piece}'s
+     * NUMERIC(10,6) column exactly. Without it, a direct API call could price a line on a
+     * 7-decimal value while the stored (6dp) figure drives the document's own printed quantity
+     * math, so the row stops multiplying out.
+     */
+    @Test
+    void sqmPerPieceBeyondSixDecimals_isRejected_matchingTheColumn() {
+        assertViolated(validItem().sqmPerPiece(new BigDecimal("0.35983491")).build());
+        assertThat(VALIDATOR.validate(validItem().sqmPerPiece(new BigDecimal("0.359835")).build())).isEmpty();
+    }
+
+    /** Same column, the upper bound: {@code sqmPerBox} caps at 9999 (4 integer digits); mirrored
+     * here for {@code sqmPerPiece} too. */
+    @Test
+    void sqmPerPieceOverMax_isRejected() {
+        assertViolated(validItem().sqmPerPiece(new BigDecimal("10000")).build());
+    }
+
     @Test
     void validUpsertRequest_hasNoViolations() {
         assertThat(VALIDATOR.validate(validUpsert().build())).isEmpty();
@@ -227,6 +247,7 @@ class DealQuotationRequestsValidationTest {
         ItemBuilder areaSqm(BigDecimal v) { areaSqm = v; return this; }
         ItemBuilder piecesInput(Integer v) { piecesInput = v; return this; }
         ItemBuilder piecesPerBox(Integer v) { piecesPerBox = v; return this; }
+        ItemBuilder sqmPerPiece(BigDecimal v) { sqmPerPiece = v; return this; }
         ItemBuilder quantity(BigDecimal v) { quantity = v; return this; }
         ItemBuilder specialPriceSqm(BigDecimal v) { specialPriceSqm = v; return this; }
         ItemBuilder adjustmentPct(BigDecimal v) { adjustmentPct = v; return this; }

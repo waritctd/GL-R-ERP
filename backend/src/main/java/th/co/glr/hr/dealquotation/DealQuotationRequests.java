@@ -47,7 +47,13 @@ public final class DealQuotationRequests {
         @Size(max = 255) String texture,
         @Size(max = 255) String sizeText,
         BigDecimal thicknessMm,
-        BigDecimal sqmPerPiece,
+        // Review fix F3 (2026-09-16) — sales.quotation_item.sqm_per_piece is NUMERIC(10,6), exactly
+        // like sqmPerBox below; mirrors that field's own @Digits bound. Without it, a direct API
+        // call with a 7th decimal prices the line on the UNROUNDED value while the document
+        // recomputes quantity from the STORED (6dp) one — e.g. 0.3598349 x 3000 prices 1,079.50 but
+        // the printed row's own quantity math (from the stored 0.359835) comes to 1,079.51, an
+        // arithmetic mismatch the customer can check.
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerPiece,
         // "AREA" | "PIECES" — see QuantityMode. Only meaningful on a TILE row.
         String quantityMode,
         @DecimalMax("999999") BigDecimal areaSqm,
