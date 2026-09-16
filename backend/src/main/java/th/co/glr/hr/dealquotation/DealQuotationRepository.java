@@ -583,12 +583,23 @@ public class DealQuotationRepository {
      * columns: this UPDATE only ever runs because the contact row still exists (it was just
      * written), so there is nothing to guard against here that {@code contact_id} being a
      * non-FK reference would otherwise risk.
+     *
+     * <p>D6 fix (Opus review 2026-09-16): {@code contact_phone}/{@code contact_email} are wrapped
+     * in {@code NULLIF(TRIM(...), '')}, matching the {@code contact_name} case just below AND
+     * {@code DealQuotationService#resolveContact}'s own {@code blankToNull(contact.phone())}/
+     * {@code blankToNull(contact.email())} — every OTHER writer of these two columns normalises a
+     * blank to {@code NULL}. {@code ContactRepository#update}'s own {@code COALESCE(:email, email)}
+     * treats an explicit {@code ""} (as opposed to a literal {@code null} parameter, which means
+     * "leave unchanged") as "clear this field", so {@code customers.contact.email/phone} can
+     * genuinely hold {@code ''} for a cleared field — copying it here raw diverged from the {@code
+     * NULL}-never-{@code ''} invariant every other writer of {@code sales.quotation.contact_phone}/
+     * {@code contact_email} maintains.
      */
     public int refreshDraftContactSnapshot(long contactId, boolean refreshName) {
         return jdbc.update("""
             UPDATE sales.quotation q
-               SET contact_phone = c.phone,
-                   contact_email = c.email,
+               SET contact_phone = NULLIF(TRIM(c.phone), ''),
+                   contact_email = NULLIF(TRIM(c.email), ''),
                    contact_name  = CASE WHEN :refreshName
                                         THEN NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '')
                                         ELSE q.contact_name END,

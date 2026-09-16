@@ -2238,6 +2238,28 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.contactName()).isEqualTo("สมหญิง2 ใจดี2");
     }
 
+    /**
+     * D6 (Opus review 2026-09-16): {@code ContactRepository#update}'s own
+     * {@code COALESCE(:email, email)} treats an explicit {@code ""} (as opposed to a literal
+     * {@code null} parameter, which means "leave unchanged") as "clear this field", so
+     * {@code customers.contact.email} genuinely holds {@code ''} after this call --
+     * {@code refreshDraftContactSnapshot} must still normalise that to {@code NULL} on
+     * {@code sales.quotation}, matching every other writer of this column
+     * ({@code DealQuotationService#resolveContact}'s own {@code blankToNull}).
+     */
+    @Test
+    void updateContact_draftQuotation_clearingEmailStoresNullNotEmptyString() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(draft.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isNull();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
