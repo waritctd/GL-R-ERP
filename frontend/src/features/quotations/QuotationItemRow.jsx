@@ -999,6 +999,16 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
       unit: item.unit || null,
       unitPrice: item.unitPrice === '' || item.unitPrice == null ? null : Number(item.unitPrice),
       discountPct: item.discountPct === '' || item.discountPct == null ? 0 : Number(item.discountPct),
+      // D1 (owner decision, 2026-09-16, review of V182): a PLAIN row (สินค้า/บริการอื่น — e.g.
+      // sanitaryware sold on ชุด) may now carry an OPTIONAL import lead time — her reference
+      // document QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against exactly this kind of row.
+      // DealQuotationService#buildPlainItem already forwards both fields (it always has — the DTO
+      // columns are shared with the TILE row); what was missing was the UI ever sending them. Null
+      // when left blank, exactly like a TILE row's own leadTimeMinDays/Max below — the field is
+      // NEVER required here (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE
+      // rows), so an unfilled PLAIN row saves exactly as it always did.
+      leadTimeMinDays: item.leadTimeMinDays ?? null,
+      leadTimeMaxDays: item.leadTimeMaxDays ?? null,
       itemNotes: item.itemNotes || null,
     };
   }
@@ -1141,6 +1151,10 @@ export function emptyPlainItem(groupId = null) {
     lineType: LINE_TYPE_PLAIN,
     locationLabel: '',
     description: '', quantity: '', unit: '', unitPrice: '', discountPct: null, itemNotes: '',
+    // D1 (2026-09-16): optional import lead time — see itemInputFromRow's PLAIN branch. `null`,
+    // not '', matching emptyQuotationItem's own tile defaults (defaultLeadTimeForOrigin returns
+    // null/null for a blank origin).
+    leadTimeMinDays: null, leadTimeMaxDays: null,
     netUnitPrice: null, lineAmount: null, calcPending: false,
   };
 }

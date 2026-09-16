@@ -132,6 +132,27 @@ export function QuotationPlainItemRow({
             onChange={(e) => onChange({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
           />
         </FormField>
+        {/* D1 (owner decision, 2026-09-16): OPTIONAL — unlike a TILE row's own control
+            (QuotationItemRow's `lead-${index}`), nothing ever requires this for a PLAIN row
+            (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE rows), so a row
+            left blank here saves exactly as it always did. Mirrors that control's shape (same
+            labels, same sr-only max-field pattern) so the two read as one feature. */}
+        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ">
+          <div className="flex items-center gap-1.5">
+            <input
+              id={`plain-lead-${index}`} type="number" disabled={readOnly} className="w-16"
+              value={item.leadTimeMinDays ?? ''}
+              onChange={(e) => onChange({ leadTimeMinDays: e.target.value === '' ? null : Number(e.target.value) })}
+            />
+            <span className="text-text-muted">–</span>
+            <label htmlFor={`plain-lead-max-${index}`} className="sr-only">ถึง (วัน)</label>
+            <input
+              id={`plain-lead-max-${index}`} type="number" disabled={readOnly} className="w-16"
+              value={item.leadTimeMaxDays ?? ''}
+              onChange={(e) => onChange({ leadTimeMaxDays: e.target.value === '' ? null : Number(e.target.value) })}
+            />
+          </div>
+        </FormField>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-subtle px-3 py-2.5">

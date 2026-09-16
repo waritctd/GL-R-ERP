@@ -52,11 +52,24 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
     expect(itemInputFromRow(perSqmRow, 'NET', 'EN').roundToFullBox).toBe(false);
   });
 
-  it('a PLAIN row sends only its four fields and a numeric quantity', () => {
+  it('a PLAIN row sends only its five fields and a numeric quantity', () => {
     const input = itemInputFromRow({ lineType: 'PLAIN', description: ' ค่าขนส่ง ', quantity: '1', unit: 'งาน', unitPrice: 3500 }, 'SPECIAL_SQM');
     expect(input).toEqual({
-      id: null, lineType: 'PLAIN', locationLabel: null, description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500, discountPct: 0, itemNotes: null,
+      id: null, lineType: 'PLAIN', locationLabel: null, description: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 3500, discountPct: 0,
+      leadTimeMinDays: null, leadTimeMaxDays: null, itemNotes: null,
     });
+  });
+
+  // D1 (owner decision, 2026-09-16): a PLAIN row's OPTIONAL import lead time must reach the wire —
+  // this is the round-trip the review flagged as missing (QuotationPlainItemRow had no input for
+  // it at all). Mutation check: drop leadTimeMinDays/leadTimeMaxDays from itemInputFromRow's PLAIN
+  // branch and this assertion goes red.
+  it('a PLAIN row\'s optional lead time travels to the payload when the rep fills it in', () => {
+    const input = itemInputFromRow({
+      lineType: 'PLAIN', description: 'สุขภัณฑ์', quantity: '1', unit: 'ชุด', unitPrice: 5000,
+      leadTimeMinDays: 75, leadTimeMaxDays: 90,
+    });
+    expect(input).toMatchObject({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
   });
 
   it('a ส่วนลดพิเศษ sends EXACTLY one of percent / amount, and no unitPrice', () => {
@@ -88,6 +101,24 @@ describe('rowFromServerItem — the GET half of the GET→PUT round trip', () =>
 
   it('treats a pre-V168 row with no lineType as a TILE', () => {
     expect(rowFromServerItem({ id: 5, unitPrice: 1 }).lineType).toBe('TILE');
+  });
+
+  // D1 (owner decision, 2026-09-16): the GET→row→PUT round trip for a PLAIN row's optional lead
+  // time — `base`'s own `...item` spread already carries the DTO fields through untouched, so this
+  // pins that end to end rather than merely trusting the spread (same reasoning as the
+  // roundToFullBox test below).
+  it('round-trips a PLAIN row\'s optional lead time — GET → row → PUT', () => {
+    const row = rowFromServerItem({
+      id: 8, lineType: 'PLAIN', descriptionLine: 'สุขภัณฑ์', quantity: 2, unit: 'ชุด', unitPrice: 5000,
+      leadTimeMinDays: 75, leadTimeMaxDays: 90,
+    });
+    expect(row).toMatchObject({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
+    expect(itemInputFromRow(row, 'NET')).toMatchObject({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
+
+    // A PLAIN row with none set still round-trips to null, not undefined -- a blank row must save
+    // exactly as it always did.
+    const blankRow = rowFromServerItem({ id: 9, lineType: 'PLAIN', descriptionLine: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 500 });
+    expect(itemInputFromRow(blankRow, 'NET')).toMatchObject({ leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 
   // Owner-approved "sell loose pieces" (V182): roundToFullBox is a plain DTO field — `...item`
