@@ -2491,6 +2491,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
         assertThat(revision.omitContactHonorific()).isTrue();
         assertThat(revision.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Contact-update DRAFT snapshot refresh (2026-09-16 fix, owner re-report "แก้หรือเพิ่ม Email
     // ผู้สั่งซื้อภายหลังไม่ได้") — CustomerService#updateContact /
     // DealQuotationRepository#refreshDraftContactSnapshot. Written wrong-way-round per CLAUDE.md

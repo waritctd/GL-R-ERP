@@ -201,6 +201,9 @@ describe('QuotationContactPicker — ไม่เติม "คุณ" หน้
     // DOCUMENT_POSITION_FOLLOWING (4): the checkbox comes AFTER the picker in document order.
     // eslint-disable-next-line no-bitwise
     expect(picker.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 // Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): a
 // quotation-grant holder who cannot load the ticket has `customerId` (== `contactCustomerId` on
 // the editor page) stay null even though the quotation's own frozen snapshot already seeded a
