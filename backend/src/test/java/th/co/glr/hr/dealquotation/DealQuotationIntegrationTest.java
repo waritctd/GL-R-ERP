@@ -1379,7 +1379,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         Assumptions.assumeTrue(ChromiumPdfPrinter.isAvailable() || LibreOfficePdfConverter.isAvailable(),
             "neither Chromium nor LibreOffice available locally");
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
-        // sampleItem(PIECES, wastage NONE, no piecesPerBox): calculationLine = "(จำนวน 10 แผ่น = 10 แผ่น)".
+        // sampleItem(PIECES, wastage NONE, no piecesPerBox): calculationLine = "(จำนวน 10 แผ่น)"
+        // (F1 fix, 2026-09-16 review: no longer "(จำนวน 10 แผ่น = 10 แผ่น)" -- that trailing "="
+        // was a pure echo of the count already stated, with no box or wastage to justify it).
         String expectedCalcLine = approved.items().get(0).calculationLine();
         assertThat(expectedCalcLine).contains("จำนวน 10 แผ่น");
 

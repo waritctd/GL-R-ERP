@@ -497,7 +497,19 @@ public final class DealQuotationLines {
         // boxes" was already right and is untouched.
         String roundingPart = hasBox ? " และปัดขึ้นเต็มกล่อง" : "";
 
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " แผ่น)";
+        // F1 fix (2026-09-16 review): the trailing "= N แผ่น" clause only states something new
+        // when box rounding or wastage may have moved piecesFinal away from the count
+        // quantityPart already states. Without a แผ่น/กล่อง and without wastage, piecesFinal
+        // always equals piecesBeforeWastage -- printing "= N แผ่น" then is a pure echo, e.g. the
+        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". hasBox alone still justifies the clause even
+        // when the rounding happened to not change the number, because roundingPart itself already
+        // says an operation occurred.
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+        if (hasBox || hasWastage) {
+            sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+        }
+        sb.append(")");
+        String line = sb.toString();
         if (hasBox) {
             line += " (บรรจุ " + format(piecesPerBox) + " แผ่น/กล่อง)";
         }
@@ -508,24 +520,35 @@ public final class DealQuotationLines {
      * The Thai "sell loose pieces" tail — {@code piecesFinal} split into full boxes plus a
      * remainder instead of forced up to the next box. The intermediate {@code "= N แผ่น"} clause
      * (matching the DEFAULT branch's own trailing clause) is printed only when it says something
-     * the box/loose split does not already say on its own — i.e. only when wastage actually moved
-     * the number away from {@code quantityPart}'s own AND there is a full-box count to split it
-     * from (when there are zero full boxes the box/loose clause already IS "= piecesFinal แผ่น",
-     * so printing it twice would be a pure duplicate).
+     * the box/loose split does not already say on its own:
+     *
+     * <ul>
+     *   <li>{@code boxes > 0} — the box/loose breakdown below always adds new grouping
+     *       information (a piece count on its own does not say how many full boxes that is), so it
+     *       always prints; the wastage-adjusted total additionally restates {@code piecesFinal}
+     *       first, but only when wastage actually moved it away from {@code quantityPart}'s own.</li>
+     *   <li>{@code boxes == 0} — the box/loose breakdown would just be "= piecesFinal แผ่น", a pure
+     *       echo of {@code quantityPart}'s own count UNLESS wastage moved it — printed only then.
+     *       This closes the production bug "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)" (F1,
+     *       2026-09-16 review): {@code loose == piecesFinal} here, so the old unconditional
+     *       {@code else} branch was a pure duplicate whenever there was no wastage to justify it.</li>
+     * </ul>
      */
     private static String thaiLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
                                               int piecesFinal, int piecesPerBox) {
         int boxes = piecesFinal / piecesPerBox;
         int loose = piecesFinal % piecesPerBox;
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
-        if (hasWastage && boxes > 0) {
-            sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
-        }
-        if (boxes > 0 && loose > 0) {
-            sb.append(" = ").append(format(boxes)).append(" กล่อง + ").append(format(loose)).append(" แผ่น");
-        } else if (boxes > 0) {
-            sb.append(" = ").append(format(boxes)).append(" กล่อง");
-        } else {
+        if (boxes > 0) {
+            if (hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+            }
+            if (loose > 0) {
+                sb.append(" = ").append(format(boxes)).append(" กล่อง + ").append(format(loose)).append(" แผ่น");
+            } else {
+                sb.append(" = ").append(format(boxes)).append(" กล่อง");
+            }
+        } else if (hasWastage) {
             sb.append(" = ").append(format(loose)).append(" แผ่น");
         }
         sb.append(") (บรรจุ ").append(format(piecesPerBox)).append(" แผ่น/กล่อง)");
@@ -576,7 +599,18 @@ public final class DealQuotationLines {
             return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
                 + format(boxes) + (boxes == 1 ? " box)" : " boxes)");
         }
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs)";
+        // F1 fix (2026-09-16 review): mirrors the Thai branch above -- omit a trailing "= N pcs"
+        // that only echoes a count quantityPart already states (no pcs/box, no wastage), e.g. the
+        // production-class duplicates "(Quantity 3,360 pcs = 3,360 pcs)" and, in AREA mode,
+        // "(Area 1,000 sqm @ 2.78 pcs/sqm = 2,780 pcs = 2,780 pcs)" -- AREA mode's own "= 2,780
+        // pcs" clause (baked into quantityPart, converting sqm to pieces) is genuine information
+        // and stays untouched; only this SECOND, redundant echo is dropped.
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+        if (hasBox || hasWastage) {
+            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+        }
+        sb.append(")");
+        String line = sb.toString();
         if (hasBox) {
             line += " (" + format(piecesPerBox) + " pcs/box)";
         }
@@ -584,21 +618,26 @@ public final class DealQuotationLines {
     }
 
     /** The English mirror of {@link #thaiLoosePiecesLine} — same split, same "print the
-     * intermediate clause only when it says something new" rule, singular "box"/"pc" at 1. */
+     * intermediate clause only when it says something new" rule (F1, 2026-09-16 review: zero full
+     * boxes AND no wastage now prints no intermediate clause at all, e.g. {@code "(Quantity 7 pcs)
+     * (10 pcs/box)"}, not the old duplicate {@code "(Quantity 7 pcs = 7 pcs) (10 pcs/box)"}),
+     * singular "box"/"pc" at 1. */
     private static String englishLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
                                                  int piecesFinal, int piecesPerBox) {
         int boxes = piecesFinal / piecesPerBox;
         int loose = piecesFinal % piecesPerBox;
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
-        if (hasWastage && boxes > 0) {
-            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
-        }
-        if (boxes > 0 && loose > 0) {
-            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
-                .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
-        } else if (boxes > 0) {
-            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
-        } else {
+        if (boxes > 0) {
+            if (hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+            }
+            if (loose > 0) {
+                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
+                    .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+            } else {
+                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
+            }
+        } else if (hasWastage) {
             sb.append(" = ").append(format(loose)).append(loose == 1 ? " pc" : " pcs");
         }
         sb.append(") (").append(format(piecesPerBox)).append(" pcs/box)");

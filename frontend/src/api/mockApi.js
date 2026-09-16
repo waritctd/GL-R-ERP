@@ -5060,13 +5060,29 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // about its own direction, since this ceils; corrected to "และปัดขึ้นเต็มกล่อง" ("rounded UP
     // to a full box"), mirroring DealQuotationLines' own correction. English already said "rounded
     // up to full boxes" and is unchanged.
+    //
+    // F1 fix (2026-09-16 review): this branch used to print BOTH the rounding wording AND the
+    // trailing "= N" clause unconditionally, even with NO piecesPerBox at all -- e.g.
+    // "(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 32 แผ่น)" with no box data whatsoever, a nonsensical
+    // rounding claim AND a pure echo of the count already stated. Mirrors
+    // DealQuotationLines#calculationLine's own default-branch fix: the rounding phrase prints only
+    // when there IS a box (hasBox), and the trailing "= N" clause prints only when box rounding or
+    // wastage may actually have moved piecesFinal away from piecesBeforeWastage (hasBox ||
+    // hasWastage) -- see DealQuotationLinesTest's "F1" section for the exact production-bug shapes
+    // this closes on the backend side.
+    const roundingPart = hasBox
+      ? (en ? ', rounded up to full boxes' : ' และปัดขึ้นเต็มกล่อง')
+      : '';
+    const echoTail = hasBox || hasWastage
+      ? (en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`)
+      : '';
     qtyText = en
       ? (quantityMode === 'PIECES'
-        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`
-        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`)
+        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`
+        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`)
       : (quantityMode === 'PIECES'
-        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดขึ้นเต็มกล่อง = ${piecesFinal} แผ่น)`
-        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดขึ้นเต็มกล่อง = ${piecesFinal} แผ่น)`);
+        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`
+        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`);
   }
   const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;

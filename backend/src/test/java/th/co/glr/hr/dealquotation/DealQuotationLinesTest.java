@@ -516,14 +516,15 @@ class DealQuotationLinesTest {
                 + "(บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** PIECES quantity mode also gets commas on its own count when it exceeds 999. */
+    /** PIECES quantity mode also gets commas on its own count when it exceeds 999.
+     * F1 fix (2026-09-16 review): no box, no wastage -- no trailing "=" echo any more. */
     @Test
     void calculationLine_piecesQuantityMode_largeCount_getsThousandsCommas() {
         String line = DealQuotationLines.calculationLine(
             WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null);
 
-        assertThat(line).isEqualTo("(จำนวน 1,500 แผ่น = 1,500 แผ่น)");
+        assertThat(line).isEqualTo("(จำนวน 1,500 แผ่น)");
     }
 
     @Test
@@ -639,19 +640,21 @@ class DealQuotationLinesTest {
         assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             100, WastageCalculator.WASTAGE_MODE_PIECES, BigDecimal.ZERO, 108, 12))
             .isEqualTo("(Quantity 100 pcs, rounded up to full boxes = 108 pcs) (12 pcs/box)");
+        // F1 fix (2026-09-16 review): no box, no wastage -- no trailing "=" echo any more.
         assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null))
-            .isEqualTo("(Quantity 1,500 pcs = 1,500 pcs)");
+            .isEqualTo("(Quantity 1,500 pcs)");
     }
 
     /** Review fix F2 (2026-09-16): the English mirror of
      * {@link #calculationLine_noneWastageWithStaleNonZeroValue_isUnaffected} -- a STALE non-zero
-     * wastageValue under wastageMode=NONE must not resurrect the allowance clause. */
+     * wastageValue under wastageMode=NONE must not resurrect the allowance clause. F1 fix
+     * (2026-09-16 review): no box either, so no trailing "=" echo any more. */
     @Test
     void english_noneWastageWithStaleNonZeroValue_isUnaffected() {
         assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             1500, WastageCalculator.WASTAGE_MODE_NONE, new BigDecimal("9"), 1500, null))
-            .isEqualTo("(Quantity 1,500 pcs = 1,500 pcs)");
+            .isEqualTo("(Quantity 1,500 pcs)");
     }
 
     /** No thickness: the size goes INLINE between Finish and No., exactly like the Thai line. */
@@ -887,10 +890,12 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("0.36"),
             new BigDecimal("2.78"), 28, WastageCalculator.WASTAGE_MODE_NONE, null, 28, null, null, null,
             new BigDecimal("28"), "SQM", new BigDecimal("64.00"));
-        // englishCalculationLine's pre-existing quirk (see calculationLine_englishRoundToFullBoxFalse_
-        // noPiecesPerBox_isUnaffected above): the default branch always echoes "= N pcs" even with no
-        // box and no wastage, so AREA mode's own "...= 28 pcs" gets it twice. Untouched by Option B.
-        assertThat(p.calculationLine()).isEqualTo("(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs = 28 pcs)");
+        // F1 fix (2026-09-16 review): the default branch used to echo "= N pcs" unconditionally,
+        // even with no box and no wastage, so AREA mode's own "...= 28 pcs" got printed twice --
+        // "(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs = 28 pcs)". Now the trailing echo is gated on
+        // hasBox || hasWastage, so AREA mode's own "= 28 pcs" (genuine area->pieces information)
+        // prints once, not twice.
+        assertThat(p.calculationLine()).isEqualTo("(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs)");
         assertThat(p.quantity()).isEqualByComparingTo("10.08"); // 28 × 0.36
         assertThat(p.unit()).isEqualTo("SQM");
         assertThat(p.subLine()).isNull();
@@ -991,14 +996,27 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 30 แผ่น = 3 กล่อง) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** full boxes = 0: fewer pieces than one box prints "= N แผ่น" with NO "กล่อง" wording at
-     * all — never "0 กล่อง + N แผ่น". */
+    /** full boxes = 0, no wastage: fewer pieces than one box prints NO trailing "=" clause at all
+     * -- the box/loose split would just be "= 7 แผ่น", a pure echo of quantityPart's own count.
+     * F1 fix (2026-09-16 review): this used to print "(จำนวน 7 แผ่น = 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)",
+     * the exact production-bug shape ("(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)") this pass
+     * fixes. */
     @Test
     void calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord() {
         String line = DealQuotationLines.calculationLine(TH,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 7, WastageCalculator.WASTAGE_MODE_NONE, null,
             7, 10, false);
-        assertThat(line).isEqualTo("(จำนวน 7 แผ่น = 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(จำนวน 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    /** full boxes = 0, WITH wastage: the intermediate "= N แผ่น" clause DOES print, because
+     * wastage moved piecesFinal away from quantityPart's own count -- it is not a duplicate. */
+    @Test
+    void calculationLine_thaiLoosePieces_fullBoxesIsZero_withWastage_printsTheAdjustedTotal() {
+        String line = DealQuotationLines.calculationLine(TH,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null, 15, WastageCalculator.WASTAGE_MODE_PERCENT,
+            new BigDecimal("5"), 16, 26, false);
+        assertThat(line).isEqualTo("(จำนวน 15 แผ่น + เผื่อ 5% = 16 แผ่น) (บรรจุ 26 แผ่น/กล่อง)");
     }
 
     /** PIECES-mode wastage variant of the "both clauses" case, so the intermediate-clause rule is
@@ -1012,7 +1030,9 @@ class DealQuotationLinesTest {
     }
 
     /** No box data at all: roundToFullBox=false has nothing to change — byte-identical to the
-     * no-box default line (no "และปัดขึ้นเต็มกล่อง" wording either way, since hasBox is false). */
+     * no-box default line (no "และปัดขึ้นเต็มกล่อง" wording either way, since hasBox is false).
+     * F1 fix (2026-09-16 review): this line used to read "(จำนวน 32 แผ่น = 32 แผ่น)" -- a pure echo
+     * of quantityPart's own count, with no box and no wastage to justify restating it. */
     @Test
     void calculationLine_roundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
         String withFalse = DealQuotationLines.calculationLine(TH,
@@ -1021,7 +1041,7 @@ class DealQuotationLinesTest {
         String withTrue = DealQuotationLines.calculationLine(TH,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
             32, null, true);
-        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(จำนวน 32 แผ่น = 32 แผ่น)");
+        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(จำนวน 32 แผ่น)");
     }
 
     // ── English mirrors of the six Thai shapes above ──────────────────────────────────────────
@@ -1061,12 +1081,16 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 30 pcs = 3 boxes) (10 pcs/box)");
     }
 
+    /** F1 fix (2026-09-16 review): the English mirror of {@link
+     * #calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord} -- this used to
+     * print "(Quantity 7 pcs = 7 pcs) (10 pcs/box)", the English shape of the same production
+     * duplicate bug. */
     @Test
     void calculationLine_englishLoosePieces_fullBoxesIsZero_printsPcsOnlyNoBoxWord() {
         String line = DealQuotationLines.calculationLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 7, WastageCalculator.WASTAGE_MODE_NONE, null,
             7, 10, false);
-        assertThat(line).isEqualTo("(Quantity 7 pcs = 7 pcs) (10 pcs/box)");
+        assertThat(line).isEqualTo("(Quantity 7 pcs) (10 pcs/box)");
     }
 
     /** Singular "box"/"pc" at exactly 1 — the one shape none of the Thai tests can pin, since Thai
@@ -1083,11 +1107,12 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
             10, 10, false))
             .isEqualTo("(Quantity 10 pcs = 1 box) (10 pcs/box)");
-        // 0 full boxes, exactly 1 loose piece.
+        // 0 full boxes, exactly 1 loose piece, no wastage: F1 fix -- no trailing "=" clause at
+        // all (it would just echo "1 pcs"/"1 pc", the same count quantityPart already states).
         assertThat(DealQuotationLines.calculationLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 1, WastageCalculator.WASTAGE_MODE_NONE, null,
             1, 10, false))
-            .isEqualTo("(Quantity 1 pcs = 1 pc) (10 pcs/box)");
+            .isEqualTo("(Quantity 1 pcs) (10 pcs/box)");
     }
 
     @Test
@@ -1098,6 +1123,10 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 100 pcs + 15 pcs allowance = 115 pcs = 9 boxes + 7 pcs) (12 pcs/box)");
     }
 
+    /** F1 fix (2026-09-16 review): the English default branch used to always echo "= N pcs"
+     * regardless of hasBox/hasWastage, printing "(Quantity 32 pcs = 32 pcs)" here -- a pure echo,
+     * the exact English-side duplicate the production bug report also names ("(Quantity 3,360 pcs
+     * = 3,360 pcs)"). Now gated the same way as the Thai branch: {@code hasBox || hasWastage}. */
     @Test
     void calculationLine_englishRoundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
         String withFalse = DealQuotationLines.calculationLine(EN,
@@ -1106,10 +1135,31 @@ class DealQuotationLinesTest {
         String withTrue = DealQuotationLines.calculationLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 32, WastageCalculator.WASTAGE_MODE_NONE, null,
             32, null, true);
-        // Unlike the Thai default branch's box-gated echo, the English default branch always
-        // echoes "= N pcs" regardless of hasBox (pre-existing behaviour, untouched by this
-        // feature) — so this is "(Quantity 32 pcs = 32 pcs)", not "(Quantity 32 pcs)".
-        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(Quantity 32 pcs = 32 pcs)");
+        assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(Quantity 32 pcs)");
+    }
+
+    // ── F1 (2026-09-16 review) — wrong-way-round: the duplicate must NEVER appear ───────────────
+    // These are the mutation-check fixtures for the F1 fix: reintroducing the unconditional
+    // trailing "= N" clause (either branch) must turn these red. Written as an explicit
+    // doesNotContain, independent in STYLE from the exact-equality assertions above, so a future
+    // change to the surrounding wording (which would need the exact-match tests updated anyway)
+    // still has an assertion that specifically targets the duplicate shape.
+
+    @Test
+    void calculationLine_thai_neverPrintsAPieceCountTwiceInARow() {
+        // Every "no box, no wastage" and "loose pieces, zero full boxes, no wastage" shape.
+        assertThat(DealQuotationLines.calculationLine(TH, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            32, WastageCalculator.WASTAGE_MODE_NONE, null, 32, null)).doesNotContain("= 32 แผ่น)");
+        assertThat(DealQuotationLines.calculationLine(TH, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            15, WastageCalculator.WASTAGE_MODE_NONE, null, 15, 26, false)).doesNotContain("= 15 แผ่น)");
+    }
+
+    @Test
+    void calculationLine_english_neverPrintsAPieceCountTwiceInARow() {
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            32, WastageCalculator.WASTAGE_MODE_NONE, null, 32, null)).doesNotContain("= 32 pcs)");
+        assertThat(DealQuotationLines.calculationLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            7, WastageCalculator.WASTAGE_MODE_NONE, null, 7, 10, false)).doesNotContain("= 7 pcs)");
     }
 
     /** {@code tilePrint} threads roundToFullBox into the ordinary (non-per-sqm) branch — proven

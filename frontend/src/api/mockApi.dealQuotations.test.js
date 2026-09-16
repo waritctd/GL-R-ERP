@@ -56,6 +56,31 @@ describe('mock dealQuotations -- item lines follow the document language (owner 
   });
 });
 
+// F1 (2026-09-16 review) — the mock's own calc-line builder (computeDealQuotationLine) mirrors
+// DealQuotationLines#calculationLine's phrasing; this pins the same duplicate-suppression fix on
+// the mock side. Wrong-way-round: reverting the mock's default branch to the old unconditional
+// rounding-phrase-plus-echo would turn these red.
+describe('mock dealQuotations -- calculationLine never echoes a piece count with no box/wastage to justify it (F1)', () => {
+  it('a row with NO แผ่น/กล่อง and no wastage prints no trailing "=" clause and no rounding wording', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      items: [{ ...ONE_ITEM, piecesPerBox: null }],
+    });
+    expect(quotation.items[0].calculationLine).toBe('(พื้นที่ 20 ตร.ม.ๆละ 2.78 แผ่น รวม 56 แผ่น)');
+    expect(quotation.items[0].calculationLine).not.toContain('และปัดขึ้นเต็มกล่อง');
+  });
+
+  it('the English mirror: no pcs/box and no wastage prints no trailing "=" clause and no rounding wording', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      documentLanguage: 'EN', currency: 'USD',
+      items: [{ ...ONE_ITEM, piecesPerBox: null }],
+    });
+    expect(quotation.items[0].calculationLine).toBe('(Area 20 sqm @ 2.78 pcs/sqm = 56 pcs)');
+    expect(quotation.items[0].calculationLine).not.toContain('rounded up to full boxes');
+  });
+});
+
 describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mirrors the RULES', () => {
   it('accepts SPECIAL_SQM on English with box data, printing SQM and the box line; the numbers stay the server\'s', async () => {
     await api.auth.login(salesUser);

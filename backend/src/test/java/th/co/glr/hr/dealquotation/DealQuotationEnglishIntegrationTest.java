@@ -416,7 +416,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /** Blank box area AND no แผ่น/กล่อง either — a TILE row with no box multiple at all, exactly
-     * like any other tile row without a pieces-per-box. No box rounding, no box wording. */
+     * like any other tile row without a pieces-per-box. No box rounding, no box wording.
+     *
+     * <p>F1 fix (2026-09-16 review): {@code calculationLine} used to read
+     * "(Quantity 3,360 pcs = 3,360 pcs)" -- a pure echo of the count already stated, the exact
+     * production-bug shape (real example: "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)"), newly
+     * REACHABLE here after Option B's no-box-area English per-sqm branch. */
     @Test
     void englishPerSqm_noBoxAreaAndNoPiecesPerBox_isAccepted_noBoxRounding() {
         ItemInput row = withBoxes(perSqmItem(3360, 28, null, "64"), null);
@@ -427,7 +432,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.quantity()).isEqualByComparingTo("1209.60"); // 3,360 × 0.36, no box rounding to apply anyway
         assertThat(item.lineAmount()).isEqualByComparingTo("77414.40");
         assertThat(item.specialPriceLine()).isNull();
-        assertThat(item.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 3,360 pcs)");
+        assertThat(item.calculationLine()).isEqualTo("(Quantity 3,360 pcs)");
     }
 
     /** Blank box area, แผ่น/กล่อง filled, "sell loose pieces" ticked: quantity derives from the
