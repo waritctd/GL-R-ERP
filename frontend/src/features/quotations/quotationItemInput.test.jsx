@@ -38,6 +38,20 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
     expect(itemInputFromRow({ ...tile, unitPrice: '' }, 'DIRECT_NET').unitPrice).toBe(500);
   });
 
+  // Owner-approved "sell loose pieces" (2026-09-16, V182).
+  it('roundToFullBox defaults true (from emptyQuotationItem) and travels verbatim otherwise', () => {
+    expect(itemInputFromRow(tile, 'NET').roundToFullBox).toBe(true);
+    expect(itemInputFromRow({ ...tile, roundToFullBox: false }, 'NET').roundToFullBox).toBe(false);
+  });
+
+  it('English per-sqm FORCES roundToFullBox true, even when the row itself says false', () => {
+    const perSqmRow = { ...tile, specialPriceSqm: 64, sqmPerBox: 0.6, roundToFullBox: false };
+    expect(itemInputFromRow(perSqmRow, 'SPECIAL_SQM', 'EN').roundToFullBox).toBe(true);
+    // The same row's roundToFullBox=false survives in every OTHER mode/language.
+    expect(itemInputFromRow(perSqmRow, 'SPECIAL_SQM', 'TH').roundToFullBox).toBe(false);
+    expect(itemInputFromRow(perSqmRow, 'NET', 'EN').roundToFullBox).toBe(false);
+  });
+
   it('a PLAIN row sends only its four fields and a numeric quantity', () => {
     const input = itemInputFromRow({ lineType: 'PLAIN', description: ' ค่าขนส่ง ', quantity: '1', unit: 'งาน', unitPrice: 3500 }, 'SPECIAL_SQM');
     expect(input).toEqual({
@@ -74,6 +88,19 @@ describe('rowFromServerItem — the GET half of the GET→PUT round trip', () =>
 
   it('treats a pre-V168 row with no lineType as a TILE', () => {
     expect(rowFromServerItem({ id: 5, unitPrice: 1 }).lineType).toBe('TILE');
+  });
+
+  // Owner-approved "sell loose pieces" (V182): roundToFullBox is a plain DTO field — `...item`
+  // in the base spread already carries it through, so this pins that the round trip actually
+  // works end to end (GET → row → PUT) rather than merely trusting the spread.
+  it('round-trips roundToFullBox — false stays false, true stays true', () => {
+    const looseRow = rowFromServerItem({ id: 6, lineType: 'TILE', unitPrice: 100, roundToFullBox: false });
+    expect(looseRow.roundToFullBox).toBe(false);
+    expect(itemInputFromRow(looseRow, 'NET').roundToFullBox).toBe(false);
+
+    const roundedRow = rowFromServerItem({ id: 7, lineType: 'TILE', unitPrice: 100, roundToFullBox: true });
+    expect(roundedRow.roundToFullBox).toBe(true);
+    expect(itemInputFromRow(roundedRow, 'NET').roundToFullBox).toBe(true);
   });
 });
 

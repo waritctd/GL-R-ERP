@@ -1411,7 +1411,7 @@ public class QuotationRenderer {
     }
 
     // A boundary between two parenthesised groups: a ")" followed by whitespace followed by "(" —
-    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
+    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
     // Owner feedback #3 (2026-09-14): {@link #wrapItemLineToWidth} prefers to break HERE, so a
     // group like "(บรรจุ N แผ่น/กล่อง)" moves to the next physical row whole rather than splitting
     // its own words across two rows.
@@ -1429,7 +1429,7 @@ public class QuotationRenderer {
      * <p>Prefers breaking at a {@link #PAREN_GROUP_BOUNDARY} — packing whole parenthesised groups
      * onto each physical line — so a group like "(บรรจุ 4 แผ่น/กล่อง)" moves to the next row intact
      * instead of splitting across rows the way the old character-length wrap did (the bug this
-     * fixes: "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
+     * fixes: "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
      * a plain greedy word wrap ({@link #wrapGreedyByVisibleWidth}) only for a single group that by
      * itself is longer than the budget, or for a line with no parenthesised groups at all.
      */

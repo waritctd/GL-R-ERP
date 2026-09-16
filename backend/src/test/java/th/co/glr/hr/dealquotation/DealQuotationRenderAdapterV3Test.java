@@ -576,7 +576,7 @@ class DealQuotationRenderAdapterV3Test {
      * immediately -- proving the row accounting agrees with what actually got written. */
     @Test
     void tileItem_withTheProductionCalculationLine_landsOnOneRow_notSplitAcrossTwo() throws Exception {
-        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
         Sheet sheet = render(WastageCalculator.PRICE_MODE_NET,
             List.of(tileWithCalculationLine(calcLine), tileWithLeadTime(30, 45)));
         // Item 1: description (row 9), size (row 10), calculation (row 11) -- exactly 3 rows, no

@@ -234,6 +234,67 @@ describe('v3/v3b document settings', () => {
     for (const stale of ['1350', '850', '800']) expect(inputValues()).not.toContain(stale);
   }, 20000);
 
+  // Review fix F1 (2026-09-16): a row ticked "ขายแผ่นไม่เต็มกล่อง" under Thai ราคาพิเศษ used to
+  // become PERMANENTLY un-submittable the moment the document switched to English per-sqm — the
+  // checkbox goes disabled AND renders unchecked in that mode (roundToFullBoxDisabledReason), so
+  // there was no on-screen control left to clear the stale stored `roundToFullBox: false`, and
+  // validateQuotationItem's own checklist branch blocked บันทึกร่าง/ส่งขออนุมัติ forever (only
+  // deleting and re-adding the row escaped it). Fixed by resetting the stored flag back to `true`
+  // in `applyPriceMode` the moment the document reaches this mode.
+  //
+  // The checkbox already RENDERS unchecked in English per-sqm regardless of the underlying flag
+  // (disabled ⇒ roundLooseChecked is forced false), and the SAVE payload already forced
+  // `roundToFullBox: true` in this mode even before this fix (itemInputFromRow) — so neither the
+  // checkbox's own `checked` state nor a payload assertion taken while STILL in per-sqm mode can
+  // tell a real reset from a merely-masked one. What actually proves the stored flag was cleared,
+  // not just hidden, is switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ):
+  // if the flag lingered, it re-appears CHECKED with no re-entry from the rep, exactly the "silent
+  // resurrection" the owner's "Clear all prices on switch" ruling forbids for prices.
+  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        priceMode: 'SPECIAL_SQM',
+        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false }],
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
+    // Ticked under Thai ราคาพิเศษ, where the option is allowed.
+    expect(byId('round-loose-0').checked).toBe(true);
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+
+    // English per-sqm: the checkbox goes disabled and renders UNCHECKED (as before this fix). The
+    // checklist DOES block now — the switch cleared ราคาพิเศษ and English per-sqm needs its own
+    // ตร.ม./กล่อง — but that is the unrelated, expected "re-enter your prices" block, not a
+    // roundToFullBox one; the assertion that matters is the round-trip below.
+    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(true));
+    expect(byId('round-loose-0').checked).toBe(false);
+
+    // Switch BACK to a mode where the checkbox re-enables. If the stored flag had merely been
+    // masked (not actually reset), it would silently re-appear CHECKED here with no re-entry —
+    // this is the assertion a reset-less `applyPriceMode` cannot pass.
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
+    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(false));
+    expect(byId('round-loose-0').checked).toBe(false);
+
+    // The language switch also clears every price (owner ruling, unrelated to this fix) -- re-enter
+    // what Thai ราคาพิเศษ needs (list price + ราคาพิเศษ) to prove the row is fully submittable.
+    fireEvent.change(byId('price-0'), { target: { value: '2000' } });
+    fireEvent.change(byId('special-0'), { target: { value: '1350' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    // The stored flag saves as `true` — the reset survived the round-trip, not merely the moment
+    // the mode was per-sqm.
+    expect(payload.items[0]).toMatchObject({ roundToFullBox: true });
+  }, 20000);
+
   it('the live preview of a Thai draft still calls calculate-line with TH', async () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });

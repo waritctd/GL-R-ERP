@@ -925,6 +925,25 @@ describe('v3 row validation', () => {
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
+  // Review fix F1 (2026-09-16): validateQuotationItem used to flag `roundToFullBox === false` here
+  // as "defence in depth" against DealQuotationService#requireBoxDataForPerSqm's 400. That claim
+  // was false (itemInputFromRow already forces `roundToFullBox: true` onto the wire in this mode
+  // regardless of the row's own state — see quotationItemInput.test.jsx), and the branch was
+  // actively harmful: it permanently blocked บันทึกร่าง/ส่งขออนุมัติ for a row ticked under NET/TH
+  // and then switched to English per-sqm, with no on-screen control left to un-tick it (the
+  // checkbox is disabled AND unchecked in this mode). Fixed at the source instead —
+  // QuotationEditorPage's `applyPriceMode` now resets the stored flag to `true` the moment the
+  // document reaches this mode — so the branch was dropped rather than kept pointing at a state
+  // that can no longer occur. The SERVER-side rejection of roundToFullBox=false under English
+  // per-sqm is unchanged; only this frontend checklist branch was removed.
+  it('English per-sqm no longer flags roundToFullBox=false in the checklist — that state is now unreachable, not merely re-guarded', () => {
+    const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
+    expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN')).toEqual({});
+    // Unaffected everywhere else, same as before: Thai ราคาพิเศษ, and NET in any language.
+    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'SPECIAL_SQM', 'TH').roundToFullBox).toBeUndefined();
+    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'NET', 'EN').roundToFullBox).toBeUndefined();
+  });
+
   it('SPECIAL_SQM needs the ราคาพิเศษ — and still the list price, which the server requires on every tile row', () => {
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: '' }, 'SPECIAL_SQM')).toEqual({ specialPriceSqm: 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)' });
     expect(meta.validateQuotationItem({ ...tile, specialPriceSqm: 1350 }, 'SPECIAL_SQM')).toEqual({});
@@ -953,6 +972,59 @@ describe('v3 row validation', () => {
     expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 101 }).adjustmentPct).toBe('ส่วนลดต้องไม่เกิน 100%');
     expect(meta.validateAdjustment({ adjustmentKind: 'PERCENT', adjustmentPct: 3 })).toEqual({});
     expect(meta.validateAdjustment({ adjustmentKind: 'AMOUNT', adjustmentAmount: 0 })).toEqual({ adjustmentAmount: 'กรุณาระบุจำนวนเงินส่วนลด' });
+  });
+});
+
+// ── Owner-approved "sell loose pieces" (2026-09-16, V182) ───────────────────────────────────────
+describe('roundToFullBoxDisabledReason', () => {
+  it('is disabled until แผ่น/กล่อง is filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: null }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 0 }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+  });
+
+  it('is disabled in English per-sqm mode, once แผ่น/กล่อง is filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'SPECIAL_SQM', 'EN'))
+      .toBe(meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON);
+    // The ppb-missing reason takes priority when BOTH apply — one reason at a time.
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'SPECIAL_SQM', 'EN')).toBe('กรอกแผ่น/กล่องก่อน');
+  });
+
+  it('is enabled (null) once แผ่น/กล่อง is filled, outside English per-sqm', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'NET', 'TH')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'SPECIAL_SQM', 'TH')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'DIRECT_NET', 'EN')).toBeNull();
+  });
+});
+
+describe('roundToFullBoxSummary', () => {
+  it('is null before the server has computed anything (no แผ่น/กล่อง, or no calc yet)', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: '' })).toBeNull();
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: null, boxes: null })).toBeNull();
+  });
+
+  it('off (round up): "ปัดขึ้นเต็มกล่อง → N กล่อง (M แผ่น)"', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4, roundToFullBox: true }))
+      .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
+    // Undefined reads the same as true (a pre-V182 row, or a freshly loaded server row that has
+    // not round-tripped yet) -- this helper must never treat "not yet known" as "loose pieces".
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4 }))
+      .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
+  });
+
+  it('on (loose pieces): "N กล่อง + M แผ่น (P แผ่น)"', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 32, boxes: 3, roundToFullBox: false }))
+      .toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
+  });
+
+  it('loose = 0: no "+ N แผ่น" tail', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 30, boxes: 3, roundToFullBox: false }))
+      .toBe('3 กล่อง (30 แผ่น)');
+  });
+
+  it('full boxes = 0: no "กล่อง" wording at all', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 7, boxes: 0, roundToFullBox: false }))
+      .toBe('7 แผ่น (ไม่ครบ 1 กล่อง)');
   });
 });
 

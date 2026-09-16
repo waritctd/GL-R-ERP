@@ -248,7 +248,7 @@ public final class DealQuotationLines {
                                          int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
                                          int piecesFinal, Integer piecesPerBox) {
         return calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, quantityMode, areaSqm, piecesPerSqm,
-            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox);
+            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
     }
 
     /**
@@ -264,9 +264,31 @@ public final class DealQuotationLines {
     public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
                                          BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
                                          BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
+        return calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+            wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
+    }
+
+    /**
+     * Owner-approved "sell loose pieces" (2026-09-16): the tenth argument. {@code true} — the
+     * default, and today's ONLY behaviour when box data is present — keeps every existing printed
+     * line unchanged EXCEPT for one wording correction (owner decision, 2026-09-16, same day):
+     * {@code "และปัดลงกล่อง"} ("rounded DOWN to the box") was misleading — the arithmetic
+     * ({@link WastageCalculator#calculate}'s {@code ceilToMultiple}) rounds the piece count UP —
+     * so the default Thai line now reads {@code "และปัดขึ้นเต็มกล่อง"} ("rounded UP to a full
+     * box"). The English line already said "rounded up to full boxes" and is unchanged. {@code
+     * false} lets a TILE row sell pieces that do not make a full box: neither rounding phrase is
+     * printed (nothing was rounded), and the box tail is instead split into full boxes plus a
+     * loose-piece remainder, e.g. {@code (จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)}.
+     * See {@code WastageCalculatorTest}/{@code DealQuotationLinesTest} for every shape this prints
+     * (loose = 0, full boxes = 0, with/without wastage).
+     */
+    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
+                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
+                                         BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
+                                         boolean roundToFullBox) {
         if (english(documentLanguage)) {
             return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox);
+                wastageValue, piecesFinal, piecesPerBox, null, roundToFullBox);
         }
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
@@ -277,7 +299,17 @@ public final class DealQuotationLines {
         // NOTHING for this part, in either mode, rather than "+ เผื่อ 0%" / "+ เผื่อ 0 แผ่น".
         // Printing-only: piecesFinal itself is unaffected, it is computed upstream and simply
         // echoed below exactly as it always was.
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        //
+        // Review fix F2 (2026-09-16): gated on the MODE too, not merely a non-zero value -- a row
+        // switched to wastageMode=NONE keeps whatever wastageValue it last held (WastageCalculator
+        // ignores it entirely in NONE mode, see WastageCalculator#calculate), so an ungated
+        // `hasWastage` reads true for a row applying no wastage at all. wastagePart below was
+        // already immune (its own `WASTAGE_MODE_PERCENT`/`WASTAGE_MODE_PIECES` checks exclude
+        // NONE), but thaiLoosePiecesLine's intermediate "= N แผ่น" clause is not -- it trusted this
+        // flag alone, so it printed the duplicate `(จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)` its
+        // own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + "%";
@@ -286,7 +318,16 @@ public final class DealQuotationLines {
         }
 
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
-        String roundingPart = hasBox ? " และปัดลงกล่อง" : "";
+
+        if (hasBox && !roundToFullBox) {
+            return thaiLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
+        }
+
+        // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
+        // rounds UP (ceilToMultiple), so that wording was wrong about its own direction. Corrected
+        // to "และปัดขึ้นเต็มกล่อง" ("rounded up to a full box"). English's "rounded up to full
+        // boxes" was already right and is untouched.
+        String roundingPart = hasBox ? " และปัดขึ้นเต็มกล่อง" : "";
 
         String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " แผ่น)";
         if (hasBox) {
@@ -295,11 +336,32 @@ public final class DealQuotationLines {
         return line;
     }
 
-    private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
-                                                 int piecesBeforeWastage, String wastageMode,
-                                                 BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
-        return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-            wastageValue, piecesFinal, piecesPerBox, null);
+    /**
+     * The Thai "sell loose pieces" tail — {@code piecesFinal} split into full boxes plus a
+     * remainder instead of forced up to the next box. The intermediate {@code "= N แผ่น"} clause
+     * (matching the DEFAULT branch's own trailing clause) is printed only when it says something
+     * the box/loose split does not already say on its own — i.e. only when wastage actually moved
+     * the number away from {@code quantityPart}'s own AND there is a full-box count to split it
+     * from (when there are zero full boxes the box/loose clause already IS "= piecesFinal แผ่น",
+     * so printing it twice would be a pure duplicate).
+     */
+    private static String thaiLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
+                                              int piecesFinal, int piecesPerBox) {
+        int boxes = piecesFinal / piecesPerBox;
+        int loose = piecesFinal % piecesPerBox;
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
+        if (hasWastage && boxes > 0) {
+            sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+        }
+        if (boxes > 0 && loose > 0) {
+            sb.append(" = ").append(format(boxes)).append(" กล่อง + ").append(format(loose)).append(" แผ่น");
+        } else if (boxes > 0) {
+            sb.append(" = ").append(format(boxes)).append(" กล่อง");
+        } else {
+            sb.append(" = ").append(format(loose)).append(" แผ่น");
+        }
+        sb.append(") (บรรจุ ").append(format(piecesPerBox)).append(" แผ่น/กล่อง)");
+        return sb.toString();
     }
 
     /**
@@ -315,12 +377,16 @@ public final class DealQuotationLines {
     private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
                                                  int piecesBeforeWastage, String wastageMode,
                                                  BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
-                                                 Integer boxes) {
+                                                 Integer boxes, boolean roundToFullBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "Quantity " + format(piecesBeforeWastage) + " pcs"
             : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
                 + format(piecesBeforeWastage) + " pcs";
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        // Review fix F2 (2026-09-16): mode-gated, mirroring the Thai branch above -- see its own
+        // comment. Without this, englishLoosePiecesLine's intermediate "= N pcs" clause could print
+        // the same duplicate its own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + " + format(wastageValue) + "% allowance";
@@ -328,6 +394,15 @@ public final class DealQuotationLines {
             wastagePart = " + " + format(wastageValue) + " pcs allowance";
         }
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
+
+        // Owner-approved "sell loose pieces": boxes is non-null ONLY for the English per-sqm
+        // variant above, which always rounds (the service refuses roundToFullBox=false there — see
+        // DealQuotationService#requireBoxDataForPerSqm) — so reaching here with boxes == null is
+        // the only way this branch is ever taken.
+        if (hasBox && !roundToFullBox && boxes == null) {
+            return englishLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
+        }
+
         String roundingPart = hasBox ? ", rounded up to full boxes" : "";
         if (boxes != null) {
             return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
@@ -338,6 +413,28 @@ public final class DealQuotationLines {
             line += " (" + format(piecesPerBox) + " pcs/box)";
         }
         return line;
+    }
+
+    /** The English mirror of {@link #thaiLoosePiecesLine} — same split, same "print the
+     * intermediate clause only when it says something new" rule, singular "box"/"pc" at 1. */
+    private static String englishLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
+                                                 int piecesFinal, int piecesPerBox) {
+        int boxes = piecesFinal / piecesPerBox;
+        int loose = piecesFinal % piecesPerBox;
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
+        if (hasWastage && boxes > 0) {
+            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+        }
+        if (boxes > 0 && loose > 0) {
+            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
+                .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+        } else if (boxes > 0) {
+            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
+        } else {
+            sb.append(" = ").append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+        }
+        sb.append(") (").append(format(piecesPerBox)).append(" pcs/box)");
+        return sb.toString();
     }
 
     /**
@@ -378,17 +475,36 @@ public final class DealQuotationLines {
                                       String wastageMode, BigDecimal wastageValue, int piecesFinal,
                                       Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
                                       BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm) {
+        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+            wastageMode, wastageValue, piecesFinal, piecesPerBox, boxes, sqmPerBox, storedQuantity, storedUnit,
+            specialPriceSqm, true);
+    }
+
+    /**
+     * Owner-approved "sell loose pieces" (2026-09-16): the trailing {@code roundToFullBox}. The
+     * 15-argument overload above always passes {@code true} — today's only behaviour, unchanged.
+     * English per-sqm ({@link WastageCalculator#isEnglishPerSqm}) can never reach the loose-pieces
+     * branch: the service refuses {@code roundToFullBox = false} for that mode (see
+     * {@code DealQuotationService#requireBoxDataForPerSqm}), so its own box-count calculation line
+     * always rounds, exactly as before.
+     */
+    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
+                                      BigDecimal areaSqm, BigDecimal piecesPerSqm, int piecesBeforeWastage,
+                                      String wastageMode, BigDecimal wastageValue, int piecesFinal,
+                                      Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
+                                      boolean roundToFullBox) {
         if (WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode) && boxes != null
             && piecesPerBox != null && piecesPerBox > 0 && sqmPerBox != null && sqmPerBox.signum() > 0) {
             return new TilePrint(
                 englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                    wastageValue, piecesFinal, piecesPerBox, boxes),
+                    wastageValue, piecesFinal, piecesPerBox, boxes, true),
                 WastageCalculator.sqmQuantityFromBoxes(boxes, sqmPerBox), TILE_UNIT_SQM,
                 boxLine(piecesPerBox, sqmPerBox));
         }
         return new TilePrint(
             calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox),
+                wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
             storedQuantity, printedTileUnit(documentLanguage, storedUnit),
             specialPriceLine(documentLanguage, specialPriceSqm));
     }

@@ -112,7 +112,7 @@ class QuotationGoldenDocumentsTest {
         assertThat(amount1).isEqualByComparingTo("2061963.12");
 
         // Row 2: area 274 → 274 × 1.39 = 380.86 HALF_UPs to 381 (CEILING agrees here — the
-        // fraction is already > 0.5), box-rounds up to 382 ("381 แผ่น + เพื่อปัดลงกล่อง = 382").
+        // fraction is already > 0.5), box-rounds up to 382 ("381 แผ่น + เพื่อปัดขึ้นเต็มกล่อง = 382").
         Result row2 = WastageCalculator.calculate(new Input(
             sqmPerPiece, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("274"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 2,

@@ -185,9 +185,15 @@ public class DealQuotationRepository {
         BigDecimal catalogWidthMm, BigDecimal catalogHeightMm,
         // V176 (owner decision 2026-09-13) — the supplier-stated sqm per box. PERSISTED
         // (sales.quotation_item.sqm_per_box); an English per-sqm row's quantity is boxes × this.
-        BigDecimal sqmPerBox
+        BigDecimal sqmPerBox,
+        // V182 (owner-approved "sell loose pieces", 2026-09-16) — PERSISTED
+        // (sales.quotation_item.round_to_full_box). true on every PLAIN/ADJUSTMENT row (the flag
+        // is meaningless there — neither has a piecesPerBox) and on every TILE row unless the rep
+        // opted out; see WastageCalculator.Input's own Javadoc for what it changes.
+        boolean roundToFullBox
     ) {
-        /** The pre-V176 shape (no sqmPerBox) — PLAIN/ADJUSTMENT rows and existing call sites. */
+        /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing
+         * call sites, for which the flag is moot; hardcodes {@code roundToFullBox = true}. */
         public NewItem(
             String locationLabel, Long catalogPriceId, String productCode,
             String brand, String model, String color, String texture, String sizeText,
@@ -207,7 +213,7 @@ public class DealQuotationRepository {
                 piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
                 discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
-                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, null);
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, null, true);
         }
     }
 
@@ -372,7 +378,9 @@ public class DealQuotationRepository {
             .addValue("adjustmentPct", item.adjustmentPct())
             .addValue("adjustmentDeadline", item.adjustmentDeadline())
             // V176
-            .addValue("sqmPerBox", item.sqmPerBox());
+            .addValue("sqmPerBox", item.sqmPerBox())
+            // V182
+            .addValue("roundToFullBox", item.roundToFullBox());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -383,7 +391,8 @@ public class DealQuotationRepository {
              quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
-             line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box)
+             line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
+             round_to_full_box)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -391,7 +400,8 @@ public class DealQuotationRepository {
              :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
-             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox)
+             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
+             :roundToFullBox)
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
@@ -457,7 +467,7 @@ public class DealQuotationRepository {
                    item_notes = :itemNotes,
                    line_type = :lineType, special_price_sqm = :specialPriceSqm,
                    adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline,
-                   sqm_per_box = :sqmPerBox
+                   sqm_per_box = :sqmPerBox, round_to_full_box = :roundToFullBox
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
@@ -920,7 +930,7 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement, sqm_per_box,
+                   picture_placement, sqm_per_box, round_to_full_box,
                    -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
                    -- (and, for the English per-sqm quantity, its price mode), resolved at read time
                    -- so every existing English quotation picks them up.
@@ -948,7 +958,7 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement, sqm_per_box,
+                   picture_placement, sqm_per_box, round_to_full_box,
                    -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
                    -- (and, for the English per-sqm quantity, its price mode), resolved at read time
                    -- so every existing English quotation picks them up.
@@ -1151,6 +1161,9 @@ public class DealQuotationRepository {
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
+        // V182: NOT NULL DEFAULT TRUE (every pre-V182 row backfills to true at the ALTER TABLE
+        // itself), so this is never NULL — no fallback needed, unlike the nullable columns above.
+        boolean roundToFullBox = rs.getBoolean("round_to_full_box");
         int piecesBeforeWastage = rs.getInt("pieces_before_wastage");
         int piecesAfterWastage = rs.getInt("pieces_after_wastage");
         BigDecimal sqmPerPiece = rs.getBigDecimal("sqm_per_piece");
@@ -1227,7 +1240,8 @@ public class DealQuotationRepository {
         // DealQuotationLines#tilePrint, the SAME call DealQuotationService#toItemDto makes.
         DealQuotationLines.TilePrint print = DealQuotationLines.tilePrint(documentLanguage, priceMode, quantityMode,
             areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox,
-            nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm);
+            nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm,
+            roundToFullBox);
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),
             rs.getInt("seq"),
@@ -1272,7 +1286,7 @@ public class DealQuotationRepository {
             // carry a flat amount. Routed through the same helper anyway so the two branches can
             // never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
-        ).withSqmPerBox(sqmPerBox);
+        ).withSqmPerBox(sqmPerBox).withRoundToFullBox(roundToFullBox);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

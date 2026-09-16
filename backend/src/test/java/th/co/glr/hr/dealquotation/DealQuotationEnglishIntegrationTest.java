@@ -387,6 +387,43 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo("แผ่น");
     }
 
+    /** Owner-approved "sell loose pieces" (V182): English per-sqm's printed quantity is
+     * {@code boxes × sqmPerBox} (WastageCalculator#sqmQuantityFromBoxes) — there is no "loose
+     * pieces" term in that formula at all, so {@code roundToFullBox = false} is refused, on the
+     * same three surfaces (create, update, the lenient preview) as the missing-box-data check
+     * above — never a silent fall-back to full-box rounding. */
+    @Test
+    void englishPerSqm_withRoundToFullBoxFalse_isRefusedInThai_onCreateUpdateAndPreview() {
+        ItemInput loose = withRoundToFullBox(perSqmItem(3360, 28, "0.6", "64"), false);
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(loose)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequest(List.of(tileItem("100.00", 10))), salesActor);
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(loose)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+        assertThat(quotationService.get(created.id(), salesActor).priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+
+        // The lenient preview has no completeness gate — this refusal still applies there.
+        assertThatThrownBy(() -> quotationService.calculateLine(loose, "EN", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+        // ...while the same box/pricing data previewed as a THAI ราคาพิเศษ is perfectly legal —
+        // the refusal is specific to the English PER-SQM combination, not to a TILE row in
+        // general (withSqmPerPiece's `copy` helper does not thread roundToFullBox through, so
+        // this leg does not itself prove roundToFullBox=false is accepted in Thai mode — see
+        // WastageCalculatorTest/DealQuotationLinesTest for that).
+        assertThat(quotationService.calculateLine(withSqmPerPiece(loose, "0.36"), null, salesActor).unit())
+            .isEqualTo("แผ่น");
+    }
+
     /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
     @Test
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
@@ -519,7 +556,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             salesActor);
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
         assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60x60 x 10 mm (ขนาดโดยประมาณ)");
-        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดลงกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดขึ้นเต็มกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 
@@ -761,6 +798,18 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private ItemInput withSqmPerBox(ItemInput b, String sqmPerBox) {
         return copy(b, b.quantityMode(), b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(),
             b.sqmPerPiece(), b.piecesPerBox(), new BigDecimal(sqmPerBox));
+    }
+
+    /** V182 "sell loose pieces" — {@code copy} has no roundToFullBox parameter (it predates this
+     * feature), so this goes through the full canonical constructor directly instead. */
+    private ItemInput withRoundToFullBox(ItemInput b, Boolean roundToFullBox) {
+        return new ItemInput(b.locationLabel(), b.catalogPriceId(), b.productCode(), b.brand(), b.model(),
+            b.color(), b.texture(), b.sizeText(), b.thicknessMm(), b.sqmPerPiece(), b.quantityMode(),
+            b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(), b.piecesPerBox(), b.unitPrice(),
+            b.discountPct(), b.originCountry(), b.leadTimeMinDays(), b.leadTimeMaxDays(), b.itemNotes(),
+            b.lineType(), b.description(), b.quantity(), b.unit(), b.specialPriceSqm(), b.directNetPrice(),
+            b.adjustmentPct(), b.adjustmentDeadline(), b.adjustmentAmount(), b.id(), b.sqmPerBox(),
+            roundToFullBox);
     }
 
     /** The row as a THAI ราคาพิเศษ would send it: a list price per piece and a ตร.ม./แผ่น. */

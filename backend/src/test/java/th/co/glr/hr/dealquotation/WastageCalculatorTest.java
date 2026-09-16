@@ -440,4 +440,145 @@ class WastageCalculatorTest {
         assertThat(WastageCalculator.isEnglishPerSqm("EN", "DIRECT_NET")).isFalse();
         assertThat(WastageCalculator.isEnglishPerSqm("EN", null)).isFalse();
     }
+
+    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+
+    /** The 9-arg legacy {@code Input} constructor (every test above this section) defaults
+     * {@code roundToFullBox} true — byte-for-byte the only behaviour that existed before this
+     * feature. Proven once, directly, rather than merely assumed from the tests above still
+     * passing unchanged. */
+    @Test
+    void legacyNineArgInput_defaultsRoundToFullBoxTrue() {
+        Result viaLegacy = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO));
+        Result viaExplicitTrue = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, true));
+        assertThat(viaLegacy.piecesFinal()).isEqualTo(viaExplicitTrue.piecesFinal()).isEqualTo(40);
+        assertThat(viaLegacy.boxes()).isEqualTo(viaExplicitTrue.boxes()).isEqualTo(4);
+        assertThat(viaLegacy.loosePieces()).isEqualTo(viaExplicitTrue.loosePieces()).isEqualTo(0);
+    }
+
+    /** The headline case: 32 pieces, box of 10, no wastage — 3 full boxes plus 2 loose, and
+     * piecesFinal is the UNROUNDED 32, not the old ceiling of 40. */
+    @Test
+    void roundToFullBoxFalse_splitsIntoFullBoxesPlusLooseRemainder() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesBeforeWastage()).isEqualTo(32);
+        assertThat(r.piecesAfterWastage()).isEqualTo(32);
+        assertThat(r.piecesFinal()).isEqualTo(32); // NOT 40 — the point of the feature.
+        assertThat(r.boxes()).isEqualTo(3);
+        assertThat(r.loosePieces()).isEqualTo(2);
+    }
+
+    /** loose = 0: an exact multiple is still reported as full boxes with a zero remainder, not
+     * null — the printed line (DealQuotationLinesTest) is what decides how to phrase zero. */
+    @Test
+    void roundToFullBoxFalse_exactMultiple_looseIsZeroNotNull() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 30,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesFinal()).isEqualTo(30);
+        assertThat(r.boxes()).isEqualTo(3);
+        assertThat(r.loosePieces()).isEqualTo(0);
+    }
+
+    /** boxes = 0: fewer pieces than a single box — reported as zero full boxes, all of it loose. */
+    @Test
+    void roundToFullBoxFalse_fewerThanOneBox_boxesIsZero() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 7,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesFinal()).isEqualTo(7);
+        assertThat(r.boxes()).isEqualTo(0);
+        assertThat(r.loosePieces()).isEqualTo(7);
+    }
+
+    /** PERCENT wastage still applies (HALF_UP, unchanged) before the loose-pieces split — only
+     * the BOX step stops rounding, not the wastage step upstream of it. */
+    @Test
+    void roundToFullBoxFalse_percentWastage_appliesBeforeTheLooseSplit() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 100,
+            WastageCalculator.WASTAGE_MODE_PERCENT, new BigDecimal("10"), 12,
+            new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesBeforeWastage()).isEqualTo(100);
+        assertThat(r.piecesAfterWastage()).isEqualTo(110); // 100 * 1.10, HALF_UP
+        assertThat(r.piecesFinal()).isEqualTo(110); // NOT ceil(110/12)*12 = 120
+        assertThat(r.boxes()).isEqualTo(9); // 110 / 12 = 9 full boxes
+        assertThat(r.loosePieces()).isEqualTo(2); // 110 - 9*12
+    }
+
+    /** PIECES wastage (a flat extra count) — same "applies upstream of the loose split" shape as
+     * the PERCENT case above, with a different arithmetic rule feeding it. */
+    @Test
+    void roundToFullBoxFalse_piecesWastage_appliesBeforeTheLooseSplit() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 100,
+            WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("15"), 12,
+            new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesAfterWastage()).isEqualTo(115);
+        assertThat(r.piecesFinal()).isEqualTo(115);
+        assertThat(r.boxes()).isEqualTo(9); // 115 / 12 = 9 full boxes
+        assertThat(r.loosePieces()).isEqualTo(7); // 115 - 9*12
+    }
+
+    /** AREA quantity mode is unaffected by which field feeds piecesBeforeWastage — the loose
+     * split only cares about piecesFinal and piecesPerBox, whatever produced piecesFinal. */
+    @Test
+    void roundToFullBoxFalse_areaQuantityMode_stillSplitsCorrectly() {
+        Result r = WastageCalculator.calculate(new Input(
+            sqmPerPieceFor("2.78"), WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), null,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        // piecesBeforeWastage = round(10 * 2.78) = 28, no wastage -> piecesFinal = 28 (unrounded).
+        assertThat(r.piecesFinal()).isEqualTo(28);
+        assertThat(r.boxes()).isEqualTo(7);
+        assertThat(r.loosePieces()).isEqualTo(0);
+    }
+
+    /** No piecesPerBox at all: roundToFullBox is simply moot (there is no box multiple to round
+     * to or split by), exactly as {@code null}/{@code <= 0} already behaved before this feature —
+     * {@code false} must not invent box/loose figures out of nothing. */
+    @Test
+    void roundToFullBoxFalse_noPiecesPerBox_boxesAndLooseStayNull() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, null, new BigDecimal("50"), BigDecimal.ZERO, false));
+
+        assertThat(r.piecesFinal()).isEqualTo(32);
+        assertThat(r.boxes()).isNull();
+        assertThat(r.loosePieces()).isNull();
+
+        Result rZero = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 0, new BigDecimal("50"), BigDecimal.ZERO, false));
+        assertThat(rZero.boxes()).isNull();
+        assertThat(rZero.loosePieces()).isNull();
+    }
+
+    /** Every price mode's amount follows piecesFinal EXACTLY as it does when rounding — the money
+     * math (R-D: single rounding of list × piecesFinal × discountFactor) does not know or care
+     * whether piecesFinal got there by ceiling or by staying unrounded. Pinned against the SAME
+     * discount arithmetic {@link #discountPct_reducesNetUnitPrice_andLineAmount} pins for the
+     * rounding-true case, with piecesFinal=32 (unrounded) standing in for that test's pieces=10. */
+    @Test
+    void roundToFullBoxFalse_lineAmountFollowsUnroundedPiecesFinal_notTheOldCeiling() {
+        Result r = WastageCalculator.calculate(new Input(
+            null, WastageCalculator.QUANTITY_MODE_PIECES, null, 32,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 10, new BigDecimal("100"), new BigDecimal("10"), false));
+
+        assertThat(r.piecesFinal()).isEqualTo(32);
+        assertThat(r.netUnitPrice()).isEqualByComparingTo("90.00"); // 100 * (1 - 10%), unaffected by rounding mode
+        // 100 * 32 * 0.90 = 2,880.00 -- NOT 100 * 40 * 0.90 = 3,600.00 (the old ceil-to-40 amount).
+        assertThat(r.lineAmount()).isEqualByComparingTo("2880.00");
+    }
 }

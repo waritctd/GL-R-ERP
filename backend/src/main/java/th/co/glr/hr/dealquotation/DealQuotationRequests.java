@@ -125,10 +125,42 @@ public final class DealQuotationRequests {
          * {@code piecesPerBox}) only for SPECIAL_SQM on an EN document. {@code @Digits} matches
          * {@code sales.quotation_item.sqm_per_box}'s NUMERIC(10,6).
          */
-        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox,
+
+        /**
+         * Owner-approved "sell loose pieces" (2026-09-16). TILE rows only, meaningful only when
+         * {@code piecesPerBox} is set. Nullable — {@code null} reads as {@code true}, exactly
+         * today's ONLY behaviour (round the piece count up to the next full box), so every
+         * existing draft/request compiles and behaves unchanged. {@code false} sells exactly the
+         * wastage-adjusted piece count, unrounded — see {@code WastageCalculator.Input}'s own
+         * Javadoc for the arithmetic and {@code DealQuotationService#requireBoxDataForPerSqm} for
+         * why it is REFUSED (400) together with an English per-sqm price mode, which has no way to
+         * express a loose-piece quantity in square metres.
+         */
+        Boolean roundToFullBox
     ) {
-        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}) — kept so every
-         * existing construction site compiles unchanged. */
+        /** The pre-loose-pieces canonical shape (with {@link #sqmPerBox}, no
+         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged.
+         * Defaults {@code roundToFullBox} to null, which reads as {@code true}. */
+        public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
+                         String model, String color, String texture, String sizeText,
+                         BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+                         BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+                         BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+                         BigDecimal discountPct, String originCountry, Integer leadTimeMinDays,
+                         Integer leadTimeMaxDays, String itemNotes, String lineType, String description,
+                         BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+                         BigDecimal directNetPrice, BigDecimal adjustmentPct, LocalDate adjustmentDeadline,
+                         BigDecimal adjustmentAmount, Long id, BigDecimal sqmPerBox) {
+            this(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
+                wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, lineType, description, quantity, unit, specialPriceSqm,
+                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, null);
+        }
+
+        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}/
+         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged. */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,

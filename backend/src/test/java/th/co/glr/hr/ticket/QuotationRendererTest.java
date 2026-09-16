@@ -238,11 +238,13 @@ class QuotationRendererTest {
     void visibleLength_excludesThaiCombiningMarksButCountsEveryOtherCodePoint() {
         // Plain ASCII: every char counts, exactly like String.length().
         assertThat(QuotationRenderer.visibleLength("hello")).isEqualTo(5);
-        // The production line itself: String.length() 66, visible 59 (measured on the real PDF —
-        // see #visibleLength's own Javadoc).
-        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
-        assertThat(calcLine.length()).isEqualTo(66);
-        assertThat(QuotationRenderer.visibleLength(calcLine)).isEqualTo(59);
+        // The production line itself: String.length() 72, visible 62. Was 66/59 before the
+        // "และปัดลงกล่อง" -> "และปัดขึ้นเต็มกล่อง" wording correction (2026-09-16, quotation
+        // loose-pieces feature) — six code points longer, none of them a combining mark, so both
+        // figures moved by exactly 6.
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        assertThat(calcLine.length()).isEqualTo(72);
+        assertThat(QuotationRenderer.visibleLength(calcLine)).isEqualTo(62);
     }
 
     @Test
@@ -251,11 +253,13 @@ class QuotationRendererTest {
         assertThat(QuotationRenderer.visibleLength("")).isEqualTo(0);
     }
 
-    /** The exact bug: at the OLD String.length() budget of 62, this 66-length/59-visible line used
-     * to wrap into "(บรรจุ 4" / "แผ่น/กล่อง)". At visible length 59 <= 62 it must not wrap at all. */
+    /** The exact bug: at the OLD String.length() budget of 62, this line — 66-length/59-visible
+     * before the "และปัดลงกล่อง" -&gt; "และปัดขึ้นเต็มกล่อง" wording correction (2026-09-16), now
+     * 72-length/62-visible — used to wrap into "(บรรจุ 4" / "แผ่น/กล่อง)". At visible length 62 <=
+     * 62 (now the exact boundary, not merely under it) it must still not wrap at all. */
     @Test
     void wrapItemLineToWidth_aLineUnderTheVisibleBudget_isNotSplit() {
-        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
         assertThat(renderer.wrapItemLineToWidth(calcLine, 62)).containsExactly(calcLine);
     }
 
@@ -265,7 +269,7 @@ class QuotationRendererTest {
      * enough for group 1 alone, not for the whole line. */
     @Test
     void wrapItemLineToWidth_overBudget_breaksAtParentheticalGroupBoundary() {
-        String group1 = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น)";
+        String group1 = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น)";
         String group2 = "(บรรจุ 4 แผ่น/กล่อง)";
         String line = group1 + " " + group2;
         int budget = QuotationRenderer.visibleLength(group1) + 5;
@@ -381,7 +385,7 @@ class QuotationRendererTest {
         requireLibreOffice();
         QuotationRenderModel.RenderItem item1 = renderItem("หน้าบ้าน",
             List.of("กระเบื้อง รุ่น Elegance สี ขาวนวล ผิว ด้าน", "ขนาด 60x120x2 cm. (ขนาดโดยประมาณ)",
-                "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดลงกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)"),
+                "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดขึ้นเต็มกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)"),
             new BigDecimal("268"), new BigDecimal("500.00"), "Net", new BigDecimal("500.00"), new BigDecimal("134000.00"));
         QuotationRenderModel.RenderItem item2 = renderItem("หน้าบ้าน",
             List.of("กระเบื้อง รุ่น Stone สี เทาเข้ม ผิว หยาบ", "ขนาด 60x60x0.9 cm. (ขนาดโดยประมาณ)",

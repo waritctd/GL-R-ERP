@@ -1376,10 +1376,23 @@ public class DealQuotationService {
         if (rowNumber != null) {
             requireItemComplete(rowNumber, input, sqmPerPiece, perSqm);
         }
+        // Owner-approved "sell loose pieces" (2026-09-16): null reads as true, today's only
+        // behaviour. Resolved ONCE here — WastageCalculator.Input, the stored NewItem and the
+        // printed line all read this same boolean, never input.roundToFullBox() directly again.
+        boolean roundToFullBox = input.roundToFullBox() == null || input.roundToFullBox();
         if (perSqm) {
             // Never a silent pieces fallback: without both box figures there is no sqm quantity.
             // Checked on the lenient preview path too — there is no honest number to preview.
             requireBoxDataForPerSqm(input, rowNumber);
+            // English per-sqm has no way to express a loose-piece quantity in square metres — its
+            // printed quantity IS boxes × sqm/box (WastageCalculator#sqmQuantityFromBoxes), which
+            // has no "remainder pieces" term at all. Refused on the lenient preview path too, same
+            // as the box-data check just above.
+            if (!roundToFullBox) {
+                String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+                throw new ApiException(HttpStatus.BAD_REQUEST, where
+                    + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
+            }
         }
         WastageCalculator.Result result;
         try {
@@ -1390,7 +1403,8 @@ public class DealQuotationService {
                 // money below is recomputed from the sqm quantity, so only the PIECE results of
                 // this call are used.
                 perSqm ? input.specialPriceSqm() : input.unitPrice(),
-                perSqm ? null : input.discountPct()));
+                perSqm ? null : input.discountPct(),
+                roundToFullBox));
         } catch (IllegalArgumentException | ArithmeticException e) {
             // ArithmeticException alongside IllegalArgumentException: BigDecimal#intValueExact
             // (piecesPerBox/ceiling conversions inside WastageCalculator) throws it for a value
@@ -1468,7 +1482,7 @@ public class DealQuotationService {
             specialPriceSqm, null, null,
             catalogBasis == null ? null : catalogBasis.widthMm(),
             catalogBasis == null ? null : catalogBasis.heightMm(),
-            input.sqmPerBox());
+            input.sqmPerBox(), roundToFullBox);
     }
 
     /**
@@ -1610,7 +1624,7 @@ public class DealQuotationService {
             // Transient render-only fields (see NewItem#catalogWidthMm) -- this NewItem is bound
             // for insertDraft, never for #toItemDto, so there is nothing here to carry through.
             null, null,
-            item.sqmPerBox());
+            item.sqmPerBox(), item.roundToFullBox());
     }
 
     // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
@@ -1921,7 +1935,8 @@ public class DealQuotationService {
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
                 piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
-                item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(), item.specialPriceSqm())
+                item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(), item.specialPriceSqm(),
+                item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.
@@ -1944,7 +1959,7 @@ public class DealQuotationService {
             print == null ? item.unit() : print.unit(), item.specialPriceSqm(), item.adjustmentPct(),
             item.adjustmentDeadline(), print == null ? null : print.subLine(),
             DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()))
-            .withSqmPerBox(item.sqmPerBox());
+            .withSqmPerBox(item.sqmPerBox()).withRoundToFullBox(item.roundToFullBox());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
