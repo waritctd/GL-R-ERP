@@ -181,7 +181,12 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
   });
 
-  it('a save failure during the flush shows the error and never downloads a stale PDF', async () => {
+  // D2 fix (Opus review 2026-09-16, proven with a probe asserting the toast count -- "expected 2
+  // to be 1"): updateMutation's own onError already toasts a save failure; handleDownload's catch
+  // used to re-toast the SAME message, stacking two identical red toasts for one failure. The
+  // original test here only asserted `toHaveBeenCalledWith`, which cannot see a duplicate -- it
+  // passes whether the toast fired once or twice, which is exactly how the bug shipped unnoticed.
+  it('a save failure during the flush shows the error EXACTLY ONCE and never downloads a stale PDF (D2 fix)', async () => {
     const err = Object.assign(new Error('ยอดรวมหลังหักส่วนลดพิเศษติดลบ'), { status: 400 });
     api.dealQuotations.update.mockRejectedValue(err);
     const showToast = renderEditor('/quotations/5');
@@ -192,6 +197,10 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยอดรวมหลังหักส่วนลดพิเศษติดลบ'));
     expect(api.dealQuotations.downloadPdf).not.toHaveBeenCalled();
+    // The count, not just the call -- a duplicate toast passes `toHaveBeenCalledWith` too.
+    expect(showToast.mock.calls.filter(
+      (c) => c[0] === 'error' && c[1] === 'ยอดรวมหลังหักส่วนลดพิเศษติดลบ',
+    )).toHaveLength(1);
   });
 
   it('clicking ดาวน์โหลด PDF twice fast only flushes+downloads once', async () => {

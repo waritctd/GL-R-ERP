@@ -1420,7 +1420,14 @@ export function QuotationEditorPage({ user, showToast }) {
             refuseDownloadForValidation();
             return;
           }
-          await runSave(false); // rejects on failure — caught below, which skips the download.
+          try {
+            await runSave(false);
+          } catch {
+            // D2: updateMutation's own onError already toasted this failure — showing it again
+            // from the outer catch below would stack a second, identical toast. Returning here
+            // (rather than rethrowing) skips the download without re-toasting.
+            return;
+          }
         }
       }
       const blob = format === 'pdf' ? await api.dealQuotations.downloadPdf(id) : await api.dealQuotations.downloadXlsx(id);
