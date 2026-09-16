@@ -203,9 +203,13 @@ public final class DealQuotationRenderAdapter {
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
         // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
-        // on ชุด/PLAIN lines, or an ADJUSTMENT-only credit-note-ish document) prints a different,
-        // shorter หมายเหตุ block — the tile-oriented remarks (sizes vs. ISO/มอก., colour/LOT
-        // variance) are simply wrong on such a document. See #hasAnyTileLine.
+        // on ชุด/PLAIN lines) prints a different, shorter หมายเหตุ block — the tile-oriented remarks
+        // (sizes vs. ISO/มอก., colour/LOT variance) are simply wrong on such a document. #hasAnyTileLine
+        // also answers "non-tile" for an all-ADJUSTMENT item list, but that is a defensive branch,
+        // not a real document: DealQuotationService#buildItems refuses BOTH an empty item list and
+        // an all-ADJUSTMENT one before anything is ever saved (comment correction, review 2026-09-16
+        // — this used to call that case a real "credit-note-ish" document, which it is not). See
+        // #hasAnyTileLine.
         boolean hasTile = hasAnyTileLine(quotation.items());
         List<String> remarks = english
             ? (hasTile ? englishRemarkLines(quotation, bankBlockLines) : englishNonTileRemarkLines(quotation, bankBlockLines))
@@ -234,10 +238,15 @@ public final class DealQuotationRenderAdapter {
     }
 
     /** {@code true} when ANY item on the document is a TILE row. {@code false} for a document made
-     * entirely of PLAIN rows (sanitaryware — taps, showers, sold as ชุด) and for an ADJUSTMENT-only
-     * document (a credit-note-ish row and nothing else) — both count as "non-tile" for the remark
-     * block below: neither has anything to do with ขนาด/สี variance between kiln lots, which is
-     * what the tile-oriented remarks 4/5 are actually about. */
+     * entirely of PLAIN rows (sanitaryware — taps, showers, sold as ชุด) — the real-world non-tile
+     * case this feature is for — and, defensively, for an item list that is all ADJUSTMENT rows.
+     * Comment correction (review, 2026-09-16): the latter is NOT a real "credit-note-ish" document —
+     * {@code DealQuotationService#buildItems} refuses both an empty item list and an all-ADJUSTMENT
+     * one before either is ever saved, so this branch of the method is never exercised by a real
+     * quotation, only by a test constructing a {@code DealQuotationItemDto} list directly. Either
+     * way the answer is "non-tile" for the remark block below: neither case has anything to do with
+     * ขนาด/สี variance between kiln lots, which is what the tile-oriented remarks 4/5 are actually
+     * about. */
     private static boolean hasAnyTileLine(List<DealQuotationItemDto> items) {
         return items.stream().anyMatch(DealQuotationRenderAdapter::isTileLine);
     }

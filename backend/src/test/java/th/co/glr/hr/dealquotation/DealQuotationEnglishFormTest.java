@@ -999,9 +999,19 @@ class DealQuotationEnglishFormTest {
             .isEqualTo("3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 30-45 วัน");
     }
 
-    /** V182: an ADJUSTMENT-only document (a credit-note-ish row and nothing else) counts as
-     * non-tile too — see {@code DealQuotationRenderAdapter#hasAnyTileLine}'s own Javadoc. An
-     * ADJUSTMENT row never carries a lead time, so the set drops to three lines. */
+    /**
+     * V182: an ADJUSTMENT-only item list counts as non-tile too — see {@code
+     * DealQuotationRenderAdapter#hasAnyTileLine}'s own Javadoc. An ADJUSTMENT row never carries a
+     * lead time, so the set drops to three lines.
+     *
+     * <p>Comment correction (review, 2026-09-16): this is NOT a real "credit-note-ish" document a
+     * rep can actually save — {@code DealQuotationService#buildItems} refuses both an empty item
+     * list and an all-ADJUSTMENT one before either is ever written (see its own Javadoc). Kept
+     * anyway as a cheap guard on the render adapter's OWN logic: {@code toRenderModel} is a pure
+     * function with no access to the service's save-time rules, so it must still answer
+     * sensibly (never throw, never misclassify) if it is ever handed a list shaped like this one —
+     * by a future caller, a test, or a re-render of data the current rules would no longer accept.
+     */
     @Test
     void remarks_anAdjustmentOnlyDocument_countsAsNonTile() throws Exception {
         DealQuotationDto q = withItems(thaiQuotation(), List.of(adjustmentRow(1)));
