@@ -792,6 +792,16 @@ class DealQuotationEnglishFormTest {
      * byte-for-byte, per {@code DealQuotationRenderAdapter#hasAnyTileLine}. Uses the SAME two
      * items as {@link #remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts} plus one tile,
      * so the only variable between the two tests is whether a tile line is present at all.
+     *
+     * <p>D4 (review, 2026-09-15): also carries the country/stock-wording guard that used to live on
+     * {@code remarks_anAllPlainDocument_dropsTheDeliveryLineEntirely_inBothLayouts} (this test's own
+     * pre-V182 ancestor) — the 2026-09-11 owner-feedback reversal means the TILE remark set must
+     * never print "Italy"/"China"/"Thailand" wording again, and V182's rewrite of that ancestor test
+     * (into {@code remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts}, which now takes
+     * the NON-TILE path and never reaches this constant at all) dropped the assertion with nothing
+     * left asserting it anywhere. This is the ONE remaining test that still exercises the TILE
+     * remark set's own English lead-time fallback ({@code EN_LINE3_FALLBACK}) on a document with no
+     * lead time, so the guard belongs here now.
      */
     @Test
     void remarks_aMixedDocument_keepsTheTileRemarkSet_unchanged() throws Exception {
@@ -802,6 +812,12 @@ class DealQuotationEnglishFormTest {
         assertThat(model.remarkLines().get(2)).startsWith("3.Payment by telegraphic transfer");
         assertThat(model.remarkLines().get(5)).startsWith("6.Colours and patterns");
         assertThat(model.remarkLines().get(6)).startsWith("7.Goods sold");
+        // D4: the country/stock-wording guard restored — see this test's own Javadoc. Item 2's OWN
+        // description ("Freight China to Male") legitimately contains "China"; that string lives in
+        // model.remarkLines(), never in the item description, so it cannot false-positive here.
+        assertThat(String.join("\n", model.remarkLines()))
+            .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian")
+            .doesNotContainIgnoringCase("china").doesNotContainIgnoringCase("thailand");
     }
 
     /** The Thai twin of the test above, pinning the NON-TILE set's drop-and-renumber path — see
