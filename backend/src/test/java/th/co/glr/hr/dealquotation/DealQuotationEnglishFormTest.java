@@ -865,6 +865,58 @@ class DealQuotationEnglishFormTest {
         assertThat(str(sheet, 27, 1)).isBlank();
     }
 
+    /**
+     * D2 (Opus review, 2026-09-15): every non-tile test above asserts cell TEXT only, which cannot
+     * catch a geometry regression — the reviewer mutated {@code QuotationRenderer#compactRemarksSection}'s
+     * closing call from {@code clampToPackedSlots(actualLineCount)} to
+     * {@code Math.max(clampToPackedSlots(actualLineCount), REMARK_V2_MIN_LINES)} and all 213 tests
+     * still passed, while the real render lost the box's bottom rule under line 4 and grew a
+     * spurious rule under รวมเป็นเงินทั้งสิ้น. This pins the box's closing bottom rule on the ACTUAL
+     * last packed row for the FOUR-line non-tile case — mirrors
+     * {@code DealQuotationRenderAdapterV3Test#leadTime_noItemHasOne_rendererWritesExactlySevenRemarkRows}'s
+     * own border assertion, applied to the non-tile set the tile-only test suite never exercised.
+     */
+    @Test
+    void remarks_nonTileFourLine_boxClosesOnTheActualLastRow_notAHardcodedMinimum() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRowWithLeadTime(1, "ค่าขนส่งกระเบื้อง", 30, 45),
+            plainRowWithLeadTime(2, "ค่าติดตั้ง", 30, 45)));
+        Sheet sheet = render(allPlain);
+        // 4 lines -> rows 23..26; the closing bottom rule must sit on row 26, across every column.
+        for (int c = 0; c <= 8; c++) {
+            assertThat(sheet.getRow(26).getCell(c).getCellStyle().getBorderBottom())
+                .as("row 26 col %d must carry the box's closing bottom rule", c)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        // Row 27 must NOT be pulled inside the box's side borders -- the REMARK_V2_MIN_LINES(7)
+        // mutation above would leave the (unwritten) rows 27..29 sitting inside them.
+        assertThat(borderLeftOrNone(sheet, 27, 1))
+            .as("row 27 must not be inside the box's left border once it has shrunk to 4 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+    }
+
+    /** D2 twin: the THREE-line case (lead time dropped, no lead time on any row). */
+    @Test
+    void remarks_nonTileThreeLine_boxClosesOnTheActualLastRow_notAHardcodedMinimum() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRow(1, "ค่าขนส่งกระเบื้อง"), plainRow(2, "ค่าติดตั้ง")));
+        Sheet sheet = render(allPlain);
+        // 3 lines -> rows 23..25; the closing bottom rule must sit on row 25.
+        for (int c = 0; c <= 8; c++) {
+            assertThat(sheet.getRow(25).getCell(c).getCellStyle().getBorderBottom())
+                .as("row 25 col %d must carry the box's closing bottom rule", c)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        assertThat(borderLeftOrNone(sheet, 26, 1))
+            .as("row 26 must not be inside the box's left border once it has shrunk to 3 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+    }
+
+    private org.apache.poi.ss.usermodel.BorderStyle borderLeftOrNone(Sheet sheet, int row, int col) {
+        var cell = sheet.getRow(row) == null ? null : sheet.getRow(row).getCell(col);
+        return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderLeft();
+    }
+
     /** The English twin, in both bank-block layouts. */
     @Test
     void remarks_aPlainOnlyEnglishDocumentWithLeadTime_printsAllFourNonTileLines_inBothLayouts() throws Exception {
