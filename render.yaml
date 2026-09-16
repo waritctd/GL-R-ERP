@@ -40,7 +40,7 @@ services:
     name: gl-r-erp
     runtime: image
     image:
-      url: ghcr.io/waritctd/glr-hr-backend:v2026-09-16c
+      url: ghcr.io/waritctd/glr-hr-backend:v2026-09-16d
       creds:
         fromRegistryCreds:
           name: ghcr-glr
