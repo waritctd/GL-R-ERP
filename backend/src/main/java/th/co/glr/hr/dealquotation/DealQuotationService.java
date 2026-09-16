@@ -1907,9 +1907,13 @@ public class DealQuotationService {
      * remove that from the หมายเหตุ") replaced that fallback with dropping the whole line
      * entirely (see {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}), so a rep must
      * actually enter a lead time rather than let the document print a plausible-looking but false
-     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT
-     * rows are exempt — neither has a lead-time concept (freight/consumables/a ส่วนลดพิเศษ line
-     * cannot "arrive"). A DRAFT may still be saved with no lead times; this gate is submit only.
+     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT rows are exempt
+     * from THIS gate — an ADJUSTMENT (ส่วนลดพิเศษ) row still has no lead-time concept at all (it
+     * cannot "arrive"), but a PLAIN row (สินค้า/บริการอื่น — sanitaryware) CAN carry one since D1
+     * (owner decision, 2026-09-16: her QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against exactly
+     * such a row) — it is simply never REQUIRED the way a TILE row's is, so a rep who leaves it
+     * blank on a PLAIN row can still submit. A DRAFT may still be saved with no lead times on any
+     * row type; this gate is submit only.
      */
     private void requireEveryTileItemHasALeadTime(List<DealQuotationItemDto> items) {
         List<String> missingSeqs = new ArrayList<>();

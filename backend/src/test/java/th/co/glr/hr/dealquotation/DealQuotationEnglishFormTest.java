@@ -685,9 +685,11 @@ class DealQuotationEnglishFormTest {
     //
     // The DATE variant (gated on hasSpecialPricing) and the lead-time-line drop (gated on
     // hasAnyLeadTime) are independent decisions computed from different data -- an ADJUSTMENT row
-    // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all
-    // (see DealQuotationItemDto -- leadTimeMinDays/Max are TILE-only), so an ADJUSTMENT-only
-    // document exercises DATE mode with hasAnyLeadTime=false. Both must compose correctly: the
+    // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all --
+    // DealQuotationService#buildAdjustmentItem always nulls originCountry/leadTimeMinDays/
+    // leadTimeMaxDays regardless of what the input carries (unlike a PLAIN row's OPTIONAL lead time
+    // since D1 -- see #plainRowWithLeadTime) -- so an ADJUSTMENT-only document exercises DATE mode
+    // with hasAnyLeadTime=false. Both must compose correctly: the
     // line-drop-and-renumber must not disturb the DATE text, and the DATE text must survive being
     // renumbered down by one.
 
@@ -836,11 +838,12 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * V182: a PLAIN-only document whose rows DO carry a lead time (not how a real PLAIN row is
-     * ever written today — see {@link #plainRow}'s own comment — but {@code
-     * DealQuotationRenderAdapter#nonTileLeadTimeRange} reads the field off ANY item regardless of
-     * {@code lineType}, so this exercises that path directly) prints the full FOUR-line non-tile
-     * set, not the three-line dropped one.
+     * V182: a PLAIN-only document whose rows DO carry a lead time — reachable since D1 wired an
+     * OPTIONAL ระยะเวลานำเข้า input onto {@code QuotationPlainItemRow} (see
+     * {@link #plainRowWithLeadTime}'s own comment) — prints the full FOUR-line non-tile set, not
+     * the three-line dropped one. {@code DealQuotationRenderAdapter#nonTileLeadTimeRange} reads the
+     * field off ANY item regardless of {@code lineType}, which is what lets this fixture exercise
+     * the path directly at the render-adapter layer.
      */
     @Test
     void remarks_aPlainOnlyThaiDocumentWithLeadTime_printsAllFourNonTileLines() throws Exception {
@@ -1190,7 +1193,9 @@ class DealQuotationEnglishFormTest {
             q.approverHasSignature(), q.items(), q.createdAt(), q.updatedAt());
     }
 
-    /** A PLAIN row: description, 1 lot at 500.00, and — like every real PLAIN row — no lead time. */
+    /** A PLAIN row: description, 1 lot at 500.00, no lead time — the ordinary case (a rep who
+     * leaves ระยะเวลานำเข้า blank), still the common one even after D1 wired an OPTIONAL lead-time
+     * input onto QuotationPlainItemRow (see {@link #plainRowWithLeadTime} for the other case). */
     private DealQuotationItemDto plainRow(int seq, String description) {
         return new DealQuotationItemDto((long) seq, seq,
             null, null, null, null, null, null, null, null,     // location … size text
@@ -1203,10 +1208,19 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "lot", null, null, null, null, null);
     }
 
-    /** V182 fixture — a PLAIN row that DOES carry a lead time, unlike every real PLAIN row (see
-     * {@link #plainRow}'s own comment) — included only to exercise {@code
-     * DealQuotationRenderAdapter#nonTileLeadTimeRange}, which reads the field off ANY item
-     * regardless of {@code lineType}. */
+    /** V182 fixture — a PLAIN row that DOES carry a lead time (สินค้า/บริการอื่น — sanitaryware
+     * sold on ชุด, an owner example being QN6900971-4's own "ระยะเวลานำเข้า 75-90 วัน" row).
+     *
+     * <p>D1 correction (review, 2026-09-16): this Javadoc used to say a real PLAIN row can never
+     * carry a lead time — that was true only because {@code QuotationPlainItemRow} had no input
+     * for it; the field itself always lived on {@code DealQuotationItemDto} (shared with the TILE
+     * row) and {@code DealQuotationService#buildPlainItem} always forwarded it. Now that the editor
+     * has the control, this fixture is a faithful stand-in for a real saved row rather than an
+     * unreachable one — see {@code DealQuotationIntegrationTest#plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks}
+     * for the same shape proven through the real {@code ItemInput} → service → render path. Kept as
+     * a direct-DTO fixture here (rather than going through the service in every test in this file)
+     * because {@code DealQuotationRenderAdapter#nonTileLeadTimeRange} reads the field off ANY item
+     * regardless of {@code lineType} — this is a render-adapter unit test, not a save-path one. */
     private DealQuotationItemDto plainRowWithLeadTime(int seq, String description, int minDays, int maxDays) {
         return new DealQuotationItemDto((long) seq, seq,
             null, null, null, null, null, null, null, null,

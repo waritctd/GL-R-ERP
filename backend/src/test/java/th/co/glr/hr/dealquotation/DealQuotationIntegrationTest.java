@@ -51,6 +51,7 @@ import th.co.glr.hr.notification.SalesNotificationMailRouter;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
+import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -2879,6 +2880,49 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.subtotalAmount()).isEqualByComparingTo("89250.00"); // 1000 + 50000 + 38250
     }
 
+    /**
+     * D1 (owner decision, 2026-09-16, review of V182): a PLAIN row (สินค้า/บริการอื่น — sanitaryware
+     * sold on ชุด) may now carry an OPTIONAL import lead time, exactly like a TILE row's. This is
+     * the production PATH the review flagged as missing evidence for — {@code ItemInput} built the
+     * way the wired editor now sends it (never a hand-constructed {@code DealQuotationItemDto}),
+     * through the REAL {@code DealQuotationService#create} → {@code #buildPlainItem}, proving the
+     * fields the UI now sends actually reach the saved item and, from there, the printed document —
+     * not merely that a fixture built directly at the render layer can express the state.
+     */
+    @Test
+    void plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))),
+            salesActor);
+
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.lineType()).isEqualTo(WastageCalculator.LINE_TYPE_PLAIN);
+        assertThat(item.leadTimeMinDays()).isEqualTo(75);
+        assertThat(item.leadTimeMaxDays()).isEqualTo(90);
+
+        // The saved document has no TILE line at all, so it takes the non-tile remark set — and
+        // now that this PLAIN row carries a lead time, remark 3 prints it rather than dropping.
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า 75-90 วัน หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+    }
+
+    /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
+     * before — the field is optional, never required, for a non-TILE row. */
+    @Test
+    void plainRow_withNoLeadTime_stillSavesAndPrintsUnchanged() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), salesActor);
+
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.leadTimeMinDays()).isNull();
+        assertThat(item.leadTimeMaxDays()).isNull();
+
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines()).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+    }
+
     /** S2: a fractional PLAIN quantity must survive — the reason `quantity` is a BigDecimal and
      * not an int. An int would have thrown ArithmeticException on the read path instead. */
     @Test
@@ -3716,6 +3760,18 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return new ItemInput(null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null,
             new BigDecimal(unitPrice), new BigDecimal(discountPct), null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    /** D1 (owner decision, 2026-09-16) — a PLAIN row carrying the OPTIONAL import lead time
+     * QuotationPlainItemRow's new control now sends ({@link #plainItem} has none, same as every
+     * PLAIN row before this fix). */
+    private ItemInput plainItemWithLeadTime(String description, String quantity, String unit,
+                                            String unitPrice, int leadTimeMinDays, int leadTimeMaxDays) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal(unitPrice), null, null, leadTimeMinDays, leadTimeMaxDays, null,
             WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
             null, null, null, null, null);
     }
