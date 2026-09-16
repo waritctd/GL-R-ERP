@@ -771,16 +771,22 @@ export function sizeTextDiffersFromCatalogFaceSize(sizeText, catalogSizeText) {
 // QuotationEditorPage's own `submitItemErrorsByRow`.
 export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH', { requireLeadTime = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
-  // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price, and the quantity
-  // needs both box figures — DealQuotationService#requireItemComplete's perSqm branch.
+  // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price.
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
+  // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL for perSqm — mirrors
+  // DealQuotationService#requireItemComplete's hasBoxArea branching exactly. WITH a box area,
+  // แผ่น/กล่อง is still required (a partially-filled pair is refused); WITHOUT one, it becomes
+  // optional too, same as any other tile row with no pieces-per-box.
+  const hasBoxArea = Number(item?.sqmPerBox) > 0;
   const errors = {};
   if (!item?.model?.trim()) errors.model = 'กรุณาระบุรุ่น';
   if (!item?.color?.trim()) errors.color = 'กรุณาระบุสี';
   if (!item?.texture?.trim()) errors.texture = 'กรุณาระบุผิว';
   if (!item?.sizeText?.trim()) errors.sizeText = 'กรุณาระบุขนาด';
   if (!(Number(item?.thicknessMm) > 0)) errors.thicknessMm = 'กรุณาระบุความหนา (มม.)';
-  if (!(Number(item?.piecesPerBox) >= 1)) errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
+  if (!(perSqm && !hasBoxArea) && !(Number(item?.piecesPerBox) >= 1)) {
+    errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
+  }
   if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุแผ่น/ตร.ม.';
   if (priceMode === 'DIRECT_NET') {
     if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
@@ -797,22 +803,11 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
       errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
     } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
   }
-  if (perSqm) {
-    if (!(Number(item?.sqmPerBox) > 0)) errors.sqmPerBox = 'กรุณาระบุ ตร.ม./กล่อง';
-    else if (!withinDecimals(item.sqmPerBox, 6)) errors.sqmPerBox = 'ทศนิยมได้ไม่เกิน 6 ตำแหน่ง';
-    // Owner-approved "sell loose pieces" (V182): this used to also flag `roundToFullBox === false`
-    // here as "defence in depth", but review (2026-09-16, F1) found that claim false and the branch
-    // actively harmful — QuotationItemRow's `itemInputFromRow` already forces `roundToFullBox: true`
-    // onto the wire in this mode regardless of the row's own state (the real, and only needed,
-    // guard against DealQuotationService#requireBoxDataForPerSqm's 400), so this checklist entry
-    // was never preventing a server rejection. What it DID do: a row ticked under NET/TH and then
-    // switched to English per-sqm kept its stored `false` forever — the checkbox is disabled and
-    // renders UNCHECKED here (roundToFullBoxDisabledReason), so there was no on-screen control left
-    // to clear it, and the row became permanently unable to save. Fixed at the actual source instead
-    // — QuotationEditorPage's `applyPriceMode` now resets `roundToFullBox` to `true` on every row the
-    // moment the document reaches this mode — which makes `roundToFullBox === false` genuinely
-    // unreachable here, so the branch is dropped rather than kept pointing at a state that cannot
-    // occur.
+  // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no "required" check here at all, only a
+  // decimal-places check on whatever value IS typed. A blank value derives the printed sqm
+  // quantity from pieces × ตร.ม./แผ่น instead (DealQuotationLines#tilePrint).
+  if (perSqm && item?.sqmPerBox !== '' && item?.sqmPerBox != null && !withinDecimals(item.sqmPerBox, 6)) {
+    errors.sqmPerBox = 'ทศนิยมได้ไม่เกิน 6 ตำแหน่ง';
   }
   if (item?.quantityMode === 'PIECES') {
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
@@ -915,18 +910,24 @@ export function isEnglishPerSqm(priceMode, documentLanguage) {
 
 // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ───────────────────────────────────────
 
-/** Mirrors {@code DealQuotationService#requireBoxDataForPerSqm}'s wording, verbatim — an English
- * per-sqm quantity is `boxes × sqmPerBox` (WastageCalculator#sqmQuantityFromBoxes), which has no
- * "loose pieces" term to express, so the option is refused together with that mode. */
+/** Mirrors {@code DealQuotationService#requireBoxDataForPerSqm}'s wording, verbatim — a per-sqm
+ * quantity WITH a box area is `boxes × sqmPerBox` (WastageCalculator#sqmQuantityFromBoxes), which
+ * has no "loose pieces" term to express, so the option is refused for that combination.
+ * Option B (2026-09-16): only WITH a box area — see {@link roundToFullBoxDisabledReason}. */
 export const ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON =
-  'ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง';
+  'ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง';
 
 /** Why the "ขายแผ่นไม่เต็มกล่อง" checkbox is disabled for this row right now, or `null` when it is
  * enabled — ONE place for both `QuotationItemRow`'s `disabled` attribute and its own hint text, so
- * the two can never disagree about the reason. */
+ * the two can never disagree about the reason. Option B (owner decision, 2026-09-16): English
+ * per-sqm disables it only when a box area (ตร.ม./กล่อง) is present — mirrors
+ * DealQuotationService#buildTileItem's hasBoxArea branching. Without one, the printed sqm
+ * quantity derives from pieces instead, which has no box-count restriction at all. */
 export function roundToFullBoxDisabledReason(item, priceMode, documentLanguage) {
   if (!(Number(item?.piecesPerBox) >= 1)) return 'กรอกแผ่น/กล่องก่อน';
-  if (isEnglishPerSqm(priceMode, documentLanguage)) return ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON;
+  if (isEnglishPerSqm(priceMode, documentLanguage) && Number(item?.sqmPerBox) > 0) {
+    return ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON;
+  }
   return null;
 }
 

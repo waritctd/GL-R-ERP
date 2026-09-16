@@ -250,11 +250,15 @@ describe('v3/v3b document settings', () => {
   // not just hidden, is switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ):
   // if the flag lingered, it re-appears CHECKED with no re-entry from the rep, exactly the "silent
   // resurrection" the owner's "Clear all prices on switch" ruling forbids for prices.
-  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
+  // Option B (owner decision, 2026-09-16): the reset below only fires when the row already carries
+  // a box area (sqmPerBox) — without one, English per-sqm now honours roundToFullBox normally (see
+  // quotationItemInput.test.jsx's own "WITHOUT a box area" coverage), so this scenario is scoped to
+  // a row WITH one to keep testing what it always tested: the flag must not survive hidden-but-set.
+  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with a box area survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
         priceMode: 'SPECIAL_SQM',
-        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false }],
+        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: 0.6 }],
       }),
     });
     renderEditor('/quotations/5');
@@ -293,6 +297,38 @@ describe('v3/v3b document settings', () => {
     // The stored flag saves as `true` — the reset survived the round-trip, not merely the moment
     // the mode was per-sqm.
     expect(payload.items[0]).toMatchObject({ roundToFullBox: true });
+  }, 20000);
+
+  // Option B (owner decision, 2026-09-16): the opposite of the test above — a row with NO box area
+  // is legitimately loose-pieces-capable in English per-sqm now, so switching INTO that mode must
+  // NOT reset it, and the checkbox must stay enabled so the rep can still change their mind.
+  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with NO box area keeps it after switching to English per-sqm', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        priceMode: 'SPECIAL_SQM',
+        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: null }],
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
+    expect(byId('round-loose-0').checked).toBe(true);
+
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+
+    // English per-sqm, no box area: the checkbox stays ENABLED and CHECKED — not reset, not
+    // disabled — unlike the box-area case above.
+    await waitFor(() => expect(byId('special-0')?.value).toBe(''));
+    expect(byId('round-loose-0').disabled).toBe(false);
+    expect(byId('round-loose-0').checked).toBe(true);
+
+    // Re-enter what English per-sqm needs (no box area required) and save — the loose-pieces
+    // selection is accepted, not silently discarded.
+    fireEvent.change(byId('special-0'), { target: { value: '64' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.items[0]).toMatchObject({ roundToFullBox: false, sqmPerBox: null });
   }, 20000);
 
   it('the live preview of a Thai draft still calls calculate-line with TH', async () => {

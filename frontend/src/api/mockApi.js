@@ -5160,19 +5160,25 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
     ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: documentLanguage === 'EN' ? 'PCS' : 'แผ่น',
   };
   if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
-    // English per-sqm — the RULE is mirrored (no box data → 400, never a pieces fallback), the
-    // quantity/amount MATH is not (boxes × ตร.ม./กล่อง is the server's; null here, and said so).
-    const missing = [];
-    if (!(Number(input.piecesPerBox) >= 1)) missing.push('แผ่น/กล่อง');
-    if (!(Number(input.sqmPerBox) > 0)) missing.push('ตร.ม./กล่อง');
-    if (missing.length) {
-      fail(`ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ ${missing.join(' และ ')}`, 400);
-    }
-    // Owner-approved "sell loose pieces" (V182) — mirrors DealQuotationService#buildTileItem: a
-    // per-sqm quantity is boxes × sqm/box, which has no "loose pieces" term to express, so this
-    // combination is refused rather than silently ignored.
-    if (input.roundToFullBox === false) {
-      fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง', 400);
+    // English per-sqm — the RULE is mirrored, never the quantity/amount MATH (boxes × ตร.ม./กล่อง,
+    // or pieces × ตร.ม./แผ่น — both the server's; null here, and said so).
+    //
+    // Option B (owner decision, 2026-09-16): a box area (ตร.ม./กล่อง) is now OPTIONAL —
+    //   - WITH one: both box figures are still required (a partially-filled pair is refused —
+    //     you cannot count boxes without pieces per box) and roundToFullBox must stay true (a
+    //     box-area quantity has no "loose pieces" term to express). Byte-identical to before.
+    //   - WITHOUT one: แผ่น/กล่อง and roundToFullBox are both free, exactly like any other tile
+    //     row without a pieces-per-box.
+    // Mirrors DealQuotationService#buildTileItem's `hasBoxArea` branching, not its own private
+    // helper names.
+    const hasBoxArea = Number(input.sqmPerBox) > 0;
+    if (hasBoxArea) {
+      if (!(Number(input.piecesPerBox) >= 1)) {
+        fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ แผ่น/กล่อง', 400);
+      }
+      if (input.roundToFullBox === false) {
+        fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง', 400);
+      }
     }
     const price = input.specialPriceSqm == null ? null : round2(Number(input.specialPriceSqm));
     return {
@@ -5180,7 +5186,9 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
       specialPriceSqm: price, discountPct: null, unitPrice: price, netUnitPrice: price,
       unit: 'SQM', quantity: null, lineAmount: null,
       calculationLine: `${tile.calculationLine} ${MOCK_NOT_COMPUTED}`,
-      specialPriceLine: `(1 box = ${Number(input.piecesPerBox).toLocaleString('en-US')} pcs = ${Number(input.sqmPerBox)} sqm)`,
+      specialPriceLine: hasBoxArea
+        ? `(1 box = ${Number(input.piecesPerBox).toLocaleString('en-US')} pcs = ${Number(input.sqmPerBox)} sqm)`
+        : null,
     };
   }
   if (priceMode === 'SPECIAL_SQM') {

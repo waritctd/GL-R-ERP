@@ -899,15 +899,33 @@ describe('ขายแผ่นไม่เต็มกล่อง — owner-ap
     expect(screen.getByTestId('round-loose-summary-0').textContent).toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
   });
 
-  it('is disabled with a reason in English per-sqm mode, regardless of the row\'s own stored value', () => {
-    renderRoundLoose({ roundToFullBox: false }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
+  // Option B (owner decision, 2026-09-16): only disabled when a box AREA (ตร.ม./กล่อง) is present.
+  it('is disabled with a reason in English per-sqm mode WITH a box area, regardless of the row\'s own stored value', () => {
+    renderRoundLoose({ roundToFullBox: false, sqmPerBox: 0.6 }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
     const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
     expect(checkbox.disabled).toBe(true);
-    // Shown UNCHECKED — the option cannot be true-loose in this mode, whatever the row's stale
-    // stored value is; itemInputFromRow forces the wire value true regardless (pinned in
+    // Shown UNCHECKED — the option cannot be true-loose in this combination, whatever the row's
+    // stale stored value is; itemInputFromRow forces the wire value true regardless (pinned in
     // quotationItemInput.test.jsx), this is only the checkbox's own display state.
     expect(checkbox.checked).toBe(false);
     expect(screen.getByText(/ต้องปัดขึ้นเต็มกล่องเสมอ/)).not.toBeNull();
+  });
+
+  it('is ENABLED in English per-sqm mode when ตร.ม./กล่อง is blank (Option B)', () => {
+    const { onChange } = renderRoundLoose({ sqmPerBox: null }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
+    const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
+    expect(checkbox.disabled).toBe(false);
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: false });
+  });
+
+  it('typing a ตร.ม./กล่อง value while ticked resets roundToFullBox to true, so the blocked state is unreachable', () => {
+    const { onChange } = renderRoundLoose(
+      { sqmPerBox: null, roundToFullBox: false, specialPriceSqm: 64 },
+      { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' },
+    );
+    fireEvent.change(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/), { target: { value: '0.6' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: 0.6, roundToFullBox: true });
   });
 
   it('readOnly disables it regardless of แผ่น/กล่อง', () => {

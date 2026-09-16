@@ -1081,16 +1081,40 @@ describe('v3 row validation', () => {
     piecesPerBox: 3, sqmPerPiece: 0.36, unitPrice: 850, quantityMode: 'AREA', areaSqm: 20,
   };
 
-  it('English per-sqm needs the USD/ตร.ม. and ตร.ม./กล่อง — and NOT a list price per piece', () => {
+  it('English per-sqm needs the USD/ตร.ม. — and NOT a list price per piece; ตร.ม./กล่อง is OPTIONAL', () => {
     const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
     expect(meta.validateQuotationItem(perSqm, 'SPECIAL_SQM', 'EN')).toEqual({});
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({ sqmPerBox: 'กรุณาระบุ ตร.ม./กล่อง' });
     expect(meta.validateQuotationItem({ ...perSqm, specialPriceSqm: '' }, 'SPECIAL_SQM', 'EN')).toEqual({ specialPriceSqm: 'กรุณาระบุราคา (USD/ตร.ม.)' });
+    // ตร.ม./กล่อง PRESENT: แผ่น/กล่อง is still required (a partially-filled pair is refused).
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
+  });
+
+  // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+  describe('English per-sqm with a blank box area (Option B)', () => {
+    const perSqmNoBox = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: null };
+
+    it('is accepted with แผ่น/กล่อง filled — no sqmPerBox required at all', () => {
+      expect(meta.validateQuotationItem(perSqmNoBox, 'SPECIAL_SQM', 'EN')).toEqual({});
+    });
+
+    it('is accepted with NEITHER box field filled — exactly like any other tile row with no pieces-per-box', () => {
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({});
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN')).toEqual({});
+    });
+
+    it('still refuses a filled ตร.ม./กล่อง paired with a blank แผ่น/กล่อง (the partial pair)', () => {
+      const partial = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6, piecesPerBox: null };
+      expect(meta.validateQuotationItem(partial, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
+    });
+
+    it('still flags a typed ตร.ม./กล่อง with too many decimals, even though the field is optional', () => {
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox)
+        .toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
+    });
   });
 
   // Review fix F1 (2026-09-16): validateQuotationItem used to flag `roundToFullBox === false` here
@@ -1151,11 +1175,18 @@ describe('roundToFullBoxDisabledReason', () => {
     expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 0 }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
   });
 
-  it('is disabled in English per-sqm mode, once แผ่น/กล่อง is filled', () => {
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'SPECIAL_SQM', 'EN'))
+  // Option B (owner decision, 2026-09-16): only disabled when a box AREA (ตร.ม./กล่อง) is present —
+  // mirrors DealQuotationService#buildTileItem's hasBoxArea branching.
+  it('is disabled in English per-sqm mode, once แผ่น/กล่อง AND ตร.ม./กล่อง are both filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN'))
       .toBe(meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON);
     // The ppb-missing reason takes priority when BOTH apply — one reason at a time.
-    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'SPECIAL_SQM', 'EN')).toBe('กรอกแผ่น/กล่องก่อน');
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '', sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN')).toBe('กรอกแผ่น/กล่องก่อน');
+  });
+
+  it('is enabled (null) in English per-sqm mode when ตร.ม./กล่อง is blank, even with แผ่น/กล่อง filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: '' }, 'SPECIAL_SQM', 'EN')).toBeNull();
   });
 
   it('is enabled (null) once แผ่น/กล่อง is filled, outside English per-sqm', () => {

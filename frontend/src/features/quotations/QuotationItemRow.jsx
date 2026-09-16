@@ -896,8 +896,9 @@ export function QuotationItemRow({
         {perSqm ? (
           <>
             {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
-                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง — both computed by the
-                server (calculate-line), never here. */}
+                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง when a box area is
+                given, or pieces × ตร.ม./แผ่น when it is left blank (Option B, 2026-09-16) — both
+                computed by the server (calculate-line), never here. */}
             <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
               <input
                 id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -905,18 +906,33 @@ export function QuotationItemRow({
                 onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
               />
               <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-                ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง
+                {Number(item.sqmPerBox) > 0
+                  ? 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง'
+                  : 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. จากจำนวนแผ่น'}
               </span>
             </FormField>
+            {/* Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank value
+                derives the printed sqm quantity from จำนวนแผ่น × ตร.ม./แผ่น instead, exactly like the
+                Thai ราคาพิเศษ mode already does. `required` dropped; the hint explains the fallback. */}
             <FormField
-              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} required error={errors.sqmPerBox}
-              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้)"
+              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} error={errors.sqmPerBox}
+              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้) · ไม่บังคับ — ถ้าเว้นว่าง จะคำนวณ ตร.ม. จากจำนวนแผ่น × ตร.ม./แผ่น"
             >
-              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''. */}
+              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''.
+                  Typing a value while "ขายแผ่นไม่เต็มกล่อง" is ticked resets that checkbox — a box
+                  area forces full-box rounding, so the blocked state (a stored roundToFullBox=false
+                  the server would now refuse) is unreachable, the same fix already applied to the
+                  price-mode switch (QuotationEditorPage#applyPriceMode). */}
               <input
                 id={`sqm-box-${index}`} type="number" step="0.000001" min="0" disabled={readOnly}
                 value={item.sqmPerBox ?? ''}
-                onChange={(e) => patch({ sqmPerBox: e.target.value === '' ? null : Number(e.target.value) })}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? null : Number(e.target.value);
+                  patch({
+                    sqmPerBox: value,
+                    ...(value > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
+                  });
+                }}
               />
             </FormField>
           </>
@@ -1033,14 +1049,18 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
       ? Number(item.specialPriceSqm) : null,
     directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
-    // English per-sqm cannot express a loose-piece quantity in square metres (its quantity is
-    // boxes × sqmPerBox, with no remainder term) — DealQuotationService#requireBoxDataForPerSqm
-    // refuses roundToFullBox=false outright. Forced true here regardless of what the row's own
+    // English per-sqm WITH a box area cannot express a loose-piece quantity in square metres (its
+    // quantity is boxes × sqmPerBox, with no remainder term) — DealQuotationService#buildTileItem's
+    // hasBoxArea branch refuses roundToFullBox=false outright for that combination. Forced true
+    // here ONLY when a box area is present (Option B, 2026-09-16), regardless of what the row's own
     // state holds, so a row that had loose pieces selected under NET/TH, then had its DOCUMENT
-    // switched to an English per-sqm price mode, can never smuggle a false through and 400 at
-    // save — the checkbox is also disabled in this mode (roundToFullBoxDisabledReason), but this
-    // is the authoritative guard, not merely a UI courtesy.
-    roundToFullBox: isEnglishPerSqm(priceMode, documentLanguage) ? true : item.roundToFullBox !== false,
+    // switched to an English per-sqm price mode WITH a box area, can never smuggle a false through
+    // and 400 at save — the checkbox is also disabled in that combination
+    // (roundToFullBoxDisabledReason), but this is the authoritative guard, not merely a UI courtesy.
+    // WITHOUT a box area, roundToFullBox is honoured normally — the server now accepts it either way.
+    roundToFullBox: isEnglishPerSqm(priceMode, documentLanguage) && Number(item.sqmPerBox) > 0
+      ? true
+      : item.roundToFullBox !== false,
   };
 }
 

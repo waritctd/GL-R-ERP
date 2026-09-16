@@ -44,12 +44,21 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
     expect(itemInputFromRow({ ...tile, roundToFullBox: false }, 'NET').roundToFullBox).toBe(false);
   });
 
-  it('English per-sqm FORCES roundToFullBox true, even when the row itself says false', () => {
+  it('English per-sqm WITH a box area FORCES roundToFullBox true, even when the row itself says false', () => {
     const perSqmRow = { ...tile, specialPriceSqm: 64, sqmPerBox: 0.6, roundToFullBox: false };
     expect(itemInputFromRow(perSqmRow, 'SPECIAL_SQM', 'EN').roundToFullBox).toBe(true);
     // The same row's roundToFullBox=false survives in every OTHER mode/language.
     expect(itemInputFromRow(perSqmRow, 'SPECIAL_SQM', 'TH').roundToFullBox).toBe(false);
     expect(itemInputFromRow(perSqmRow, 'NET', 'EN').roundToFullBox).toBe(false);
+  });
+
+  // Option B (owner decision, 2026-09-16): the force applies ONLY when a box area is present.
+  it('English per-sqm WITHOUT a box area honours roundToFullBox normally (no force)', () => {
+    const noBoxRow = { ...tile, specialPriceSqm: 64, sqmPerBox: null, roundToFullBox: false };
+    expect(itemInputFromRow(noBoxRow, 'SPECIAL_SQM', 'EN').roundToFullBox).toBe(false);
+    expect(itemInputFromRow({ ...noBoxRow, roundToFullBox: true }, 'SPECIAL_SQM', 'EN').roundToFullBox).toBe(true);
+    // Blank string sqmPerBox (the field's own "cleared" wire state) behaves the same as null.
+    expect(itemInputFromRow({ ...noBoxRow, sqmPerBox: '' }, 'SPECIAL_SQM', 'EN').roundToFullBox).toBe(false);
   });
 
   it('a PLAIN row sends only its five fields and a numeric quantity', () => {

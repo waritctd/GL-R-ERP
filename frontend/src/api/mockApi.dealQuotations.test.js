@@ -70,15 +70,37 @@ describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mir
     expect(tile.lineAmount).toBeNull();
   });
 
-  it('refuses an English per-sqm row with no ตร.ม./กล่อง (400), on create and on the preview', async () => {
+  // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank box area is
+  // accepted (with or without แผ่น/กล่อง); only a box area PRESENT with แผ่น/กล่อง BLANK (the
+  // partially-filled pair) is still refused.
+  it('accepts an English per-sqm row with NO ตร.ม./กล่อง, with or without แผ่น/กล่อง', async () => {
     await api.auth.login(salesUser);
-    await expect(api.dealQuotations.create(18, {
+    // ONE_ITEM already carries piecesPerBox: 3 and no sqmPerBox key at all.
+    const { quotation } = await api.dealQuotations.create(18, {
       priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [{ ...ONE_ITEM, specialPriceSqm: 64 }],
-    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ตร.ม./กล่อง') });
-    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 }, 'EN'))
-      .rejects.toMatchObject({ status: 400 });
+    });
+    expect(quotation.items[0].unit).toBe('SQM');
+    expect(quotation.items[0].specialPriceLine).toBeNull(); // no box sub-line without a box area
+
+    // Neither box field at all — also accepted.
+    const { quotation: neither } = await api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN',
+      items: [{ ...ONE_ITEM, piecesPerBox: null, specialPriceSqm: 64 }],
+    });
+    expect(neither.items[0].unit).toBe('SQM');
+
+    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 }, 'EN')).resolves.toBeTruthy();
+  });
+
+  it('still refuses a box area PRESENT with แผ่น/กล่อง BLANK (the partially-filled pair), on create and on the preview', async () => {
+    await api.auth.login(salesUser);
+    const partial = { ...ONE_ITEM, piecesPerBox: null, sqmPerBox: 0.6, specialPriceSqm: 64 };
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [partial],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('แผ่น/กล่อง') });
+    await expect(api.dealQuotations.calculateLine(partial, 'EN')).rejects.toMatchObject({ status: 400 });
     // The same row previewed in Thai is an ordinary ราคาพิเศษ — no box rule.
-    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 })).resolves.toBeTruthy();
+    await expect(api.dealQuotations.calculateLine(partial)).resolves.toBeTruthy();
   });
 
   it('calculateLine takes the document language: English lines on EN', async () => {

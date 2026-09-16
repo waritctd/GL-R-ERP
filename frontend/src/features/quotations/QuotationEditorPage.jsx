@@ -553,14 +553,16 @@ export function QuotationEditorPage({ user, showToast }) {
   function applyPriceMode(priceMode, {
     prefill = true, documentLanguage = docSettings.documentLanguage, clearPrices = false,
   } = {}) {
-    // Review fix F1 (2026-09-16): English per-sqm cannot express a loose-piece quantity — the
-    // checkbox is disabled AND renders unchecked in this mode (roundToFullBoxDisabledReason,
-    // QuotationItemRow), so a row ticked under NET/TH before the switch had no on-screen control
-    // left to un-tick it, and validateQuotationItem's own checklist branch blocked บันทึกร่าง/
-    // ส่งขออนุมัติ forever. Reset the STORED flag back to `true` here, the moment the document
-    // reaches this mode (both changePriceMode and changeLanguage route through this function), so
-    // the state can never linger — matching itemInputFromRow's own wire-level force for the same
-    // reason.
+    // Review fix F1 (2026-09-16), narrowed by Option B (2026-09-16): English per-sqm WITH a box
+    // area cannot express a loose-piece quantity — the checkbox is disabled AND renders unchecked
+    // for that combination (roundToFullBoxDisabledReason, QuotationItemRow), so a row ticked under
+    // NET/TH before the switch had no on-screen control left to un-tick it, and
+    // validateQuotationItem's own checklist branch blocked บันทึกร่าง/ส่งขออนุมัติ forever. Reset
+    // the STORED flag back to `true` here, the moment the document reaches this mode AND the row
+    // already carries a box area (both changePriceMode and changeLanguage route through this
+    // function), so the state can never linger — matching itemInputFromRow's own wire-level force
+    // for the same reason. A row with NO box area keeps whatever roundToFullBox it already had —
+    // that combination is legal now, so resetting it would silently discard a rep's choice.
     const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
     const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
@@ -571,7 +573,7 @@ export function QuotationEditorPage({ user, showToast }) {
       // calc-error note above for why a stale net must never be shown under the new mode.
       return {
         ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true,
-        ...(perSqm ? { roundToFullBox: true } : {}),
+        ...(perSqm && Number(it.sqmPerBox) > 0 ? { roundToFullBox: true } : {}),
       };
     });
     setItems(next);
