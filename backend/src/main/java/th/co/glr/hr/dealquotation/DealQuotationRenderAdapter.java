@@ -202,12 +202,44 @@ public final class DealQuotationRenderAdapter {
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
+        // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
+        // on ชุด/PLAIN lines, or an ADJUSTMENT-only credit-note-ish document) prints a different,
+        // shorter หมายเหตุ block — the tile-oriented remarks (sizes vs. ISO/มอก., colour/LOT
+        // variance) are simply wrong on such a document. See #hasAnyTileLine.
+        boolean hasTile = hasAnyTileLine(quotation.items());
+        List<String> remarks = english
+            ? (hasTile ? englishRemarkLines(quotation, bankBlockLines) : englishNonTileRemarkLines(quotation, bankBlockLines))
+            : (hasTile ? remarkLines(quotation) : nonTileRemarkLines(quotation));
+
         return new QuotationRenderModel(
             issueDate, quotation.number(), quotation.deptCode(), quotation.unitCode(), salesLine,
             attnLine, phoneLine, quotation.projectName(), items,
-            english ? englishRemarkLines(quotation, bankBlockLines) : remarkLines(quotation), signatories, true,
+            remarks, signatories, true,
             english ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH,
-            quotation.currency());
+            quotation.currency(),
+            // forceCompactRemarks: this class ALWAYS builds the direct-deal v2 render (tile OR
+            // non-tile) and always wants the packed/compacted remark-box layout — see
+            // QuotationRenderModel#forceCompactRemarks's own Javadoc for why the non-tile set (3 or
+            // 4 lines, well under QuotationRenderer#REMARK_V2_MIN_LINES) needs this rather than
+            // relying on the size check the tile set has always passed on its own.
+            true);
+    }
+
+    /** {@code true} when {@code item} is a TILE row — {@code lineType} null or {@link
+     * WastageCalculator#LINE_TYPE_TILE} — the same question {@link #printedUnit}/{@link
+     * #discountLabel} each ask inline for their own reasons. Shared here for the non-tile
+     * remark-set gate below. */
+    private static boolean isTileLine(DealQuotationItemDto item) {
+        return item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+    }
+
+    /** {@code true} when ANY item on the document is a TILE row. {@code false} for a document made
+     * entirely of PLAIN rows (sanitaryware — taps, showers, sold as ชุด) and for an ADJUSTMENT-only
+     * document (a credit-note-ish row and nothing else) — both count as "non-tile" for the remark
+     * block below: neither has anything to do with ขนาด/สี variance between kiln lots, which is
+     * what the tile-oriented remarks 4/5 are actually about. */
+    private static boolean hasAnyTileLine(List<DealQuotationItemDto> items) {
+        return items.stream().anyMatch(DealQuotationRenderAdapter::isTileLine);
     }
 
     /**
@@ -471,6 +503,89 @@ public final class DealQuotationRenderAdapter {
             return "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า";
         }
         return null;
+    }
+
+    // ── V182 (owner request, 2026-09-16): the NON-TILE remark set ("สินค้าที่ไม่ใช่กระเบื้อง" —
+    // sanitaryware: taps, showers, sold as ชุด on PLAIN lines; also an ADJUSTMENT-only document) —
+    // reference: her real document QN6900971-4, which prints exactly these four remarks. ─────
+
+    private static final String NON_TILE_LINE1 =
+        "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง";
+
+    /** Remark 3 when NO row on a non-tile document carries a lead time — discarded by {@link
+     * #dropLeadTimeLineAndRenumber} in exactly the same way {@link #LINE3_FALLBACK} is for the
+     * tile set (see that constant's own Javadoc); kept only as the value {@link
+     * #nonTileLeadTimeLine} must return something for while composing the full line list. */
+    private static final String NON_TILE_LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
+
+    /**
+     * The overall {@code {min, max}} lead-time span across every item that carries one — this
+     * sentence's {@code {min}-{max}} slot names ONE range (unlike the tile set's per-item grouped
+     * list at {@link #leadTimeLine}), so items that all share the same range collapse to it
+     * trivially and items with genuinely different ranges still print a single overall span
+     * rather than a per-item breakdown the sentence has no room for. {@code null} when NOTHING on
+     * the document carries a lead time — the same question {@link #hasAnyLeadTime} already asks,
+     * asked here only to also recover the actual span. Shared by the Thai and English non-tile
+     * lead-time builders.
+     */
+    private static int[] nonTileLeadTimeRange(List<DealQuotationItemDto> items) {
+        Integer min = null;
+        Integer max = null;
+        for (DealQuotationItemDto item : items) {
+            if (item.leadTimeMinDays() != null && item.leadTimeMaxDays() != null) {
+                min = min == null ? item.leadTimeMinDays() : Math.min(min, item.leadTimeMinDays());
+                max = max == null ? item.leadTimeMaxDays() : Math.max(max, item.leadTimeMaxDays());
+            }
+        }
+        return min == null ? null : new int[] {min, max};
+    }
+
+    /** {@code "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า {min}-{max} วัน หลังจากได้รับ
+      * มัดจำ {deposit}% เรียบร้อยแล้ว"} — or, when the quotation takes NO deposit ({@code
+      * depositPct == 0}), the same sentence with just the "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว"
+      * clause dropped (naming a deposit that does not exist would be nonsensical, but the
+      * lead-time claim itself still stands). Falls back to {@link #NON_TILE_LINE3_FALLBACK} when
+      * {@link #nonTileLeadTimeRange} is null — the ONLY caller ({@link #nonTileRemarkLines}) then
+      * drops the whole line via {@link #dropLeadTimeLineAndRenumber}, exactly as the tile set's own
+      * {@link #leadTimeLine} does. */
+    private static String nonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
+        int[] range = nonTileLeadTimeRange(items);
+        if (range == null) {
+            return NON_TILE_LINE3_FALLBACK;
+        }
+        String days = range[0] == range[1] ? String.valueOf(range[0]) : range[0] + "-" + range[1];
+        String depositClause = depositPct == 0 ? ""
+            : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + days + " วัน" + depositClause;
+    }
+
+    /** Renumbers {@link #LINE6}'s own "no exchange or return" sentence to {@code number} (4
+      * normally, 3 when {@link #nonTileLeadTimeLine} above it was dropped) — REUSES the constant's
+      * text (only its leading digit differs) rather than retyping it, so the tile and non-tile
+      * remark sets can never print two different translations of the same rule. */
+    private static String noReturnLine(int number) {
+        return number + LINE6.substring(LINE6.indexOf('.'));
+    }
+
+    /** The non-tile หมายเหตุ block — exactly four lines (three when there is no lead time to
+      * report): freight/no-installation, the deposit (verbatim {@link #depositLine}, so 30%/50%/
+      * custom, เครดิต N วัน and the V181 "ไม่รับมัดจำ" sentences all keep working unchanged), the
+      * lead time (dropped entirely, not blanked, when nothing on the document carries one — same
+      * {@link #dropLeadTimeLineAndRenumber} the tile set uses), and the no-exchange-or-return rule. */
+    private static List<String> nonTileRemarkLines(DealQuotationDto quotation) {
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        String remainderText = "CREDIT".equals(quotation.remainderMode())
+            ? "เครดิต " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " วัน"
+            : "ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+
+        List<String> lines = new ArrayList<>();
+        lines.add(NON_TILE_LINE1);
+        lines.add(depositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
+        int leadTimeLineIndex = lines.size();
+        lines.add(nonTileLeadTimeLine(quotation.items(), depositPct));
+        lines.add(noReturnLine(4));
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
     private static List<String> remarkLines(DealQuotationDto quotation) {
@@ -744,14 +859,78 @@ public final class DealQuotationRenderAdapter {
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
                 + "different production lots.");
-            lines.add("8.Goods sold are not returnable or exchangeable. Please check the order "
-                + "carefully before confirming or signing for delivery.");
+            lines.add(enNoReturnLine(8));
         }
         // Owner feedback (2026-09-14): same drop-and-renumber as the Thai branch, sharing the SAME
         // hasAnyLeadTime question — see #dropLeadTimeLineAndRenumber. leadTimeLineIndex is 5 in the
         // bank-block layout (after the 2 numbered + 3 unnumbered bank lines) and 2 in the no-bank
         // layout; either way the method only ever renumbers a NUMBERED line, so the bank block's
         // own unnumbered lines are untouched.
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
+    }
+
+    /** The standalone "no exchange or return" sentence — the English twin of {@link #LINE6},
+      * reused (not retyped) by both the tile no-bank-block layout above (remark 8) and the
+      * non-tile set below, so the two can never drift apart. NOT the same sentence as the
+      * bank-block layout's merged remark 5 ("Colours may vary... Goods sold are not returnable or
+      * exchangeable."), which folds colour-variance and no-return into one sentence to fit the
+      * bank block's row budget — that one stays a one-off literal. */
+    private static final String EN_LINE_NO_RETURN =
+        "Goods sold are not returnable or exchangeable. Please check the order "
+        + "carefully before confirming or signing for delivery.";
+
+    /** {@link #EN_LINE_NO_RETURN}, renumbered — the English twin of {@link #noReturnLine}. */
+    private static String enNoReturnLine(int number) {
+        return number + "." + EN_LINE_NO_RETURN;
+    }
+
+    // ── V182 (owner request, 2026-09-16): the NON-TILE English remark set — the same rule as
+    // #nonTileRemarkLines, English equivalents, with the SAME optional bank block the tile set
+    // carries (inserted straight after the payment remark, unnumbered, exactly as it does there —
+    // see #englishRemarkLines's own Javadoc). Bank or no bank, the block never consumes a numbered
+    // slot, so the numbering is IDENTICAL either way: 1/2/3/4. ─────────────────────────────────
+
+    private static final String EN_NON_TILE_LINE1 =
+        "1.The price above includes delivery to the ground floor within the Bangkok Metropolitan "
+        + "Area, but excludes installation.";
+
+    /** The English twin of {@link #NON_TILE_LINE3_FALLBACK} — same unreachable-in-practice
+      * contract (see that constant's Javadoc). */
+    private static final String EN_NON_TILE_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
+
+    /** The English twin of {@link #nonTileLeadTimeLine} — same {@link #nonTileLeadTimeRange}, same
+      * zero-deposit clause-drop rule, English words. */
+    private static String englishNonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
+        int[] range = nonTileLeadTimeRange(items);
+        if (range == null) {
+            return EN_NON_TILE_LINE3_FALLBACK;
+        }
+        String days = range[0] == range[1] ? String.valueOf(range[0]) : range[0] + "-" + range[1];
+        return depositPct == 0
+            ? "3.If the factory has the goods ready to ship, the import lead time is " + days + " days."
+            : "3.If the factory has the goods ready to ship, the import lead time is " + days
+                + " days after the " + depositPct + "% deposit is received.";
+    }
+
+    /** The English twin of {@link #nonTileRemarkLines}. */
+    private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        String remainderText = "CREDIT".equals(quotation.remainderMode())
+            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
+            : "the balance before or upon delivery";
+        boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
+            && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
+
+        List<String> lines = new ArrayList<>();
+        lines.add(EN_NON_TILE_LINE1);
+        lines.add(englishDepositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
+        if (hasBankBlock) {
+            lines.addAll(bankBlockLines);
+        }
+        int leadTimeLineIndex = lines.size();
+        lines.add(englishNonTileLeadTimeLine(quotation.items(), depositPct));
+        lines.add(enNoReturnLine(4));
         return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 

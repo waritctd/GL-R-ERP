@@ -345,7 +345,13 @@ public class QuotationRenderer {
             // footerShift folds into every footer-block row constant used below, exactly like
             // insertLine3ContinuationRow's shift already folds into FOOTER_END etc.
             int remarkLineCount = model.remarkLines() != null ? model.remarkLines().size() : 0;
-            boolean v2CompactRemarks = model.signatureLabelsV2() && remarkLineCount >= REMARK_V2_MIN_LINES;
+            // V182: model.forceCompactRemarks() (set only by DealQuotationRenderAdapter, for its new
+            // 3/4-line non-tile remark set — see that field's own Javadoc) supersedes the size check
+            // rather than duplicating it, so a short remark list still gets the packed/compacted
+            // layout instead of falling through to the legacy head-row-plus-gaps path, whose "unused"
+            // rows still carry the template's own baked tile-oriented text.
+            boolean v2CompactRemarks = model.signatureLabelsV2()
+                && (remarkLineCount >= REMARK_V2_MIN_LINES || model.forceCompactRemarks());
             // Owner feedback (2026-09-14): a 7-line render (the lead-time line dropped) removes ONE
             // extra row versus today's fixed -7 — see #remarkV2CompactShift/#compactRemarksSection.
             int footerShift = v2CompactRemarks ? remarkV2CompactShift(remarkLineCount) : 0;
@@ -456,7 +462,7 @@ public class QuotationRenderer {
             // One-off template data fix, independent of the caller: strip the stray "+B27:B29"
             // cell reference the template author left in B27's (line 2's continuation) text.
             stripStrayCellReference(sh);
-            writeRemarks(sh, model.remarkLines());
+            writeRemarks(sh, model.remarkLines(), v2CompactRemarks);
 
             List<RenderItem> items = model.items();
             BigDecimal subtotal = items.stream()
@@ -1205,10 +1211,14 @@ public class QuotationRenderer {
      * continuation row — its text fits on one line, so the old composed-sentence-with-baked-in-
      * continuation-text convention no longer applies. The legacy wrappers send exactly 3 (matching
      * this renderer's pre-existing behaviour), so their continuation rows are left untouched.
+     *
+     * <p>{@code full} is the SAME {@code v2CompactRemarks} decision {@link #toXls(QuotationRenderModel)}
+     * already computed (size &gt;= {@link #REMARK_V2_MIN_LINES}, OR {@code
+     * QuotationRenderModel#forceCompactRemarks()} — V182) — passed in rather than recomputed here,
+     * so the two can never disagree about which layout a given render actually used.
      */
-    private void writeRemarks(Sheet sh, List<String> remarkLines) {
+    private void writeRemarks(Sheet sh, List<String> remarkLines, boolean full) {
         if (remarkLines == null) return;
-        boolean full = remarkLines.size() >= REMARK_V2_MIN_LINES;
         if (full) {
             // layout-spec §3: 8 (or, owner feedback 2026-09-14, 7 when the lead-time line was
             // dropped) CONSECUTIVE rows starting at REMARK_HEAD_ROWS[0] — the compaction in
