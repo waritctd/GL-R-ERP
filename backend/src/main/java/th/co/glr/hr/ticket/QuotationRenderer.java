@@ -711,6 +711,17 @@ public class QuotationRenderer {
             for (int c = 0; c <= 8; c++) clearCell(sh, r, c);
         }
         setNum(sh, SUBTOTAL_ROW + footerShift, 8, subtotal.doubleValue()); // I38; I39/I40 are template formulas
+        shrinkToFitIfOverflow(sh, SUBTOTAL_ROW + footerShift, 8, moneyPreview(subtotal));
+        // I39/I40 stay Excel FORMULAS here (untouched) — LibreOffice computes their displayed
+        // value at PDF-conversion time (wb.setForceFormulaRecalculation(true)), so Java never
+        // holds a literal double for them on this branch. Reproduce the same VAT_RATE arithmetic
+        // purely to PREDICT the formula's displayed width; the formula cell itself is untouched —
+        // #shrinkToFitIfOverflow only ever swaps the CellStyle, never the cell's formula/value.
+        BigDecimal vatPreview = englishForm
+            ? BigDecimal.ZERO
+            : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+        shrinkToFitIfOverflow(sh, VAT_ROW + footerShift, 8, moneyPreview(vatPreview));
+        shrinkToFitIfOverflow(sh, TOTAL_ROW + footerShift, 8, moneyPreview(subtotal.add(vatPreview)));
         getOrKeep(sh, SALESPERSON_FORMULA_ROW + footerShift, 0).setBlank(); // lookup → "0" otherwise
         writeFormTag(sh, FORM_TAG_ROW + footerShift, englishForm);
         fitToOnePage(sh);
@@ -752,8 +763,11 @@ public class QuotationRenderer {
             ? BigDecimal.ZERO
             : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
         setNum(sh, SUBTOTAL_ROW + footerShift + delta, 8, subtotal.doubleValue());
+        shrinkToFitIfOverflow(sh, SUBTOTAL_ROW + footerShift + delta, 8, moneyPreview(subtotal));
         setNum(sh, VAT_ROW + footerShift + delta, 8, vat.doubleValue());
+        shrinkToFitIfOverflow(sh, VAT_ROW + footerShift + delta, 8, moneyPreview(vat));
         setNum(sh, TOTAL_ROW + footerShift + delta, 8, subtotal.add(vat).doubleValue());
+        shrinkToFitIfOverflow(sh, TOTAL_ROW + footerShift + delta, 8, moneyPreview(subtotal.add(vat)));
         getOrKeep(sh, SALESPERSON_FORMULA_ROW + footerShift + delta, 0).setBlank();
         writeFormTag(sh, FORM_TAG_ROW + footerShift + delta, englishForm);
         return delta;
@@ -980,6 +994,10 @@ public class QuotationRenderer {
             }
             qtyCell.setCellStyle(formatted);
         }
+        // Large-quantity fix (2026-09-16, "when the numbers get a lot, like a million pieces, it
+        // renders ###"): จำนวน/Qty (C) has no width-fitting at all — #shrinkToFitIfOverflow's own
+        // Javadoc has the reproduction and the owner ruling to use shrink-to-fit, not widening.
+        shrinkToFitIfOverflow(sh, r, 2, qtyPreview(qty, item.qtyFormat()));
         // Quotation v3: a NULL unit still falls back to "แผ่น" (no caller has ever passed null,
         // so nothing changes for them), but an EXPLICITLY EMPTY unit now prints an empty cell.
         // That distinction is what the ADJUSTMENT row needs: the owner's ส่วนลดพิเศษ line carries
@@ -987,9 +1005,12 @@ public class QuotationRenderer {
         // null alike — would have stamped "แผ่น" onto it.
         setStr(sh, r, 3, item.unit() != null ? item.unit() : "แผ่น");     // D: unit
         setNum(sh, r, 4, orZero(item.unitPrice()));                       // E: unit price
+        shrinkToFitIfOverflow(sh, r, 4, moneyPreview(item.unitPrice()));
         setStr(sh, r, 6, item.discountLabel() != null ? item.discountLabel() : "Net"); // G: ส่วนลด
         setNum(sh, r, 7, orZero(item.netUnitPrice()));                    // H: คงเหลือ (net)
+        shrinkToFitIfOverflow(sh, r, 7, moneyPreview(item.netUnitPrice()));
         setNum(sh, r, 8, orZero(item.amount()));                         // I: เป็นเงิน (amount)
+        shrinkToFitIfOverflow(sh, r, 8, moneyPreview(item.amount()));
     }
 
     private void fillContinuationRow(Sheet sh, int r, String text) {
@@ -2456,6 +2477,70 @@ public class QuotationRenderer {
         } catch (RuntimeException e) {
             log.debug("Column text-width fit unavailable for '{}': {}", text, e.getMessage());
         }
+    }
+
+    // ── shrink-to-fit safety net for numeric cells (2026-09-16, owner report: "when the numbers
+    // get a lot, like a million pieces, it renders ###") ─────────────────────────────────────
+    //
+    // #sizeMoneyColumns/#fitColumnToText already guard E/H/I and I4 by WIDENING the column, but
+    // the จำนวน/Qty column (C) never got that treatment — a large quantity ("a million pieces")
+    // clips to "###" exactly as reported (reproduced with a real LibreOffice render — see the PR
+    // body's reproduction table). Owner ruling (2026-09-16), given when this was flagged as an
+    // open choice: do NOT widen any more columns here — "the column layout [must] stay consistent
+    // across every document, so column widths must not change with the size of the numbers".
+    // Excel/LibreOffice's other built-in answer to overflow is shrink-to-fit (already used
+    // elsewhere on this class for TEXT overflow — #setCentered, #setRightAligned,
+    // #setStrShrinkToFit): auto-shrink the CELL's own font to the column's EXISTING width, never
+    // touching the column itself. Proven to be honoured by LibreOffice's PDF export for a NUMERIC
+    // cell (not just a string one) with a real HSSFWorkbook round-trip identical to this class's
+    // own template format — see the PR body's probe (a narrow column, one cell shrinkToFit=true,
+    // one control cell shrinkToFit=false: the control prints "###", the shrunk cell prints the
+    // full number).
+    //
+    // Conditional, exactly like #fitColumnToText: only swaps in a new CellStyle when the
+    // formatted value is actually predicted to overflow the column's CURRENT width (i.e. AFTER
+    // any widening #sizeMoneyColumns/#fitColumnToText already did) — an ordinary-magnitude
+    // document's cell is left completely untouched, so its style table (and therefore the golden
+    // byte-hash pinned in QuotationRendererNoPictureGoldenTest) is unaffected.
+    private void shrinkToFitIfOverflow(Sheet sh, int row, int col, String formattedPreview) {
+        if (formattedPreview == null || formattedPreview.isEmpty()) return;
+        try {
+            Cell cell = getOrKeep(sh, row, col);
+            CellStyle base = cell.getCellStyle();
+            if (base.getShrinkToFit()) return; // already shrinking (e.g. an earlier call this same render) -- no-op
+            Font poiFont = sh.getWorkbook().getFontAt(base.getFontIndexAsInt());
+            FontResolver.Resolved resolved = FontResolver.resolve(poiFont.getFontName());
+            java.util.OptionalDouble widthPt = FontResolver.stringWidthPt(
+                resolved, formattedPreview, poiFont.getFontHeightInPoints(), poiFont.getBold());
+            if (widthPt.isEmpty()) return;
+            int textTwips = (int) Math.ceil(widthPt.getAsDouble() * 20.0) + 2 * LibreOfficeMetrics.TEXT_INSET_TWIPS;
+            int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
+            int colTwips = LibreOfficeMetrics.columnTwips(sh.getColumnWidth(col), charWidthTwips);
+            if (textTwips <= colTwips) return; // fits already at this column's width -- no-op
+            CellStyle shrink = sh.getWorkbook().createCellStyle();
+            shrink.cloneStyleFrom(base);
+            shrink.setShrinkToFit(true);
+            cell.setCellStyle(shrink);
+        } catch (RuntimeException e) {
+            log.debug("Shrink-to-fit sizing unavailable for '{}': {}", formattedPreview, e.getMessage());
+        }
+    }
+
+    /** The plain-ASCII preview of what a {@code #,##0.00}-formatted money cell (E/H/I, and the
+     * totals it shares column I with) will actually display, for {@link #shrinkToFitIfOverflow}'s
+     * width measurement. */
+    private static String moneyPreview(BigDecimal value) {
+        return String.format(Locale.US, "%,.2f", value != null ? value : BigDecimal.ZERO);
+    }
+
+    /** Same idea for the จำนวน/Qty column (C): whole numbers by default (the template's own
+     * {@code #,##0}), or two decimal places when {@link RenderItem#qtyFormat()} asked for it (the
+     * English per-sqm row — see that field's own Javadoc). */
+    private static String qtyPreview(BigDecimal value, String qtyFormat) {
+        BigDecimal v = value != null ? value : BigDecimal.ONE;
+        return qtyFormat != null
+            ? String.format(Locale.US, "%,.2f", v)
+            : String.format(Locale.US, "%,.0f", v);
     }
 
 
