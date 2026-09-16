@@ -765,7 +765,12 @@ public final class DealQuotationRenderAdapter {
         String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
         if (english) {
             String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-            groups.add(range + " approximately " + days + " days");
+            // Wording-scan fix 7 (2026-09-17): a single-value exact lead time (min == max) is
+            // pluralized by that value -- "approximately 1 day", not "approximately 1 days". A
+            // RANGE ("75-90") is always plural regardless of its endpoints, so only the single-value
+            // branch routes through the shared helper.
+            String dayWord = min.equals(max) ? DealQuotationLines.plural(min, "day", "days") : "days";
+            groups.add(range + " approximately " + days + " " + dayWord);
         } else {
             String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
             groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
@@ -820,9 +825,13 @@ public final class DealQuotationRenderAdapter {
         if (termText != null) {
             return "2." + termText;
         }
-        return "CREDIT".equals(remainderMode)
-            ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
-            : "2.Full payment is due before or upon delivery.";
+        if ("CREDIT".equals(remainderMode)) {
+            // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+            int days = creditDays != null ? creditDays : 0;
+            return "2.Full payment is due on " + days + " " + DealQuotationLines.plural(days, "day", "days")
+                + " credit.";
+        }
+        return "2.Full payment is due before or upon delivery.";
     }
 
     /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
@@ -843,10 +852,17 @@ public final class DealQuotationRenderAdapter {
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         LocalDate offerDate = quotation.offerDate() != null ? quotation.offerDate() : LocalDate.now(BANGKOK);
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
+        String validityDayWord = DealQuotationLines.plural(validityDays, "day", "days");
         // V178, English twin of the Thai line7 branch above — same guard, same byte-identical
         // DAYS-mode output.
         boolean validityIsDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
@@ -887,7 +903,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(validityIsDate
                 ? "4.Special price for orders with deposit paid by " + validityUntilEn
                     + "; sizes may vary slightly within ISO and TIS tolerances."
-                : "4.Price validity : " + validityDays + " days from the date of this quotation; "
+                : "4.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation; "
                     + "sizes may vary slightly within ISO and TIS tolerances.");
             lines.add("5.Colours may vary slightly between production lots. "
                 + "Goods sold are not returnable or exchangeable.");
@@ -897,7 +913,7 @@ public final class DealQuotationRenderAdapter {
             lines.add(BANK_BLOCK_PLACEHOLDER_LINE);
             lines.add(validityIsDate
                 ? "5.Special price for orders with deposit paid by " + validityUntilEn + "."
-                : "5.Price validity : " + validityDays + " days from the date of this quotation.");
+                : "5.Price validity : " + validityDays + " " + validityDayWord + " from the date of this quotation.");
             lines.add("6.Actual tile sizes may vary slightly from the sizes stated above, within ISO "
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
@@ -963,9 +979,15 @@ public final class DealQuotationRenderAdapter {
     /** The English twin of {@link #nonTileRemarkLines}. */
     private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
         int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
-        String remainderText = "CREDIT".equals(quotation.remainderMode())
-            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
-            : "the balance before or upon delivery";
+        // Wording-scan fix 7 (2026-09-17): singular "day credit" at exactly 1 day.
+        String remainderText;
+        if ("CREDIT".equals(quotation.remainderMode())) {
+            int creditDays = quotation.creditDays() != null ? quotation.creditDays() : 0;
+            remainderText = "the balance on " + creditDays + " " + DealQuotationLines.plural(creditDays, "day", "days")
+                + " credit";
+        } else {
+            remainderText = "the balance before or upon delivery";
+        }
         boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
             && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
 

@@ -1289,10 +1289,14 @@ class DealQuotationLinesTest {
             .isEqualTo("(Quantity 10 pcs = 1 box) (10 pcs/box)");
         // 0 full boxes, exactly 1 loose piece, no wastage: F1 fix -- no trailing "=" clause at
         // all (it would just echo "1 pcs"/"1 pc", the same count quantityPart already states).
+        // Wording-scan fix 7 (2026-09-17): quantityPart itself now pluralizes ("Quantity 1 pc",
+        // not "1 pcs") through the shared plural() helper -- this test's own piecesBeforeWastage=1
+        // makes it exactly the "exactly one" case the fix targets, so the pinned string changes
+        // from "(Quantity 1 pcs)" to "(Quantity 1 pc)".
         assertThat(DealQuotationLines.calculationLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 1, WastageCalculator.WASTAGE_MODE_NONE, null,
             1, 10, false))
-            .isEqualTo("(Quantity 1 pcs) (10 pcs/box)");
+            .isEqualTo("(Quantity 1 pc) (10 pcs/box)");
     }
 
     @Test

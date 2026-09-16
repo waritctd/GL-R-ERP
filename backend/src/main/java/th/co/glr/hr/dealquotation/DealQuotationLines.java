@@ -613,9 +613,9 @@ public final class DealQuotationLines {
                                                  BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
                                                  Integer boxes, boolean roundToFullBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
-            ? "Quantity " + format(piecesBeforeWastage) + " pcs"
-            : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
-                + format(piecesBeforeWastage) + " pcs";
+            ? "Quantity " + format(piecesBeforeWastage) + " " + pluralPcs(piecesBeforeWastage)
+            : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " " + pluralPcs(piecesPerSqm)
+                + "/sqm = " + format(piecesBeforeWastage) + " " + pluralPcs(piecesBeforeWastage);
         // Review fix F2 (2026-09-16): mode-gated, mirroring the Thai branch above -- see its own
         // comment. Without this, englishLoosePiecesLine's intermediate "= N pcs" clause could print
         // the same duplicate its own Javadoc says it exists to avoid.
@@ -625,7 +625,7 @@ public final class DealQuotationLines {
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + " + format(wastageValue) + "% allowance";
         } else if (hasWastage && WastageCalculator.WASTAGE_MODE_PIECES.equals(wastageMode)) {
-            wastagePart = " + " + format(wastageValue) + " pcs allowance";
+            wastagePart = " + " + format(wastageValue) + " " + pluralPcs(wastageValue) + " allowance";
         }
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
 
@@ -653,9 +653,9 @@ public final class DealQuotationLines {
             // follow fix 1's rule.
             StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
             if (boxRoundingChangedCount || hasWastage) {
-                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+                sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
             }
-            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box)" : " boxes)");
+            sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes)).append(")");
             return sb.toString();
         }
         // F1 fix (2026-09-16 review): mirrors the Thai branch above -- omit a trailing "= N pcs"
@@ -668,16 +668,16 @@ public final class DealQuotationLines {
         // the new information instead of yet another echo of the same piece count.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
         if (boxRoundingChangedCount || hasWastage) {
-            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+            sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
         }
         if (hasBox && !boxRoundingChangedCount) {
             int boxCount = piecesFinal / piecesPerBox;
-            sb.append(" = ").append(format(boxCount)).append(boxCount == 1 ? " box" : " boxes");
+            sb.append(" = ").append(format(boxCount)).append(" ").append(pluralBoxes(boxCount));
         }
         sb.append(")");
         String line = sb.toString();
         if (hasBox) {
-            line += " (" + format(piecesPerBox) + " pcs/box)";
+            line += " (" + format(piecesPerBox) + " " + pluralPcs(piecesPerBox) + "/box)";
         }
         return line;
     }
@@ -686,7 +686,9 @@ public final class DealQuotationLines {
      * intermediate clause only when it says something new" rule (F1, 2026-09-16 review: zero full
      * boxes AND no wastage now prints no intermediate clause at all, e.g. {@code "(Quantity 7 pcs)
      * (10 pcs/box)"}, not the old duplicate {@code "(Quantity 7 pcs = 7 pcs) (10 pcs/box)"}),
-     * singular "box"/"pc" at 1. */
+     * singular "box"/"pc" at 1 — routed through the shared {@link #pluralPcs}/{@link #pluralBoxes}
+     * helpers (wording-scan fix 7, 2026-09-17) rather than this method's own ad-hoc ternaries, so
+     * every English count on the document agrees on the same singular/plural rule. */
     private static String englishLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
                                                  int piecesFinal, int piecesPerBox) {
         int boxes = piecesFinal / piecesPerBox;
@@ -694,32 +696,79 @@ public final class DealQuotationLines {
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
         if (boxes > 0) {
             if (hasWastage) {
-                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+                sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
             }
             if (loose > 0) {
-                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
-                    .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+                sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes)).append(" + ")
+                    .append(format(loose)).append(" ").append(pluralPcs(loose));
             } else {
-                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
+                sb.append(" = ").append(format(boxes)).append(" ").append(pluralBoxes(boxes));
             }
         } else if (hasWastage) {
-            sb.append(" = ").append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+            sb.append(" = ").append(format(loose)).append(" ").append(pluralPcs(loose));
         }
-        sb.append(") (").append(format(piecesPerBox)).append(" pcs/box)");
+        // Wording-scan fix 7 (2026-09-17): this box tail used to hardcode "pcs" regardless of
+        // count -- a piecesPerBox of 1 printed the bug's own "(1 pcs/box)" shape.
+        sb.append(") (").append(format(piecesPerBox)).append(" ").append(pluralPcs(piecesPerBox)).append("/box)");
         return sb.toString();
     }
 
     /**
      * The English per-sqm box sub-line, exactly her QN6900933's shape: {@code (1 box = 28 pcs =
      * 0.6 sqm)}, {@code (1 box = 66 pcs = 0.495 sqm)} — the box area as the supplier states it,
-     * trailing zeros dropped (up to the column's 6 decimals).
+     * trailing zeros dropped (up to the column's 6 decimals). The LEADING "1 box" is always
+     * singular and literal — it is not a count, it names ONE box's own contents — but the piece
+     * count inside it is a genuine count and is pluralized accordingly (wording-scan fix 7).
      */
     public static String boxLine(Integer piecesPerBox, BigDecimal sqmPerBox) {
         if (piecesPerBox == null || piecesPerBox <= 0 || sqmPerBox == null || sqmPerBox.signum() <= 0) {
             return null;
         }
         DecimalFormat area = new DecimalFormat("#,##0.######", DecimalFormatSymbols.getInstance(Locale.US));
-        return "(1 box = " + format(piecesPerBox) + " pcs = " + area.format(sqmPerBox) + " sqm)";
+        return "(1 box = " + format(piecesPerBox) + " " + pluralPcs(piecesPerBox) + " = " + area.format(sqmPerBox)
+            + " sqm)";
+    }
+
+    /**
+     * Wording-scan fix 7 (2026-09-17) — the ONE shared English singular/plural helper for a
+     * printed count, used everywhere a count appears on the English document (calculation lines,
+     * the box line, the per-sqm line, the wastage allowance, credit days, lead time, validity
+     * days) instead of an ad-hoc ternary at each call site. A real English document printed every
+     * one of "1 pcs", "1 days", "(1 pcs/box)", "@ 1 pcs/sqm", "+ 1 pcs allowance", "on 1 days
+     * credit" and "approximately 1 days" before this fix — one shared rule closes all of them at
+     * once, and closes the same way for whichever is added next.
+     *
+     * @return {@code singular} when {@code count} is exactly one, {@code pluralWord} otherwise
+     *     (zero, negative, or greater than one) — English count agreement, not a sign check.
+     */
+    static String plural(int count, String singular, String pluralWord) {
+        return count == 1 ? singular : pluralWord;
+    }
+
+    /** {@link #plural(int, String, String)} for a {@link BigDecimal} count (the wastage-allowance
+     * piece count, which is user-typed and so arrives as a decimal even though fix 5 requires it be
+     * a whole number in PIECES mode) — compared with {@link BigDecimal#compareTo} so "1.00" reads
+     * as singular exactly like {@code 1}. */
+    static String plural(BigDecimal count, String singular, String pluralWord) {
+        return count != null && count.compareTo(BigDecimal.ONE) == 0 ? singular : pluralWord;
+    }
+
+    /** {@code "pc"}/{@code "pcs"} via {@link #plural(int, String, String)} — the single most common
+     * shape this document prints, given its own tiny helper so call sites read as one word rather
+     * than a three-argument call. */
+    private static String pluralPcs(int count) {
+        return plural(count, "pc", "pcs");
+    }
+
+    /** {@link #pluralPcs(int)} for a {@link BigDecimal}-typed count (the wastage allowance and the
+     * per-sqm rate, e.g. "@ 1 pc/sqm"). */
+    private static String pluralPcs(BigDecimal count) {
+        return plural(count, "pc", "pcs");
+    }
+
+    /** {@code "box"}/{@code "boxes"} via {@link #plural(int, String, String)}. */
+    private static String pluralBoxes(int count) {
+        return plural(count, "box", "boxes");
     }
 
     /** What a TILE row prints in the quantity/unit cells and under its description, decided in ONE
