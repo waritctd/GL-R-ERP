@@ -5081,7 +5081,8 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
       ? (en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`)
       : '';
     const boxCount = hasBox ? Math.floor(piecesFinal / piecesPerBox) : 0;
-    const boxCountTail = hasBox && !boxRoundingChangedCount
+    // Mirrors DealQuotationLines: a one-piece box's count only repeats the piece count.
+    const boxCountTail = hasBox && piecesPerBox > 1 && !boxRoundingChangedCount
       ? (en ? ` = ${boxCount} ${pl(boxCount, 'box', 'boxes')}` : ` = ${boxCount} กล่อง`)
       : '';
     qtyText = en

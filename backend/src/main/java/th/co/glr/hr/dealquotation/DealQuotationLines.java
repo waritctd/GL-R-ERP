@@ -548,7 +548,9 @@ public final class DealQuotationLines {
         if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
         }
-        if (hasBox && !boxRoundingChangedCount) {
+        // A box of ONE piece makes "= N กล่อง" the same number as the piece count in another
+        // unit -- another echo, not information (2 real items carry แผ่น/กล่อง = 1).
+        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
             sb.append(" = ").append(format(piecesFinal / piecesPerBox)).append(" กล่อง");
         }
         sb.append(")");
@@ -670,7 +672,8 @@ public final class DealQuotationLines {
         if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
         }
-        if (hasBox && !boxRoundingChangedCount) {
+        // Same one-piece-box rule as the Thai line above.
+        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
             int boxCount = piecesFinal / piecesPerBox;
             sb.append(" = ").append(format(boxCount)).append(" ").append(pluralBoxes(boxCount));
         }

@@ -673,6 +673,22 @@ class DealQuotationLinesTest {
         assertThat(line).doesNotContain("= 4 กล่อง");
     }
 
+    /** A one-piece box: "= 5 กล่อง" would just repeat the piece count in another unit. */
+    @Test
+    void calculationLine_onePiecePerBox_neverEchoesTheCountAsBoxes() {
+        String thai = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            5, WastageCalculator.WASTAGE_MODE_NONE, null, 5, 1);
+        String english = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            5, WastageCalculator.WASTAGE_MODE_NONE, null, 5, 1);
+
+        assertThat(thai).isEqualTo("(จำนวน 5 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        assertThat(thai).doesNotContain("= 5 กล่อง").doesNotContain("= 5 แผ่น");
+        assertThat(english).isEqualTo("(Quantity 5 pcs) (1 pc/box)");
+        assertThat(english).doesNotContain("= 5 box").doesNotContain("= 5 pcs");
+    }
+
     /** English mirror of the first test above. */
     @Test
     void english_noWastage_alreadyWholeBoxes_printsBoxCount_noRoundingPhrase() {

@@ -613,11 +613,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         // An English NET preview: English lines, PCS, pieces.
         DealQuotationItemDto net = quotationService.calculateLine(tileItem("100.00", 10), "EN", salesActor);
-        // Wording-scan fix 1 (2026-09-17): tileItem's piecesPerBox=1 makes box rounding a no-op
-        // (see englishQuotation_itemLinesUnitAndDiscountTextAreEnglish_storedColumnsUntouched's
-        // matching comment) -- box count prints instead of the old rounding-phrase echo. Wording-scan
-        // fix 7: singular "1 pc/box".
-        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs = 10 boxes) (1 pc/box)");
+        // Wording-scan fix 1 (2026-09-17): tileItem's piecesPerBox=1 makes box rounding a no-op, and
+        // a one-piece box's count would only repeat the piece count, so neither the rounding
+        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(net.unit()).isEqualTo("PCS");
 
         assertThatThrownBy(() -> quotationService.calculateLine(tileItem("100.00", 10), "FR", salesActor))
@@ -692,11 +691,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
         // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
         assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
-        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 makes box rounding a no-op (see the Thai
-        // mirror of this test, anExistingRowReadsInTheDocumentsCurrentLanguage_withNoRewrite) --
-        // the box count prints instead of the old rounding-phrase echo. Wording-scan fix 7:
-        // singular "1 pc/box".
-        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs = 10 boxes) (1 pc/box)");
+        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 makes box rounding a no-op, and a
+        // one-piece box's count would only repeat the piece count -- so neither the rounding
+        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
         assertThat(adjustment.descriptionLine()).isEqualTo("Special discount 3% for orders placed by July 31, 2026");
@@ -745,9 +743,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
         // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 -- tileItem's own fixed value -- makes
         // EVERY piece count trivially "already a whole number of boxes", so this row's box
-        // rounding was always a no-op; the misleading "และปัดขึ้นเต็มกล่อง = 10 แผ่น" echo drops and
-        // the box count (10 boxes of 1 pc) prints instead.
-        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น = 10 กล่อง) (บรรจุ 1 แผ่น/กล่อง)");
+        // rounding was always a no-op; the misleading "และปัดขึ้นเต็มกล่อง = 10 แผ่น" echo drops, and
+        // "= 10 กล่อง" does not print either -- a one-piece box's count only repeats the pieces.
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 
