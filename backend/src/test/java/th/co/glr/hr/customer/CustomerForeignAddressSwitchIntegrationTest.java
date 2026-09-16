@@ -14,7 +14,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -43,7 +45,8 @@ class CustomerForeignAddressSwitchIntegrationTest extends AbstractPostgresIntegr
         ContactRepository contacts = new ContactRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeAuthRepository employeeAuth = new EmployeeAuthRepository(jdbc);
-        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
+        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth,
+            new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
         return MockMvcBuilders
             .standaloneSetup(new CustomerController(customers, contacts, projects, customerService,
                 new SessionContext(), employeeAuth))

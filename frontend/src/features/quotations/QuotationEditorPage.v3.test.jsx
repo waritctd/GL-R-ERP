@@ -234,6 +234,103 @@ describe('v3/v3b document settings', () => {
     for (const stale of ['1350', '850', '800']) expect(inputValues()).not.toContain(stale);
   }, 20000);
 
+  // Review fix F1 (2026-09-16): a row ticked "ขายแผ่นไม่เต็มกล่อง" under Thai ราคาพิเศษ used to
+  // become PERMANENTLY un-submittable the moment the document switched to English per-sqm — the
+  // checkbox goes disabled AND renders unchecked in that mode (roundToFullBoxDisabledReason), so
+  // there was no on-screen control left to clear the stale stored `roundToFullBox: false`, and
+  // validateQuotationItem's own checklist branch blocked บันทึกร่าง/ส่งขออนุมัติ forever (only
+  // deleting and re-adding the row escaped it). Fixed by resetting the stored flag back to `true`
+  // in `applyPriceMode` the moment the document reaches this mode.
+  //
+  // The checkbox already RENDERS unchecked in English per-sqm regardless of the underlying flag
+  // (disabled ⇒ roundLooseChecked is forced false), and the SAVE payload already forced
+  // `roundToFullBox: true` in this mode even before this fix (itemInputFromRow) — so neither the
+  // checkbox's own `checked` state nor a payload assertion taken while STILL in per-sqm mode can
+  // tell a real reset from a merely-masked one. What actually proves the stored flag was cleared,
+  // not just hidden, is switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ):
+  // if the flag lingered, it re-appears CHECKED with no re-entry from the rep, exactly the "silent
+  // resurrection" the owner's "Clear all prices on switch" ruling forbids for prices.
+  // Option B (owner decision, 2026-09-16): the reset below only fires when the row already carries
+  // a box area (sqmPerBox) — without one, English per-sqm now honours roundToFullBox normally (see
+  // quotationItemInput.test.jsx's own "WITHOUT a box area" coverage), so this scenario is scoped to
+  // a row WITH one to keep testing what it always tested: the flag must not survive hidden-but-set.
+  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with a box area survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        priceMode: 'SPECIAL_SQM',
+        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: 0.6 }],
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
+    // Ticked under Thai ราคาพิเศษ, where the option is allowed.
+    expect(byId('round-loose-0').checked).toBe(true);
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+
+    // English per-sqm: the checkbox goes disabled and renders UNCHECKED (as before this fix). The
+    // checklist DOES block now — the switch cleared ราคาพิเศษ and English per-sqm needs its own
+    // ตร.ม./กล่อง — but that is the unrelated, expected "re-enter your prices" block, not a
+    // roundToFullBox one; the assertion that matters is the round-trip below.
+    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(true));
+    expect(byId('round-loose-0').checked).toBe(false);
+
+    // Switch BACK to a mode where the checkbox re-enables. If the stored flag had merely been
+    // masked (not actually reset), it would silently re-appear CHECKED here with no re-entry —
+    // this is the assertion a reset-less `applyPriceMode` cannot pass.
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
+    await waitFor(() => expect(byId('round-loose-0').disabled).toBe(false));
+    expect(byId('round-loose-0').checked).toBe(false);
+
+    // The language switch also clears every price (owner ruling, unrelated to this fix) -- re-enter
+    // what Thai ราคาพิเศษ needs (list price + ราคาพิเศษ) to prove the row is fully submittable.
+    fireEvent.change(byId('price-0'), { target: { value: '2000' } });
+    fireEvent.change(byId('special-0'), { target: { value: '1350' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    expect(screen.queryByTestId('checklist-blocking')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    // The stored flag saves as `true` — the reset survived the round-trip, not merely the moment
+    // the mode was per-sqm.
+    expect(payload.items[0]).toMatchObject({ roundToFullBox: true });
+  }, 20000);
+
+  // Option B (owner decision, 2026-09-16): the opposite of the test above — a row with NO box area
+  // is legitimately loose-pieces-capable in English per-sqm now, so switching INTO that mode must
+  // NOT reset it, and the checkbox must stay enabled so the rep can still change their mind.
+  it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with NO box area keeps it after switching to English per-sqm', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({
+        priceMode: 'SPECIAL_SQM',
+        items: [{ ...TILE_ITEM, specialPriceSqm: 1350, netUnitPrice: 453.84, roundToFullBox: false, sqmPerBox: null }],
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('special-0')?.value).toBe('1350'));
+    expect(byId('round-loose-0').checked).toBe(true);
+
+    fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
+
+    // English per-sqm, no box area: the checkbox stays ENABLED and CHECKED — not reset, not
+    // disabled — unlike the box-area case above.
+    await waitFor(() => expect(byId('special-0')?.value).toBe(''));
+    expect(byId('round-loose-0').disabled).toBe(false);
+    expect(byId('round-loose-0').checked).toBe(true);
+
+    // Re-enter what English per-sqm needs (no box area required) and save — the loose-pieces
+    // selection is accepted, not silently discarded.
+    fireEvent.change(byId('special-0'), { target: { value: '64' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
+    const [, payload] = api.dealQuotations.update.mock.calls[0];
+    expect(payload.items[0]).toMatchObject({ roundToFullBox: false, sqmPerBox: null });
+  }, 20000);
+
   it('the live preview of a Thai draft still calls calculate-line with TH', async () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
@@ -349,6 +446,68 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
     await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
 
     expect(screen.getByText('กรุณาระบุระยะเวลานำเข้า (วัน)')).not.toBeNull();
+  });
+});
+
+// Opus review fix (2026-09-16, F2): "typing 0 as a custom deposit %" used to be only VISUALLY
+// refused — depositZeroError showed a message but nothing blocked the save, so a rep could reach
+// depositPercent = 0 with no fullPaymentTerm two ways (the "ไม่รับมัดจำ" checkbox, already handled,
+// OR typing "0" into the custom "อื่นๆ" input while unticked, which was NOT) and only discover the
+// problem at ส่งขออนุมัติ's server-side 400. Mirrors DealQuotationService#submit's own gate
+// (isZeroDeposit(depositPercent) && isBlank(fullPaymentTerm)) — SUBMIT only, exactly like "lead
+// time required to submit" above: a draft with this same shape still saves.
+describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-16)', () => {
+  it('typing "0" into the custom "อื่นๆ" input (checkbox left UNticked) BLOCKS ส่งขออนุมัติ, but บันทึกร่าง stays enabled', async () => {
+    renderEditor('/quotations/5'); // draft() default: depositPercent 30, checkbox unticked
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
+
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.title).toBe('มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ');
+    expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
+  });
+
+  it('the checklist ALSO lists the gap, alongside the block', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
+
+    const warnings = await screen.findByTestId('checklist-warnings');
+    expect(within(warnings).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+  });
+
+  it('ticking "ไม่รับมัดจำ" with no term chosen ALSO blocks ส่งขออนุมัติ (the pre-existing route, unaffected in shape)', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.title).toBe('มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ');
+  });
+
+  it('choosing a term after ticking "ไม่รับมัดจำ" clears the block', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByRole('button', { name: '30%' });
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false));
+  });
+
+  it('a normal 30% deposit quotation (default fixture) is unaffected — submit stays enabled, no checklist entry', async () => {
+    renderEditor('/quotations/5');
+    const submitBtn = await screen.findByRole('button', { name: 'ส่งขออนุมัติ' });
+    expect(submitBtn.disabled).toBe(false);
+    expect(screen.queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
   });
 });
 

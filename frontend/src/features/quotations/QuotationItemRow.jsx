@@ -10,6 +10,7 @@ import {
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
+  roundToFullBoxDisabledReason, roundToFullBoxSummary,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -168,6 +169,12 @@ export function QuotationItemRow({
   const listPerSqm = priceMode === 'SPECIAL_SQM' && !perSqm
     ? listPricePerSqmIncVat(item.unitPrice, item.sqmPerPiece)
     : null;
+  // Owner-approved "sell loose pieces" (2026-09-16, V182) -- see quotationMeta.js for both
+  // helpers' own Javadoc. `roundLooseDisabledReason` doubles as the disabled flag (non-null =
+  // disabled) and its own hint text, so the two can never disagree.
+  const roundLooseDisabledReason = roundToFullBoxDisabledReason(item, priceMode, documentLanguage);
+  const roundLooseChecked = !roundLooseDisabledReason && item.roundToFullBox === false;
+  const roundLooseSummary = roundToFullBoxSummary(item);
   const [catalogResults, setCatalogResults] = useState([]);
   const [catalogOpen, setCatalogOpen] = useState(false);
   // #L4: "กำหนดเอง" opens the custom input -- UI-only state, never written onto `item` itself.
@@ -264,6 +271,10 @@ export function QuotationItemRow({
       ? sqmPerPieceFromSizeCm(newSizeText)
       : null;
     const effectiveSqmPerPiece = resolvedSqmPerPiece ?? sizeFallbackSqmPerPiece ?? item.sqmPerPiece ?? null;
+    // V176: the supplier-stated ตร.ม./กล่อง this pick fills, if any -- computed ahead of the patch
+    // below so both the field itself AND the roundToFullBox reset (F5.2, 2026-09-16 review) use
+    // the exact same resolved value, never two independently-computed reads that could disagree.
+    const effectiveSqmPerBox = cat.priceUnit === PRICE_UNIT_PER_LINEAR_M ? null : (cat.sqmPerBox ?? null);
     patch({
       catalogPriceId: cat.priceId ?? null,
       productCode: cat.productCode ?? null,
@@ -307,9 +318,16 @@ export function QuotationItemRow({
       // NEVER from a per_linear_m row (its sqm_per_box column holds LINEAR METRES, V153), and never
       // inherited from a previous pick: a box area belongs to its own product, and a stale one would
       // silently misprice every box of the new one. A missing figure stays blank for the rep.
-      sqmPerBox: cat.priceUnit === PRICE_UNIT_PER_LINEAR_M ? null : (cat.sqmPerBox ?? null),
+      sqmPerBox: effectiveSqmPerBox,
       originCountry,
       ...(originCountry && originCountry !== item.originCountry ? defaultLeadTimeForOrigin(originCountry) : {}),
+      // F5.2 (2026-09-16 review): a catalogue pick that FILLS ตร.ม./กล่อง must reset "ขายแผ่นไม่เต็ม
+      // กล่อง" the same way typing a value into the field by hand already does (the onChange handler
+      // below) — a box area forces full-box rounding server-side, so a stale roundToFullBox=false
+      // left ticked from a previous, box-area-less row would silently mismatch the printed summary
+      // line until the rep noticed and cleared it manually. Does not otherwise touch the payload:
+      // sqmPerBox itself was already always overwritten by this pick, whatever its new value.
+      ...(effectiveSqmPerBox > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
     });
     onCatalogPicked?.(cat);
     setCatalogResults([]);
@@ -559,12 +577,29 @@ export function QuotationItemRow({
               if (!readOnly && item.sqmPerPieceSource === 'catalog'
                 && sizeTextDiffersFromCatalogFaceSize(newSizeText, item.catalogSizeText)) {
                 const recomputed = sqmPerPieceFromSizeCm(newSizeText);
-                patch({
-                  sizeText: newSizeText,
-                  sqmPerPiece: recomputed,
-                  piecesPerSqmDisplay: recomputed != null ? (piecesPerSqmFromSqmPerPiece(recomputed) ?? '') : '',
-                  sqmPerPieceSource: recomputed != null ? 'size' : null,
-                });
+                // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"):
+                // `recomputed` is `null` not only when the text fails to parse, but also when it
+                // parses to an OUT-OF-RANGE area (sqmPerPieceFromSizeCm's own 0.001-10 m² bound) --
+                // e.g. a rep typing the catalogue's millimetre figures ("300x600") into this
+                // cm-labelled field for a 60x60cm tile parses fine as 300x600 CM (18 m²) and is
+                // rejected by that bound. The previous version patched `sqmPerPiece: recomputed`
+                // unconditionally here, so EITHER failure NULLED a previously-valid catalogue
+                // figure — turning a size typo into a blocking "required" error that then refused
+                // EVERY save (autosave, บันทึกร่าง, ส่งขออนุมัติ) on the whole document, not just
+                // this row. Only replace the figure when the recompute is genuinely valid; otherwise
+                // keep whatever ตร.ม./แผ่น the row already had (still the catalogue's own value here)
+                // so the rep can still edit it manually rather than the row going blank and blocking
+                // every save silently.
+                if (recomputed != null) {
+                  patch({
+                    sizeText: newSizeText,
+                    sqmPerPiece: recomputed,
+                    piecesPerSqmDisplay: piecesPerSqmFromSqmPerPiece(recomputed) ?? '',
+                    sqmPerPieceSource: 'size',
+                  });
+                } else {
+                  patch({ sizeText: newSizeText });
+                }
                 return;
               }
               const sizeFallbackEligible = !readOnly
@@ -734,6 +769,46 @@ export function QuotationItemRow({
         </FormField>
       </div>
 
+      {/* Owner-approved "sell loose pieces" (2026-09-16, V182): default OFF (round up to a full
+          box, exactly today's behaviour). Checking it lets this TILE row sell exactly its
+          wastage-adjusted piece count, unrounded — split into full boxes plus a loose remainder.
+          Disabled until แผ่น/กล่อง is filled (no box multiple to round to or split by yet) and in
+          English per-sqm mode (that quantity is boxes × ตร.ม./กล่อง, with no loose-pieces term at
+          all) — `roundLooseDisabledReason` decides both the disabled state and its own hint text,
+          so the two can never disagree. The whole label is tappable (≥44px on mobile), matching
+          this row's other toggle controls above. */}
+      <div>
+        <label
+          htmlFor={`round-loose-${index}`}
+          className={`flex min-h-[38px] mobile:min-h-[44px] items-start gap-2 rounded-md border px-3 py-2 text-xs font-bold ${
+            roundLooseChecked ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text'
+          } ${roundLooseDisabledReason ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+        >
+          <input
+            id={`round-loose-${index}`}
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0"
+            disabled={readOnly || !!roundLooseDisabledReason}
+            checked={roundLooseChecked}
+            onChange={(e) => patch({ roundToFullBox: e.target.checked ? false : true })}
+          />
+          <span className="min-w-0 flex-1">
+            <span className="block">ขายแผ่นไม่เต็มกล่อง</span>
+            {roundLooseDisabledReason ? (
+              <span className="mt-0.5 block text-2xs font-normal text-text-muted">{roundLooseDisabledReason}</span>
+            ) : null}
+          </span>
+        </label>
+        {roundLooseSummary ? (
+          <p
+            className="mt-1 break-words text-2xs font-bold text-text-muted"
+            data-testid={`round-loose-summary-${index}`}
+          >
+            {roundLooseSummary}
+          </p>
+        ) : null}
+      </div>
+
       <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
         {/* v3: the two price fields follow the QUOTATION's price mode, chosen once in the
             "รูปแบบเอกสาร" block — never per row, because every tile row of every one of the owner's
@@ -832,8 +907,9 @@ export function QuotationItemRow({
         {perSqm ? (
           <>
             {/* English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. is the printed Unit price
-                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง — both computed by the
-                server (calculate-line), never here. */}
+                AND Net price, no VAT; the printed Qty is boxes × ตร.ม./กล่อง when a box area is
+                given, or pieces × ตร.ม./แผ่น when it is left blank (Option B, 2026-09-16) — both
+                computed by the server (calculate-line), never here. */}
             <FormField label="ราคา (USD/ตร.ม.)" htmlFor={`special-${index}`} required error={errors.specialPriceSqm}>
               <input
                 id={`special-${index}`} type="number" step="0.01" disabled={readOnly}
@@ -841,18 +917,33 @@ export function QuotationItemRow({
                 onChange={(e) => patch({ specialPriceSqm: e.target.value === '' ? '' : Number(e.target.value) })}
               />
               <span className="mt-1 block text-2xs font-bold text-info" data-testid={`special-net-${index}`}>
-                ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง
+                {Number(item.sqmPerBox) > 0
+                  ? 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. ตามกล่อง'
+                  : 'ไม่มี VAT · จำนวนพิมพ์เป็น ตร.ม. จากจำนวนแผ่น'}
               </span>
             </FormField>
+            {/* Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank value
+                derives the printed sqm quantity from จำนวนแผ่น × ตร.ม./แผ่น instead, exactly like the
+                Thai ราคาพิเศษ mode already does. `required` dropped; the hint explains the fallback. */}
             <FormField
-              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} required error={errors.sqmPerBox}
-              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้)"
+              label="ตร.ม./กล่อง" htmlFor={`sqm-box-${index}`} error={errors.sqmPerBox}
+              hint="ตามที่ผู้ผลิตระบุ (จากแคตตาล็อก แก้ได้) · ไม่บังคับ — ถ้าเว้นว่าง จะคำนวณ ตร.ม. จากจำนวนแผ่น × ตร.ม./แผ่น"
             >
-              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''. */}
+              {/* null on clear, never '' — the payload builders coerce with `??`, which keeps ''.
+                  Typing a value while "ขายแผ่นไม่เต็มกล่อง" is ticked resets that checkbox — a box
+                  area forces full-box rounding, so the blocked state (a stored roundToFullBox=false
+                  the server would now refuse) is unreachable, the same fix already applied to the
+                  price-mode switch (QuotationEditorPage#applyPriceMode). */}
               <input
                 id={`sqm-box-${index}`} type="number" step="0.000001" min="0" disabled={readOnly}
                 value={item.sqmPerBox ?? ''}
-                onChange={(e) => patch({ sqmPerBox: e.target.value === '' ? null : Number(e.target.value) })}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? null : Number(e.target.value);
+                  patch({
+                    sqmPerBox: value,
+                    ...(value > 0 && item.roundToFullBox === false ? { roundToFullBox: true } : {}),
+                  });
+                }}
               />
             </FormField>
           </>
@@ -935,6 +1026,16 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
       unit: item.unit || null,
       unitPrice: item.unitPrice === '' || item.unitPrice == null ? null : Number(item.unitPrice),
       discountPct: item.discountPct === '' || item.discountPct == null ? 0 : Number(item.discountPct),
+      // D1 (owner decision, 2026-09-16, review of V182): a PLAIN row (สินค้า/บริการอื่น — e.g.
+      // sanitaryware sold on ชุด) may now carry an OPTIONAL import lead time — her reference
+      // document QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against exactly this kind of row.
+      // DealQuotationService#buildPlainItem already forwards both fields (it always has — the DTO
+      // columns are shared with the TILE row); what was missing was the UI ever sending them. Null
+      // when left blank, exactly like a TILE row's own leadTimeMinDays/Max below — the field is
+      // NEVER required here (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE
+      // rows), so an unfilled PLAIN row saves exactly as it always did.
+      leadTimeMinDays: item.leadTimeMinDays ?? null,
+      leadTimeMaxDays: item.leadTimeMaxDays ?? null,
       itemNotes: item.itemNotes || null,
     };
   }
@@ -959,6 +1060,18 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && item.specialPriceSqm !== '' && item.specialPriceSqm != null
       ? Number(item.specialPriceSqm) : null,
     directNetPrice: priceMode === 'DIRECT_NET' ? directNet : null,
+    // English per-sqm WITH a box area cannot express a loose-piece quantity in square metres (its
+    // quantity is boxes × sqmPerBox, with no remainder term) — DealQuotationService#buildTileItem's
+    // hasBoxArea branch refuses roundToFullBox=false outright for that combination. Forced true
+    // here ONLY when a box area is present (Option B, 2026-09-16), regardless of what the row's own
+    // state holds, so a row that had loose pieces selected under NET/TH, then had its DOCUMENT
+    // switched to an English per-sqm price mode WITH a box area, can never smuggle a false through
+    // and 400 at save — the checkbox is also disabled in that combination
+    // (roundToFullBoxDisabledReason), but this is the authoritative guard, not merely a UI courtesy.
+    // WITHOUT a box area, roundToFullBox is honoured normally — the server now accepts it either way.
+    roundToFullBox: isEnglishPerSqm(priceMode, documentLanguage) && Number(item.sqmPerBox) > 0
+      ? true
+      : item.roundToFullBox !== false,
   };
 }
 
@@ -1000,6 +1113,11 @@ function tileInputFromRow(item) {
     wastageValue: item.wastageValue ?? 0,
     piecesPerBox: item.piecesPerBox === '' ? null : item.piecesPerBox,
     sqmPerBox: item.sqmPerBox === '' || item.sqmPerBox == null ? null : Number(item.sqmPerBox),
+    // Owner-approved "sell loose pieces" (V182): sent as an explicit boolean (never '' or null) so
+    // a PUT round-trip of an unmodified row is byte-identical to what GET returned. The English
+    // per-sqm override lives in itemInputFromRow, not here, because that decision needs priceMode/
+    // documentLanguage, which this helper does not receive.
+    roundToFullBox: item.roundToFullBox !== false,
     unitPrice: item.unitPrice === '' ? null : item.unitPrice,
     discountPct: item.discountPct ?? 0,
     originCountry: item.originCountry || null,
@@ -1041,6 +1159,9 @@ export function emptyQuotationItem(groupId = null, defaults = null) {
     catalogSqmPerPiece: null, catalogPriceUnit: null, catalogSizeText: null, sqmPerPieceSource: null, piecesPerSqmDisplay: null,
     quantityMode: 'AREA', areaSqm: '', piecesInput: '',
     wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: '',
+    // Owner-approved "sell loose pieces" (V182): default OFF — every new row rounds up to a full
+    // box, exactly today's only behaviour, unless the rep opts out.
+    roundToFullBox: true,
     unitPrice: '', discountPct: null,
     originCountry, ...defaultLeadTimeForOrigin(originCountry),
     itemNotes: '',
@@ -1061,6 +1182,10 @@ export function emptyPlainItem(groupId = null) {
     lineType: LINE_TYPE_PLAIN,
     locationLabel: '',
     description: '', quantity: '', unit: '', unitPrice: '', discountPct: null, itemNotes: '',
+    // D1 (2026-09-16): optional import lead time — see itemInputFromRow's PLAIN branch. `null`,
+    // not '', matching emptyQuotationItem's own tile defaults (defaultLeadTimeForOrigin returns
+    // null/null for a blank origin).
+    leadTimeMinDays: null, leadTimeMaxDays: null,
     netUnitPrice: null, lineAmount: null, calcPending: false,
   };
 }

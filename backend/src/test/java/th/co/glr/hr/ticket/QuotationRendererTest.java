@@ -238,11 +238,13 @@ class QuotationRendererTest {
     void visibleLength_excludesThaiCombiningMarksButCountsEveryOtherCodePoint() {
         // Plain ASCII: every char counts, exactly like String.length().
         assertThat(QuotationRenderer.visibleLength("hello")).isEqualTo(5);
-        // The production line itself: String.length() 66, visible 59 (measured on the real PDF —
-        // see #visibleLength's own Javadoc).
-        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
-        assertThat(calcLine.length()).isEqualTo(66);
-        assertThat(QuotationRenderer.visibleLength(calcLine)).isEqualTo(59);
+        // The production line itself: String.length() 72, visible 62. Was 66/59 before the
+        // "และปัดลงกล่อง" -> "และปัดขึ้นเต็มกล่อง" wording correction (2026-09-16, quotation
+        // loose-pieces feature) — six code points longer, none of them a combining mark, so both
+        // figures moved by exactly 6.
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        assertThat(calcLine.length()).isEqualTo(72);
+        assertThat(QuotationRenderer.visibleLength(calcLine)).isEqualTo(62);
     }
 
     @Test
@@ -251,11 +253,13 @@ class QuotationRendererTest {
         assertThat(QuotationRenderer.visibleLength("")).isEqualTo(0);
     }
 
-    /** The exact bug: at the OLD String.length() budget of 62, this 66-length/59-visible line used
-     * to wrap into "(บรรจุ 4" / "แผ่น/กล่อง)". At visible length 59 <= 62 it must not wrap at all. */
+    /** The exact bug: at the OLD String.length() budget of 62, this line — 66-length/59-visible
+     * before the "และปัดลงกล่อง" -&gt; "และปัดขึ้นเต็มกล่อง" wording correction (2026-09-16), now
+     * 72-length/62-visible — used to wrap into "(บรรจุ 4" / "แผ่น/กล่อง)". At visible length 62 <=
+     * 62 (now the exact boundary, not merely under it) it must still not wrap at all. */
     @Test
     void wrapItemLineToWidth_aLineUnderTheVisibleBudget_isNotSplit() {
-        String calcLine = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
+        String calcLine = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)";
         assertThat(renderer.wrapItemLineToWidth(calcLine, 62)).containsExactly(calcLine);
     }
 
@@ -265,7 +269,7 @@ class QuotationRendererTest {
      * enough for group 1 alone, not for the whole line. */
     @Test
     void wrapItemLineToWidth_overBudget_breaksAtParentheticalGroupBoundary() {
-        String group1 = "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น)";
+        String group1 = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น)";
         String group2 = "(บรรจุ 4 แผ่น/กล่อง)";
         String line = group1 + " " + group2;
         int budget = QuotationRenderer.visibleLength(group1) + 5;
@@ -381,7 +385,7 @@ class QuotationRendererTest {
         requireLibreOffice();
         QuotationRenderModel.RenderItem item1 = renderItem("หน้าบ้าน",
             List.of("กระเบื้อง รุ่น Elegance สี ขาวนวล ผิว ด้าน", "ขนาด 60x120x2 cm. (ขนาดโดยประมาณ)",
-                "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดลงกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)"),
+                "(พื้นที่ 87 ตร.ม.ๆละ 2.78 แผ่น รวม 242 แผ่น + เผื่อ 10% และปัดขึ้นเต็มกล่อง = 268 แผ่น) (บรรจุ 4 แผ่น/กล่อง)"),
             new BigDecimal("268"), new BigDecimal("500.00"), "Net", new BigDecimal("500.00"), new BigDecimal("134000.00"));
         QuotationRenderModel.RenderItem item2 = renderItem("หน้าบ้าน",
             List.of("กระเบื้อง รุ่น Stone สี เทาเข้ม ผิว หยาบ", "ขนาด 60x60x0.9 cm. (ขนาดโดยประมาณ)",
@@ -1427,6 +1431,129 @@ class QuotationRendererTest {
                 .as("column I must be wide enough for the FULL suffixed reference number, "
                     + "not just the (much smaller) grand total")
                 .isGreaterThanOrEqualTo(neededPx + insetPx - 0.5); // small epsilon for twips rounding
+        }
+    }
+
+    // ── item 1 (2026-09-16): ฝ่าย/หน่วยงาน labels follow their own value's blankness ──────────
+    // Both fields became optional on the deal (commit 3003bd0c: the frontend stopped requiring
+    // them). The value cells (I3/I5, VALUE_COL) already printed blank via nullSafe — this closes
+    // the follow-on gap where the LABEL cell (H3/H5, SALES_LINE_COL) still printed with nothing
+    // after it. H3/H5 are confirmed distinct from SALES_LINE_ROW (row 6, "Sales/{name}") by this
+    // class's own row constants (DEPT_VALUE_ROW=2, UNIT_VALUE_ROW=4, SALES_LINE_ROW=5) — clearing
+    // them cannot touch the sales line.
+
+    @Test
+    void deptAndUnitLabels_clearedWhenBlank_thai() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0099", null, "", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // H3/H5 = col 7 (SALES_LINE_COL) on rows 2/4 (DEPT_VALUE_ROW/UNIT_VALUE_ROW) — the
+            // template's own baked-in "ฝ่าย"/"หน่วยงาน" label text — must be cleared.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared when deptCode null").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value stays blank").isEmpty();
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label cleared when unitCode blank").isTrue();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value stays blank").isEmpty();
+            // เลขที่อ้างอิง (row 4, i.e. index 3) is untouched by this change.
+            assertThat(sheet.getRow(3).getCell(8).getStringCellValue()).isEqualTo("QT-2026-0099");
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_thai() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0100", "P003", "D002", "Sales/สมชาย ใจดี T.081-234-5678",
+            "คุณลูกค้า   /   Test Customer Co., Ltd.", "โทร. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true);
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // The Thai branch never writes H3/H5 itself (they are the template's own baked-in
+            // text) -- this only proves the new guard did not blank them when the value is filled.
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 label untouched when deptCode filled").isFalse();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 label untouched when unitCode filled").isFalse();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_clearedWhenBlank_english() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0101", null, null, "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 'Dept.' label cleared when deptCode blank").isTrue();
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value stays blank").isEmpty();
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 'D.Co.' label cleared when unitCode blank").isTrue();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value stays blank").isEmpty();
+        }
+    }
+
+    @Test
+    void deptAndUnitLabels_printByteForByteAsTodayWhenFilled_english() throws Exception {
+        QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
+            new BigDecimal("100.00"), "Net", new BigDecimal("100.00"), new BigDecimal("100.00"));
+        QuotationRenderModel model = new QuotationRenderModel(
+            LocalDate.of(2026, 9, 16), "QT-2026-0102", "P003", "D002", "Sales/John T.081-234-5678",
+            "Test Customer Co., Ltd.", "Tel. 02-000-0000", "Showroom V2 Project",
+            List.of(item), List.of("1.x"),
+            new QuotationRenderModel.Signatories(null, null, null, null, null), true, "EN", "USD");
+
+        byte[] xls = renderer.toXls(model);
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("Dept.");
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).isEqualTo("P003");
+            assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("D.Co.");
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
+        }
+    }
+
+    // ── Opus review fix (2026-09-16, F1): the label-clearing guard above is gated on
+    // signatureLabelsV2, so a LEGACY/PCR document — which #buildLegacyModel hands deptCode=null/
+    // unitCode=null UNCONDITIONALLY, for every ticket, whether or not the rep left anything blank
+    // — must keep the template's own baked-in ฝ่าย/หน่วยงาน labels exactly as before this whole
+    // feature. Exercised through the REAL legacy entry point (toXlsx(TicketDto, QuotationDto,
+    // CustomerDto)), not a hand-built QuotationRenderModel, so this actually proves
+    // #buildLegacyModel's real null/null shape rather than an assumption about it.
+    @Test
+    void deptAndUnitLabels_legacyPathKeepsTemplateLabelsEvenThoughCodesAreAlwaysBlank() throws Exception {
+        byte[] xlsx = renderer.toXlsx(
+            ticket(List.of(item(1, "Cotto", "Marble Series", BigDecimal.ONE, new BigDecimal("580.00")))),
+            quotation(), customer(null));
+
+        try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
+            var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
+            // DEPT_VALUE_ROW=2/UNIT_VALUE_ROW=4, SALES_LINE_COL=7 (H3/H5) — the template's own
+            // "ฝ่าย"/"หน่วยงาน" text — must survive on a legacy render, where deptCode/unitCode are
+            // always null (buildLegacyModel never reads them off TicketDto/QuotationDto at all).
+            assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label NOT cleared on legacy render").isFalse();
+            assertThat(sheet.getRow(2).getCell(7).getStringCellValue()).isEqualTo("ฝ่าย");
+            assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label NOT cleared on legacy render").isFalse();
+            assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("หน่วยงาน");
+            // The value cells (I3/I5) stay blank, exactly as they always have (nullSafe) — only the
+            // LABEL's untouched-ness is new coverage here.
+            assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value blank").isEmpty();
+            assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value blank").isEmpty();
         }
     }
 

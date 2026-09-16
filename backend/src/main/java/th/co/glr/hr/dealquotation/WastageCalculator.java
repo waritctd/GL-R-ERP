@@ -90,6 +90,22 @@ public final class WastageCalculator {
      * an exact deadline rather than "N days from now". */
     public static final String VALIDITY_MODE_DATE = "DATE";
 
+    // ── Item 4 (V181, "ไม่รับมัดจำ", 2026-09-16) — the three 100%-payment-term codes ─────────────
+    // Only ever apply on a document whose deposit_percent = 0 ("ไม่รับมัดจำ" ticked); see
+    // DealQuotationService#resolveFullPaymentTerm. Deposit 0% stopped being expressible any other
+    // way (the editor's percent chips/custom input now reject 0), so a zero-deposit document names
+    // ONE of these instead of leaving the reader to infer why no deposit is asked. No credit-days
+    // option exists in no-deposit mode (owner ruling, 2026-09-16) — only these three fixed terms.
+    /** "บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า" */
+    public static final String FULL_PAYMENT_TERM_BEFORE_DELIVERY = "BEFORE_DELIVERY";
+    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า" */
+    public static final String FULL_PAYMENT_TERM_ON_DELIVERY = "ON_DELIVERY";
+    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า" — owner correction
+     * 2026-09-16: "เมื่อ..." first, THEN "หรือก่อน...", the reverse order of the other two terms'
+     * own "ก่อน...หรือเมื่อ..." phrasing; code renamed BEFORE_OR_ON_DELIVERY -> ON_OR_BEFORE_DELIVERY
+     * to match. */
+    public static final String FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY = "ON_OR_BEFORE_DELIVERY";
+
     /**
      * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
      * thing (ภาษาเอกสาร) and the rest follows. {@code DealQuotationService#resolveCurrency} lets an
@@ -139,10 +155,38 @@ public final class WastageCalculator {
         // null or <= 0 means "no box rounding" — piecesFinal = piecesAfterWastage, boxes = null.
         Integer piecesPerBox,
         BigDecimal unitPrice,
-        BigDecimal discountPct
-    ) {}
+        BigDecimal discountPct,
+        // Owner-approved (2026-09-16, "sell loose pieces"): true (the default) is today's ONLY
+        // behaviour, byte-for-byte — piecesFinal always rounds UP to the next piecesPerBox
+        // multiple. false lets a TILE row sell pieces that do not make a full box: piecesFinal
+        // stays piecesAfterWastage, unrounded, and Result#boxes/#loosePieces split it into full
+        // boxes plus a remainder instead of forcing it to the next box. Meaningless (never read)
+        // when piecesPerBox is null/<=0 — there is no box multiple to round to or split by either
+        // way.
+        boolean roundToFullBox
+    ) {
+        /** The pre-loose-pieces shape — every call site before this feature. Defaults
+         * {@code roundToFullBox} true, which is byte-for-byte the only behaviour that existed
+         * before it, so every existing caller (production and test) compiles and behaves
+         * unchanged. */
+        public Input(BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
+                     String wastageMode, BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+                     BigDecimal discountPct) {
+            this(sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox,
+                unitPrice, discountPct, true);
+        }
+    }
 
-    /** Everything the server computed for one line — the client never supplies any of this. */
+    /** Everything the server computed for one line — the client never supplies any of this.
+     *
+     * @param boxes the FULL box count when {@code piecesPerBox > 0} (exactly {@code piecesFinal /
+     *     piecesPerBox} either way — an EXACT quotient when {@code roundToFullBox} is true, since
+     *     {@code piecesFinal} is then itself a multiple of {@code piecesPerBox}); {@code null}
+     *     when there is no box multiple at all.
+     * @param loosePieces the remainder pieces that do not make a full box: always {@code 0} when
+     *     {@code roundToFullBox} is true (the whole point of rounding up), {@code piecesFinal %
+     *     piecesPerBox} when it is false, and {@code null} exactly when {@link #boxes} is null.
+     */
     public record Result(
         BigDecimal piecesPerSqm,
         int piecesBeforeWastage,
@@ -150,7 +194,8 @@ public final class WastageCalculator {
         int piecesFinal,
         Integer boxes,
         BigDecimal netUnitPrice,
-        BigDecimal lineAmount
+        BigDecimal lineAmount,
+        Integer loosePieces
     ) {}
 
     public static Result calculate(Input in) {
@@ -187,10 +232,22 @@ public final class WastageCalculator {
 
         int piecesFinal = piecesAfter;
         Integer boxes = null;
+        Integer loosePieces = null;
         if (in.piecesPerBox() != null && in.piecesPerBox() > 0) {
             int ppb = in.piecesPerBox();
-            piecesFinal = ceilToMultiple(piecesAfter, ppb);
-            boxes = piecesFinal / ppb;
+            if (in.roundToFullBox()) {
+                piecesFinal = ceilToMultiple(piecesAfter, ppb);
+                boxes = piecesFinal / ppb;
+                loosePieces = 0;
+            } else {
+                // Owner-approved "sell loose pieces": piecesFinal is NOT rounded up — the rep is
+                // selling exactly piecesAfter, split into full boxes plus whatever does not make
+                // one more. lineAmount below is unaffected either way: it always derives from
+                // THIS piecesFinal, whichever branch set it.
+                piecesFinal = piecesAfter;
+                boxes = piecesFinal / ppb;
+                loosePieces = piecesFinal % ppb;
+            }
         }
 
         BigDecimal discountPct = in.discountPct() == null ? BigDecimal.ZERO : in.discountPct();
@@ -215,7 +272,8 @@ public final class WastageCalculator {
         // is computed from the unrounded product — of the already-2dp LIST price, per the note above.
         BigDecimal lineAmount = round2(listPrice.multiply(BigDecimal.valueOf(piecesFinal)).multiply(discountFactor));
 
-        return new Result(piecesPerSqm, piecesBefore, piecesAfter, piecesFinal, boxes, netUnitPrice, lineAmount);
+        return new Result(piecesPerSqm, piecesBefore, piecesAfter, piecesFinal, boxes, netUnitPrice, lineAmount,
+            loosePieces);
     }
 
     /**
@@ -378,6 +436,37 @@ public final class WastageCalculator {
             throw new IllegalArgumentException("sqmPerBox must be positive, got: " + sqmPerBox);
         }
         return round2(BigDecimal.valueOf(boxes).multiply(sqmPerBox));
+    }
+
+    /**
+     * Owner decision 2026-09-16 ("Option B") — the English per-sqm printed quantity when the row
+     * carries no supplier box area (ตร.ม./กล่อง blank): {@code round2(piecesFinal × sqmPerPiece)},
+     * applied to the FINAL piece count — post-wastage, and post box-rounding when a แผ่น/กล่อง IS
+     * present without a box area (a normal full-box round, or the exact wastage-adjusted count when
+     * the rep has ticked "sell loose pieces"). {@code sqmPerPiece} here is the RAW column value, not
+     * the 2dp {@link #piecesPerSqm} reciprocal, so this is a SINGLE rounding rather than a double
+     * one.
+     *
+     * <p><b>Correction (2026-09-16 review) to this Javadoc's previous claim.</b> This is NOT "the
+     * same area basis the Thai SPECIAL_SQM mode uses" — Thai SPECIAL_SQM never derives a printed sqm
+     * quantity from pieces at all (its {@link DealQuotationLines#tilePrint} branch prints the stored
+     * PIECE count; only its net-price-per-piece derivation, {@link
+     * #netPerPieceFromSpecialSqm}, touches an sqm/piece figure, and it does so by DIVIDING by the
+     * 2dp {@link #piecesPerSqm} reciprocal, the opposite direction and a different rounding step from
+     * this method's raw multiplication). The two formulas are genuinely independent, and AREA
+     * quantity mode's own area→pieces step ({@code calculate}, below) already uses the ROUNDED
+     * {@link #piecesPerSqm} to go from a typed area to a piece count — so converting that piece
+     * count back to sqm via this method's RAW {@code sqmPerPiece} is not the exact inverse of that
+     * step, and a round-tripped value can print differently from what was typed: a typed 1,000 sqm
+     * (AREA mode, no wastage, no box) can print back as 1,000.80 sqm, because the pieces were
+     * derived using the rounded {@link #piecesPerSqm} while this method derives sqm going back using
+     * the raw {@code sqmPerPiece}.
+     */
+    public static BigDecimal sqmQuantityFromPieces(int piecesFinal, BigDecimal sqmPerPiece) {
+        if (sqmPerPiece == null || sqmPerPiece.signum() <= 0) {
+            throw new IllegalArgumentException("sqmPerPiece is required for a per-sqm quantity, got: " + sqmPerPiece);
+        }
+        return round2(BigDecimal.valueOf(piecesFinal).multiply(sqmPerPiece));
     }
 
     public static BigDecimal subtotal(List<BigDecimal> lineAmounts) {

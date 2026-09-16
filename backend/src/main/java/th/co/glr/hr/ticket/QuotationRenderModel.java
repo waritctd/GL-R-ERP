@@ -70,8 +70,47 @@ public record QuotationRenderModel(
     String documentLanguage,
     /** {@code "THB"} | {@code "USD"} — printed in the เป็นเงิน/Amount column heading and in the
      * grand-total label. Null falls back to THB via {@link #currencyCode()}. */
-    String currency
+    String currency,
+    /**
+     * V182 (owner request, 2026-09-16 — "sanitaryware"/non-tile documents print a different,
+     * shorter หมายเหตุ block): forces {@code QuotationRenderer} to use the packed/compacted
+     * v2-remarks layout (the {@code REMARK_HEAD_ROWS[0]..+n} CONSECUTIVE rows, with the
+     * template's now-unused rows physically removed — see {@code QuotationRenderer
+     * #compactRemarksSection}) regardless of {@code remarkLines.size()}.
+     *
+     * <p>Without this field, that layout was only ever chosen when {@code remarkLines.size() >=
+     * QuotationRenderer#REMARK_V2_MIN_LINES} (7) — exactly right for the tile-oriented 8-line (or
+     * 7-line, lead-time-dropped) set, but a NON-tile document's remark set is 3 or 4 lines, well
+     * under that threshold, and would otherwise fall through to the legacy
+     * head-row-plus-gaps layout — whose "unused" rows are not blank, they still carry the
+     * TEMPLATE's own baked-in tile-oriented sentences (LINE4/5/6/8's text lives in the raw XLS
+     * cells, not just in {@code DealQuotationRenderAdapter}'s constants), which would print
+     * ALONGSIDE the new short non-tile set rather than being replaced by it.
+     *
+     * <p>{@code false} (every constructor below except the canonical one) preserves today's
+     * behaviour byte-for-byte: the renderer keeps deciding purely from
+     * {@code remarkLines.size()}, exactly as it always has. Every existing caller — every test
+     * fixture and the legacy/PCR wrapper — uses one of those constructors, so this field is
+     * {@code false} everywhere except {@link th.co.glr.hr.dealquotation.DealQuotationRenderAdapter},
+     * which always builds the direct-deal v2 render (tile OR non-tile) and so always wants the
+     * packed layout — it sets this {@code true} unconditionally, superseding the size check rather
+     * than duplicating it.
+     */
+    boolean forceCompactRemarks
 ) {
+    /** The pre-V182 fourteen-argument shape — every caller before {@code forceCompactRemarks}
+     * existed. Defaults it to {@code false}: the renderer keeps choosing the v2/legacy remark
+     * layout purely from {@code remarkLines.size()}, exactly as before this field existed. */
+    public QuotationRenderModel(
+        LocalDate issueDate, String number, String deptCode, String unitCode, String salesLine,
+        String attnLine, String phoneLine, String projectName, List<RenderItem> items,
+        List<String> remarkLines, Signatories signatories, boolean signatureLabelsV2,
+        String documentLanguage, String currency
+    ) {
+        this(issueDate, number, deptCode, unitCode, salesLine, attnLine, phoneLine, projectName,
+            items, remarkLines, signatories, signatureLabelsV2, documentLanguage, currency, false);
+    }
+
     /** The pre-v3b shape: a Thai/THB document, which is what every caller predating the English
      * form means. Keeps the legacy wrappers and the existing renderer fixtures unchanged. */
     public QuotationRenderModel(

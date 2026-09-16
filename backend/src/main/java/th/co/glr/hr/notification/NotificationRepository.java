@@ -193,7 +193,9 @@ public class NotificationRepository {
         // constants for why these are notification `type`s only, not ticket_event kinds.
         Map.entry("DEAL_QUOTATION_SUBMITTED", "ใบเสนอราคารออนุมัติ"),
         Map.entry("DEAL_QUOTATION_APPROVED", "ใบเสนอราคาได้รับอนุมัติแล้ว"),
-        Map.entry("DEAL_QUOTATION_REJECTED", "ใบเสนอราคาไม่ได้รับอนุมัติ")
+        Map.entry("DEAL_QUOTATION_REJECTED", "ใบเสนอราคาไม่ได้รับอนุมัติ"),
+        // Owner request (2026-09-16) -- see TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED.
+        Map.entry("DEAL_QUOTATION_REVISION_SUBMITTED", "ใบเสนอราคาฉบับแก้ไขรออนุมัติ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

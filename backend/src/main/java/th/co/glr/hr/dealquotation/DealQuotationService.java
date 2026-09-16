@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -178,6 +179,13 @@ public class DealQuotationService {
         // never persist an id no client could ever have legitimately picked.
         Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
         Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
+        // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): remainderMode/creditDays are
+        // irrelevant on a zero-deposit document (its whole-amount term is fullPaymentTerm instead)
+        // and fullPaymentTerm is irrelevant on any other -- see #noDeposit/#resolveFullPaymentTerm.
+        boolean noDeposit = isZeroDeposit(request.depositPercent());
+        String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
+        Integer creditDays = noDeposit ? null : request.creditDays();
+        String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
         // ("0014") is minted here and immediately formatted as revision 1 of itself
@@ -195,11 +203,12 @@ public class DealQuotationService {
             // project name, exactly as this line unconditionally did before projectName existed.
             request.projectName() != null ? blankToNull(request.projectName()) : ticket.projectName(),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
-            request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            request.offerDate(), request.depositPercent(), remainderMode,
+            creditDays, request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency,
             printedByDisplayId, salesRepDisplayId,
+            resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
             subtotal, null, 1, items));
         return requireQuotation(id);
     }
@@ -351,6 +360,17 @@ public class DealQuotationService {
         // "use the real name" value for these two Long fields, so it is taken at face value).
         Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
         Long salesRepDisplayId = requireEligibleDisplayEmployeeId(request.salesRepDisplayId());
+        // Item 4 ("ไม่รับมัดจำ", V181) — same rule as #create; a full PUT always carries the
+        // payload's own depositPercent (there is no "missing keeps stored" case for it), so there is
+        // nothing stale to preserve here either.
+        boolean noDeposit = isZeroDeposit(request.depositPercent());
+        String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
+        Integer creditDays = noDeposit ? null : request.creditDays();
+        String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
+        // Item 2 ("ไม่เติม “คุณ”", V180) — the editor always sends its CURRENT value (the checkbox
+        // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
+        // no "missing keeps stored" case: a null on the wire means UNticked, exactly like create.
+        boolean omitContactHonorific = resolveOmitContactHonorific(request.omitContactHonorific());
         // Compare-and-set FIRST, before touching a single item row — a header update that finds
         // the row no longer DRAFT (a concurrent submit/approve) must leave the items untouched.
         // F7 (2026-09-10): re-snapshot the ลูกค้า columns from the LIVE customer row on every DRAFT
@@ -360,8 +380,8 @@ public class DealQuotationService {
         // stays frozen at what it was approved with.
         int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
-            request.offerDate(), request.depositPercent(), blankToNull(request.remainderMode()),
-            request.creditDays(), request.validityDays(), validityMode, validityUntil,
+            request.offerDate(), request.depositPercent(), remainderMode,
+            creditDays, request.validityDays(), validityMode, validityUntil,
             blankToNull(request.customerNotes()),
             priceMode, documentLanguage, currency, subtotal,
             printedByDisplayId, salesRepDisplayId,
@@ -370,7 +390,8 @@ public class DealQuotationService {
             // printedByDisplayId/salesRepDisplayId just above, there is no "missing keeps stored"
             // case — blankToNull(null) clears it, exactly like every other free-text header field
             // on this same call (customerNotes, deptCode, unitCode).
-            blankToNull(request.projectName()));
+            blankToNull(request.projectName()),
+            omitContactHonorific, fullPaymentTerm);
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะร่างแล้ว จึงแก้ไขไม่ได้");
         }
@@ -442,6 +463,18 @@ public class DealQuotationService {
         // had no contact -- it stays a draft until the rep saves it with one.
         if (quotation.contactId() == null || isBlank(quotation.contactName())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ");
+        }
+        // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): a zero-deposit document must name
+        // ONE of the three payment terms before an approver ever sees it — create/update allow a
+        // DRAFT to be saved with no term chosen yet (isZeroDeposit(...) ? blankToNull(...) : null),
+        // so submit is the one gate that actually requires it, the same "create/update permissive,
+        // submit strict" split #requireEveryTileItemHasALeadTime and the DATE-mode check just below
+        // both already use. Deliberately NOT re-checked for a row whose depositPercent is not
+        // exactly 0 (including every pre-V181 row, which stores fullPaymentTerm = NULL regardless
+        // of its deposit): #resolveFullPaymentTerm already guarantees such a row's fullPaymentTerm
+        // is null, so this condition can only ever fire on a genuinely zero-deposit document.
+        if (isZeroDeposit(quotation.depositPercent()) && isBlank(quotation.fullPaymentTerm())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน");
         }
         // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
         // create/update already refuse one before the quotation's OWN date, but time keeps moving
@@ -529,11 +562,25 @@ public class DealQuotationService {
         // silently swallowed, though the in-app bell rows still landed since that INSERT runs
         // synchronously and simply joins the ambient transaction like any other write here -- no
         // manual deferral needed for it to roll back together with everything else.
-        notifySubmitted(submitted);
+        notifySubmitted(submitted, actor);
         return submitted;
     }
 
-    private void notifySubmitted(DealQuotationDto submitted) {
+    /**
+     * Owner request (2026-09-16): a submitted row that is a revision -- {@code
+     * parentQuotationId() != null}, true for BOTH {@link #createRevision}'s own submit (parent
+     * {@code APPROVED}) and {@link #submitAsRevisionOfRejected}'s (parent {@code DRAFT}, carrying
+     * a rejection reason in its own {@code approvalNote}) -- must read as a REVISION to
+     * sales_manager/ceo, not the identical "รออนุมัติ" text an ordinary first-time submit sends; a
+     * reviewer skimming the bell/inbox otherwise has no way to tell the two apart. First-time
+     * submits ({@code parentQuotationId() == null}) fall straight through to the original
+     * unchanged branch below.
+     */
+    private void notifySubmitted(DealQuotationDto submitted, UserPrincipal actor) {
+        if (submitted.parentQuotationId() != null) {
+            notifyRevisionSubmitted(submitted, submitted.parentQuotationId(), actor);
+            return;
+        }
         String message = "ใบเสนอราคา " + submitted.number() + " รอการอนุมัติ";
         String link = "/quotations/" + submitted.id();
         notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DEAL_QUOTATION_SUBMITTED, message, link);
@@ -546,6 +593,55 @@ public class DealQuotationService {
         // still written from the rep's own point of view.
         notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
             "ส่งใบเสนอราคา " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
+    }
+
+    /**
+     * The revision half of {@link #notifySubmitted} above. Looks the parent up (a plain {@link
+     * #requireQuotation}, no access re-check -- the actor already passed {@link
+     * #requireEditAccessForQuotation} against the CURRENT row earlier in {@link #submit}, and the
+     * parent is the very row that row was copied from) purely to read its {@code number()} and,
+     * for the resubmit-after-ตีกลับ path only, its rejection reason.
+     *
+     * <p>{@code parent.docStatus()} is what actually tells the two {@link #insertRevisionCopyOf}
+     * callers apart, NOT {@code approvalNote() != null} alone: {@link #createRevision} requires an
+     * {@code APPROVED} source, and an approved row's own {@code approvalNote} is whatever the
+     * approver typed (see {@code acceptanceScenario_createUpdateSubmitApprove}'s "อนุมัติแล้ว"),
+     * which would be a false "ตีกลับ" reading here. {@link #submitAsRevisionOfRejected} requires a
+     * {@code DRAFT} source carrying a PRIOR rejection decision, and ตีกลับ itself never renumbers
+     * (see this class's own status-machine comment above {@link #submit}) -- so the parent is
+     * STILL {@code DRAFT} at this point, with {@code approvalNote} holding the rejection reason,
+     * not yet superseded (that only happens once THIS revision itself reaches {@code APPROVED}).
+     *
+     * <p>Opus review (2026-09-16): the parent lookup is a plain {@link
+     * DealQuotationRepository#findById}, NOT {@link #requireQuotation}, so this notification step
+     * can never 404 the surrounding submit transaction just because the parent row is somehow
+     * unreadable -- there is no DELETE of quotations anywhere in this codebase and the parent is
+     * FK-protected, so the fallback below is not reachable today, but a notification side-effect is
+     * still the wrong place to fail a submit outright. Same reasoning for {@code actor.name()}: it
+     * is interpolated with no null/blank guard elsewhere in this class, but this is the one message
+     * that prints it verbatim as the FIRST word, so a blank name would otherwise read as the
+     * literal "null ได้จัดทำ...". Falls back to a role label, matching {@link #approve}'s own
+     * {@code approvedByName() != null ? ... : "ผู้อนุมัติ"} pattern just below in this class.
+     */
+    private void notifyRevisionSubmitted(DealQuotationDto submitted, long parentId, UserPrincipal actor) {
+        Optional<DealQuotationDto> parent = quotations.findById(parentId);
+        String parentNumber = parent.map(DealQuotationDto::number).orElse("-");
+        String actorName = isBlank(actor.name()) ? "ผู้เสนอราคา" : actor.name();
+        StringBuilder message = new StringBuilder()
+            .append(actorName).append(" ได้จัดทำใบเสนอราคาฉบับแก้ไข ").append(submitted.number())
+            .append(" (แก้ไขจาก ").append(parentNumber).append(") กรุณาตรวจสอบและพิจารณาอนุมัติ");
+        if (parent.isPresent() && QuotationStatus.DRAFT.equals(parent.get().docStatus())
+                && !isBlank(parent.get().approvalNote())) {
+            message.append(" — แก้ไขตามที่ตีกลับ: ").append(parent.get().approvalNote());
+        }
+        String link = "/quotations/" + submitted.id();
+        notifications.notifyByRoleAtLink(
+            "sales_manager", TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED, message.toString(), link);
+        notifications.notifyByRoleAtLink(
+            "ceo", TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED, message.toString(), link);
+        // Same rep/creator confirmation as the first-time-submit branch, worded for a revision.
+        notifyRepAndCreator(submitted, TicketEventKind.DEAL_QUOTATION_SUBMITTED,
+            "ส่งใบเสนอราคาฉบับแก้ไข " + submitted.number() + " ขออนุมัติแล้ว รอผลการพิจารณา");
     }
 
     @Transactional
@@ -747,6 +843,11 @@ public class DealQuotationService {
             // stays whatever it was — this mirrors how the parent's own contact/rep snapshot is
             // copied without re-checking against a live table).
             source.printedByDisplayId(), source.salesRepDisplayId(),
+            // V180/V181 (items 2/4) — a revision inherits its parent's honorific flag and
+            // full-payment term VERBATIM, the same "copy every header field" rule as everything
+            // else in this call — a revise must not silently re-add "คุณ" or drop a chosen
+            // zero-deposit term the rep already picked on the document being revised.
+            source.omitContactHonorific(), source.fullPaymentTerm(),
             source.subtotalAmount(), source.id(),
             nextRevisionNo, items));
         // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
@@ -1156,6 +1257,42 @@ public class DealQuotationService {
         return currency;
     }
 
+    /**
+     * Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16): the nullable {@code Boolean} on the
+     * wire resolves to {@code false} (UNticked, today's only behaviour) whenever it is absent —
+     * shared by {@link #create}/{@link #update} so "missing means unticked" can never drift
+     * between the two.
+     */
+    private boolean resolveOmitContactHonorific(Boolean omitContactHonorific) {
+        return Boolean.TRUE.equals(omitContactHonorific);
+    }
+
+    /**
+     * Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): {@code true} only for an EXPLICIT
+     * {@code depositPercent == 0}. A {@code null} depositPercent is NOT "no deposit" — it defaults
+     * to 30% exactly like {@code DealQuotationRenderAdapter#depositLine}'s own reasoning — so a
+     * quotation that simply never set a percent must not have its remainderMode/creditDays cleared
+     * or accept a fullPaymentTerm. Shared by {@link #create}/{@link #update} so the "0% is the ONE
+     * signal for no-deposit" rule can never drift between the two.
+     */
+    private boolean isZeroDeposit(Integer depositPercent) {
+        return depositPercent != null && depositPercent == 0;
+    }
+
+    /**
+     * Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — a {@code fullPaymentTerm} only ever
+     * applies to a zero-deposit document; on any other (including a null/unset depositPercent,
+     * which defaults to 30% — see {@link #isZeroDeposit}) it is forced back to null, so a rep who
+     * unticks "ไม่รับมัดจำ" and re-enters an ordinary percentage can never leave a stale term
+     * attached. On a genuinely zero-deposit document, null/blank passes through unchanged — a
+     * DRAFT may be saved before the rep has picked one; only {@link #submit} refuses to advance it.
+     * An unrecognised code never reaches here: {@code @Pattern} on the request field already 400s
+     * it before bean validation lets the request through.
+     */
+    private String resolveFullPaymentTerm(Integer depositPercent, String fullPaymentTerm) {
+        return isZeroDeposit(depositPercent) ? blankToNull(fullPaymentTerm) : null;
+    }
+
     /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
      * (and the whole legacy customer-quotation path) stores. */
     private String resolveValidityMode(String validityMode) {
@@ -1303,10 +1440,31 @@ public class DealQuotationService {
         if (rowNumber != null) {
             requireItemComplete(rowNumber, input, sqmPerPiece, perSqm);
         }
-        if (perSqm) {
-            // Never a silent pieces fallback: without both box figures there is no sqm quantity.
-            // Checked on the lenient preview path too — there is no honest number to preview.
+        // Owner-approved "sell loose pieces" (2026-09-16): null reads as true, today's only
+        // behaviour. Resolved ONCE here — WastageCalculator.Input, the stored NewItem and the
+        // printed line all read this same boolean, never input.roundToFullBox() directly again.
+        boolean roundToFullBox = input.roundToFullBox() == null || input.roundToFullBox();
+        // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL for English per-sqm.
+        // WITH a box area, behaviour is unchanged byte-for-byte — both box figures are still
+        // required and the quantity can only ever be a whole number of boxes, so loose pieces is
+        // still refused. WITHOUT one, the printed sqm quantity instead derives from piecesFinal ×
+        // sqmPerPiece (DealQuotationLines#tilePrint), which has no box-count restriction at all —
+        // piecesPerBox becomes optional too, and loose pieces is allowed exactly like any other
+        // tile row.
+        boolean hasBoxArea = input.sqmPerBox() != null && input.sqmPerBox().signum() > 0;
+        if (perSqm && hasBoxArea) {
+            // Never a silent pieces fallback: with a box area present there is no sqm quantity
+            // without BOTH box figures. Checked on the lenient preview path too — there is no
+            // honest number to preview.
             requireBoxDataForPerSqm(input, rowNumber);
+            // A box-area quantity IS boxes × sqm/box (WastageCalculator#sqmQuantityFromBoxes),
+            // which has no "remainder pieces" term at all. Refused on the lenient preview path too,
+            // same as the box-data check just above.
+            if (!roundToFullBox) {
+                String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+                throw new ApiException(HttpStatus.BAD_REQUEST, where
+                    + "ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง");
+            }
         }
         WastageCalculator.Result result;
         try {
@@ -1317,7 +1475,8 @@ public class DealQuotationService {
                 // money below is recomputed from the sqm quantity, so only the PIECE results of
                 // this call are used.
                 perSqm ? input.specialPriceSqm() : input.unitPrice(),
-                perSqm ? null : input.discountPct()));
+                perSqm ? null : input.discountPct(),
+                roundToFullBox));
         } catch (IllegalArgumentException | ArithmeticException e) {
             // ArithmeticException alongside IllegalArgumentException: BigDecimal#intValueExact
             // (piecesPerBox/ceiling conversions inside WastageCalculator) throws it for a value
@@ -1348,8 +1507,28 @@ public class DealQuotationService {
             discountPct = null;
             BigDecimal qtySqm;
             try {
-                qtySqm = WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox());
+                // Same "amount = price/sqm × printed sqm quantity" formula either way (v3b, owner
+                // decision 2026-09-13) — only the quantity's OWN derivation differs by hasBoxArea.
+                qtySqm = hasBoxArea
+                    ? WastageCalculator.sqmQuantityFromBoxes(result.boxes(), input.sqmPerBox())
+                    : WastageCalculator.sqmQuantityFromPieces(result.piecesFinal(), sqmPerPiece);
             } catch (IllegalArgumentException e) {
+                if (!hasBoxArea) {
+                    // F5.1 fix (2026-09-16 review): without a box area, the ONLY way
+                    // sqmQuantityFromPieces throws here is a missing/non-positive ตร.ม./แผ่น -- and
+                    // this branch is reachable ONLY from the LENIENT calculate-line preview
+                    // (rowNumber == null), since requireItemComplete (which names this exact field
+                    // as "ตร.ม./แผ่น" on create/update) is skipped there. Before this fix, the raw
+                    // exception message leaked verbatim as "ข้อมูลรายการไม่ถูกต้อง: sqmPerPiece is
+                    // required for a per-sqm quantity, got: null" -- an English, implementation-detail
+                    // string on a screen a sales rep sees while typing. Reuse the same Thai
+                    // field-name wording the save/create path already uses instead.
+                    String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+                    throw new ApiException(HttpStatus.BAD_REQUEST, where + "ขาด ตร.ม./แผ่น");
+                }
+                // hasBoxArea: requireBoxDataForPerSqm above already validated both box figures are
+                // present, so this is not expected to be reachable -- kept as the original generic
+                // wrap, defence in depth only.
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
             }
             perSqmLineAmount = money2(qtySqm.multiply(specialPriceSqm));
@@ -1389,13 +1568,14 @@ public class DealQuotationService {
             input.originCountry(), input.leadTimeMinDays(), input.leadTimeMaxDays(), input.itemNotes(),
             descriptionLine,
             // qty stays the PIECE count on every tile row (the read path's piecesFinal); the sqm
-            // quantity is derived from boxes × sqm_per_box when printed (DealQuotationLines#tilePrint).
+            // quantity is derived from boxes × sqm_per_box (box area present) or piecesFinal ×
+            // sqm_per_piece (Option B, box area blank) when printed (DealQuotationLines#tilePrint).
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.valueOf(result.piecesFinal()),
             perSqm ? DealQuotationLines.TILE_UNIT_SQM : "แผ่น",
             specialPriceSqm, null, null,
             catalogBasis == null ? null : catalogBasis.widthMm(),
             catalogBasis == null ? null : catalogBasis.heightMm(),
-            input.sqmPerBox());
+            input.sqmPerBox(), roundToFullBox);
     }
 
     /**
@@ -1537,7 +1717,7 @@ public class DealQuotationService {
             // Transient render-only fields (see NewItem#catalogWidthMm) -- this NewItem is bound
             // for insertDraft, never for #toItemDto, so there is nothing here to carry through.
             null, null,
-            item.sqmPerBox());
+            item.sqmPerBox(), item.roundToFullBox());
     }
 
     // ProductPriceDto's/price_catalog.product_prices' own price_unit for a linear-metre trim
@@ -1615,8 +1795,12 @@ public class DealQuotationService {
         return null;
     }
 
-    /** Owner decision 2026-09-13: an English per-sqm row needs BOTH box figures — its quantity is
-     * boxes × sqm/box, and there is deliberately no pieces fallback. A rep-facing Thai 400. */
+    /** Owner decision 2026-09-13, narrowed by Option B (2026-09-16): an English per-sqm row WITH a
+     * box area (ตร.ม./กล่อง filled) needs BOTH box figures — its quantity is boxes × sqm/box, and
+     * there is deliberately no pieces fallback for that combination. Only called by
+     * {@link #buildTileItem} when {@code hasBoxArea} is true; a row with NO box area at all skips
+     * this entirely (piecesPerBox becomes optional too — see {@link #requireItemComplete}). A
+     * rep-facing Thai 400. */
     private void requireBoxDataForPerSqm(ItemInput input, Integer rowNumber) {
         List<String> missing = new ArrayList<>();
         if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("แผ่น/กล่อง");
@@ -1732,10 +1916,20 @@ public class DealQuotationService {
         if (isBlank(input.texture())) missing.add("ผิว");
         if (isBlank(input.sizeText())) missing.add("ขนาด");
         if (input.thicknessMm() == null || input.thicknessMm().signum() <= 0) missing.add("ความหนา");
-        if (input.piecesPerBox() == null || input.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
+        // Option B (owner decision, 2026-09-16): แผ่น/กล่อง stays required for every row EXCEPT an
+        // English per-sqm row with no box area at all — that combination needs no box multiple
+        // (its quantity derives from piecesFinal × sqmPerPiece instead, see
+        // DealQuotationLines#tilePrint), exactly like any other tile row without a pieces-per-box.
+        boolean hasBoxArea = input.sqmPerBox() != null && input.sqmPerBox().signum() > 0;
+        boolean piecesPerBoxOptional = perSqm && !hasBoxArea;
+        if (!piecesPerBoxOptional && (input.piecesPerBox() == null || input.piecesPerBox() < 1)) {
+            missing.add("จำนวนแผ่นต่อกล่อง");
+        }
         if (resolvedSqmPerPiece == null || resolvedSqmPerPiece.signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (perSqm) {
-            if (input.sqmPerBox() == null || input.sqmPerBox().signum() <= 0) missing.add("ตร.ม./กล่อง");
+            // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no separate check here. WITH one,
+            // piecesPerBox is still required (the check above), and #buildTileItem's hasBoxArea
+            // branch separately requires it be present too, refusing a partially-filled pair.
             if (input.specialPriceSqm() == null || input.specialPriceSqm().signum() <= 0) missing.add("ราคาต่อ ตร.ม.");
         } else if (input.unitPrice() == null || input.unitPrice().signum() <= 0) {
             missing.add("ราคาต่อหน่วย");
@@ -1756,9 +1950,13 @@ public class DealQuotationService {
      * remove that from the หมายเหตุ") replaced that fallback with dropping the whole line
      * entirely (see {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}), so a rep must
      * actually enter a lead time rather than let the document print a plausible-looking but false
-     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT
-     * rows are exempt — neither has a lead-time concept (freight/consumables/a ส่วนลดพิเศษ line
-     * cannot "arrive"). A DRAFT may still be saved with no lead times; this gate is submit only.
+     * one, or silently ship the document one remark shorter. PLAIN and ADJUSTMENT rows are exempt
+     * from THIS gate — an ADJUSTMENT (ส่วนลดพิเศษ) row still has no lead-time concept at all (it
+     * cannot "arrive"), but a PLAIN row (สินค้า/บริการอื่น — sanitaryware) CAN carry one since D1
+     * (owner decision, 2026-09-16: her QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against exactly
+     * such a row) — it is simply never REQUIRED the way a TILE row's is, so a rep who leaves it
+     * blank on a PLAIN row can still submit. A DRAFT may still be saved with no lead times on any
+     * row type; this gate is submit only.
      */
     private void requireEveryTileItemHasALeadTime(List<DealQuotationItemDto> items) {
         List<String> missingSeqs = new ArrayList<>();
@@ -1792,10 +1990,17 @@ public class DealQuotationService {
         if (isBlank(item.texture())) missing.add("ผิว");
         if (isBlank(item.sizeText())) missing.add("ขนาด");
         if (item.thicknessMm() == null || item.thicknessMm().signum() <= 0) missing.add("ความหนา");
-        if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
+        // Same hasBoxArea exception as #requireItemComplete — see its own comment.
+        boolean hasBoxArea = item.sqmPerBox() != null && item.sqmPerBox().signum() > 0;
+        boolean piecesPerBoxOptional = perSqm && !hasBoxArea;
+        if (!piecesPerBoxOptional && (item.piecesPerBox() == null || item.piecesPerBox() < 1)) {
+            missing.add("จำนวนแผ่นต่อกล่อง");
+        }
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (item.unitPrice() == null || item.unitPrice().signum() <= 0) missing.add("ราคาต่อหน่วย");
-        if (perSqm && (item.sqmPerBox() == null || item.sqmPerBox().signum() <= 0)) missing.add("ตร.ม./กล่อง");
+        // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no check here; a partially-filled pair
+        // (sqmPerBox set, piecesPerBox blank) is already caught by the piecesPerBoxOptional branch
+        // above, since hasBoxArea alone does not exempt piecesPerBox.
         if (!hasQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
         if (!missing.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1847,8 +2052,9 @@ public class DealQuotationService {
         // The SAME decision DealQuotationRepository#mapItemColumns makes for a stored row.
         DealQuotationLines.TilePrint print = tile
             ? DealQuotationLines.tilePrint(documentLanguage, priceMode, item.quantityMode(), item.areaSqm(),
-                piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(), item.piecesFinal(),
-                item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(), item.specialPriceSqm())
+                item.sqmPerPiece(), piecesPerSqm, item.piecesBeforeWastage(), item.wastageMode(), item.wastageValue(),
+                item.piecesFinal(), item.piecesPerBox(), item.boxes(), item.sqmPerBox(), item.quantity(), item.unit(),
+                item.specialPriceSqm(), item.roundToFullBox())
             : null;
         // A tile's description is recomposed in the document's language, exactly as the read path
         // does; a PLAIN/ADJUSTMENT row's is the one the build step composed or the rep typed.
@@ -1871,7 +2077,7 @@ public class DealQuotationService {
             print == null ? item.unit() : print.unit(), item.specialPriceSqm(), item.adjustmentPct(),
             item.adjustmentDeadline(), print == null ? null : print.subLine(),
             DealQuotationLines.flatAdjustmentAmount(item.lineType(), item.adjustmentPct(), item.unitPrice()))
-            .withSqmPerBox(item.sqmPerBox());
+            .withSqmPerBox(item.sqmPerBox()).withRoundToFullBox(item.roundToFullBox());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

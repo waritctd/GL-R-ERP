@@ -19,12 +19,105 @@ import java.util.Locale;
  * rather than sharing one across this singleton-free, static-methods-only class.
  */
 public final class DealQuotationLines {
+    /** The unit-token vocabulary the shared grammar recognises — shared by {@link #SIZE_HAS_UNIT}
+     * and {@link #TWO_DIMENSIONS} so the two can never drift the way they did before 2026-09-16
+     * (review finding F4: {@code SIZE_HAS_UNIT} was missing the middle-dot Thai forms {@code ซ.ม.}/
+     * {@code ม.ม.} that {@code TWO_DIMENSIONS} already accepted, so {@code descriptionLine} printed
+     * a millimetre size labelled "cm." on a customer document). */
+    private static final String UNIT_ALTERNATION = "cm\\.?|mm\\.?|ซ\\.?ม\\.?|ม\\.?ม\\.?";
+
     private static final java.util.regex.Pattern SIZE_HAS_UNIT =
-        java.util.regex.Pattern.compile("(?i)(ซม\\.?|มม\\.?|cm\\.?|mm\\.?)\\s*$");
-    /** Matches a plain "{@code W x H}" pair — see {@link #parseTwoDimensions} for the exact shape
-     * this is meant to recognise (and, as importantly, everything it deliberately does not). */
+        java.util.regex.Pattern.compile("(?i)(" + UNIT_ALTERNATION + ")\\s*$");
+
+    /** ReDoS guard (F1, BLOCKER, 2026-09-16 review) — the maximum {@code sizeText} length
+     * {@link #parseTwoDimensions} will attempt to match against {@link #TWO_DIMENSIONS} at all. 64
+     * comfortably covers every real "WxH[xT] [unit] (note)" free-text cell in this file's own vector
+     * table with room to spare, so this never rejects a genuine size — it exists purely so a pasted
+     * multi-hundred-character string can never reach the matcher, as a second, independent line of
+     * defense alongside the grammar fix below (a length guard costs nothing and catches a regression
+     * in the regex fix; the regex fix costs nothing and catches a regression in the guard). Same
+     * number, same reasoning, on the frontend side — {@code quotationMeta.js#MAX_SIZE_TEXT_LENGTH}. */
+    private static final int MAX_SIZE_TEXT_LENGTH = 64;
+
+    /** F2 (HIGH, 2026-09-16 review) — every Unicode space separator (general category {@code Z}:
+     * NBSP, thin space, ideographic space, narrow no-break space, …), the BOM/ZWNBSP ({@code U+FEFF},
+     * category {@code Cf} so not covered by {@code \p{Z}}) and the line/paragraph
+     * separators. Java's {@code \s} (used throughout {@link #TWO_DIMENSIONS}) is ASCII-only and
+     * {@link String#trim()} strips only code points {@code <= U+0020}, while JS's {@code \s} is
+     * Unicode-aware — so the two engines disagreed on every character in this class (see {@link
+     * #normalize}'s own doc for the measured vectors). Folding them all to a plain ASCII space
+     * BEFORE the shared grammar ever runs is what keeps the two engines agreeing, rather than
+     * trying to reconcile two different {@code \s} definitions inside the pattern itself. */
+    private static final java.util.regex.Pattern SIZE_TEXT_WHITESPACE =
+        java.util.regex.Pattern.compile("[\\p{Z}\\uFEFF\\u2028\\u2029]");
+
+    /**
+     * ⚠️ SHARED GRAMMAR (2026-09-16, owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
+     * แต่ PDF ยังใช้ค่าเดิม"): this pattern and the frontend's {@code quotationMeta.js#SIZE_PATTERN}
+     * MUST stay identical. Before 2026-09-16 they had quietly drifted — this one had no per-number
+     * unit, no decimal-comma, no mm unit, no trailing free text, while the frontend's already
+     * tolerated a third dimension — so a size the rep typed could recompute แผ่น/ตร.ม. on the
+     * screen (frontend parsed it) while the printed PDF still showed the linked catalogue's size
+     * (this one didn't parse it, so {@link #sizeLine} fell back to "unparseable, keep the
+     * catalogue"). The vector table pinning both sides is in {@code DealQuotationLinesTest} and
+     * {@code quotationMeta.test.js} — same inputs, same {width, height, unit} result — so the two
+     * can never drift apart again without a red test.
+     *
+     * <p>One number, one separator ({@code x}/{@code X}/{@code ×}/{@code *}, optional surrounding
+     * spaces), a second number, an optional THIRD {@code separator number} (thickness — e.g.
+     * "30x60x1"; ignored, never a second dimension), then optional trailing free text in
+     * parentheses (e.g. "(หนา 9)"; ignored). Numbers accept a decimal POINT OR COMMA ("29,7" is
+     * 29.7 — this column has no thousands separators to confuse it with). Each of the first two
+     * numbers may carry its OWN trailing unit token, OR a single one may follow the second number
+     * (which is how "the unit once at the end" and "unit after the second number" collapse into the
+     * same grammar position when there is no third dimension): {@code cm}/{@code cm.}/{@code
+     * mm}/{@code mm.} (English, case-insensitive) or {@code ซม}/{@code ซม.}/{@code ซ.ม.}
+     * (Thai centimetres) / {@code มม}/{@code มม.}/{@code ม.ม.} (Thai millimetres) — see {@link
+     * #unitFamily}. Anything else — a spelled-out shape, a lone number, letters before/between the
+     * numbers, a non-numeric third token — fails the match and yields {@code null} rather than a
+     * guess.
+     *
+     * <p>Group 1 = width digits, group 2 = width's own unit token (or {@code null}), group 3 =
+     * height digits, group 4 = height's own unit token (or {@code null}). See {@link
+     * #parseTwoDimensions} for how the two unit groups resolve to one {@link SizeUnit}.
+     *
+     * <p>⚠️ F1 (BLOCKER, 2026-09-16 review) — this grammar previously had FOUR independent
+     * {@code \s*(unit)?\s*} positions: a leading and trailing {@code \s*} around each optional,
+     * possibly-empty unit group. Because the unit group can match empty, a whitespace run of length
+     * n between two required tokens could be split n+1 ways between the leading and trailing
+     * {@code \s*}, and these splits multiply across the four positions — a ~degree-5 polynomial
+     * blow-up, measured on this exact (pre-fix) code at 253 ms / 5,026 ms (Java, 128 / 248 chars;
+     * the reviewer's own run measured 367 ms / 12,238 ms) against {@code "30" + " "×n + "x60" + " "×n
+     * + "x1" + " "×n + "!"} — and the 488-char shape did not finish within a 15-second timeout at
+     * all. Fixed by folding each position to a SINGLE leading {@code \s*+} with the unit token
+     * consuming its own trailing whitespace inside the (now single) optional group — {@code
+     * \s*+(?:(unit)\s*+)?} — so there is exactly one way to distribute a whitespace run rather than
+     * n+1 (this does not change what the pattern MATCHES, only how many ways it can try to match
+     * it). Possessive quantifiers ({@code *+}) are additionally used throughout on this (Java) side,
+     * so backtracking into an already-fully-consumed whitespace run is not even attempted. See
+     * {@link #MAX_SIZE_TEXT_LENGTH} for the second, independent line of defense, and {@code
+     * DealQuotationLinesTest}'s own "F1" section for the timing vectors that pin both.
+     */
     private static final java.util.regex.Pattern TWO_DIMENSIONS = java.util.regex.Pattern.compile(
-        "(?i)^\\s*(\\d+(?:\\.\\d+)?)\\s*[x×*]\\s*(\\d+(?:\\.\\d+)?)\\s*(?:cm\\.?|ซม\\.?|mm\\.?|มม\\.?)?\\s*$");
+        "(?i)^\\s*+(\\d+(?:[.,]\\d+)?)\\s*+(?:(" + UNIT_ALTERNATION + ")\\s*+)?"
+        + "[x×*]\\s*+(\\d+(?:[.,]\\d+)?)\\s*+(?:(" + UNIT_ALTERNATION + ")\\s*+)?"
+        + "(?:[x×*]\\s*+\\d+(?:[.,]\\d+)?\\s*+(?:(?:" + UNIT_ALTERNATION + ")\\s*+)?)?"
+        + "(?:\\([^)]*\\))?\\s*+$");
+
+    /** The unit a typed size pair states — {@code null} reads as "unspecified" (today's ambiguous
+     * rule: compare the catalogue in BOTH cm and mm readings; see {@link #matchesCatalogFaceSize}).
+     * An explicit unit is load-bearing: known "60x120 typed as cm vs a 60x120 MILLIMETRE catalogue
+     * row" ambiguity aside (a real, tiny tile that genuinely reads "60x120mm" — nothing in free text
+     * can distinguish that from "60x120cm" typed with the unit omitted; this grammar does not try),
+     * an EXPLICIT unit token means only that reading is checked, never the other — so "300x600mm"
+     * against a 60x60cm/600x600mm catalogue row reads as a DIFFERENT tile (300mm x 600mm), never as
+     * "matches once you also allow the cm reading". */
+    enum SizeUnit { CM, MM }
+
+    /** A parsed {@code {width, height}} pair plus its resolved unit — {@code null} unit means
+     * "unspecified" (see {@link SizeUnit}). Digits only, never rounded or unit-converted here. */
+    record ParsedSize(BigDecimal width, BigDecimal height, SizeUnit unit) {}
+
     private DealQuotationLines() {}
 
     /** {@code กระเบื้อง รุ่น {model} สี {color} ผิว {texture}}, plus {@code No.{productCode}}
@@ -156,19 +249,23 @@ public final class DealQuotationLines {
         }
         String thicknessPart = format(thicknessMm) + " mm";
         String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
+        // F2 fix (2026-09-16 review): resolved once, used by BOTH fallback branches below.
+        ParsedSize typed = parseTwoDimensions(sizeText);
         if (facePart != null) {
-            BigDecimal[] typed = parseTwoDimensions(sizeText);
             if (typed != null && !matchesCatalogFaceSize(typed, catalogWidthMm, catalogHeightMm)) {
                 // The rep typed a genuinely DIFFERENT size than the row's linked catalogue tile --
                 // print exactly what they typed rather than the (wrong-for-this-line) catalogue
                 // dims. See this method's Javadoc "REFINEMENT" section -- bug prod QT-2026-0034-1.
-                facePart = sizeText.trim();
+                // F2: UNLESS they typed no unit at all, in which case print it in the catalogue's
+                // own cm format rather than the ambiguous verbatim text -- see the Javadoc below.
+                facePart = typed.unit() == null ? formatUnitlessTypedSize(typed) : sizeText.trim();
             }
         } else if (!blank(sizeText)) {
             // FALLBACK: no catalogue geometry -- print exactly what the rep typed. Never split it
             // on "x", never unit-suffix it, never treat SIZE_HAS_UNIT as license to reformat it --
-            // see this method's Javadoc for why guessing here was the bug.
-            facePart = sizeText.trim();
+            // see this method's Javadoc for why guessing here was the bug. F2: EXCEPT a typed size
+            // that parses with no unit at all, printed in cm instead -- see the Javadoc below.
+            facePart = typed != null && typed.unit() == null ? formatUnitlessTypedSize(typed) : sizeText.trim();
         }
         if (blank(facePart)) {
             return label + thicknessPart + approx;
@@ -177,46 +274,121 @@ public final class DealQuotationLines {
     }
 
     /**
-     * Two positive numbers separated by an "x"-like separator ({@code x}/{@code X}/{@code ×}/
-     * {@code *}), tolerating surrounding spaces, decimals ("6x24.6"), and ONE trailing unit token
-     * ({@code cm}/{@code ซม.}/{@code mm}/{@code มม.}) after the pair — not per-number, matching how
-     * reps actually type ("60 x 60 cm", never "60cm x 60cm"). Anything else (a spelled-out shape, a
-     * third number, a non-numeric token) is deliberately treated as unparseable: this method exists
-     * only to detect "the rep typed a plain WxH pair", not to understand free text in general.
+     * The shared size grammar — see {@link #TWO_DIMENSIONS}'s Javadoc for the full spec (separators,
+     * per-number/trailing units, decimal comma, ignored third dimension, ignored trailing
+     * parenthetical). Package-private (not {@code private}) so {@code DealQuotationLinesTest} can
+     * pin the shared vector table directly against the parse RESULT, not just against {@link
+     * #sizeLine}'s printed string.
      *
-     * @return the two numbers in the order typed, or {@code null} when {@code sizeText} is blank,
-     *     does not match the two-number shape, or either number is not strictly positive.
+     * @return the parsed {@link ParsedSize}, or {@code null} when {@code sizeText} is blank, exceeds
+     *     {@link #MAX_SIZE_TEXT_LENGTH}, does not match the grammar, or either number is not
+     *     strictly positive.
      */
-    private static BigDecimal[] parseTwoDimensions(String sizeText) {
+    static ParsedSize parseTwoDimensions(String sizeText) {
         if (blank(sizeText)) {
             return null;
         }
-        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(sizeText.trim());
+        String normalized = normalize(sizeText);
+        // F1 (ReDoS guard): reject BEFORE the regex ever runs, independent of the grammar fix above.
+        if (normalized.isEmpty() || normalized.length() > MAX_SIZE_TEXT_LENGTH) {
+            return null;
+        }
+        java.util.regex.Matcher m = TWO_DIMENSIONS.matcher(normalized);
         if (!m.matches()) {
             return null;
         }
-        BigDecimal a = new BigDecimal(m.group(1));
-        BigDecimal b = new BigDecimal(m.group(2));
+        BigDecimal a = new BigDecimal(m.group(1).replace(',', '.'));
+        BigDecimal b = new BigDecimal(m.group(3).replace(',', '.'));
         if (a.signum() <= 0 || b.signum() <= 0) {
             return null;
         }
-        return new BigDecimal[] {a, b};
+        SizeUnit widthUnit = unitFamily(m.group(2));
+        SizeUnit heightUnit = unitFamily(m.group(4));
+        // Unit resolution: an explicit unit on EITHER number wins outright. When both numbers carry
+        // one and they genuinely conflict (a shape no real rep types, and not in the vector table --
+        // e.g. "30cm x 60mm") there is no sane single reading, so this falls back to "unspecified"
+        // rather than silently preferring one side.
+        SizeUnit unit = widthUnit != null ? widthUnit : heightUnit;
+        if (widthUnit != null && heightUnit != null && widthUnit != heightUnit) {
+            unit = null;
+        }
+        return new ParsedSize(a, b, unit);
     }
 
     /**
-     * Whether a typed {@code {a, b}} pair is the SAME face size as the catalogue's own
-     * {@code width_mm}/{@code height_mm}, order-insensitive (so "120x60" matches a 600x1200mm
-     * catalogue row) and checked in EITHER unit — millimetres (the pair as stored) or centimetres
-     * (the pair {@link #sizeLine} actually prints) — since a rep might type either. Compares with
-     * {@link BigDecimal#compareTo}, never {@code equals}, so a trailing ".00" never causes a false
-     * mismatch.
+     * F2 (HIGH, 2026-09-16 review) — folds every character {@link #SIZE_TEXT_WHITESPACE} matches to
+     * a plain ASCII space, then trims (via {@link String#trim()}, which strips anything
+     * {@code <= U+0020} — control bytes included, e.g. a stray {@code U+0001}). Mirrors
+     * {@code normalizeSizeText} in {@code quotationMeta.js} exactly.
+     *
+     * <p>Measured divergences this closes, all against a plain {@code "30x60"} pair unless noted:
+     * NBSP between the numbers or before a trailing unit, U+3000 (ideographic space) before a unit,
+     * U+2009 (thin space) and U+202F (narrow NBSP) between the numbers, a leading U+FEFF (BOM), and
+     * a trailing U+2028 (line separator) all used to return {@code null} here (Java's {@code \s} is
+     * ASCII-only) while {@code parseSizeText} parsed them (JS's {@code \s} is Unicode-aware) — a
+     * rep's pasted (often Excel/Word-sourced) size recomputed แผ่น/ตร.ม. on screen while the printed
+     * PDF kept the catalogue size, exactly the divergence this repo's own quotation-size-parsing
+     * history warns about. The OTHER direction — a leading/trailing raw control byte like
+     * {@code U+0001} — used to parse here (because {@link String#trim()} always stripped it) but
+     * return {@code null} in JS (because neither {@code \s} nor {@code String#trim()} in JS treats a
+     * bare control byte as whitespace); {@code normalizeSizeText}'s own explicit {@code [\x00-\x20]}
+     * trim closes that gap from the other side. See {@code DealQuotationLinesTest}'s "F2" section
+     * for the full vector table, pinned identically in {@code quotationMeta.test.js}.
      */
-    private static boolean matchesCatalogFaceSize(BigDecimal[] typed, BigDecimal catalogWidthMm,
+    private static String normalize(String sizeText) {
+        return SIZE_TEXT_WHITESPACE.matcher(sizeText).replaceAll(" ").trim();
+    }
+
+    /** {@code cm}/{@code cm.}/{@code ซม}/{@code ซม.}/{@code ซ.ม.} → {@link SizeUnit#CM};
+     * {@code mm}/{@code mm.}/{@code มม}/{@code มม.}/{@code ม.ม.} → {@link SizeUnit#MM};
+     * {@code null} (no unit token captured) → {@code null} ("unspecified"). */
+    private static SizeUnit unitFamily(String token) {
+        if (token == null) {
+            return null;
+        }
+        String t = token.toLowerCase(Locale.ROOT);
+        if (t.startsWith("cm")) {
+            return SizeUnit.CM;
+        }
+        if (t.startsWith("mm")) {
+            return SizeUnit.MM;
+        }
+        // Thai: ซ (cm) and ม (mm) never share a leading character, so a plain startsWith is
+        // unambiguous -- "ซม."/"ซม"/"ซ.ม." all start with ซ; "มม."/"มม"/"ม.ม." all start with ม.
+        if (t.startsWith("ซ")) {
+            return SizeUnit.CM;
+        }
+        if (t.startsWith("ม")) {
+            return SizeUnit.MM;
+        }
+        return null;
+    }
+
+    /**
+     * Whether a typed size pair is the SAME face size as the catalogue's own {@code width_mm}/
+     * {@code height_mm}, order-insensitive (so "120x60" matches a 600x1200mm catalogue row).
+     * Compares with {@link BigDecimal#compareTo}, never {@code equals}, so a trailing ".00" never
+     * causes a false mismatch.
+     *
+     * <p><b>Unit resolution (2026-09-16):</b> {@code typed.unit()} explicit ({@link SizeUnit#CM} or
+     * {@link SizeUnit#MM}) checks ONLY that reading — "300x600mm" against a 60x60cm/600x600mm
+     * catalogue row is a DIFFERENT tile, full stop, never re-checked against the cm reading just
+     * because it would happen to also fail there. {@code null} ("unspecified", no unit typed) keeps
+     * today's pre-2026-09-16 ambiguous-case rule unchanged: check BOTH the millimetre reading (the
+     * pair as stored) and the centimetre reading (the pair {@link #sizeLine} prints), since a rep
+     * who typed no unit at all might have meant either. This is a genuine, documented ambiguity this
+     * grammar does not resolve — e.g. a typed "60x120" with no unit reads as matching EITHER a
+     * 60x120 MILLIMETRE catalogue row or a 60x120 CENTIMETRE one; only an explicit unit token
+     * disambiguates.
+     */
+    private static boolean matchesCatalogFaceSize(ParsedSize typed, BigDecimal catalogWidthMm,
                                                   BigDecimal catalogHeightMm) {
         BigDecimal catalogWidthCm = catalogWidthMm.movePointLeft(1);
         BigDecimal catalogHeightCm = catalogHeightMm.movePointLeft(1);
-        return pairMatches(typed[0], typed[1], catalogWidthMm, catalogHeightMm)
-            || pairMatches(typed[0], typed[1], catalogWidthCm, catalogHeightCm);
+        boolean checkCm = typed.unit() != SizeUnit.MM;
+        boolean checkMm = typed.unit() != SizeUnit.CM;
+        return (checkCm && pairMatches(typed.width(), typed.height(), catalogWidthCm, catalogHeightCm))
+            || (checkMm && pairMatches(typed.width(), typed.height(), catalogWidthMm, catalogHeightMm));
     }
 
     private static boolean pairMatches(BigDecimal a, BigDecimal b, BigDecimal w, BigDecimal h) {
@@ -240,6 +412,23 @@ public final class DealQuotationLines {
     }
 
     /**
+     * F2 fix (2026-09-16 review) — a typed size that parses via {@link #parseTwoDimensions} but
+     * carries explicitly NO unit token. Production bug: a rep typed {@code "14.8x14.8"} into the
+     * field labelled {@code "ขนาด (ซม.)"} — centimetres by the field's own label — and both
+     * FALLBACK branches of {@link #sizeLine} printed it VERBATIM, appending only the thickness in
+     * millimetres, so the printed document read {@code "ขนาด 14.8x14.8 x 7 mm"} — 14.8
+     * MILLIMETRES, a 10x misread of a genuinely centimetre-typed size. Format the parsed pair in
+     * the catalogue's own {@code "{w} cm x {h} cm"} shape instead — same {@link #format} discipline
+     * (trailing zeros dropped), the numbers read AS TYPED (unit-less means cm by the field's own
+     * label, never guessed), never converted. An EXPLICIT unit ({@code "14.8x14.8mm"},
+     * {@code "300x600mm"}) is untouched by this fix — it says what it means and keeps printing
+     * verbatim, same as an unparseable size.
+     */
+    private static String formatUnitlessTypedSize(ParsedSize typed) {
+        return format(typed.width()) + " cm x " + format(typed.height()) + " cm";
+    }
+
+    /**
      * The wastage/box-rounding calculation line — see docs/sales/quotation-v2-plan.md's "Printed lines"
      * section for the four variants this reproduces (AREA vs PIECES quantity mode; PERCENT vs
      * PIECES vs NONE wastage; with vs without a pieces-per-box).
@@ -248,7 +437,7 @@ public final class DealQuotationLines {
                                          int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
                                          int piecesFinal, Integer piecesPerBox) {
         return calculationLine(WastageCalculator.DOCUMENT_LANGUAGE_TH, quantityMode, areaSqm, piecesPerSqm,
-            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox);
+            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
     }
 
     /**
@@ -264,9 +453,31 @@ public final class DealQuotationLines {
     public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
                                          BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
                                          BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
+        return calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+            wastageMode, wastageValue, piecesFinal, piecesPerBox, true);
+    }
+
+    /**
+     * Owner-approved "sell loose pieces" (2026-09-16): the tenth argument. {@code true} — the
+     * default, and today's ONLY behaviour when box data is present — keeps every existing printed
+     * line unchanged EXCEPT for one wording correction (owner decision, 2026-09-16, same day):
+     * {@code "และปัดลงกล่อง"} ("rounded DOWN to the box") was misleading — the arithmetic
+     * ({@link WastageCalculator#calculate}'s {@code ceilToMultiple}) rounds the piece count UP —
+     * so the default Thai line now reads {@code "และปัดขึ้นเต็มกล่อง"} ("rounded UP to a full
+     * box"). The English line already said "rounded up to full boxes" and is unchanged. {@code
+     * false} lets a TILE row sell pieces that do not make a full box: neither rounding phrase is
+     * printed (nothing was rounded), and the box tail is instead split into full boxes plus a
+     * loose-piece remainder, e.g. {@code (จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)}.
+     * See {@code WastageCalculatorTest}/{@code DealQuotationLinesTest} for every shape this prints
+     * (loose = 0, full boxes = 0, with/without wastage).
+     */
+    public static String calculationLine(String documentLanguage, String quantityMode, BigDecimal areaSqm,
+                                         BigDecimal piecesPerSqm, int piecesBeforeWastage, String wastageMode,
+                                         BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
+                                         boolean roundToFullBox) {
         if (english(documentLanguage)) {
             return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox);
+                wastageValue, piecesFinal, piecesPerBox, null, roundToFullBox);
         }
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "จำนวน " + format(piecesBeforeWastage) + " แผ่น"
@@ -277,7 +488,17 @@ public final class DealQuotationLines {
         // NOTHING for this part, in either mode, rather than "+ เผื่อ 0%" / "+ เผื่อ 0 แผ่น".
         // Printing-only: piecesFinal itself is unaffected, it is computed upstream and simply
         // echoed below exactly as it always was.
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        //
+        // Review fix F2 (2026-09-16): gated on the MODE too, not merely a non-zero value -- a row
+        // switched to wastageMode=NONE keeps whatever wastageValue it last held (WastageCalculator
+        // ignores it entirely in NONE mode, see WastageCalculator#calculate), so an ungated
+        // `hasWastage` reads true for a row applying no wastage at all. wastagePart below was
+        // already immune (its own `WASTAGE_MODE_PERCENT`/`WASTAGE_MODE_PIECES` checks exclude
+        // NONE), but thaiLoosePiecesLine's intermediate "= N แผ่น" clause is not -- it trusted this
+        // flag alone, so it printed the duplicate `(จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)` its
+        // own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + เผื่อ " + format(wastageValue) + "%";
@@ -286,20 +507,73 @@ public final class DealQuotationLines {
         }
 
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
-        String roundingPart = hasBox ? " และปัดลงกล่อง" : "";
 
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " แผ่น)";
+        if (hasBox && !roundToFullBox) {
+            return thaiLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
+        }
+
+        // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
+        // rounds UP (ceilToMultiple), so that wording was wrong about its own direction. Corrected
+        // to "และปัดขึ้นเต็มกล่อง" ("rounded up to a full box"). English's "rounded up to full
+        // boxes" was already right and is untouched.
+        String roundingPart = hasBox ? " และปัดขึ้นเต็มกล่อง" : "";
+
+        // F1 fix (2026-09-16 review): the trailing "= N แผ่น" clause only states something new
+        // when box rounding or wastage may have moved piecesFinal away from the count
+        // quantityPart already states. Without a แผ่น/กล่อง and without wastage, piecesFinal
+        // always equals piecesBeforeWastage -- printing "= N แผ่น" then is a pure echo, e.g. the
+        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". hasBox alone still justifies the clause even
+        // when the rounding happened to not change the number, because roundingPart itself already
+        // says an operation occurred.
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+        if (hasBox || hasWastage) {
+            sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+        }
+        sb.append(")");
+        String line = sb.toString();
         if (hasBox) {
             line += " (บรรจุ " + format(piecesPerBox) + " แผ่น/กล่อง)";
         }
         return line;
     }
 
-    private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
-                                                 int piecesBeforeWastage, String wastageMode,
-                                                 BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox) {
-        return englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-            wastageValue, piecesFinal, piecesPerBox, null);
+    /**
+     * The Thai "sell loose pieces" tail — {@code piecesFinal} split into full boxes plus a
+     * remainder instead of forced up to the next box. The intermediate {@code "= N แผ่น"} clause
+     * (matching the DEFAULT branch's own trailing clause) is printed only when it says something
+     * the box/loose split does not already say on its own:
+     *
+     * <ul>
+     *   <li>{@code boxes > 0} — the box/loose breakdown below always adds new grouping
+     *       information (a piece count on its own does not say how many full boxes that is), so it
+     *       always prints; the wastage-adjusted total additionally restates {@code piecesFinal}
+     *       first, but only when wastage actually moved it away from {@code quantityPart}'s own.</li>
+     *   <li>{@code boxes == 0} — the box/loose breakdown would just be "= piecesFinal แผ่น", a pure
+     *       echo of {@code quantityPart}'s own count UNLESS wastage moved it — printed only then.
+     *       This closes the production bug "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)" (F1,
+     *       2026-09-16 review): {@code loose == piecesFinal} here, so the old unconditional
+     *       {@code else} branch was a pure duplicate whenever there was no wastage to justify it.</li>
+     * </ul>
+     */
+    private static String thaiLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
+                                              int piecesFinal, int piecesPerBox) {
+        int boxes = piecesFinal / piecesPerBox;
+        int loose = piecesFinal % piecesPerBox;
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
+        if (boxes > 0) {
+            if (hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+            }
+            if (loose > 0) {
+                sb.append(" = ").append(format(boxes)).append(" กล่อง + ").append(format(loose)).append(" แผ่น");
+            } else {
+                sb.append(" = ").append(format(boxes)).append(" กล่อง");
+            }
+        } else if (hasWastage) {
+            sb.append(" = ").append(format(loose)).append(" แผ่น");
+        }
+        sb.append(") (บรรจุ ").append(format(piecesPerBox)).append(" แผ่น/กล่อง)");
+        return sb.toString();
     }
 
     /**
@@ -315,12 +589,16 @@ public final class DealQuotationLines {
     private static String englishCalculationLine(String quantityMode, BigDecimal areaSqm, BigDecimal piecesPerSqm,
                                                  int piecesBeforeWastage, String wastageMode,
                                                  BigDecimal wastageValue, int piecesFinal, Integer piecesPerBox,
-                                                 Integer boxes) {
+                                                 Integer boxes, boolean roundToFullBox) {
         String quantityPart = WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)
             ? "Quantity " + format(piecesBeforeWastage) + " pcs"
             : "Area " + format(areaSqm) + " sqm @ " + format(piecesPerSqm) + " pcs/sqm = "
                 + format(piecesBeforeWastage) + " pcs";
-        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0;
+        // Review fix F2 (2026-09-16): mode-gated, mirroring the Thai branch above -- see its own
+        // comment. Without this, englishLoosePiecesLine's intermediate "= N pcs" clause could print
+        // the same duplicate its own Javadoc says it exists to avoid.
+        boolean hasWastage = wastageValue != null && wastageValue.signum() != 0
+            && !WastageCalculator.WASTAGE_MODE_NONE.equals(wastageMode);
         String wastagePart = "";
         if (hasWastage && WastageCalculator.WASTAGE_MODE_PERCENT.equals(wastageMode)) {
             wastagePart = " + " + format(wastageValue) + "% allowance";
@@ -328,16 +606,63 @@ public final class DealQuotationLines {
             wastagePart = " + " + format(wastageValue) + " pcs allowance";
         }
         boolean hasBox = piecesPerBox != null && piecesPerBox > 0;
+
+        // Owner-approved "sell loose pieces": boxes is non-null ONLY for the English per-sqm
+        // variant above, which always rounds (the service refuses roundToFullBox=false there — see
+        // DealQuotationService#requireBoxDataForPerSqm) — so reaching here with boxes == null is
+        // the only way this branch is ever taken.
+        if (hasBox && !roundToFullBox && boxes == null) {
+            return englishLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
+        }
+
         String roundingPart = hasBox ? ", rounded up to full boxes" : "";
         if (boxes != null) {
             return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
                 + format(boxes) + (boxes == 1 ? " box)" : " boxes)");
         }
-        String line = "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs)";
+        // F1 fix (2026-09-16 review): mirrors the Thai branch above -- omit a trailing "= N pcs"
+        // that only echoes a count quantityPart already states (no pcs/box, no wastage), e.g. the
+        // production-class duplicates "(Quantity 3,360 pcs = 3,360 pcs)" and, in AREA mode,
+        // "(Area 1,000 sqm @ 2.78 pcs/sqm = 2,780 pcs = 2,780 pcs)" -- AREA mode's own "= 2,780
+        // pcs" clause (baked into quantityPart, converting sqm to pieces) is genuine information
+        // and stays untouched; only this SECOND, redundant echo is dropped.
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+        if (hasBox || hasWastage) {
+            sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+        }
+        sb.append(")");
+        String line = sb.toString();
         if (hasBox) {
             line += " (" + format(piecesPerBox) + " pcs/box)";
         }
         return line;
+    }
+
+    /** The English mirror of {@link #thaiLoosePiecesLine} — same split, same "print the
+     * intermediate clause only when it says something new" rule (F1, 2026-09-16 review: zero full
+     * boxes AND no wastage now prints no intermediate clause at all, e.g. {@code "(Quantity 7 pcs)
+     * (10 pcs/box)"}, not the old duplicate {@code "(Quantity 7 pcs = 7 pcs) (10 pcs/box)"}),
+     * singular "box"/"pc" at 1. */
+    private static String englishLoosePiecesLine(String quantityPart, String wastagePart, boolean hasWastage,
+                                                 int piecesFinal, int piecesPerBox) {
+        int boxes = piecesFinal / piecesPerBox;
+        int loose = piecesFinal % piecesPerBox;
+        StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart);
+        if (boxes > 0) {
+            if (hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+            }
+            if (loose > 0) {
+                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box + " : " boxes + ")
+                    .append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+            } else {
+                sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box" : " boxes");
+            }
+        } else if (hasWastage) {
+            sb.append(" = ").append(format(loose)).append(loose == 1 ? " pc" : " pcs");
+        }
+        sb.append(") (").append(format(piecesPerBox)).append(" pcs/box)");
+        return sb.toString();
     }
 
     /**
@@ -361,34 +686,70 @@ public final class DealQuotationLines {
      * The TILE row's calculation line, printed quantity, unit and sub-line.
      *
      * <ul>
-     *   <li><b>English per-sqm</b> ({@link WastageCalculator#isEnglishPerSqm}) with box data:
-     *       quantity = {@link WastageCalculator#sqmQuantityFromBoxes}, unit {@code SQM}, the
-     *       box-count calculation line and {@link #boxLine}.</li>
+     *   <li><b>English per-sqm</b> ({@link WastageCalculator#isEnglishPerSqm}) with a box AREA
+     *       (ตร.ม./กล่อง filled): quantity = {@link WastageCalculator#sqmQuantityFromBoxes}, unit
+     *       {@code SQM}, the box-count calculation line and {@link #boxLine}. Byte-identical to the
+     *       row's only behaviour before Option B (2026-09-16).</li>
+     *   <li><b>English per-sqm WITHOUT a box area</b> (Option B, owner decision 2026-09-16): quantity
+     *       = {@link WastageCalculator#sqmQuantityFromPieces} (pieces × ตร.ม./แผ่น, the same area
+     *       basis the Thai SPECIAL_SQM mode uses), unit {@code SQM}, the ORDINARY English piece-based
+     *       calculation line (loose-pieces phrasing included when แผ่น/กล่อง is present and
+     *       {@code roundToFullBox} is false), and NO box line — there is no supplier box area to
+     *       print one from.</li>
      *   <li>Everything else: {@link #calculationLine}, the stored quantity (pieces), the language's
      *       tile unit ({@link #printedTileUnit}) and {@link #specialPriceLine}. For Thai this is
-     *       byte-for-byte what the row always printed.</li>
+     *       byte-for-byte what the row always printed. English per-sqm reaches this branch only when
+     *       {@code sqmPerPiece} itself is missing/non-positive — a hand-edited row, since a normal
+     *       save always resolves and stores one; it prints pieces rather than inventing an area.</li>
      * </ul>
-     *
-     * <p>An English per-sqm row WITHOUT box data cannot be written (the service refuses it), so
-     * reaching the second branch for one means a hand-edited row; it prints pieces rather than
-     * inventing an area.
      */
     public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
-                                      BigDecimal areaSqm, BigDecimal piecesPerSqm, int piecesBeforeWastage,
-                                      String wastageMode, BigDecimal wastageValue, int piecesFinal,
-                                      Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
+                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
+                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
                                       BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm) {
-        if (WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode) && boxes != null
-            && piecesPerBox != null && piecesPerBox > 0 && sqmPerBox != null && sqmPerBox.signum() > 0) {
+        return tilePrint(documentLanguage, priceMode, quantityMode, areaSqm, sqmPerPiece, piecesPerSqm,
+            piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox, boxes, sqmPerBox,
+            storedQuantity, storedUnit, specialPriceSqm, true);
+    }
+
+    /**
+     * Owner-approved "sell loose pieces" (2026-09-16): the trailing {@code roundToFullBox}. The
+     * 16-argument overload above always passes {@code true} — today's only behaviour when a box area
+     * is present, unchanged. English per-sqm WITH a box area can never reach the loose-pieces branch
+     * (the service still refuses {@code roundToFullBox = false} whenever ตร.ม./กล่อง is filled — see
+     * {@code DealQuotationService#buildTileItem}'s {@code hasBoxArea} branch), so that row's
+     * box-count calculation line always rounds, exactly as before. WITHOUT a box area, {@code
+     * roundToFullBox} is honoured normally (Option B).
+     */
+    public static TilePrint tilePrint(String documentLanguage, String priceMode, String quantityMode,
+                                      BigDecimal areaSqm, BigDecimal sqmPerPiece, BigDecimal piecesPerSqm,
+                                      int piecesBeforeWastage, String wastageMode, BigDecimal wastageValue,
+                                      int piecesFinal, Integer piecesPerBox, Integer boxes, BigDecimal sqmPerBox,
+                                      BigDecimal storedQuantity, String storedUnit, BigDecimal specialPriceSqm,
+                                      boolean roundToFullBox) {
+        boolean perSqm = WastageCalculator.isEnglishPerSqm(documentLanguage, priceMode);
+        boolean hasBoxArea = sqmPerBox != null && sqmPerBox.signum() > 0;
+        if (perSqm && hasBoxArea && boxes != null && piecesPerBox != null && piecesPerBox > 0) {
+            // Unchanged from before Option B — byte-identical for every existing box-area document.
             return new TilePrint(
                 englishCalculationLine(quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                    wastageValue, piecesFinal, piecesPerBox, boxes),
+                    wastageValue, piecesFinal, piecesPerBox, boxes, true),
                 WastageCalculator.sqmQuantityFromBoxes(boxes, sqmPerBox), TILE_UNIT_SQM,
                 boxLine(piecesPerBox, sqmPerBox));
         }
+        if (perSqm && !hasBoxArea && sqmPerPiece != null && sqmPerPiece.signum() > 0) {
+            // Option B (2026-09-16): no supplier box area — derive the printed sqm quantity from the
+            // FINAL piece count instead (which already reflects box rounding when piecesPerBox is
+            // present, or the exact wastage-adjusted count when it is not / loose pieces is ticked).
+            return new TilePrint(
+                calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage,
+                    wastageMode, wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
+                WastageCalculator.sqmQuantityFromPieces(piecesFinal, sqmPerPiece), TILE_UNIT_SQM, null);
+        }
         return new TilePrint(
             calculationLine(documentLanguage, quantityMode, areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode,
-                wastageValue, piecesFinal, piecesPerBox),
+                wastageValue, piecesFinal, piecesPerBox, roundToFullBox),
             storedQuantity, printedTileUnit(documentLanguage, storedUnit),
             specialPriceLine(documentLanguage, specialPriceSqm));
     }

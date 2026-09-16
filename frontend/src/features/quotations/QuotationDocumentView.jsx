@@ -3,7 +3,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import {
   currencyForLanguage, dealQuotationStatusLabel, documentDiscountLabel, formatQuotationMoney,
-  joinPresent, LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
+  fullPaymentTermLabel, joinPresent, LINE_TYPE_ADJUSTMENT, LINE_TYPE_TILE, lineTypeOf, remainderModeLabel,
 } from './quotationMeta.js';
 
 // v3b: the item table, totals and signature block follow the DOCUMENT's language, because this
@@ -241,10 +241,31 @@ export function QuotationDocumentView({ quotation }) {
 
       <Panel title="เงื่อนไข">
         <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
-          <div><span className="block text-2xs font-bold uppercase text-text-muted">มัดจำ</span><strong>{quotation.depositPercent != null ? `${quotation.depositPercent}%` : '-'}</strong></div>
+          {/* Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): depositPercent === 0 reads as
+              "ไม่รับมัดจำ", not a phantom "0%" deposit demand (the same fix
+              DealQuotationRenderAdapter#depositLine already made for the printed document) — and
+              ส่วนที่เหลือ becomes เงื่อนไขการชำระเงิน, since a remainder is meaningless once there
+              is no deposit to take a remainder of. */}
+          <div><span className="block text-2xs font-bold uppercase text-text-muted">มัดจำ</span>
+            <strong>{quotation.depositPercent === 0 ? 'ไม่รับมัดจำ' : (quotation.depositPercent != null ? `${quotation.depositPercent}%` : '-')}</strong>
+          </div>
           <div>
-            <span className="block text-2xs font-bold uppercase text-text-muted">ส่วนที่เหลือ</span>
-            <strong>{remainderModeLabel(quotation.remainderMode)}{quotation.remainderMode === 'CREDIT' && quotation.creditDays ? ` ${quotation.creditDays} วัน` : ''}</strong>
+            <span className="block text-2xs font-bold uppercase text-text-muted">
+              {quotation.depositPercent === 0 ? 'เงื่อนไขการชำระเงิน' : 'ส่วนที่เหลือ'}
+            </span>
+            <strong>
+              {quotation.depositPercent === 0 ? (
+                quotation.fullPaymentTerm ? fullPaymentTermLabel(quotation.fullPaymentTerm)
+                  // LEGACY (pre-V181): a zero-deposit row saved before this feature has no term —
+                  // mirror DealQuotationRenderAdapter#depositLine's own remainderMode-based
+                  // fallback text so this summary never disagrees with the printed document.
+                  : (quotation.remainderMode === 'CREDIT' && quotation.creditDays
+                      ? `ชำระเต็มจำนวนเป็นเครดิต ${quotation.creditDays} วัน`
+                      : 'ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า')
+              ) : (
+                `${remainderModeLabel(quotation.remainderMode)}${quotation.remainderMode === 'CREDIT' && quotation.creditDays ? ` ${quotation.creditDays} วัน` : ''}`
+              )}
+            </strong>
           </div>
           {/* V178: DATE mode shows the rep's exact ภายในวันที่ deadline (validityUntil) instead of
               a day count — same date format (formatThaiDate) the DAYS branch already used for

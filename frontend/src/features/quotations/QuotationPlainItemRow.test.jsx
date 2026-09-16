@@ -15,7 +15,7 @@ function renderRow(props = {}) {
 }
 
 describe('QuotationPlainItemRow (v3 S2)', () => {
-  it('offers ONLY the four PLAIN fields — none of the tile machinery', () => {
+  it('offers the four required PLAIN fields — none of the tile machinery', () => {
     renderRow();
     expect(screen.getByLabelText(/^รายละเอียด/)).not.toBeNull();
     expect(screen.getByLabelText(/^จำนวน/)).not.toBeNull();
@@ -23,6 +23,30 @@ describe('QuotationPlainItemRow (v3 S2)', () => {
     expect(screen.getByLabelText(/^ราคา\/หน่วย/)).not.toBeNull();
     expect(screen.queryByLabelText(/ตร\.ม\.\/แผ่น/)).toBeNull();
     expect(screen.queryByText(/เผื่อ/)).toBeNull();
+  });
+
+  // D1 (owner decision, 2026-09-16): a สินค้า/บริการอื่น row (sanitaryware) may carry an OPTIONAL
+  // import lead time — her reference document QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against
+  // exactly this kind of row. Mirrors QuotationItemRow's own tile lead-time control.
+  it('offers an OPTIONAL ระยะเวลานำเข้า (วัน) min–max input, blank by default', () => {
+    renderRow();
+    expect(screen.getByLabelText(/^ระยะเวลานำเข้า/).value).toBe('');
+    expect(screen.getByLabelText('ถึง (วัน)').value).toBe('');
+    expect(screen.getByText('ไม่บังคับ')).not.toBeNull();
+  });
+
+  it('reports the typed lead-time range as numbers', () => {
+    const { onChange } = renderRow();
+    fireEvent.change(screen.getByLabelText(/^ระยะเวลานำเข้า/), { target: { value: '75' } });
+    expect(onChange).toHaveBeenCalledWith({ leadTimeMinDays: 75 });
+    fireEvent.change(screen.getByLabelText('ถึง (วัน)'), { target: { value: '90' } });
+    expect(onChange).toHaveBeenCalledWith({ leadTimeMaxDays: 90 });
+  });
+
+  it('clearing a typed lead-time field reports null, not an empty string', () => {
+    const { onChange } = renderRow({ item: { ...emptyPlainItem('g1'), leadTimeMinDays: 75, leadTimeMaxDays: 90 } });
+    fireEvent.change(screen.getByLabelText(/^ระยะเวลานำเข้า/), { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith({ leadTimeMinDays: null });
   });
 
   it('หน่วย is a controlled list, the document language\'s units first', () => {

@@ -26,6 +26,7 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.customer.CustomerService;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationCountsDto;
@@ -50,6 +51,7 @@ import th.co.glr.hr.notification.SalesNotificationMailRouter;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
+import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -71,6 +73,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
     private EmployeeAuthRepository employeeAuth;
+    // Quotation-editor bug fix (2026-09-16) — see ContactUpdateRefreshesDraftQuotations* tests
+    // below. Wrapped in #transactional(...) at each call site, not here, so its own @Transactional
+    // is exercised through a real AOP proxy rather than being inert (this suite hand-wires with
+    // `new` everywhere else — see AbstractPostgresIntegrationTest#transactional's own Javadoc).
+    private CustomerService customerService;
     private EmployeeSignatureService signatureService;
     private CapturingMailer mailer;
 
@@ -128,6 +135,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
             // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
+        customerService = new CustomerService(customers, contacts, projects, employeeAuth, quotationRepository);
 
         signatureService = new EmployeeSignatureService(signatureRepository, new ActivityLogRepository(jdbc));
 
@@ -536,6 +544,193 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.number()).isEqualTo(created.number());
         assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
         assertThat(submitted.parentQuotationId()).isNull();
+    }
+
+    // ── owner request (2026-09-16): a revision's submit must read as a REVISION to
+    // sales_manager/ceo, not the identical "รออนุมัติ" text a first-time submit sends ──
+
+    /**
+     * {@link #createRevision}'s own submit (parent {@code APPROVED}): sales_manager + CEO get the
+     * NEW {@code DEAL_QUOTATION_REVISION_SUBMITTED} kind, mailed with the REVISION subject/title
+     * ("ใบเสนอราคาฉบับแก้ไขรออนุมัติ" -- {@code NotificationRepository.TICKET_EVENT_TITLES}), and a
+     * message naming the actor, the new number, and the number it revises -- wired against the
+     * REAL {@link SalesNotificationMailRouter} (see {@link
+     * #submit_actuallyMailsSalesManagerCeoAndRep_throughTheRealMailRouter}'s own Javadoc for why a
+     * bare {@code new DealQuotationService} would be a false positive for the mail assertions).
+     */
+    @Test
+    void createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage() {
+        NotificationEmailService realEmailService =
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
+        NotificationRepository realNotifications = new NotificationRepository(jdbc,
+            new SalesNotificationMailRouter(realEmailService, new SalesMailRecipientRepository(jdbc)));
+        DealQuotationService realQuotationService = transactional(new DealQuotationService(quotationRepository,
+            tickets, customers, contacts, realNotifications, realEmailService, new QuotationRenderer(), employeeAuth,
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", ""));
+
+        DealQuotationDto created = realQuotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = realQuotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            realQuotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        // Isolate the revision submit's OWN mail from the create/submit/approve noise above.
+        mailer.htmlSent.clear();
+
+        DealQuotationDto revision = realQuotationService.createRevision(approved.id(), salesActor);
+        DealQuotationDto revisionSubmitted = realQuotationService.submit(revision.id(), salesActor);
+
+        assertThat(mailer.htmlSent).extracting(sent -> sent[0])
+            .as("sales_manager, ceo, and the rep's own confirmation each sent mail")
+            .containsExactlyInAnyOrder("sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
+        assertThat(mailer.htmlSent)
+            .filteredOn(sent -> !sent[0].equals("sales-dq@glr.co.th"))
+            .as("sales_manager + ceo get the REVISION subject, not the first-time-submit one")
+            .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
+
+        // The message body itself (htmlSent only captures [to, subject] in this fixture) is
+        // asserted through the in-app row instead -- same underlying Postgres row the real mail
+        // router reads from.
+        //
+        // Opus review (2026-09-16): the revision number is ALWAYS the parent number plus a
+        // "-n" suffix (see revisionNumber(base, n) below), so it CONTAINS the parent number as a
+        // literal substring -- asserting message().contains(newNumber) makes
+        // message().contains(parentNumber) pass trivially even if "(แก้ไขจาก ...)" were dropped
+        // entirely. Pin the WHOLE message verbatim instead, so the "(แก้ไขจาก {parent})" wording
+        // and the two fixed phrases ("ฉบับแก้ไข", "กรุณาตรวจสอบและพิจารณาอนุมัติ") are all load-bearing.
+        String expectedMessage = salesActor.name() + " ได้จัดทำใบเสนอราคาฉบับแก้ไข " + revisionSubmitted.number()
+            + " (แก้ไขจาก " + approved.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("sales_manager gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+        assertThat(notifications.findByEmployeeId(ceoId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("ceo gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+    }
+
+    /**
+     * {@link #submitAsRevisionOfRejected}'s path (parent {@code DRAFT}, carrying a rejection):
+     * same REVISION kind/subject as {@link
+     * #createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage}
+     * above, PLUS the rejection reason appended to the message -- {@code parent.docStatus()}
+     * being {@code DRAFT} (not {@code approvalNote() != null} alone) is what {@code
+     * notifyRevisionSubmitted} keys the suffix on, since an APPROVED parent's own {@code
+     * approvalNote} is an approval note, not a rejection reason (see that method's own Javadoc).
+     */
+    @Test
+    void submit_afterRejection_mailsAndNotifiesWithTheRevisionSubjectAndTheRejectionReason() {
+        NotificationEmailService realEmailService =
+            new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
+        NotificationRepository realNotifications = new NotificationRepository(jdbc,
+            new SalesNotificationMailRouter(realEmailService, new SalesMailRecipientRepository(jdbc)));
+        DealQuotationService realQuotationService = transactional(new DealQuotationService(quotationRepository,
+            tickets, customers, contacts, realNotifications, realEmailService, new QuotationRenderer(), employeeAuth,
+            new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", ""));
+
+        DealQuotationDto created = realQuotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = realQuotationService.submit(created.id(), salesActor);
+        DealQuotationDto rejected = realQuotationService.reject(submitted.id(),
+            new RejectRequest("ราคาผิดพลาด กรุณาแก้ไข"), salesManagerActor);
+        mailer.htmlSent.clear();
+
+        DealQuotationDto resubmitted = realQuotationService.submit(rejected.id(), salesActor);
+
+        // Opus review (2026-09-16): filteredOn(...).allSatisfy(...) passes vacuously on an EMPTY
+        // list (verified against this repo's assertj-core 3.27.7) -- exactly the shape that stayed
+        // green through the documented nested-afterCommit bug (submitDraftRow's own comment above),
+        // where every revision mail was silently swallowed while the in-app bell rows still landed
+        // synchronously. Pin the recipient set FIRST so a totally-lost mail batch fails loudly here,
+        // before the filtered subject check even runs.
+        assertThat(mailer.htmlSent).hasSize(3);
+        assertThat(mailer.htmlSent).extracting(sent -> sent[0])
+            .as("sales_manager, ceo, and the rep's own confirmation each sent mail on the resubmit")
+            .containsExactlyInAnyOrder("sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
+        assertThat(mailer.htmlSent)
+            .filteredOn(sent -> !sent[0].equals("sales-dq@glr.co.th"))
+            .as("sales_manager + ceo get the REVISION subject on a resubmit-after-ตีกลับ too")
+            .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
+
+        // Same reasoning as the sibling test above: pin the WHOLE message, not just substrings the
+        // revision number's own "{parent}-n" shape would satisfy regardless.
+        String expectedMessage = salesActor.name() + " ได้จัดทำใบเสนอราคาฉบับแก้ไข " + resubmitted.number()
+            + " (แก้ไขจาก " + rejected.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ"
+            + " — แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("sales_manager gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+        assertThat(notifications.findByEmployeeId(ceoId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("ceo gets exactly one revision-submitted row, message verbatim")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+    }
+
+    /**
+     * Opus review (2026-09-16), finding 4: {@code notifyRevisionSubmitted} interpolates {@code
+     * actor.name()} with no null/blank guard, so a blank name would otherwise print the literal
+     * "  ได้จัดทำใบเสนอราคาฉบับแก้ไข ..." (an empty leading word) in both the bell row and the
+     * e-mail. Pins the blank-safe fallback this service now falls back to instead, mirroring
+     * {@link #approve}'s own {@code approvedByName() != null ? ... : "ผู้อนุมัติ"} pattern
+     * elsewhere in this class.
+     */
+    @Test
+    void createRevision_thenSubmit_byActorWithBlankName_fallsBackToARoleLabelNotBlank() {
+        UserPrincipal blankNamedSalesActor = new UserPrincipal(
+            salesRepId, "sales-dq@glr.co.th", "   ", "sales", salesRepId, true, LocalDate.now(), false, null, false);
+
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved =
+            quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), blankNamedSalesActor);
+        DealQuotationDto revisionSubmitted = quotationService.submit(revision.id(), blankNamedSalesActor);
+
+        String expectedMessage = "ผู้เสนอราคา ได้จัดทำใบเสนอราคาฉบับแก้ไข " + revisionSubmitted.number()
+            + " (แก้ไขจาก " + approved.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ";
+        assertThat(notifications.findByEmployeeId(salesManagerId))
+            .filteredOn(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"))
+            .as("a blank actor name falls back to a role label, never a literal blank/\"null\"")
+            .singleElement()
+            .extracting(NotificationDto::message)
+            .isEqualTo(expectedMessage);
+    }
+
+    /**
+     * Wrong-way-round (CLAUDE.md's own rule for this kind of assertion): an ORDINARY first-time
+     * submit -- no parent, {@link #submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber}
+     * above already pins {@code parentQuotationId()} null for it -- must NOT use the revision
+     * kind, subject, or wording, byte-identical to before this feature. Guards against the new
+     * {@code parentQuotationId() != null} branch in {@code notifySubmitted} ever being loosened
+     * (or its condition inverted) to fire on a first-time submit too.
+     */
+    @Test
+    void submit_firstTime_doesNotUseTheRevisionKindSubjectOrMessage() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+
+        assertThat(submitted.parentQuotationId()).isNull();
+        List<NotificationDto> managerNotifications = notifications.findByEmployeeId(salesManagerId);
+        assertThat(managerNotifications).noneMatch(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"));
+        assertThat(managerNotifications).anyMatch(n ->
+            n.type().equals("DEAL_QUOTATION_SUBMITTED")
+                && n.message().equals("ใบเสนอราคา " + submitted.number() + " รอการอนุมัติ")
+                && !n.message().contains("ฉบับแก้ไข"));
+        List<NotificationDto> ceoNotifications = notifications.findByEmployeeId(ceoId);
+        assertThat(ceoNotifications).noneMatch(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"));
     }
 
     /** The revision must copy the rejected draft's CURRENT (edited-after-rejection) data, not a
@@ -1184,7 +1379,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         Assumptions.assumeTrue(ChromiumPdfPrinter.isAvailable() || LibreOfficePdfConverter.isAvailable(),
             "neither Chromium nor LibreOffice available locally");
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
-        // sampleItem(PIECES, wastage NONE, no piecesPerBox): calculationLine = "(จำนวน 10 แผ่น = 10 แผ่น)".
+        // sampleItem(PIECES, wastage NONE, no piecesPerBox): calculationLine = "(จำนวน 10 แผ่น)"
+        // (F1 fix, 2026-09-16 review: no longer "(จำนวน 10 แผ่น = 10 แผ่น)" -- that trailing "="
+        // was a pure echo of the count already stated, with no box or wastage to justify it).
         String expectedCalcLine = approved.items().get(0).calculationLine();
         assertThat(expectedCalcLine).contains("จำนวน 10 แผ่น");
 
@@ -2139,6 +2336,311 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ") + Item 4 (V181, "ไม่รับมัดจำ")
+    // owner ruling 2026-09-16 — real-DB coverage through the real service.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** Item 4 wither — sets depositPercent/remainderMode/creditDays/fullPaymentTerm together,
+     * since {@code DealQuotationService} resolves the four as one unit (see
+     * #resolveFullPaymentTerm's own Javadoc). */
+    private UpsertDealQuotationRequest withDepositAndTerm(UpsertDealQuotationRequest base,
+            Integer depositPercent, String remainderMode, Integer creditDays, String fullPaymentTerm) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), depositPercent, remainderMode, creditDays,
+            base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
+            base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
+            base.salesRepDisplayId(), base.projectName(), base.omitContactHonorific(), fullPaymentTerm,
+            base.items());
+    }
+
+    /** Item 2 wither. */
+    private UpsertDealQuotationRequest withOmitContactHonorific(UpsertDealQuotationRequest base, Boolean omit) {
+        return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
+            base.offerDate(), base.depositPercent(), base.remainderMode(), base.creditDays(),
+            base.validityDays(), base.validityMode(), base.validityUntil(), base.customerNotes(),
+            base.priceMode(), base.documentLanguage(), base.currency(), base.printedByDisplayId(),
+            base.salesRepDisplayId(), base.projectName(), omit, base.fullPaymentTerm(), base.items());
+    }
+
+    @Test
+    void create_omitContactHonorific_defaultsFalse_whenNotSent() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.omitContactHonorific()).isFalse();
+    }
+
+    @Test
+    void create_omitContactHonorificTrue_persists() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(upsertRequest(List.of(sampleItem("100.00", 10))), true), salesActor);
+        assertThat(created.omitContactHonorific()).isTrue();
+    }
+
+    /** No "missing keeps stored" case for this flag on UPDATE — the editor always sends its
+     * CURRENT value, so an update that omits it (or sends {@code false}) clears a previously-set
+     * {@code true} back to {@code false}, exactly like {@code printedByDisplayId}/{@code projectName}. */
+    @Test
+    void update_omitContactHonorific_clearsWhenOmittedFromThePayload() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(upsertRequest(List.of(sampleItem("100.00", 10))), true), salesActor);
+        assertThat(created.omitContactHonorific()).isTrue();
+
+        DealQuotationDto updated = quotationService.update(created.id(),
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(updated.omitContactHonorific()).isFalse();
+    }
+
+    @Test
+    void create_zeroDeposit_clearsRemainderModeAndCreditDays_andStoresTheChosenTerm() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, "CREDIT", 45, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isEqualTo(0);
+        assertThat(created.remainderMode()).isNull();
+        assertThat(created.creditDays()).isNull();
+        assertThat(created.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    }
+
+    /** A rep who unticks "ไม่รับมัดจำ" (re-enters an ordinary percentage) can never leave a stale
+     * term attached, EVEN IF the request still sends one — wrong-way-round: the field the request
+     * carries is not the field the stored row ends up with. */
+    @Test
+    void create_nonZeroDeposit_forcesFullPaymentTermNull_evenIfTheRequestSendsOne() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                30, "CREDIT", 30, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isEqualTo(30);
+        assertThat(created.fullPaymentTerm()).isNull();
+        assertThat(created.remainderMode()).isEqualTo("CREDIT");
+        assertThat(created.creditDays()).isEqualTo(30);
+    }
+
+    /** A {@code null} depositPercent is NOT "no deposit" (it defaults to 30% at render time) — same
+     * refusal as an explicit non-zero percentage. */
+    @Test
+    void create_nullDepositPercent_alsoForcesFullPaymentTermNull() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                null, "CREDIT", 30, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+            salesActor);
+        assertThat(created.depositPercent()).isNull();
+        assertThat(created.fullPaymentTerm()).isNull();
+    }
+
+    @Test
+    void update_switchingToZeroDeposit_clearsRemainderModeAndCreditDays_andStoresTheChosenTerm() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // 30%, CREDIT, 30 days
+        DealQuotationDto updated = quotationService.update(created.id(),
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, "CREDIT", 45, WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY),
+            salesActor);
+        assertThat(updated.depositPercent()).isEqualTo(0);
+        assertThat(updated.remainderMode()).isNull();
+        assertThat(updated.creditDays()).isNull();
+        assertThat(updated.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY);
+    }
+
+    /** Wrong-way-round: a zero-deposit DRAFT is SAVEABLE with no term chosen yet (create/update
+     * above never refuse it) — {@link DealQuotationService#submit} is the one gate, the last check
+     * before an approver ever sees the document, same "create/update permissive, submit strict"
+     * split the DATE-mode validity check and the per-item lead-time check already use. */
+    @Test
+    void submit_zeroDepositWithNoTermChosen_isBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))), 0, null, null, null),
+            salesActor);
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("เงื่อนไขการชำระเงิน");
+    }
+
+    @Test
+    void submit_zeroDepositWithTermChosen_succeeds() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                0, null, null, WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY),
+            salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(submitted.fullPaymentTerm())
+            .isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY);
+    }
+
+    /** A non-zero-deposit document is NEVER blocked by the new submit gate — the condition can
+     * only ever fire on a genuinely zero-deposit document (regression guard for the guard itself). */
+    @Test
+    void submit_nonZeroDeposit_isUnaffectedByTheNewGate() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+    }
+
+    @Test
+    void revision_copiesOmitContactHonorificAndFullPaymentTermVerbatim() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            withOmitContactHonorific(
+                withDepositAndTerm(upsertRequest(List.of(sampleItem("100.00", 10))),
+                    0, null, null, WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY),
+                true),
+            salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto revision = quotationService.createRevision(approved.id(), salesActor);
+        assertThat(revision.omitContactHonorific()).isTrue();
+        assertThat(revision.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Contact-update DRAFT snapshot refresh (2026-09-16 fix, owner re-report "แก้หรือเพิ่ม Email
+    // ผู้สั่งซื้อภายหลังไม่ได้") — CustomerService#updateContact /
+    // DealQuotationRepository#refreshDraftContactSnapshot. Written wrong-way-round per CLAUDE.md
+    // ("Permission changes must ship evidence" — same discipline applied to this scope guard):
+    // negative cases (a row that must NOT move) come first. Every call goes through
+    // #transactional(customerService) rather than the bare field, so #updateContact's own
+    // @Transactional is exercised through a real AOP proxy instead of being inert — see that
+    // helper's own Javadoc and the double-afterCommit-defer test above for why a bare `new`-wired
+    // service would prove nothing about the annotation.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void updateContact_approvedQuotation_snapshotNeverChanges() {
+        DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        assertThat(approved.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-after-approval@customer.test", "099-000-0000");
+
+        DealQuotationDto reloaded = quotationRepository.findById(approved.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        assertThat(reloaded.contactEmail()).isEqualTo(contact.email());
+        assertThat(reloaded.contactPhone()).isEqualTo(contact.phone());
+    }
+
+    @Test
+    void updateContact_pendingApprovalQuotation_snapshotNeverChanges() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        assertThat(submitted.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-while-pending@customer.test", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(submitted.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+        assertThat(reloaded.contactEmail()).isEqualTo(contact.email());
+    }
+
+    @Test
+    void updateContact_draftBelongingToADifferentContact_notChanged() {
+        ContactDto otherContact = contacts.create(customer.id(), "สมชาย", "รักดี", "ผู้จัดการ",
+            "somchai@customer.test", "082-222-3333");
+        ProjectDto otherProject = projects.create(customer.id(), "โครงการผู้สั่งซื้ออื่น");
+        long otherTicket = createTicket("ดีล DQ ผู้สั่งซื้ออื่น", otherProject.id(), otherContact.id(), salesActor);
+        DealQuotationDto otherDraft = quotationService.create(otherTicket,
+            upsertRequest(otherContact.id(), List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(otherDraft.contactEmail()).isEqualTo(otherContact.email());
+
+        // Updating the ORIGINAL contact (`contact`, not `otherContact`) must never touch a draft
+        // snapshotted against a DIFFERENT contact id.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "changed-for-original-contact@customer.test", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(otherDraft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isEqualTo(otherContact.email());
+        assertThat(reloaded.contactId()).isEqualTo(otherContact.id());
+    }
+
+    @Test
+    void updateContact_draftQuotation_phoneAndEmailRefreshedImmediately_nameLeftAlone() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(draft.contactEmail()).isEqualTo(contact.email());
+        String originalName = draft.contactName();
+
+        // No re-save of the DRAFT itself -- the fix is that the CONTACT update alone reaches it.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "new-email@customer.test", "088-777-6666");
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(reloaded.contactEmail()).isEqualTo("new-email@customer.test");
+        assertThat(reloaded.contactPhone()).isEqualTo("088-777-6666");
+        // A phone/email-only edit never re-snapshots the printed NAME -- see
+        // DealQuotationRepository#refreshDraftContactSnapshot's own Javadoc on `refreshName`.
+        assertThat(reloaded.contactName()).isEqualTo(originalName);
+    }
+
+    @Test
+    void updateContact_draftQuotation_nameRefreshedOnlyWhenNameFieldsAreSent() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            "สมหญิง2", "ใจดี2", null, null, null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.contactName()).isEqualTo("สมหญิง2 ใจดี2");
+    }
+
+    /**
+     * D5 (Opus review 2026-09-16): {@code refreshDraftContactSnapshot}'s own {@code UPDATE} carries
+     * no actor/ownership predicate at all -- it moves EVERY DRAFT pointing at this contact id,
+     * regardless of whose ticket it belongs to, even though a DRAFT is otherwise visible only to
+     * its owning rep plus CEO/sales_manager (DealEntryAccess is role-only). Pinned here as the
+     * INTENDED behaviour, not an authz gap: the snapshot is derived data rep B's own next save on
+     * their DRAFT would reproduce verbatim anyway (same contact row, same {@code resolveContact}
+     * read), so this carries no information about rep B's ticket that rep A could not already see
+     * by looking at the (shared) contact record itself. See this test's own PR-body paragraph
+     * (in the branch's PR description) for the full reasoning a reviewer needs to tell this apart
+     * from a genuine cross-rep leak.
+     */
+    @Test
+    void updateContact_anotherRepsDraftOnTheSameContact_isAlsoRefreshed() {
+        DealQuotationDto repBsDraft = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+        assertThat(repBsDraft.contactEmail()).isEqualTo(contact.email());
+        assertThat(repBsDraft.salesRepId()).isEqualTo(otherSalesId);
+
+        // Rep A (or anyone reaching CustomerService#updateContact -- it takes no actor) corrects
+        // the SHARED contact. Rep B never touched their own draft.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "shared-contact-new-email@customer.test", "085-000-1111");
+
+        DealQuotationDto reloaded = quotationRepository.findById(repBsDraft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isEqualTo("shared-contact-new-email@customer.test");
+        assertThat(reloaded.contactPhone()).isEqualTo("085-000-1111");
+    }
+
+    /**
+     * D6 (Opus review 2026-09-16): {@code ContactRepository#update}'s own
+     * {@code COALESCE(:email, email)} treats an explicit {@code ""} (as opposed to a literal
+     * {@code null} parameter, which means "leave unchanged") as "clear this field", so
+     * {@code customers.contact.email} genuinely holds {@code ''} after this call --
+     * {@code refreshDraftContactSnapshot} must still normalise that to {@code NULL} on
+     * {@code sales.quotation}, matching every other writer of this column
+     * ({@code DealQuotationService#resolveContact}'s own {@code blankToNull}).
+     */
+    @Test
+    void updateContact_draftQuotation_clearingEmailStoresNullNotEmptyString() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(draft.contactEmail()).isEqualTo(contact.email());
+
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "", null);
+
+        DealQuotationDto reloaded = quotationRepository.findById(draft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isNull();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -2378,6 +2880,50 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(mapei.quantity()).isEqualByComparingTo("85");
         assertThat(mapei.lineAmount()).isEqualByComparingTo("38250.00"); // 85 x 450
         assertThat(created.subtotalAmount()).isEqualByComparingTo("89250.00"); // 1000 + 50000 + 38250
+    }
+
+    /**
+     * D1 (owner decision, 2026-09-16, review of V182): a PLAIN row (สินค้า/บริการอื่น — sanitaryware
+     * sold on ชุด) may now carry an OPTIONAL import lead time, exactly like a TILE row's. This is
+     * the production PATH the review flagged as missing evidence for — {@code ItemInput} built the
+     * way the wired editor now sends it (never a hand-constructed {@code DealQuotationItemDto}),
+     * through the REAL {@code DealQuotationService#create} → {@code #buildPlainItem}, proving the
+     * fields the UI now sends actually reach the saved item and, from there, the printed document —
+     * not merely that a fixture built directly at the render layer can express the state.
+     */
+    @Test
+    void plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(
+                plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 75, 90))),
+            salesActor);
+
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.lineType()).isEqualTo(WastageCalculator.LINE_TYPE_PLAIN);
+        assertThat(item.leadTimeMinDays()).isEqualTo(75);
+        assertThat(item.leadTimeMaxDays()).isEqualTo(90);
+
+        // The saved document has no TILE line at all, so it takes the non-tile remark set — and
+        // now that this PLAIN row carries a lead time, remark 3 prints it rather than dropping.
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
+                + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
+    }
+
+    /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
+     * before — the field is optional, never required, for a non-TILE row. */
+    @Test
+    void plainRow_withNoLeadTime_stillSavesAndPrintsUnchanged() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), salesActor);
+
+        DealQuotationItemDto item = created.items().get(0);
+        assertThat(item.leadTimeMinDays()).isNull();
+        assertThat(item.leadTimeMaxDays()).isNull();
+
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
+        assertThat(model.remarkLines()).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
     }
 
     /** S2: a fractional PLAIN quantity must survive — the reason `quantity` is a BigDecimal and
@@ -3089,12 +3635,146 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.grandTotal()).isEqualByComparingTo("64649.40");
     }
 
+    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+
+    /** The flag persists, round-trips on GET, and defaults true for a request that never mentions
+     * it — same "null reads as true" contract as every other layer. */
+    @Test
+    void roundToFullBox_persistsAndRoundTripsOnGet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+
+        DealQuotationDto reloaded = quotationService.get(created.id(), salesActor);
+        assertThat(reloaded.items().get(0).roundToFullBox()).isTrue();
+    }
+
+    /** The headline case, end to end through the real service and Postgres: 32 pieces, box of 10,
+     * no wastage — 3 full boxes plus 2 loose, piecesFinal UNROUNDED at 32 (not the old ceiling of
+     * 40), and the printed line reflects it. Proves the column round-trips both directions, not
+     * only "does not reject false". */
+    @Test
+    void roundToFullBoxFalse_persistsAndComputesTheLooseSplit_onCreateAndGet() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        var item = created.items().get(0);
+        assertThat(item.roundToFullBox()).isFalse();
+        assertThat(item.piecesFinal()).isEqualTo(32);
+        assertThat(item.boxes()).isEqualTo(3);
+        assertThat(item.calculationLine()).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+        // 50.00 * 32 (unrounded) = 1,600.00 -- NOT 50.00 * 40 (the old ceiling) = 2,000.00.
+        assertThat(item.lineAmount()).isEqualByComparingTo("1600.00");
+
+        DealQuotationDto reloaded = quotationService.get(created.id(), salesActor);
+        var reloadedItem = reloaded.items().get(0);
+        assertThat(reloadedItem.roundToFullBox()).isFalse();
+        assertThat(reloadedItem.piecesFinal()).isEqualTo(32);
+        assertThat(reloadedItem.boxes()).isEqualTo(3);
+        assertThat(reloadedItem.calculationLine()).isEqualTo(item.calculationLine());
+        assertThat(reloadedItem.lineAmount()).isEqualByComparingTo("1600.00");
+    }
+
+    /** update() can flip the flag on an existing row, in either direction, and the stored row
+     * follows — not merely accepted at create and frozen thereafter. */
+    @Test
+    void roundToFullBox_canBeToggledOnUpdate_inEitherDirection() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+        assertThat(created.items().get(0).piecesFinal()).isEqualTo(40); // ceil(32/10)*10
+
+        DealQuotationDto toggledOff = quotationService.update(created.id(),
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        assertThat(toggledOff.items().get(0).roundToFullBox()).isFalse();
+        assertThat(toggledOff.items().get(0).piecesFinal()).isEqualTo(32);
+
+        DealQuotationDto toggledBackOn = quotationService.update(created.id(),
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        assertThat(toggledBackOn.items().get(0).roundToFullBox()).isTrue();
+        assertThat(toggledBackOn.items().get(0).piecesFinal()).isEqualTo(40);
+    }
+
+    /** {@code createRevision} copies its parent's rows VERBATIM (the class's own documented
+     * contract for every other item field) — proven here for roundToFullBox specifically, in
+     * BOTH directions, so a regression that silently defaulted a revision back to true (or froze
+     * it at false) would be caught either way. */
+    @Test
+    void createRevision_copiesRoundToFullBoxVerbatim_bothDirections() {
+        DealQuotationDto createdFalse = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", false))),
+            salesActor);
+        quotationService.submit(createdFalse.id(), salesActor);
+        DealQuotationDto approvedFalse =
+            quotationService.approve(createdFalse.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto revisionOfFalse = quotationService.createRevision(approvedFalse.id(), salesActor);
+        assertThat(revisionOfFalse.items().get(0).roundToFullBox()).isFalse();
+        assertThat(revisionOfFalse.items().get(0).piecesFinal()).isEqualTo(32);
+        assertThat(revisionOfFalse.items().get(0).boxes()).isEqualTo(3);
+
+        DealQuotationDto createdTrue = quotationService.create(ticketId,
+            upsertRequest(List.of(loosePiecesItem(32, WastageCalculator.WASTAGE_MODE_NONE, null, 10,
+                "50.00", true))),
+            salesActor);
+        quotationService.submit(createdTrue.id(), salesActor);
+        DealQuotationDto approvedTrue =
+            quotationService.approve(createdTrue.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto revisionOfTrue = quotationService.createRevision(approvedTrue.id(), salesActor);
+        assertThat(revisionOfTrue.items().get(0).roundToFullBox()).isTrue();
+        assertThat(revisionOfTrue.items().get(0).piecesFinal()).isEqualTo(40);
+    }
+
+    /** A PLAIN row is unaffected: it has no {@code piecesPerBox} concept at all, and the stored
+     * flag reads {@code true} (the moot default) rather than propagating whatever a client might
+     * have sent for a TILE row elsewhere in the same payload. */
+    @Test
+    void roundToFullBox_plainRow_isAlwaysTrue_flagIsMootWithoutABox() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(plainItem("ค่าขนส่ง", "1", "JOB", "500.00"))), salesActor);
+        assertThat(created.items().get(0).roundToFullBox()).isTrue();
+    }
+
+    /** V182 "sell loose pieces" fixture: a PIECES-mode TILE row with explicit piecesPerBox,
+     * wastage and roundToFullBox — every other field mirrors {@link #sampleItem}'s 60x60/
+     * 0.36-sqm-per-piece fixture (so it satisfies the same item-completeness rule). */
+    private ItemInput loosePiecesItem(int piecesInput, String wastageMode, String wastageValue,
+                                      int piecesPerBox, String unitPrice, boolean roundToFullBox) {
+        return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
+            new BigDecimal("10"), new BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, piecesInput,
+            wastageMode, wastageValue == null ? null : new BigDecimal(wastageValue), piecesPerBox,
+            new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null,
+            WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            null, null, null, null, null,
+            null, null, roundToFullBox);
+    }
+
     /** D1/D8 — a PLAIN row with an explicit discount ({@link #plainItem} has none). */
     private ItemInput plainItemWithDiscount(String description, String quantity, String unit,
                                             String unitPrice, String discountPct) {
         return new ItemInput(null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null,
             new BigDecimal(unitPrice), new BigDecimal(discountPct), null, null, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
+            null, null, null, null, null);
+    }
+
+    /** D1 (owner decision, 2026-09-16) — a PLAIN row carrying the OPTIONAL import lead time
+     * QuotationPlainItemRow's new control now sends ({@link #plainItem} has none, same as every
+     * PLAIN row before this fix). */
+    private ItemInput plainItemWithLeadTime(String description, String quantity, String unit,
+                                            String unitPrice, int leadTimeMinDays, int leadTimeMaxDays) {
+        return new ItemInput(null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal(unitPrice), null, null, leadTimeMinDays, leadTimeMaxDays, null,
             WastageCalculator.LINE_TYPE_PLAIN, description, new BigDecimal(quantity), unit,
             null, null, null, null, null);
     }

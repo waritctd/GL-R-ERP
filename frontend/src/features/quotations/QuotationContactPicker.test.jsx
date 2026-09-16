@@ -20,9 +20,17 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-function Harness({ customerId = 1, customerName = null, initial = null, showToast }) {
+function Harness({
+  customerId = 1, customerName = null, initial = null, showToast,
+  omitContactHonorific, onChangeOmitContactHonorific,
+}) {
   const [value, setValue] = React.useState(initial);
-  return <QuotationContactPicker customerId={customerId} customerName={customerName} value={value} onChange={setValue} showToast={showToast} />;
+  return (
+    <QuotationContactPicker
+      customerId={customerId} customerName={customerName} value={value} onChange={setValue} showToast={showToast}
+      omitContactHonorific={omitContactHonorific} onChangeOmitContactHonorific={onChangeOmitContactHonorific}
+    />
+  );
 }
 
 // ── "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11): "when the customer and the
@@ -151,5 +159,81 @@ describe('QuotationContactPicker — edit-in-place โทร./อีเมล', 
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์เข้าถึงรายการนี้'));
     expect(emailInput.value).toBe('wipa@example.com'); // rolled back
+  });
+});
+
+// ── Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) ─────────────────
+describe('QuotationContactPicker — ไม่เติม "คุณ" หน้าชื่อผู้สั่งซื้อ', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: [] });
+  });
+
+  it('does not render the checkbox when the caller passes no onChangeOmitContactHonorific', async () => {
+    render(<Harness />);
+    await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    expect(screen.queryByText(/ไม่เติม/)).toBeNull();
+  });
+
+  it('renders unticked by default when the caller wires the handler', async () => {
+    render(<Harness onChangeOmitContactHonorific={vi.fn()} />);
+    const checkbox = await screen.findByRole('checkbox', { name: /ไม่เติม/ });
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('reflects the omitContactHonorific prop when true', async () => {
+    render(<Harness omitContactHonorific onChangeOmitContactHonorific={vi.fn()} />);
+    const checkbox = await screen.findByRole('checkbox', { name: /ไม่เติม/ });
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('clicking calls onChangeOmitContactHonorific with the new checked value', async () => {
+    const onChangeOmitContactHonorific = vi.fn();
+    render(<Harness onChangeOmitContactHonorific={onChangeOmitContactHonorific} />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /ไม่เติม/ }));
+    expect(onChangeOmitContactHonorific).toHaveBeenCalledWith(true);
+  });
+
+  it('is placed directly under the ผู้สั่งซื้อ select (per the owner\'s own placement)', async () => {
+    render(<Harness onChangeOmitContactHonorific={vi.fn()} />);
+    const picker = await screen.findByLabelText(/^ผู้สั่งซื้อ/);
+    const checkbox = screen.getByRole('checkbox', { name: /ไม่เติม/ });
+    // DOCUMENT_POSITION_FOLLOWING (4): the checkbox comes AFTER the picker in document order.
+    // eslint-disable-next-line no-bitwise
+    expect(picker.compareDocumentPosition(checkbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+// Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): a
+// quotation-grant holder who cannot load the ticket has `customerId` (== `contactCustomerId` on
+// the editor page) stay null even though the quotation's own frozen snapshot already seeded a
+// SELECTED contact with a real phone/email -- editing either field used to return silently: no
+// request, no toast, the rep left to guess why nothing happened.
+describe('QuotationContactPicker — missing customerId (owner re-report 2026-09-16)', () => {
+  const SELECTED_CONTACT = { id: 42, customerId: 1, firstName: 'วิภา', lastName: 'สมิทธ์', phone: '081-000-0000', email: 'wipa@example.com' };
+
+  // Resets call history AND any lingering mockRejectedValue/mockResolvedValue configuration from
+  // an earlier describe block's tests (e.g. "edit-in-place โทร./อีเมล"'s own updateContact stubs) —
+  // without this, `expect(api.customers.updateContact).not.toHaveBeenCalled()` below could see a
+  // PREVIOUS test's call still in the mock's history.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a Thai toast instead of silently no-op-ing, and keeps the typed value visible', async () => {
+    const showToast = vi.fn();
+    render(<Harness customerId={null} initial={SELECTED_CONTACT} showToast={showToast} />);
+
+    const emailInput = await screen.findByLabelText('แก้ไขอีเมลผู้สั่งซื้อ');
+    fireEvent.change(emailInput, { target: { value: 'new@example.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้',
+    ));
+    expect(api.customers.updateContact).not.toHaveBeenCalled();
+    // No request was ever sent, so there is nothing to roll back -- the typed value stays exactly
+    // as the rep left it (unlike the "rolls back" case above, which DID send a request).
+    expect(emailInput.value).toBe('new@example.com');
   });
 });

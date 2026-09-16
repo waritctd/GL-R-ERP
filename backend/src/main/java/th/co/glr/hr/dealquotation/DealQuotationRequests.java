@@ -47,7 +47,13 @@ public final class DealQuotationRequests {
         @Size(max = 255) String texture,
         @Size(max = 255) String sizeText,
         BigDecimal thicknessMm,
-        BigDecimal sqmPerPiece,
+        // Review fix F3 (2026-09-16) — sales.quotation_item.sqm_per_piece is NUMERIC(10,6), exactly
+        // like sqmPerBox below; mirrors that field's own @Digits bound. Without it, a direct API
+        // call with a 7th decimal prices the line on the UNROUNDED value while the document
+        // recomputes quantity from the STORED (6dp) one — e.g. 0.3598349 x 3000 prices 1,079.50 but
+        // the printed row's own quantity math (from the stored 0.359835) comes to 1,079.51, an
+        // arithmetic mismatch the customer can check.
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerPiece,
         // "AREA" | "PIECES" — see QuantityMode. Only meaningful on a TILE row.
         String quantityMode,
         @DecimalMax("999999") BigDecimal areaSqm,
@@ -125,10 +131,42 @@ public final class DealQuotationRequests {
          * {@code piecesPerBox}) only for SPECIAL_SQM on an EN document. {@code @Digits} matches
          * {@code sales.quotation_item.sqm_per_box}'s NUMERIC(10,6).
          */
-        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox
+        @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox,
+
+        /**
+         * Owner-approved "sell loose pieces" (2026-09-16). TILE rows only, meaningful only when
+         * {@code piecesPerBox} is set. Nullable — {@code null} reads as {@code true}, exactly
+         * today's ONLY behaviour (round the piece count up to the next full box), so every
+         * existing draft/request compiles and behaves unchanged. {@code false} sells exactly the
+         * wastage-adjusted piece count, unrounded — see {@code WastageCalculator.Input}'s own
+         * Javadoc for the arithmetic and {@code DealQuotationService#requireBoxDataForPerSqm} for
+         * why it is REFUSED (400) together with an English per-sqm price mode, which has no way to
+         * express a loose-piece quantity in square metres.
+         */
+        Boolean roundToFullBox
     ) {
-        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}) — kept so every
-         * existing construction site compiles unchanged. */
+        /** The pre-loose-pieces canonical shape (with {@link #sqmPerBox}, no
+         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged.
+         * Defaults {@code roundToFullBox} to null, which reads as {@code true}. */
+        public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
+                         String model, String color, String texture, String sizeText,
+                         BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
+                         BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+                         BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
+                         BigDecimal discountPct, String originCountry, Integer leadTimeMinDays,
+                         Integer leadTimeMaxDays, String itemNotes, String lineType, String description,
+                         BigDecimal quantity, String unit, BigDecimal specialPriceSqm,
+                         BigDecimal directNetPrice, BigDecimal adjustmentPct, LocalDate adjustmentDeadline,
+                         BigDecimal adjustmentAmount, Long id, BigDecimal sqmPerBox) {
+            this(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode,
+                wastageValue, piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, lineType, description, quantity, unit, specialPriceSqm,
+                directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, null);
+        }
+
+        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}/
+         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged. */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
@@ -286,8 +324,53 @@ public final class DealQuotationRequests {
          * this field at all — see {@code DealQuotationService#create}).
          */
         @Size(max = 200) String projectName,
+        /**
+         * Item 2 (V180, owner ruling 2026-09-16) — "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ": when true,
+         * {@code DealQuotationRenderAdapter}'s attn line never prefixes "คุณ" onto the ผู้สั่งซื้อ
+         * contact name, for a deal whose contact is genuinely a department/section name ("ฝ่าย
+         * จัดซื้อ") rather than a person. Nullable on the wire and treated as {@code false} when
+         * absent (see {@code DealQuotationService#resolveOmitContactHonorific}) — UNticked is the
+         * default for every new quotation, and is NOT remembered in {@code quotationPrefs} (unlike
+         * depositPercent/remainderMode/etc.), so it never silently carries over from a previous
+         * document.
+         */
+        Boolean omitContactHonorific,
+        /**
+         * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — one of
+         * {@link WastageCalculator#FULL_PAYMENT_TERM_BEFORE_DELIVERY}/
+         * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_DELIVERY}/
+         * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY}, meaningful ONLY on a
+         * document whose {@link #depositPercent} resolves to exactly 0 ("ไม่รับมัดจำ" ticked) —
+         * {@code DealQuotationService#resolveFullPaymentTerm} forces it back to null on any other
+         * deposit percentage, so a rep who unticks "ไม่รับมัดจำ" can never leave a stale term
+         * attached to a document that now names an ordinary percentage deposit. Null/blank on a
+         * zero-deposit DRAFT is allowed (the rep has not picked one yet); {@code submit()} refuses
+         * to advance such a document until one is chosen. An unrecognised code is rejected here by
+         * bean validation (400), before the service ever sees it.
+         */
+        @Pattern(regexp = "BEFORE_DELIVERY|ON_DELIVERY|ON_OR_BEFORE_DELIVERY",
+            message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
+        String fullPaymentTerm,
         @NotEmpty List<@Valid ItemInput> items
     ) {
+        /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
+         * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
+         * omitContactHonorific to null (read as {@code false} — UNticked, today's only behaviour)
+         * and fullPaymentTerm to null (no zero-deposit document existed before this change had a
+         * term to carry). */
+        public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
+                                          LocalDate offerDate, Integer depositPercent,
+                                          String remainderMode, Integer creditDays,
+                                          Integer validityDays, String validityMode, LocalDate validityUntil,
+                                          String customerNotes, String priceMode, String documentLanguage,
+                                          String currency, Long printedByDisplayId, Long salesRepDisplayId,
+                                          String projectName, List<ItemInput> items) {
+            this(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
+                documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
+                null, null, items);
+        }
+
         /** The pre-projectName shape — kept so every existing construction site (tests, mostly)
          * compiles unchanged. Defaults to null, which on create falls back to the ticket's own
          * project name (today's behaviour for every one of those fixtures) and on update would

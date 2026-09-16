@@ -50,6 +50,33 @@ describe('quotationPrefs', () => {
     expect(readQuotationDefaults(6)).toEqual({ validityMode: 'DATE' });
   });
 
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): unlike every other
+  // field above, noDeposit/fullPaymentTerm must NEVER round-trip — remembering noDeposit would
+  // make every LATER new quotation start with no deposit, which is exactly the accidental-no-
+  // deposit-quotation risk the reversal exists to prevent.
+  it('never remembers noDeposit or fullPaymentTerm, even alongside fields that DO round-trip', () => {
+    writeQuotationDefaults(6, {
+      depositPercent: 50, noDeposit: true, fullPaymentTerm: 'ON_DELIVERY',
+    });
+    expect(readQuotationDefaults(6)).toEqual({ depositPercent: 50 });
+  });
+
+  // A stale blob is exactly what a rep who used the checkbox during the brief window this shipped
+  // (2026-09-16, before the reversal) may already have sitting in their browser's localStorage.
+  // Reading it back must silently drop the stale keys rather than warn, crash, or apply them.
+  it('ignores a stale stored noDeposit/fullPaymentTerm from before the reversal', () => {
+    // Simulates the OLD writer, which used to include these two keys.
+    writeQuotationDefaults(6, { depositPercent: 0 }); // depositPercent 0 alone is not "no deposit"
+    const key = 'glr.quotation.defaults.v1:6';
+    const stale = JSON.parse(store.getItem(key));
+    store.setItem(key, JSON.stringify({ ...stale, noDeposit: true, fullPaymentTerm: 'ON_DELIVERY' }));
+
+    const defaults = readQuotationDefaults(6);
+    expect(defaults).toEqual({ depositPercent: 0 });
+    expect(defaults.noDeposit).toBeUndefined();
+    expect(defaults.fullPaymentTerm).toBeUndefined();
+  });
+
   // A shared sales machine is the normal case in this office — two reps on one browser must not
   // inherit each other's terms.
   it('keys defaults per user, so one rep never inherits another\'s', () => {

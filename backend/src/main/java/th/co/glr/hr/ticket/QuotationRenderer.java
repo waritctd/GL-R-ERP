@@ -345,7 +345,13 @@ public class QuotationRenderer {
             // footerShift folds into every footer-block row constant used below, exactly like
             // insertLine3ContinuationRow's shift already folds into FOOTER_END etc.
             int remarkLineCount = model.remarkLines() != null ? model.remarkLines().size() : 0;
-            boolean v2CompactRemarks = model.signatureLabelsV2() && remarkLineCount >= REMARK_V2_MIN_LINES;
+            // V182: model.forceCompactRemarks() (set only by DealQuotationRenderAdapter, for its new
+            // 3/4-line non-tile remark set — see that field's own Javadoc) supersedes the size check
+            // rather than duplicating it, so a short remark list still gets the packed/compacted
+            // layout instead of falling through to the legacy head-row-plus-gaps path, whose "unused"
+            // rows still carry the template's own baked tile-oriented text.
+            boolean v2CompactRemarks = model.signatureLabelsV2()
+                && (remarkLineCount >= REMARK_V2_MIN_LINES || model.forceCompactRemarks());
             // Owner feedback (2026-09-14): a 7-line render (the lead-time line dropped) removes ONE
             // extra row versus today's fixed -7 — see #remarkV2CompactShift/#compactRemarksSection.
             int footerShift = v2CompactRemarks ? remarkV2CompactShift(remarkLineCount) : 0;
@@ -383,6 +389,42 @@ public class QuotationRenderer {
             setStr(sh, DEPT_VALUE_ROW, VALUE_COL, nullSafe(model.deptCode()));   // I3 — ฝ่าย / Dept.
             setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
             setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
+            // ฝ่าย/ผู้ออกแบบ optional (2026-09-16): both fields became optional on the deal (commit
+            // 3003bd0c) and the value cell above already prints blank via nullSafe when unset — but
+            // H3/H5's own LABEL never followed: it is the Thai TEMPLATE's own baked-in text ("ฝ่าย" /
+            // "หน่วยงาน", never written by the Thai branch — see this class's H3/H4/H5 comment above)
+            // or, on English, the "Dept."/"D.Co." literal #writeEnglishHeaderLabels just wrote a few
+            // lines above. Either way a blank value used to still print its label with nothing after
+            // it ("ฝ่าย" / "Dept." with an empty I3/I5), which reads as a field the rep forgot to
+            // fill rather than one that is genuinely inapplicable. Clearing H3/H5 here — AFTER both
+            // the Thai template's own text and the English overwrite have already been decided —
+            // handles both languages with the one guard: when filled, neither cell is touched, so a
+            // filled document renders byte-for-byte as before this change.
+            //
+            // Opus review fix (2026-09-16, F1): gated on model.signatureLabelsV2() — this fix is
+            // scoped to the v2/direct-deal render only. deptCode/unitCode became optional on the
+            // DEAL aggregate (DealQuotationRenderAdapter's caller), not on the legacy TicketDto/
+            // QuotationDto shape: #buildLegacyModel above hands this method deptCode=null/unitCode=
+            // null UNCONDITIONALLY for every legacy/PCR ticket quotation (it never reads a
+            // deptCode/unitCode off TicketDto/QuotationDto at all — there is no such field), so an
+            // ungated guard here would have started clearing H3/H5 on every legacy document ever
+            // rendered, not just the ones a rep deliberately left blank — a silent behaviour change
+            // to a document nobody asked to touch. signatureLabelsV2 is this exact class's own
+            // established discriminator for "is this the v2/direct-deal render" (see this field's
+            // Javadoc on QuotationRenderModel, and its other three uses in this method/class below:
+            // v2CompactRemarks, the Project-heading centring a few lines down, alwaysShowSeq, and
+            // writeSignatureBlock) — DealQuotationRenderAdapter#toRenderModel passes signatureLabelsV2
+            // = true (line ~208, alongside the real quotation.deptCode()/unitCode()), buildLegacyModel
+            // passes false (line ~318, alongside its hardcoded null/null) — so it is already exactly
+            // "was this model built from a real deal's dept/unit fields, or a legacy shape that never
+            // had them". Legacy documents keep the template's baked-in ฝ่าย/หน่วยงาน labels exactly as
+            // they always have.
+            if (model.signatureLabelsV2() && (model.deptCode() == null || model.deptCode().isBlank())) {
+                clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 label
+            }
+            if (model.signatureLabelsV2() && (model.unitCode() == null || model.unitCode().isBlank())) {
+                clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
+            }
             // layout-spec §3: SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns
             // sizes for the "net" money figure — a previous version of this fix WIDENED that data
             // column to fit "Sales/{name} T.{phone}", which made คงเหลือ absurdly wide on every
@@ -420,7 +462,7 @@ public class QuotationRenderer {
             // One-off template data fix, independent of the caller: strip the stray "+B27:B29"
             // cell reference the template author left in B27's (line 2's continuation) text.
             stripStrayCellReference(sh);
-            writeRemarks(sh, model.remarkLines());
+            writeRemarks(sh, model.remarkLines(), v2CompactRemarks);
 
             List<RenderItem> items = model.items();
             BigDecimal subtotal = items.stream()
@@ -1169,10 +1211,14 @@ public class QuotationRenderer {
      * continuation row — its text fits on one line, so the old composed-sentence-with-baked-in-
      * continuation-text convention no longer applies. The legacy wrappers send exactly 3 (matching
      * this renderer's pre-existing behaviour), so their continuation rows are left untouched.
+     *
+     * <p>{@code full} is the SAME {@code v2CompactRemarks} decision {@link #toXls(QuotationRenderModel)}
+     * already computed (size &gt;= {@link #REMARK_V2_MIN_LINES}, OR {@code
+     * QuotationRenderModel#forceCompactRemarks()} — V182) — passed in rather than recomputed here,
+     * so the two can never disagree about which layout a given render actually used.
      */
-    private void writeRemarks(Sheet sh, List<String> remarkLines) {
+    private void writeRemarks(Sheet sh, List<String> remarkLines, boolean full) {
         if (remarkLines == null) return;
-        boolean full = remarkLines.size() >= REMARK_V2_MIN_LINES;
         if (full) {
             // layout-spec §3: 8 (or, owner feedback 2026-09-14, 7 when the lead-time line was
             // dropped) CONSECUTIVE rows starting at REMARK_HEAD_ROWS[0] — the compaction in
@@ -1375,7 +1421,7 @@ public class QuotationRenderer {
     }
 
     // A boundary between two parenthesised groups: a ")" followed by whitespace followed by "(" —
-    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
+    // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
     // Owner feedback #3 (2026-09-14): {@link #wrapItemLineToWidth} prefers to break HERE, so a
     // group like "(บรรจุ N แผ่น/กล่อง)" moves to the next physical row whole rather than splitting
     // its own words across two rows.
@@ -1393,7 +1439,7 @@ public class QuotationRenderer {
      * <p>Prefers breaking at a {@link #PAREN_GROUP_BOUNDARY} — packing whole parenthesised groups
      * onto each physical line — so a group like "(บรรจุ 4 แผ่น/กล่อง)" moves to the next row intact
      * instead of splitting across rows the way the old character-length wrap did (the bug this
-     * fixes: "(จำนวน 5,560 แผ่น และปัดลงกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
+     * fixes: "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
      * a plain greedy word wrap ({@link #wrapGreedyByVisibleWidth}) only for a single group that by
      * itself is longer than the budget, or for a line with no parenthesised groups at all.
      */

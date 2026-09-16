@@ -130,10 +130,17 @@ public final class DealQuotationRenderAdapter {
             // this branch prefixed a second one unconditionally whenever the name was not an
             // organisation. #hasThaiHonorificPrefix adds the same "already has one" check
             // #looksLikeOrganisation already does for a company name.
+            // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16): the ONE
+            // override on top of the existing organisation/already-has-one detection below — a rep
+            // ticks this when the contact snapshot is genuinely a department/section name ("ฝ่าย
+            // จัดซื้อ") that #looksLikeOrganisation's markers do not catch. Only ever suppresses the
+            // honorific itself; #printContactPart's own dedupe (contact == customer name) is
+            // unaffected and still decides whether the contact part prints at all.
+            String honorific = quotation.omitContactHonorific() ? ""
+                : (looksLikeOrganisation(quotation.contactName())
+                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ");
             String contactPart = printContactPart(quotation.contactName(), quotation.customerName())
-                ? (looksLikeOrganisation(quotation.contactName())
-                        || hasThaiHonorificPrefix(quotation.contactName()) ? "" : "คุณ")
-                    + quotation.contactName().trim() + "   /   "
+                ? honorific + quotation.contactName().trim() + "   /   "
                 : "";
             String taxIdPart = !blank(quotation.customerTaxId())
                 ? "   เลขที่ผู้เสียภาษี : " + quotation.customerTaxId().trim() : "";
@@ -195,12 +202,53 @@ public final class DealQuotationRenderAdapter {
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()));
 
+        // V182 (owner request, 2026-09-16): a document with NO tile line at all (sanitaryware sold
+        // on ชุด/PLAIN lines) prints a different, shorter หมายเหตุ block — the tile-oriented remarks
+        // (sizes vs. ISO/มอก., colour/LOT variance) are simply wrong on such a document. #hasAnyTileLine
+        // also answers "non-tile" for an all-ADJUSTMENT item list, but that is a defensive branch,
+        // not a real document: DealQuotationService#buildItems refuses BOTH an empty item list and
+        // an all-ADJUSTMENT one before anything is ever saved (comment correction, review 2026-09-16
+        // — this used to call that case a real "credit-note-ish" document, which it is not). See
+        // #hasAnyTileLine.
+        boolean hasTile = hasAnyTileLine(quotation.items());
+        List<String> remarks = english
+            ? (hasTile ? englishRemarkLines(quotation, bankBlockLines) : englishNonTileRemarkLines(quotation, bankBlockLines))
+            : (hasTile ? remarkLines(quotation) : nonTileRemarkLines(quotation));
+
         return new QuotationRenderModel(
             issueDate, quotation.number(), quotation.deptCode(), quotation.unitCode(), salesLine,
             attnLine, phoneLine, quotation.projectName(), items,
-            english ? englishRemarkLines(quotation, bankBlockLines) : remarkLines(quotation), signatories, true,
+            remarks, signatories, true,
             english ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH,
-            quotation.currency());
+            quotation.currency(),
+            // forceCompactRemarks: this class ALWAYS builds the direct-deal v2 render (tile OR
+            // non-tile) and always wants the packed/compacted remark-box layout — see
+            // QuotationRenderModel#forceCompactRemarks's own Javadoc for why the non-tile set (3 or
+            // 4 lines, well under QuotationRenderer#REMARK_V2_MIN_LINES) needs this rather than
+            // relying on the size check the tile set has always passed on its own.
+            true);
+    }
+
+    /** {@code true} when {@code item} is a TILE row — {@code lineType} null or {@link
+     * WastageCalculator#LINE_TYPE_TILE} — the same question {@link #printedUnit}/{@link
+     * #discountLabel} each ask inline for their own reasons. Shared here for the non-tile
+     * remark-set gate below. */
+    private static boolean isTileLine(DealQuotationItemDto item) {
+        return item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
+    }
+
+    /** {@code true} when ANY item on the document is a TILE row. {@code false} for a document made
+     * entirely of PLAIN rows (sanitaryware — taps, showers, sold as ชุด) — the real-world non-tile
+     * case this feature is for — and, defensively, for an item list that is all ADJUSTMENT rows.
+     * Comment correction (review, 2026-09-16): the latter is NOT a real "credit-note-ish" document —
+     * {@code DealQuotationService#buildItems} refuses both an empty item list and an all-ADJUSTMENT
+     * one before either is ever saved, so this branch of the method is never exercised by a real
+     * quotation, only by a test constructing a {@code DealQuotationItemDto} list directly. Either
+     * way the answer is "non-tile" for the remark block below: neither case has anything to do with
+     * ขนาด/สี variance between kiln lots, which is what the tile-oriented remarks 4/5 are actually
+     * about. */
+    private static boolean hasAnyTileLine(List<DealQuotationItemDto> items) {
+        return items.stream().anyMatch(DealQuotationRenderAdapter::isTileLine);
     }
 
     /**
@@ -426,14 +474,111 @@ public final class DealQuotationRenderAdapter {
      * amount rather than "the remainder after the deposit". The "2." slot number is kept exactly
      * as before either way.
      */
-    private static String depositLine(int depositPct, String remainderMode, Integer creditDays,
-                                       String remainderText) {
+    private static String depositLine(int depositPct, String fullPaymentTerm, String remainderMode,
+                                       Integer creditDays, String remainderText) {
         if (depositPct != 0) {
             return "2.บริษัทฯ ขอรับมัดจำ " + depositPct + "% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือ" + remainderText;
+        }
+        // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document names ONE
+        // of three fixed payment terms — see #fullPaymentTermThaiText. A row whose fullPaymentTerm
+        // is null (every LEGACY zero-deposit row, which predates this feature and never set it —
+        // DealQuotationService#resolveFullPaymentTerm guarantees it is null on every OTHER row too,
+        // but those never reach depositPct == 0 in the first place) falls through to the ORIGINAL
+        // remainderMode/creditDays-based text below, UNCHANGED, so an already-approved legacy
+        // document keeps printing byte-for-byte what it always did.
+        String termText = fullPaymentTermThaiText(fullPaymentTerm);
+        if (termText != null) {
+            return "2." + termText;
         }
         return "CREDIT".equals(remainderMode)
             ? "2.บริษัทฯ ขอรับชำระเต็มจำนวนเป็นเครดิต " + (creditDays != null ? creditDays : 0) + " วัน"
             : "2.บริษัทฯ ขอรับชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+    }
+
+    /** The three fixed Thai payment-term sentences (owner ruling 2026-09-16), or {@code null} for
+     * any other value — including a legacy null, which lets {@link #depositLine} fall back to its
+     * ORIGINAL remainderMode-based text rather than printing nothing. */
+    private static String fullPaymentTermThaiText(String code) {
+        if (WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า";
+        }
+        // Owner correction 2026-09-16: "เมื่อ..." FIRST, then "หรือก่อน..." — the reverse order of
+        // the other two terms' own "ก่อน...หรือเมื่อ..." phrasing (and of the pre-feature legacy
+        // fallback text a few lines above, which is untouched by this correction).
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY.equals(code)) {
+            return "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า";
+        }
+        return null;
+    }
+
+    // ── V182 (owner request, 2026-09-16): the NON-TILE remark set ("สินค้าที่ไม่ใช่กระเบื้อง" —
+    // sanitaryware: taps, showers, sold as ชุด on PLAIN lines; also an ADJUSTMENT-only document) —
+    // reference: her real document QN6900971-4, which prints exactly these four remarks. ─────
+
+    private static final String NON_TILE_LINE1 =
+        "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง";
+
+    /** Remark 3 when NO row on a non-tile document carries a lead time — discarded by {@link
+     * #dropLeadTimeLineAndRenumber} in exactly the same way {@link #LINE3_FALLBACK} is for the
+     * tile set (see that constant's own Javadoc); kept only as the value {@link
+     * #nonTileLeadTimeLine} must return something for while composing the full line list. */
+    private static final String NON_TILE_LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
+
+    /**
+     * {@code "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า {groups} หลังจากได้รับมัดจำ
+     * {deposit}% เรียบร้อยแล้ว"} — or, when the quotation takes NO deposit ({@code
+     * depositPct == 0}), the same sentence with just the "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว" clause
+     * dropped (naming a deposit that does not exist would be nonsensical, but the lead-time claim
+     * itself still stands).
+     *
+     * <p>Owner ruling (review of V182, 2026-09-16): {@code {groups}} is the SAME per-item grouped
+     * list the tile set's own {@link #leadTimeLine} builds ({@link #leadTimeGroups}) — NOT an
+     * overall min-of-mins/max-of-maxes envelope, which this line used to print and which the owner
+     * rejected: a genuinely mixed non-tile document (e.g. one row 75-90 days, another 30-45) could
+     * print a single misleading "30-90 วัน" span under the envelope approach. Falls back to
+     * {@link #NON_TILE_LINE3_FALLBACK} when {@link #hasAnyLeadTime} is false — the ONLY caller
+     * ({@link #nonTileRemarkLines}) then drops the whole line via {@link #dropLeadTimeLineAndRenumber},
+     * exactly as the tile set's own {@link #leadTimeLine} does. */
+    private static String nonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
+        if (!hasAnyLeadTime(items)) {
+            return NON_TILE_LINE3_FALLBACK;
+        }
+        String groups = String.join("  ", leadTimeGroups(items, false));
+        String depositClause = depositPct == 0 ? ""
+            : " หลังจากได้รับมัดจำ " + depositPct + "% เรียบร้อยแล้ว";
+        return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
+    }
+
+    /** Renumbers {@link #LINE6}'s own "no exchange or return" sentence to {@code number} (4
+      * normally, 3 when {@link #nonTileLeadTimeLine} above it was dropped) — REUSES the constant's
+      * text (only its leading digit differs) rather than retyping it, so the tile and non-tile
+      * remark sets can never print two different translations of the same rule. */
+    private static String noReturnLine(int number) {
+        return number + LINE6.substring(LINE6.indexOf('.'));
+    }
+
+    /** The non-tile หมายเหตุ block — exactly four lines (three when there is no lead time to
+      * report): freight/no-installation, the deposit (verbatim {@link #depositLine}, so 30%/50%/
+      * custom, เครดิต N วัน and the V181 "ไม่รับมัดจำ" sentences all keep working unchanged), the
+      * lead time (dropped entirely, not blanked, when nothing on the document carries one — same
+      * {@link #dropLeadTimeLineAndRenumber} the tile set uses), and the no-exchange-or-return rule. */
+    private static List<String> nonTileRemarkLines(DealQuotationDto quotation) {
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        String remainderText = "CREDIT".equals(quotation.remainderMode())
+            ? "เครดิต " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " วัน"
+            : "ขอรับก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า";
+
+        List<String> lines = new ArrayList<>();
+        lines.add(NON_TILE_LINE1);
+        lines.add(depositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
+        int leadTimeLineIndex = lines.size();
+        lines.add(nonTileLeadTimeLine(quotation.items(), depositPct));
+        lines.add(noReturnLine(4));
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
     private static List<String> remarkLines(DealQuotationDto quotation) {
@@ -454,7 +599,8 @@ public final class DealQuotationRenderAdapter {
 
         List<String> lines = new ArrayList<>();
         lines.add("1.จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่  " + shortThaiDate(offerDate));
-        lines.add(depositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
+        lines.add(depositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
         int leadTimeLineIndex = lines.size();
         lines.add(leadTimeLine(quotation.items()));
         lines.add(LINE4);
@@ -478,6 +624,24 @@ public final class DealQuotationRenderAdapter {
      * owner feedback, 2026-09-14 -- see {@link #LINE3_FALLBACK}'s own comment), so in practice this
      * value never reaches a rendered document. */
     private static String leadTimeLine(List<DealQuotationItemDto> items) {
+        return hasAnyLeadTime(items)
+            ? "3.ระยะเวลานำเข้า : " + String.join("  ", leadTimeGroups(items, false))
+            : LINE3_FALLBACK;
+    }
+
+    /**
+     * The per-item lead-time grouping shared by the tile set's {@link #leadTimeLine}/
+     * {@link #englishLeadTimeLine} AND the non-tile set's {@link #nonTileLeadTimeLine}/
+     * {@link #englishNonTileLeadTimeLine} (owner ruling, review of V182, 2026-09-16: a non-tile
+     * document with genuinely mixed lead times must use this SAME per-item grouping, not an
+     * overall min-of-mins/max-of-maxes envelope that could misstate a customer's actual wait).
+     * Consecutive item numbers sharing the same {@code (min, max)} are grouped, ALWAYS in this
+     * per-item form (owner feedback #7, 2026-09-14) even for a single group; items with no lead
+     * time are omitted and only ever act as a group boundary. Returns one formatted string per
+     * group — {@code "รายการที่ {range} ประมาณ {days} วัน"} in Thai, {@code "item(s) {range}
+     * approximately {days} days"} in English — for the caller to {@code String.join("  ", ...)}.
+     */
+    private static List<String> leadTimeGroups(List<DealQuotationItemDto> items, boolean english) {
         List<DealQuotationItemDto> ordered = items.stream()
             .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
         List<String> groups = new ArrayList<>();
@@ -494,7 +658,7 @@ public final class DealQuotationRenderAdapter {
             if (continuesGroup) {
                 groupLastSeq = item.seq();
             } else {
-                flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
+                flushLeadTimeGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq, english);
                 if (hasLeadTime) {
                     groupMin = min;
                     groupMax = max;
@@ -508,9 +672,8 @@ public final class DealQuotationRenderAdapter {
                 }
             }
         }
-        flushGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-
-        return hasAnyLeadTime(items) ? "3.ระยะเวลานำเข้า : " + String.join("  ", groups) : LINE3_FALLBACK;
+        flushLeadTimeGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq, english);
+        return groups;
     }
 
     // ── owner feedback (2026-09-14): "if ระยะเวลานำเข้า is not chosen remove that from the
@@ -570,15 +733,25 @@ public final class DealQuotationRenderAdapter {
         return newNumber + "." + line.substring(m.end());
     }
 
-    private static void flushGroup(List<String> groups, Integer min, Integer max, Integer first, Integer last) {
+    /** Formats and appends ONE flushed group (Thai or English, per {@code english}) — shared by
+     * {@link #leadTimeGroups}, the ONE place either language's grouping traversal lives now. A
+     * {@code null min} means there is no pending group to flush (the very first item, or the item
+     * right after one that already flushed) — a no-op, not an empty group. */
+    private static void flushLeadTimeGroup(List<String> groups, Integer min, Integer max,
+                                            Integer first, Integer last, boolean english) {
         if (min == null) {
             return;
         }
-        String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
-        // Owner feedback #7 nicety: an exact lead time (min == max) reads "ประมาณ 30 วัน", not the
-        // pointless "30-30 วัน" a range formatter would print for it.
+        // Owner feedback #7 nicety: an exact lead time (min == max) reads "ประมาณ 30 วัน"/
+        // "approximately 30 days", not the pointless "30-30 วัน" a range formatter would print.
         String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
-        groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
+        if (english) {
+            String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
+            groups.add(range + " approximately " + days + " days");
+        } else {
+            String range = first.equals(last) ? String.valueOf(first) : first + "-" + last;
+            groups.add("รายการที่ " + range + " ประมาณ " + days + " วัน");
+        }
     }
 
     // ── v3b: the ENGLISH remark block (F-SM-008) ─────────────────────────────────────────────
@@ -614,14 +787,34 @@ public final class DealQuotationRenderAdapter {
      * remainderMode} variants, English words. See that method's Javadoc for the full reasoning;
      * kept as its own method for the same "two flat methods read better than one with language
      * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
-    private static String englishDepositLine(int depositPct, String remainderMode, Integer creditDays,
-                                              String remainderText) {
+    private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
+                                              Integer creditDays, String remainderText) {
         if (depositPct != 0) {
             return "2.A deposit of " + depositPct + "% is required upon order confirmation, " + remainderText + ".";
+        }
+        // Item 4 (V181) English twin of the Thai branch above — same legacy fallback, same reason.
+        String termText = fullPaymentTermEnglishText(fullPaymentTerm);
+        if (termText != null) {
+            return "2." + termText;
         }
         return "CREDIT".equals(remainderMode)
             ? "2.Full payment is due on " + (creditDays != null ? creditDays : 0) + " days credit."
             : "2.Full payment is due before or upon delivery.";
+    }
+
+    /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
+     * null-for-unrecognised/legacy contract. */
+    private static String fullPaymentTermEnglishText(String code) {
+        if (WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required before delivery.";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required upon delivery.";
+        }
+        if (WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY.equals(code)) {
+            return "Full payment (100%) is required upon or before delivery.";
+        }
+        return null;
     }
 
     private static List<String> englishRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
@@ -651,7 +844,8 @@ public final class DealQuotationRenderAdapter {
         List<String> lines = new ArrayList<>();
         lines.add("1.The quantities above are as received on " + shortEnglishDate(offerDate)
             + ". Please re-confirm the actual quantities with your installer before ordering.");
-        lines.add(englishDepositLine(depositPct, quotation.remainderMode(), quotation.creditDays(), remainderText));
+        lines.add(englishDepositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
         int leadTimeLineIndex;
         if (hasBankBlock) {
             // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
@@ -685,14 +879,78 @@ public final class DealQuotationRenderAdapter {
                 + "and TIS tolerances.");
             lines.add("7.Colours and patterns may vary slightly from the samples, as goods come from "
                 + "different production lots.");
-            lines.add("8.Goods sold are not returnable or exchangeable. Please check the order "
-                + "carefully before confirming or signing for delivery.");
+            lines.add(enNoReturnLine(8));
         }
         // Owner feedback (2026-09-14): same drop-and-renumber as the Thai branch, sharing the SAME
         // hasAnyLeadTime question — see #dropLeadTimeLineAndRenumber. leadTimeLineIndex is 5 in the
         // bank-block layout (after the 2 numbered + 3 unnumbered bank lines) and 2 in the no-bank
         // layout; either way the method only ever renumbers a NUMBERED line, so the bank block's
         // own unnumbered lines are untouched.
+        return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
+    }
+
+    /** The standalone "no exchange or return" sentence — the English twin of {@link #LINE6},
+      * reused (not retyped) by both the tile no-bank-block layout above (remark 8) and the
+      * non-tile set below, so the two can never drift apart. NOT the same sentence as the
+      * bank-block layout's merged remark 5 ("Colours may vary... Goods sold are not returnable or
+      * exchangeable."), which folds colour-variance and no-return into one sentence to fit the
+      * bank block's row budget — that one stays a one-off literal. */
+    private static final String EN_LINE_NO_RETURN =
+        "Goods sold are not returnable or exchangeable. Please check the order "
+        + "carefully before confirming or signing for delivery.";
+
+    /** {@link #EN_LINE_NO_RETURN}, renumbered — the English twin of {@link #noReturnLine}. */
+    private static String enNoReturnLine(int number) {
+        return number + "." + EN_LINE_NO_RETURN;
+    }
+
+    // ── V182 (owner request, 2026-09-16): the NON-TILE English remark set — the same rule as
+    // #nonTileRemarkLines, English equivalents, with the SAME optional bank block the tile set
+    // carries (inserted straight after the payment remark, unnumbered, exactly as it does there —
+    // see #englishRemarkLines's own Javadoc). Bank or no bank, the block never consumes a numbered
+    // slot, so the numbering is IDENTICAL either way: 1/2/3/4. ─────────────────────────────────
+
+    private static final String EN_NON_TILE_LINE1 =
+        "1.The price above includes delivery to the ground floor within the Bangkok Metropolitan "
+        + "Area, but excludes installation.";
+
+    /** The English twin of {@link #NON_TILE_LINE3_FALLBACK} — same unreachable-in-practice
+      * contract (see that constant's Javadoc). */
+    private static final String EN_NON_TILE_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
+
+    /** The English twin of {@link #nonTileLeadTimeLine} — same {@link #leadTimeGroups} grouping
+      * (owner ruling, review of V182, 2026-09-16 — see that method's own Javadoc), same zero-deposit
+      * clause-drop rule, English words. */
+    private static String englishNonTileLeadTimeLine(List<DealQuotationItemDto> items, int depositPct) {
+        if (!hasAnyLeadTime(items)) {
+            return EN_NON_TILE_LINE3_FALLBACK;
+        }
+        String groups = String.join("  ", leadTimeGroups(items, true));
+        return depositPct == 0
+            ? "3.If the factory has the goods ready to ship, the import lead time is " + groups + "."
+            : "3.If the factory has the goods ready to ship, the import lead time is " + groups
+                + ", after the " + depositPct + "% deposit is received.";
+    }
+
+    /** The English twin of {@link #nonTileRemarkLines}. */
+    private static List<String> englishNonTileRemarkLines(DealQuotationDto quotation, List<String> bankBlockLines) {
+        int depositPct = quotation.depositPercent() != null ? quotation.depositPercent() : 30;
+        String remainderText = "CREDIT".equals(quotation.remainderMode())
+            ? "the balance on " + (quotation.creditDays() != null ? quotation.creditDays() : 0) + " days credit"
+            : "the balance before or upon delivery";
+        boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
+            && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
+
+        List<String> lines = new ArrayList<>();
+        lines.add(EN_NON_TILE_LINE1);
+        lines.add(englishDepositLine(depositPct, quotation.fullPaymentTerm(), quotation.remainderMode(),
+            quotation.creditDays(), remainderText));
+        if (hasBankBlock) {
+            lines.addAll(bankBlockLines);
+        }
+        int leadTimeLineIndex = lines.size();
+        lines.add(englishNonTileLeadTimeLine(quotation.items(), depositPct));
+        lines.add(enNoReturnLine(4));
         return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
@@ -742,53 +1000,12 @@ public final class DealQuotationRenderAdapter {
      */
     private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
-    /** The English twin of {@link #leadTimeLine} — same grouping, same source data, English words.
-     * Kept as its own method rather than parameterising the Thai one: the two differ in every
-     * literal, and a shared method with four language ternaries reads worse than two flat ones. */
+    /** The English twin of {@link #leadTimeLine} — same {@link #leadTimeGroups} grouping, same
+     * source data, English words. */
     private static String englishLeadTimeLine(List<DealQuotationItemDto> items) {
-        List<DealQuotationItemDto> ordered = items.stream()
-            .sorted((a, b) -> Integer.compare(a.seq(), b.seq())).toList();
-        List<String> groups = new ArrayList<>();
-        Integer groupMin = null;
-        Integer groupMax = null;
-        Integer groupFirstSeq = null;
-        Integer groupLastSeq = null;
-        for (DealQuotationItemDto item : ordered) {
-            Integer min = item.leadTimeMinDays();
-            Integer max = item.leadTimeMaxDays();
-            boolean hasLeadTime = min != null && max != null;
-            boolean continuesGroup = hasLeadTime && groupMin != null
-                && min.equals(groupMin) && max.equals(groupMax) && item.seq() == groupLastSeq + 1;
-            if (continuesGroup) {
-                groupLastSeq = item.seq();
-            } else {
-                flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-                if (hasLeadTime) {
-                    groupMin = min;
-                    groupMax = max;
-                    groupFirstSeq = item.seq();
-                    groupLastSeq = item.seq();
-                } else {
-                    groupMin = null;
-                    groupMax = null;
-                    groupFirstSeq = null;
-                    groupLastSeq = null;
-                }
-            }
-        }
-        flushEnglishGroup(groups, groupMin, groupMax, groupFirstSeq, groupLastSeq);
-        return hasAnyLeadTime(items) ? "3.Delivery : " + String.join("  ", groups) : EN_LINE3_FALLBACK;
-    }
-
-    private static void flushEnglishGroup(List<String> groups, Integer min, Integer max,
-                                          Integer first, Integer last) {
-        if (min == null) {
-            return;
-        }
-        String range = first.equals(last) ? "item " + first : "items " + first + "-" + last;
-        // Owner feedback #7 nicety: the same min == max collapse as the Thai #flushGroup.
-        String days = min.equals(max) ? String.valueOf(min) : min + "-" + max;
-        groups.add(range + " approximately " + days + " days");
+        return hasAnyLeadTime(items)
+            ? "3.Delivery : " + String.join("  ", leadTimeGroups(items, true))
+            : EN_LINE3_FALLBACK;
     }
 
     /**

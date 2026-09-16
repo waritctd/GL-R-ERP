@@ -355,36 +355,242 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.specialPriceLine()).isEqualTo("(1 box = 20 pcs = 1.22 sqm)");
     }
 
-    /** Wrong-way-round: no box data → a rep-facing Thai 400, on create, update and the preview —
-     * never a silent quantity in pieces. */
+    // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+
+    /** Blank box area, แผ่น/กล่อง filled: quantity derives from the box-rounded piecesFinal ×
+     * sqmPerPiece instead of boxes × sqmPerBox — accepted on create, update AND the preview, where
+     * this exact combination used to 400 before Option B. */
     @Test
-    void englishPerSqm_withoutBoxData_isRefusedInThai_onCreateUpdateAndPreview() {
+    void englishPerSqm_noBoxArea_piecesPerBoxFilled_isNowAccepted_onCreateUpdateAndPreview() throws Exception {
+        // 3,360 pcs / 28 per box = 120 exactly (no box rounding needed) — sqmPerPiece 0.36 (tileItem's
+        // fixed value): qty = 3,360 × 0.36 = 1,209.60; amount = 1,209.60 × 64 = 77,414.40.
+        ItemInput row = perSqmItem(3360, 28, null, "64");
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
+        var item = created.items().get(0);
+        assertThat(item.unit()).isEqualTo("SQM");
+        assertThat(item.quantity()).isEqualByComparingTo("1209.60");
+        assertThat(item.lineAmount()).isEqualByComparingTo("77414.40");
+        assertThat(item.boxes()).isEqualTo(120);
+        assertThat(item.sqmPerBox()).isNull();
+        assertThat(item.specialPriceLine()).isNull(); // no box sub-line without a box area
+        assertThat(item.calculationLine())
+            .isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs) (28 pcs/box)");
+
+        // Stored: qty stays the PIECE count, sqm_per_box stays NULL.
+        assertThat(jdbc.getJdbcOperations().queryForObject(
+            "SELECT qty::int || '|' || (sqm_per_box IS NULL)::text FROM sales.quotation_item"
+                + " WHERE quotation_id = " + created.id(), String.class))
+            .isEqualTo("3360|true");
+
+        // RELOAD through the repository mapping (DealQuotationRepository#mapItemColumns), not just
+        // the create response — proves the sqmPerPiece thread reaches the READ path too.
+        var reread = quotationService.get(created.id(), salesActor).items().get(0);
+        assertThat(reread.quantity()).isEqualByComparingTo("1209.60");
+        assertThat(reread.lineAmount()).isEqualByComparingTo("77414.40");
+        assertThat(reread.unit()).isEqualTo("SQM");
+
+        // RENDER: the sheet's own Qty/Unit/Amount cells, and no box sub-line text anywhere on it.
+        Sheet sheet = renderSheet(created.id());
+        int row2 = rowWithText(sheet, 1, "Tile Model Model A");
+        assertThat(sheet.getRow(row2).getCell(2).getNumericCellValue()).isEqualTo(1209.60);
+        assertThat(str(sheet, row2, 3)).isEqualTo("SQM");
+        assertThat(sheet.getRow(row2).getCell(8).getNumericCellValue()).isEqualTo(77414.40);
+        assertThat(allText(sheet)).noneMatch(t -> t.contains("1 box ="));
+
+        // Submit's stored-row gate accepts it too — no per-piece list price, no box area required.
+        assertThat(quotationService.submit(created.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.PENDING_APPROVAL);
+
+        // update: the same combination onto an existing (NET) document.
+        DealQuotationDto net = quotationService.create(ticketId,
+            englishRequest(List.of(tileItem("100.00", 10))), salesActor);
+        DealQuotationDto updated = quotationService.update(net.id(),
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
+        assertThat(updated.items().get(0).quantity()).isEqualByComparingTo("1209.60");
+
+        // preview: the lenient calculate-line path accepts it too.
+        DealQuotationItemDto preview = quotationService.calculateLine(row, "EN", salesActor);
+        assertThat(preview.quantity()).isEqualByComparingTo("1209.60");
+        assertThat(preview.unit()).isEqualTo("SQM");
+    }
+
+    /** Blank box area AND no แผ่น/กล่อง either — a TILE row with no box multiple at all, exactly
+     * like any other tile row without a pieces-per-box. No box rounding, no box wording.
+     *
+     * <p>F1 fix (2026-09-16 review): {@code calculationLine} used to read
+     * "(Quantity 3,360 pcs = 3,360 pcs)" -- a pure echo of the count already stated, the exact
+     * production-bug shape (real example: "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)"), newly
+     * REACHABLE here after Option B's no-box-area English per-sqm branch. */
+    @Test
+    void englishPerSqm_noBoxAreaAndNoPiecesPerBox_isAccepted_noBoxRounding() {
+        ItemInput row = withBoxes(perSqmItem(3360, 28, null, "64"), null);
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
+        var item = created.items().get(0);
+        assertThat(item.boxes()).isNull();
+        assertThat(item.quantity()).isEqualByComparingTo("1209.60"); // 3,360 × 0.36, no box rounding to apply anyway
+        assertThat(item.lineAmount()).isEqualByComparingTo("77414.40");
+        assertThat(item.specialPriceLine()).isNull();
+        assertThat(item.calculationLine()).isEqualTo("(Quantity 3,360 pcs)");
+    }
+
+    /** Blank box area, แผ่น/กล่อง filled, "sell loose pieces" ticked: quantity derives from the
+     * EXACT wastage-adjusted piece count (unrounded), never the box-rounded one — the combination
+     * {@code englishPerSqm_withRoundToFullBoxFalse_isRefusedWithABoxArea} below still refuses when
+     * a box area IS present. */
+    @Test
+    void englishPerSqm_noBoxArea_loosePieces_isNowAccepted_derivesSqmFromExactPieces() {
+        // 3,357 pcs / 10 per box = 335 boxes + 7 loose pcs; qty = 3,357 × 0.36 = 1,208.52 (NOT the
+        // box-rounded 3,360 × 0.36 = 1,209.60).
+        ItemInput row = withRoundToFullBox(perSqmItem(3357, 10, null, "64"), false);
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
+        var item = created.items().get(0);
+        assertThat(item.quantity()).isEqualByComparingTo("1208.52");
+        assertThat(item.lineAmount()).isEqualByComparingTo("77345.28");
+        assertThat(item.calculationLine()).isEqualTo("(Quantity 3,357 pcs = 335 boxes + 7 pcs) (10 pcs/box)");
+        assertThat(item.specialPriceLine()).isNull();
+
+        // preview accepts it too — no completeness gate to bypass, but this used to be the exact
+        // refused combination before Option B.
+        assertThat(quotationService.calculateLine(row, "EN", salesActor).quantity())
+            .isEqualByComparingTo("1208.52");
+    }
+
+    /** Wrong-way-round, unchanged from before Option B: a box area PRESENT with แผ่น/กล่อง blank is
+     * a partially-filled pair — you cannot count boxes without pieces per box, so it is still
+     * refused, on create, update and the preview. This is the ONE combination Option B leaves
+     * refused. */
+    @Test
+    void englishPerSqm_boxAreaFilledButPiecesPerBoxBlank_isStillRefused_onCreateUpdateAndPreview() {
+        ItemInput partial = withBoxes(perSqmItem(3360, 28, "0.6", "64"), null);
         assertThatThrownBy(() -> quotationService.create(ticketId,
-            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
-                List.of(perSqmItem(3360, 28, null, "64"))), salesActor))
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(partial)), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("รายการที่ 1").hasMessageContaining("ตร.ม./กล่อง");
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("แผ่นต่อกล่อง");
 
         DealQuotationDto created = quotationService.create(ticketId,
             englishRequest(List.of(tileItem("100.00", 10))), salesActor);
         assertThatThrownBy(() -> quotationService.update(created.id(),
-            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
-                List.of(perSqmItem(3360, 28, null, "64"))), salesActor))
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(partial)), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("ตร.ม./กล่อง");
+            .hasMessageContaining("แผ่นต่อกล่อง");
         assertThat(quotationService.get(created.id(), salesActor).priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
 
-        // The lenient preview has no completeness gate — the box-data refusal still applies there.
-        ItemInput neither = withBoxes(perSqmItem(3360, 28, null, "64"), null);
-        assertThatThrownBy(() -> quotationService.calculateLine(neither, "EN", salesActor))
+        // The lenient preview skips #requireItemComplete (rowNumber is null there), so it is the
+        // OTHER per-sqm-specific check (#requireBoxDataForPerSqm) that catches this combination —
+        // a different message ("แผ่น/กล่อง"), same refusal.
+        assertThatThrownBy(() -> quotationService.calculateLine(partial, "EN", salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
-            .hasMessageContaining("แผ่น/กล่อง").hasMessageContaining("ตร.ม./กล่อง");
+            .hasMessageContaining("แผ่น/กล่อง");
         // ...while the SAME row previewed as a THAI ราคาพิเศษ needs no box data at all.
-        assertThat(quotationService.calculateLine(withSqmPerPiece(neither, "0.36"), null, salesActor).unit())
+        assertThat(quotationService.calculateLine(withSqmPerPiece(partial, "0.36"), null, salesActor).unit())
             .isEqualTo("แผ่น");
+    }
+
+    /** Owner-approved "sell loose pieces" (V182), narrowed by Option B: a box AREA present is
+     * still boxes × sqmPerBox, which has no "loose pieces" term at all, so
+     * {@code roundToFullBox = false} is STILL refused whenever ตร.ม./กล่อง is filled — on the same
+     * three surfaces (create, update, the lenient preview) as before. */
+    @Test
+    void englishPerSqm_withRoundToFullBoxFalse_isRefusedInThai_whenABoxAreaIsPresent() {
+        ItemInput loose = withRoundToFullBox(perSqmItem(3360, 28, "0.6", "64"), false);
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(loose)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequest(List.of(tileItem("100.00", 10))), salesActor);
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(loose)), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+        assertThat(quotationService.get(created.id(), salesActor).priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
+
+        // The lenient preview has no completeness gate — this refusal still applies there.
+        assertThatThrownBy(() -> quotationService.calculateLine(loose, "EN", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ปัดขึ้นเต็มกล่อง");
+        // ...while the same box/pricing data previewed as a THAI ราคาพิเศษ is perfectly legal —
+        // the refusal is specific to the English PER-SQM combination, not to a TILE row in
+        // general (withSqmPerPiece's `copy` helper does not thread roundToFullBox through, so
+        // this leg does not itself prove roundToFullBox=false is accepted in Thai mode — see
+        // WastageCalculatorTest/DealQuotationLinesTest for that).
+        assertThat(quotationService.calculateLine(withSqmPerPiece(loose, "0.36"), null, salesActor).unit())
+            .isEqualTo("แผ่น");
+    }
+
+    /**
+     * F4 (2026-09-16 review) — {@code DealQuotationService#requireStoredItemComplete}'s guard is
+     * {@code piecesPerBoxOptional = perSqm && !hasBoxArea}: a box AREA present with แผ่น/กล่อง
+     * BLANK is refused at create/update/preview time (proven above by {@code
+     * englishPerSqm_boxAreaFilledButPiecesPerBoxBlank_isStillRefused_onCreateUpdateAndPreview}),
+     * and this test proves the SAME combination is ALSO refused by submit's defensive re-check
+     * over an already-STORED row — defence in depth for a legacy or hand-edited row that reached
+     * the database despite the create-time gate. The row is written straight through jdbc
+     * (bypassing create/update's own validation entirely), the same technique {@code
+     * DealQuotationIntegrationTest#submit_reChecksStoredItems_incompleteRowIsBadRequest} uses.
+     *
+     * <p>Mutation-check (2026-09-16): narrowing the guard from {@code perSqm && !hasBoxArea} to
+     * {@code perSqm} alone would make this exact combination submittable — {@code
+     * piecesPerBoxOptional} would then read {@code true} for ANY English per-sqm row regardless of
+     * a box area being present, silently accepting the partially-filled pair this test exists to
+     * refuse. Confirmed to go red under that mutation, and reverted (see the PR body).
+     */
+    @Test
+    void submit_reChecksStoredItems_boxAreaPresentButPiecesPerBoxNull_isBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(perSqmItem(3360, 28, "0.6", "64"))), salesActor);
+        // Straight through jdbc, bypassing create/update's own requireItemComplete gate -- proves
+        // the combination is caught EVEN when it reaches storage some other way (a legacy row from
+        // before this rule, or a direct DB edit), not merely refused at write time.
+        jdbc.update("""
+            UPDATE sales.quotation_item SET pieces_per_box = NULL
+             WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("แผ่นต่อกล่อง");
+    }
+
+    /**
+     * F5.1 (2026-09-16 review) — the lenient calculate-line preview of a blank-box-area English
+     * per-sqm row with no resolved ตร.ม./แผ่น used to leak the raw {@code
+     * WastageCalculator#sqmQuantityFromPieces} exception message verbatim: "ข้อมูลรายการไม่ถูกต้อง:
+     * sqmPerPiece is required for a per-sqm quantity, got: null" -- a developer-facing, English
+     * string on a screen a sales rep is typing into. {@code requireItemComplete} (which names this
+     * same field "ตร.ม./แผ่น" on create/update) is deliberately skipped on this lenient path, so
+     * nothing else names the field in Thai here. Now it reuses that same field name instead.
+     */
+    @Test
+    void calculateLine_englishPerSqm_noBoxAreaAndNoSqmPerPiece_namesTheMissingFieldInThai() {
+        ItemInput base = tileItem("1.00", 3360);
+        ItemInput row = new ItemInput(base.locationLabel(), base.catalogPriceId(), base.productCode(),
+            base.brand(), base.model(), base.color(), base.texture(), base.sizeText(), base.thicknessMm(), null,
+            base.quantityMode(), base.areaSqm(), base.piecesInput(), base.wastageMode(), base.wastageValue(),
+            null, null, null, base.originCountry(), base.leadTimeMinDays(), base.leadTimeMaxDays(),
+            base.itemNotes(), WastageCalculator.LINE_TYPE_TILE, null, null, null,
+            new BigDecimal("64"), null, null, null, null, null, null);
+
+        assertThatThrownBy(() -> quotationService.calculateLine(row, "EN", salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ตร.ม./แผ่น")
+            .satisfies(e -> {
+                String message = ((ApiException) e).getMessage();
+                assertThat(message).doesNotContain("sqmPerPiece").doesNotContain("ข้อมูลรายการไม่ถูกต้อง");
+            });
     }
 
     /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
@@ -472,7 +678,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             salesActor);
         var tile = created.items().get(0);
         assertThat(tile.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        assertThat(tile.sizeLine()).isEqualTo("Size 60x60 x 10 mm (approx.)");
+        // F2 fix (2026-09-16 review): tileItem's "60x60" carries no unit and no catalogue link, so
+        // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
+        // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
+        assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
         assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
@@ -518,8 +727,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             thaiRequest(List.of(tileItem("100.00", 10), adjustmentItem("3", LocalDate.of(2026, 7, 31)))),
             salesActor);
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
-        assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60x60 x 10 mm (ขนาดโดยประมาณ)");
-        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดลงกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        // F2 fix (2026-09-16 review): same "60x60", no unit, no catalogue link -- centimetres now.
+        assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดขึ้นเต็มกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 
@@ -761,6 +971,18 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private ItemInput withSqmPerBox(ItemInput b, String sqmPerBox) {
         return copy(b, b.quantityMode(), b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(),
             b.sqmPerPiece(), b.piecesPerBox(), new BigDecimal(sqmPerBox));
+    }
+
+    /** V182 "sell loose pieces" — {@code copy} has no roundToFullBox parameter (it predates this
+     * feature), so this goes through the full canonical constructor directly instead. */
+    private ItemInput withRoundToFullBox(ItemInput b, Boolean roundToFullBox) {
+        return new ItemInput(b.locationLabel(), b.catalogPriceId(), b.productCode(), b.brand(), b.model(),
+            b.color(), b.texture(), b.sizeText(), b.thicknessMm(), b.sqmPerPiece(), b.quantityMode(),
+            b.areaSqm(), b.piecesInput(), b.wastageMode(), b.wastageValue(), b.piecesPerBox(), b.unitPrice(),
+            b.discountPct(), b.originCountry(), b.leadTimeMinDays(), b.leadTimeMaxDays(), b.itemNotes(),
+            b.lineType(), b.description(), b.quantity(), b.unit(), b.specialPriceSqm(), b.directNetPrice(),
+            b.adjustmentPct(), b.adjustmentDeadline(), b.adjustmentAmount(), b.id(), b.sqmPerBox(),
+            roundToFullBox);
     }
 
     /** The row as a THAI ราคาพิเศษ would send it: a list price per piece and a ตร.ม./แผ่น. */

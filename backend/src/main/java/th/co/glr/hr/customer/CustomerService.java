@@ -4,10 +4,12 @@ import java.util.List;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.DealEntryAccess;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.ticket.TicketAccessPolicy;
 
 /**
@@ -58,13 +60,17 @@ public class CustomerService {
     // Deal-ENTRY grant read only (see DealEntryAccess's own Javadoc) -- ORed alongside
     // VIEWER_ROLES below, never replacing it (import/ceo/account must stay reachable too).
     private final EmployeeAuthRepository employeeAuth;
+    // Quotation-editor bug fix (2026-09-16) — see #updateContact's own Javadoc. Only ever reached
+    // from that one method; every read above it stays exactly as narrow as it was.
+    private final DealQuotationRepository dealQuotations;
 
     public CustomerService(CustomerRepository customers, ContactRepository contacts, ProjectRepository projects,
-                           EmployeeAuthRepository employeeAuth) {
-        this.customers    = customers;
-        this.contacts     = contacts;
-        this.projects     = projects;
-        this.employeeAuth = employeeAuth;
+                           EmployeeAuthRepository employeeAuth, DealQuotationRepository dealQuotations) {
+        this.customers      = customers;
+        this.contacts       = contacts;
+        this.projects       = projects;
+        this.employeeAuth   = employeeAuth;
+        this.dealQuotations = dealQuotations;
     }
 
     public List<CustomerDto> search(String q, UserPrincipal actor) {
@@ -87,5 +93,32 @@ public class CustomerService {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+    }
+
+    /**
+     * Owner re-report 2026-09-16 ("แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): wraps
+     * {@link ContactRepository#update} and {@link DealQuotationRepository#refreshDraftContactSnapshot}
+     * in ONE transaction, so a contact correction and the DRAFT snapshots it feeds either both land
+     * or neither does. This is the caller {@link CustomerController#updateContact} now goes through
+     * instead of {@code contacts.update(...)} directly.
+     *
+     * <p><strong>Stated business-logic change</strong> (CLAUDE.md's sales-flow relaxation — declared,
+     * not smuggled in): a DRAFT quotation's ผู้สั่งซื้อ phone/email snapshot used to refresh only on
+     * that DRAFT's own next save ({@code DealQuotationRepository#updateHeader}'s comment). It now
+     * refreshes the moment the CONTACT itself is corrected — see
+     * {@code DealQuotationRepository#refreshDraftContactSnapshot}'s own Javadoc for the full
+     * reasoning and why an already-submitted document is untouched either way.
+     *
+     * <p>{@code refreshName} is derived here, not left to the caller to remember: only an edit that
+     * actually supplies a new {@code firstName}/{@code lastName} re-snapshots the printed name —
+     * a phone/email-only PATCH (the common case, and the one the owner reported) never touches it.
+     */
+    @Transactional
+    public ContactDto updateContact(long customerId, long contactId, String firstName, String lastName,
+                                    String position, String email, String phone) {
+        ContactDto updated = contacts.update(customerId, contactId, firstName, lastName, position, email, phone)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบผู้สั่งซื้อรายนี้"));
+        dealQuotations.refreshDraftContactSnapshot(contactId, firstName != null || lastName != null);
+        return updated;
     }
 }

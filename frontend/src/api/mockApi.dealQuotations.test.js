@@ -56,6 +56,31 @@ describe('mock dealQuotations -- item lines follow the document language (owner 
   });
 });
 
+// F1 (2026-09-16 review) — the mock's own calc-line builder (computeDealQuotationLine) mirrors
+// DealQuotationLines#calculationLine's phrasing; this pins the same duplicate-suppression fix on
+// the mock side. Wrong-way-round: reverting the mock's default branch to the old unconditional
+// rounding-phrase-plus-echo would turn these red.
+describe('mock dealQuotations -- calculationLine never echoes a piece count with no box/wastage to justify it (F1)', () => {
+  it('a row with NO แผ่น/กล่อง and no wastage prints no trailing "=" clause and no rounding wording', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      items: [{ ...ONE_ITEM, piecesPerBox: null }],
+    });
+    expect(quotation.items[0].calculationLine).toBe('(พื้นที่ 20 ตร.ม.ๆละ 2.78 แผ่น รวม 56 แผ่น)');
+    expect(quotation.items[0].calculationLine).not.toContain('และปัดขึ้นเต็มกล่อง');
+  });
+
+  it('the English mirror: no pcs/box and no wastage prints no trailing "=" clause and no rounding wording', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      documentLanguage: 'EN', currency: 'USD',
+      items: [{ ...ONE_ITEM, piecesPerBox: null }],
+    });
+    expect(quotation.items[0].calculationLine).toBe('(Area 20 sqm @ 2.78 pcs/sqm = 56 pcs)');
+    expect(quotation.items[0].calculationLine).not.toContain('rounded up to full boxes');
+  });
+});
+
 describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mirrors the RULES', () => {
   it('accepts SPECIAL_SQM on English with box data, printing SQM and the box line; the numbers stay the server\'s', async () => {
     await api.auth.login(salesUser);
@@ -70,15 +95,37 @@ describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mir
     expect(tile.lineAmount).toBeNull();
   });
 
-  it('refuses an English per-sqm row with no ตร.ม./กล่อง (400), on create and on the preview', async () => {
+  // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank box area is
+  // accepted (with or without แผ่น/กล่อง); only a box area PRESENT with แผ่น/กล่อง BLANK (the
+  // partially-filled pair) is still refused.
+  it('accepts an English per-sqm row with NO ตร.ม./กล่อง, with or without แผ่น/กล่อง', async () => {
     await api.auth.login(salesUser);
-    await expect(api.dealQuotations.create(18, {
+    // ONE_ITEM already carries piecesPerBox: 3 and no sqmPerBox key at all.
+    const { quotation } = await api.dealQuotations.create(18, {
       priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [{ ...ONE_ITEM, specialPriceSqm: 64 }],
-    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('ตร.ม./กล่อง') });
-    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 }, 'EN'))
-      .rejects.toMatchObject({ status: 400 });
+    });
+    expect(quotation.items[0].unit).toBe('SQM');
+    expect(quotation.items[0].specialPriceLine).toBeNull(); // no box sub-line without a box area
+
+    // Neither box field at all — also accepted.
+    const { quotation: neither } = await api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN',
+      items: [{ ...ONE_ITEM, piecesPerBox: null, specialPriceSqm: 64 }],
+    });
+    expect(neither.items[0].unit).toBe('SQM');
+
+    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 }, 'EN')).resolves.toBeTruthy();
+  });
+
+  it('still refuses a box area PRESENT with แผ่น/กล่อง BLANK (the partially-filled pair), on create and on the preview', async () => {
+    await api.auth.login(salesUser);
+    const partial = { ...ONE_ITEM, piecesPerBox: null, sqmPerBox: 0.6, specialPriceSqm: 64 };
+    await expect(api.dealQuotations.create(18, {
+      priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [partial],
+    })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('แผ่น/กล่อง') });
+    await expect(api.dealQuotations.calculateLine(partial, 'EN')).rejects.toMatchObject({ status: 400 });
     // The same row previewed in Thai is an ordinary ราคาพิเศษ — no box rule.
-    await expect(api.dealQuotations.calculateLine({ ...ONE_ITEM, specialPriceSqm: 64 })).resolves.toBeTruthy();
+    await expect(api.dealQuotations.calculateLine(partial)).resolves.toBeTruthy();
   });
 
   it('calculateLine takes the document language: English lines on EN', async () => {
@@ -841,5 +888,155 @@ describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-
       projectName: '   ', items: [ONE_ITEM],
     });
     expect(cleared.projectName).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ") + Item 4 (V181, "ไม่รับมัดจำ") —
+// owner ruling 2026-09-16. Mirrors DealQuotationService#resolveOmitContactHonorific/
+// #isZeroDeposit/#resolveFullPaymentTerm exactly.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () => {
+  it('defaults false when the request omits it', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    expect(quotation.omitContactHonorific).toBe(false);
+  });
+
+  it('true round-trips through create -> get', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      omitContactHonorific: true, items: [ONE_ITEM],
+    });
+    expect(created.omitContactHonorific).toBe(true);
+    const { quotation: reread } = await api.dealQuotations.get(created.id);
+    expect(reread.omitContactHonorific).toBe(true);
+  });
+
+  // Same "no missing-keeps-stored" discipline as projectName/printedByDisplayId above -- the
+  // editor always sends its CURRENT value, so an update that omits it clears a previously-set true.
+  it('an update that omits it clears a previously-set true back to false', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      omitContactHonorific: true, items: [ONE_ITEM],
+    });
+    const { quotation: updated } = await api.dealQuotations.update(created.id, { items: [ONE_ITEM] });
+    expect(updated.omitContactHonorific).toBe(false);
+  });
+
+  it('createRevision copies it verbatim', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      omitContactHonorific: true, items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.omitContactHonorific).toBe(true);
+  });
+});
+
+describe('mock dealQuotations.create/update -- fullPaymentTerm (V181, "ไม่รับมัดจำ")', () => {
+  it('depositPercent 0 clears remainderMode/creditDays and stores the chosen term', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      depositPercent: 0, remainderMode: 'CREDIT', creditDays: 45,
+      fullPaymentTerm: 'ON_DELIVERY', items: [ONE_ITEM],
+    });
+    expect(quotation.depositPercent).toBe(0);
+    expect(quotation.remainderMode).toBeNull();
+    expect(quotation.creditDays).toBeNull();
+    expect(quotation.fullPaymentTerm).toBe('ON_DELIVERY');
+  });
+
+  // Wrong-way-round: a rep who unticks "ไม่รับมัดจำ" (an ordinary percentage) can never leave a
+  // stale term attached, EVEN IF the request still sends one.
+  it('a non-zero depositPercent forces fullPaymentTerm null even if the request sends one', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30,
+      fullPaymentTerm: 'ON_DELIVERY', items: [ONE_ITEM],
+    });
+    expect(quotation.depositPercent).toBe(30);
+    expect(quotation.fullPaymentTerm).toBeNull();
+    expect(quotation.remainderMode).toBe('CREDIT');
+    expect(quotation.creditDays).toBe(30);
+  });
+
+  // A null depositPercent is NOT "no deposit" -- it defaults to 30% at render time (see
+  // DealQuotationRenderAdapter#depositLine) -- same refusal as an explicit non-zero percentage.
+  it('a null depositPercent also forces fullPaymentTerm null', async () => {
+    await api.auth.login(salesUser);
+    const { quotation } = await api.dealQuotations.create(18, {
+      fullPaymentTerm: 'ON_DELIVERY', items: [ONE_ITEM],
+    });
+    expect(quotation.depositPercent).toBeNull();
+    expect(quotation.fullPaymentTerm).toBeNull();
+  });
+
+  it('an unrecognised code is refused (400)', async () => {
+    await api.auth.login(salesUser);
+    await expect(api.dealQuotations.create(18, {
+      depositPercent: 0, fullPaymentTerm: 'SOMETHING_ELSE', items: [ONE_ITEM],
+    })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('update switching TO depositPercent 0 clears remainderMode/creditDays and stores the term', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30, items: [ONE_ITEM],
+    });
+    const { quotation: updated } = await api.dealQuotations.update(created.id, {
+      depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [ONE_ITEM],
+    });
+    expect(updated.depositPercent).toBe(0);
+    expect(updated.remainderMode).toBeNull();
+    expect(updated.creditDays).toBeNull();
+    expect(updated.fullPaymentTerm).toBe('BEFORE_DELIVERY');
+  });
+
+  // Wrong-way-round: a zero-deposit DRAFT is saveable with no term chosen yet (create/update
+  // above never refuse it) -- submit() is the one gate.
+  it('submit refuses a zero-deposit document with no term chosen', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      depositPercent: 0, items: [ONE_ITEM],
+    });
+    await expect(api.dealQuotations.submit(created.id)).rejects
+      .toMatchObject({ status: 400, message: expect.stringContaining('เงื่อนไขการชำระเงิน') });
+  });
+
+  it('submit succeeds once a term is chosen', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      depositPercent: 0, fullPaymentTerm: 'ON_OR_BEFORE_DELIVERY', items: [ONE_ITEM],
+    });
+    const { quotation: submitted } = await api.dealQuotations.submit(created.id);
+    expect(submitted.docStatus).toBe('PENDING_APPROVAL');
+    expect(submitted.fullPaymentTerm).toBe('ON_OR_BEFORE_DELIVERY');
+  });
+
+  // A non-zero-deposit document is never blocked by the new submit gate.
+  it('submit is unaffected by the new gate on an ordinary non-zero deposit', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const { quotation: submitted } = await api.dealQuotations.submit(created.id);
+    expect(submitted.docStatus).toBe('PENDING_APPROVAL');
+  });
+
+  it('createRevision copies fullPaymentTerm verbatim', async () => {
+    await api.auth.login(salesUser);
+    const { quotation: created } = await api.dealQuotations.create(18, {
+      depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY', items: [ONE_ITEM],
+    });
+    await api.dealQuotations.submit(created.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const { quotation: approved } = await api.dealQuotations.approve(created.id, {});
+    await api.auth.login(salesUser);
+    const { quotation: revision } = await api.dealQuotations.createRevision(approved.id);
+    expect(revision.depositPercent).toBe(0);
+    expect(revision.fullPaymentTerm).toBe('ON_DELIVERY');
   });
 });

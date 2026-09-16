@@ -77,6 +77,32 @@ describe('QuotationItemRow — English per-sqm (owner decision 2026-09-13)', () 
     expect(patch).toMatchObject({ piecesPerBox: 28, sqmPerBox: 0.6 });
   });
 
+  // F5.2 (2026-09-16 review): a catalogue pick that FILLS ตร.ม./กล่อง must reset a ticked
+  // "ขายแผ่นไม่เต็มกล่อง" (roundToFullBox === false) the same way typing a value into the field by
+  // hand already does (the "clearing ตร.ม./กล่อง..." test and its neighbours above) — a box area
+  // forces full-box rounding server-side, so leaving the checkbox ticked would keep sending
+  // roundToFullBox=false alongside a now-present box area, and the summary line would read wrong
+  // until the rep noticed and cleared it manually.
+  it('a catalogue pick that fills ตร.ม./กล่อง resets a ticked ขายแผ่นไม่เต็มกล่อง', async () => {
+    const patch = await pick(
+      { priceId: 11, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: 0.6 },
+      { roundToFullBox: false },
+    );
+    expect(patch).toMatchObject({ sqmPerBox: 0.6, roundToFullBox: true });
+  });
+
+  /** Wrong-way-round: a pick whose product has NO box area at all must NOT force the checkbox
+   * back on — "sell loose pieces" is still perfectly legal without a box area (Option B), so
+   * nothing here should touch roundToFullBox. */
+  it('a catalogue pick with NO ตร.ม./กล่อง leaves a ticked ขายแผ่นไม่เต็มกล่อง alone', async () => {
+    const patch = await pick(
+      { priceId: 12, collection: 'Menorca', sizeRaw: '60x120', priceUnit: 'per_sqm', pcsPerBox: 28, sqmPerBox: null },
+      { roundToFullBox: false },
+    );
+    expect(patch.sqmPerBox).toBeNull();
+    expect(patch).not.toHaveProperty('roundToFullBox');
+  });
+
   // Owner feedback 2026-09-14 (QT-2026-0017 saved 66 แผ่น/กล่อง; its catalogue row says 38): a pick
   // takes the NEW product's box count, and a product with none clears the field rather than
   // keeping the previous product's number.
@@ -188,7 +214,10 @@ describe('QuotationItemRow — Thai SPECIAL_SQM ราคาตั้ง suffix 
       id: null, locationLabel: null, catalogPriceId: null, productCode: null, brand: null,
       model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
       sqmPerPiece: 0.72, quantityMode: 'AREA', areaSqm: 20, piecesInput: null,
-      wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: 3, sqmPerBox: null, unitPrice: 1299,
+      wastageMode: 'PERCENT', wastageValue: 0, piecesPerBox: 3, sqmPerBox: null,
+      // V182 "sell loose pieces" -- a deliberate new field (emptyQuotationItem defaults it true),
+      // not the accidental drift this test otherwise guards against.
+      roundToFullBox: true, unitPrice: 1299,
       discountPct: null, originCountry: null, leadTimeMinDays: null, leadTimeMaxDays: null,
       itemNotes: null, lineType: 'TILE', specialPriceSqm: 1932, directNetPrice: null,
     });
@@ -656,6 +685,24 @@ describe('QuotationItemRow — ขนาด (ซม.) → แผ่น/ตร.�
       expect(onChange).toHaveBeenLastCalledWith({ sizeText: '600x600' });
     });
 
+    // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): a rep
+    // typing the catalogue's OWN millimetre figures into this cm-labelled field ("300x600" for a
+    // 60x60cm/600x600mm tile) parses fine as a plain size pair -- genuinely different from
+    // catalogSizeText per sizeTextDiffersFromCatalogFaceSize (300x600 matches neither 60x60cm nor
+    // 600x600mm) -- but resolves to 18 m²/piece, outside sqmPerPieceFromSizeCm's own 0.001-10 m²
+    // bound, so it returns null. The previous version patched `sqmPerPiece: recomputed`
+    // UNCONDITIONALLY here, nulling a previously-valid catalogue figure on EITHER failure
+    // (unparseable OR out-of-range) -- turning a size typo into a blocking "required" error that
+    // silently refused every save (autosave, บันทึกร่าง, ส่งขออนุมัติ) for the whole document.
+    it('an out-of-range recompute (mm typed into a cm field) keeps the existing แผ่น/ตร.ม. rather than nulling it', () => {
+      const { onChange } = renderCatalogPicked();
+      fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '300x600' } });
+      // Only sizeText patches -- sqmPerPiece/source stay exactly as the catalogue left them (0.36 /
+      // 'catalog'), same shape as the "unparseable" and "same tile in millimetres" cases above, so
+      // the row stays valid and the rep can still edit แผ่น/ตร.ม. manually.
+      expect(onChange).toHaveBeenLastCalledWith({ sizeText: '300x600' });
+    });
+
     it('a \'manual\' value is never overwritten, even on a row that still carries catalogSizeText', () => {
       const { onChange } = renderCatalogPicked({ sqmPerPieceSource: 'manual', sqmPerPiece: 0.5 });
       fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '30x60' } });
@@ -829,5 +876,86 @@ describe('ส่วนลด % — blank by default, and a rep can clear it (own
     // The server prices null and 0 identically (WastageCalculator), but the payload must never send ''.
     expect(itemInputFromRow({ ...emptyQuotationItem(), discountPct: null }, 'NET').discountPct).toBe(0);
     expect(itemInputFromRow({ ...emptyPlainItem(), discountPct: null }).discountPct).toBe(0);
+  });
+});
+
+describe('ขายแผ่นไม่เต็มกล่อง — owner-approved "sell loose pieces" (V182, 2026-09-16)', () => {
+  function renderRoundLoose(itemOverrides = {}, extraProps = {}) {
+    const onChange = vi.fn();
+    const item = { ...emptyQuotationItem(), piecesPerBox: 10, piecesFinal: 32, boxes: 3, ...itemOverrides };
+    render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} {...extraProps} />);
+    return { onChange };
+  }
+
+  it('a brand-new row defaults to off (rounds up)', () => {
+    expect(emptyQuotationItem().roundToFullBox).toBe(true);
+    renderRoundLoose();
+    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(false);
+  });
+
+  it('is disabled with a reason until แผ่น/กล่อง is filled', () => {
+    renderRoundLoose({ piecesPerBox: '', piecesFinal: null, boxes: null });
+    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).disabled).toBe(true);
+    expect(screen.getByText('กรอกแผ่น/กล่องก่อน')).not.toBeNull();
+    // No summary yet either — nothing has been computed.
+    expect(screen.queryByTestId('round-loose-summary-0')).toBeNull();
+  });
+
+  it('checking it sends roundToFullBox: false', () => {
+    const { onChange } = renderRoundLoose();
+    fireEvent.click(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/));
+    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: false });
+  });
+
+  it('unchecking it sends roundToFullBox: true', () => {
+    const { onChange } = renderRoundLoose({ roundToFullBox: false });
+    fireEvent.click(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/));
+    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: true });
+  });
+
+  it('shows the rounded-up summary when off', () => {
+    renderRoundLoose({ roundToFullBox: true, piecesFinal: 40, boxes: 4 });
+    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(false);
+    expect(screen.getByTestId('round-loose-summary-0').textContent).toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
+  });
+
+  it('shows the box+loose summary when on', () => {
+    renderRoundLoose({ roundToFullBox: false });
+    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).checked).toBe(true);
+    expect(screen.getByTestId('round-loose-summary-0').textContent).toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
+  });
+
+  // Option B (owner decision, 2026-09-16): only disabled when a box AREA (ตร.ม./กล่อง) is present.
+  it('is disabled with a reason in English per-sqm mode WITH a box area, regardless of the row\'s own stored value', () => {
+    renderRoundLoose({ roundToFullBox: false, sqmPerBox: 0.6 }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
+    const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
+    expect(checkbox.disabled).toBe(true);
+    // Shown UNCHECKED — the option cannot be true-loose in this combination, whatever the row's
+    // stale stored value is; itemInputFromRow forces the wire value true regardless (pinned in
+    // quotationItemInput.test.jsx), this is only the checkbox's own display state.
+    expect(checkbox.checked).toBe(false);
+    expect(screen.getByText(/ต้องปัดขึ้นเต็มกล่องเสมอ/)).not.toBeNull();
+  });
+
+  it('is ENABLED in English per-sqm mode when ตร.ม./กล่อง is blank (Option B)', () => {
+    const { onChange } = renderRoundLoose({ sqmPerBox: null }, { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' });
+    const checkbox = screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/);
+    expect(checkbox.disabled).toBe(false);
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenLastCalledWith({ roundToFullBox: false });
+  });
+
+  it('typing a ตร.ม./กล่อง value while ticked resets roundToFullBox to true, so the blocked state is unreachable', () => {
+    const { onChange } = renderRoundLoose(
+      { sqmPerBox: null, roundToFullBox: false, specialPriceSqm: 64 },
+      { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN' },
+    );
+    fireEvent.change(screen.getByLabelText(/^ตร\.ม\.\/กล่อง/), { target: { value: '0.6' } });
+    expect(onChange).toHaveBeenLastCalledWith({ sqmPerBox: 0.6, roundToFullBox: true });
+  });
+
+  it('readOnly disables it regardless of แผ่น/กล่อง', () => {
+    renderRoundLoose({}, { readOnly: true });
+    expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).disabled).toBe(true);
   });
 });

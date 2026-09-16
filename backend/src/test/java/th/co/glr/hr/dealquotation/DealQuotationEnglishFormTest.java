@@ -685,9 +685,11 @@ class DealQuotationEnglishFormTest {
     //
     // The DATE variant (gated on hasSpecialPricing) and the lead-time-line drop (gated on
     // hasAnyLeadTime) are independent decisions computed from different data -- an ADJUSTMENT row
-    // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all
-    // (see DealQuotationItemDto -- leadTimeMinDays/Max are TILE-only), so an ADJUSTMENT-only
-    // document exercises DATE mode with hasAnyLeadTime=false. Both must compose correctly: the
+    // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all --
+    // DealQuotationService#buildAdjustmentItem always nulls originCountry/leadTimeMinDays/
+    // leadTimeMaxDays regardless of what the input carries (unlike a PLAIN row's OPTIONAL lead time
+    // since D1 -- see #plainRowWithLeadTime) -- so an ADJUSTMENT-only document exercises DATE mode
+    // with hasAnyLeadTime=false. Both must compose correctly: the
     // line-drop-and-renumber must not disturb the DATE text, and the DATE text must survive being
     // renumbered down by one.
 
@@ -696,7 +698,11 @@ class DealQuotationEnglishFormTest {
     @Test
     void remarks_dateModeValidityAndNoLeadTime_compose_thai() throws Exception {
         LocalDate until = LocalDate.of(2026, 9, 30);
-        DealQuotationDto q = withPriceModeAndValidity(withItems(thaiQuotation(), List.of(adjustmentRow(1))),
+        // V182: a TILE row (with no lead time of its own) alongside the ADJUSTMENT row keeps this a
+        // TILE document — see #tileNoLeadTime's own Javadoc — so it still exercises the tile remark
+        // set's DATE-mode/no-lead-time composition rather than becoming a non-tile document.
+        DealQuotationDto q = withPriceModeAndValidity(
+            withItems(thaiQuotation(), List.of(tileNoLeadTime(1), adjustmentRow(2))),
             WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
         assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isTrue();
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
@@ -715,7 +721,9 @@ class DealQuotationEnglishFormTest {
     @Test
     void remarks_dateModeValidityAndNoLeadTime_compose_english_bothLayouts() {
         LocalDate until = LocalDate.of(2026, 10, 31);
-        DealQuotationDto q = withPriceModeAndValidity(withItems(englishQuotation(), List.of(adjustmentRow(1))),
+        // V182: see the Thai twin's own comment — a TILE row keeps this a TILE document.
+        DealQuotationDto q = withPriceModeAndValidity(
+            withItems(englishQuotation(), List.of(tileNoLeadTime(1), adjustmentRow(2))),
             WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
         assertThat(DealQuotationRenderAdapter.hasSpecialPricing(q)).isTrue();
 
@@ -731,76 +739,322 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * An all-PLAIN China→Maldives document (QN6900902-6) has no lead time on any row. Owner
-     * feedback (2026-09-14, "if ระยะเวลานำเข้า is not chosen remove that from the หมายเหตุ")
-     * SUPERSEDES both the countries/stock-wording default (already reversed by #7, 2026-09-11) AND
-     * the "print a visible blank fallback" behaviour that replaced it: the line is now dropped
-     * ENTIRELY — not left blank — and every remark after it renumbers down by one, shrinking the
-     * box from 8 lines to 7, in BOTH English layouts. See
-     * {@code DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber}.
+     * V182 (owner request, 2026-09-16): an all-PLAIN China→Maldives document (QN6900902-6) has NO
+     * TILE line at all, so it now takes the NON-TILE remark set (see {@code
+     * DealQuotationRenderAdapter#englishNonTileRemarkLines}) rather than the tile-oriented 7/8-line
+     * one this test used to pin. Neither {@code plainRow} carries a lead time, so the set's own
+     * lead-time line drops too, shrinking it further — 3 lines with no bank block, 6 with it (the
+     * block always costs 3 unnumbered lines, never a numbered slot).
+     *
+     * <p>This test used to prove the OLD tile-remarks lead-time-drop-and-renumber path on an
+     * all-PLAIN document; it now proves the non-tile set replaces that path entirely for exactly
+     * this kind of document — see {@code remarks_anAllPlainDocument_keepsTheTileSet_whenATileLineIsPresent}
+     * just below for the wrong-way-round guard (a MIXED document keeps the tile set unchanged).
      */
     @Test
-    void remarks_anAllPlainDocument_dropsTheDeliveryLineEntirely_inBothLayouts() throws Exception {
+    void remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts() throws Exception {
         DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
             plainRow(1, "Supply of Porcelain Tiles"), plainRow(2, "Freight China to Male"))));
+        String noReturn = "3.Goods sold are not returnable or exchangeable. Please check the order "
+            + "carefully before confirming or signing for delivery.";
         for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
             String layout = block.isEmpty() ? "no bank" : "bank";
             QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null, block);
-            assertThat(model.remarkLines()).as("adapter, %s layout", layout).hasSize(7)
+            List<String> expected = block.isEmpty()
+                ? List.of(
+                    "1.The price above includes delivery to the ground floor within the Bangkok "
+                        + "Metropolitan Area, but excludes installation.",
+                    "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
+                    noReturn)
+                : List.of(
+                    "1.The price above includes delivery to the ground floor within the Bangkok "
+                        + "Metropolitan Area, but excludes installation.",
+                    "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
+                    BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2),
+                    noReturn);
+            assertThat(model.remarkLines()).as("adapter, %s layout", layout).containsExactlyElementsOf(expected)
                 .noneMatch(l -> l.contains("Delivery"));
 
             Sheet sheet = renderLegacyModel(model);
-            List<String> remarks = new ArrayList<>();
-            for (int r = 23; r <= 29; r++) {
-                remarks.add(str(sheet, r, 1));
+            for (int i = 0; i < expected.size(); i++) {
+                assertThat(str(sheet, 23 + i, 1)).as("%s layout row %d", layout, 23 + i)
+                    .isEqualTo(expected.get(i));
             }
-            assertThat(remarks).as("7 lines, %s layout", layout).hasSize(7).allMatch(l -> !l.isBlank());
-            assertThat(String.join("\n", remarks)).as("%s layout", layout)
-                .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian")
-                .doesNotContainIgnoringCase("china").doesNotContainIgnoringCase("thailand")
-                .doesNotContain("Delivery");
-            remarks.forEach(l -> assertThat(l.length()).as("%s layout: %s", layout, l)
-                .isLessThanOrEqualTo(130));
-            // Row 30 (the old 8th packed slot) is no longer part of the box — the whole footer
-            // block shifted up by one extra row.
-            assertThat(str(sheet, 30, 1)).as("%s layout: row 30 must not be a leftover remark row", layout)
+            // The box closes directly under the last line — nothing past it is a leftover remark row.
+            assertThat(str(sheet, 23 + expected.size(), 1)).as("%s layout: no leftover remark row", layout)
                 .isBlank();
-
-            if (block.isEmpty()) {
-                // No-bank layout, renumbered: 3(payment)/4(validity)/5(sizes)/6(colours)/7(goods) —
-                // was 4/5/6/7/8.
-                assertThat(remarks.get(2)).startsWith("3.Payment by telegraphic transfer");
-                assertThat(remarks.get(3)).startsWith("4.Price validity");
-                assertThat(remarks.get(6)).startsWith("7.Goods sold");
-            } else {
-                // Bank layout, renumbered: the 3 unnumbered bank lines are untouched, then
-                // 3(validity)/4(colours) — was 4/5.
-                assertThat(remarks.get(2)).isEqualTo(BANK_BLOCK.get(0));
-                assertThat(remarks.get(4)).isEqualTo(BANK_BLOCK.get(2));
-                assertThat(remarks.get(5)).startsWith("3.Price validity");
-                assertThat(remarks.get(6)).startsWith("4.Colours");
-            }
         }
     }
 
-    /** The Thai twin of the test above, pinning {@code DealQuotationRenderAdapter#LINE3_FALLBACK}'s
-     * drop path — owner feedback (2026-09-14) drops the line ENTIRELY (rather than printing the
-     * visible-blank fallback) and renumbers every remark after it down by one. */
+    /**
+     * Wrong-way-round guard for V182: a MIXED document (one genuine tile line alongside a PLAIN
+     * one) still has a tile line, so it keeps the OLD 7/8-line tile-oriented remark set —
+     * byte-for-byte, per {@code DealQuotationRenderAdapter#hasAnyTileLine}. Uses the SAME two
+     * items as {@link #remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts} plus one tile,
+     * so the only variable between the two tests is whether a tile line is present at all.
+     *
+     * <p>D4 (review, 2026-09-15): also carries the country/stock-wording guard that used to live on
+     * {@code remarks_anAllPlainDocument_dropsTheDeliveryLineEntirely_inBothLayouts} (this test's own
+     * pre-V182 ancestor) — the 2026-09-11 owner-feedback reversal means the TILE remark set must
+     * never print "Italy"/"China"/"Thailand" wording again, and V182's rewrite of that ancestor test
+     * (into {@code remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts}, which now takes
+     * the NON-TILE path and never reaches this constant at all) dropped the assertion with nothing
+     * left asserting it anywhere. This is the ONE remaining test that still exercises the TILE
+     * remark set's own English lead-time fallback ({@code EN_LINE3_FALLBACK}) on a document with no
+     * lead time, so the guard belongs here now.
+     */
     @Test
-    void remarks_anAllPlainThaiDocument_dropsTheLeadTimeLineEntirely() throws Exception {
+    void remarks_aMixedDocument_keepsTheTileRemarkSet_unchanged() throws Exception {
+        DealQuotationDto mixed = englishQuotation(q -> withItems(q, List.of(
+            tileNoLeadTime(1), plainRow(2, "Freight China to Male"))));
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(mixed, null, null, List.of());
+        assertThat(model.remarkLines()).hasSize(7).noneMatch(l -> l.contains("Delivery"));
+        assertThat(model.remarkLines().get(2)).startsWith("3.Payment by telegraphic transfer");
+        assertThat(model.remarkLines().get(5)).startsWith("6.Colours and patterns");
+        assertThat(model.remarkLines().get(6)).startsWith("7.Goods sold");
+        // D4: the country/stock-wording guard restored — see this test's own Javadoc. Item 2's OWN
+        // description ("Freight China to Male") legitimately contains "China"; that string lives in
+        // model.remarkLines(), never in the item description, so it cannot false-positive here.
+        assertThat(String.join("\n", model.remarkLines()))
+            .doesNotContainIgnoringCase("italy").doesNotContainIgnoringCase("italian")
+            .doesNotContainIgnoringCase("china").doesNotContainIgnoringCase("thailand");
+    }
+
+    /** The Thai twin of the test above, pinning the NON-TILE set's drop-and-renumber path — see
+     * {@code DealQuotationRenderAdapter#nonTileRemarkLines}/{@code #dropLeadTimeLineAndRenumber}.
+     * Neither {@code plainRow} carries a lead time, so remark 3 (ระยะเวลานำเข้า) drops entirely and
+     * the no-return line renumbers from "4." down to "3.". */
+    @Test
+    void remarks_anAllPlainThaiDocument_printsTheNonTileSet_withLeadTimeLineDropped() throws Exception {
         DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
             plainRow(1, "ค่าขนส่งกระเบื้อง"), plainRow(2, "ค่าติดตั้ง")));
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null);
-        assertThat(model.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+        assertThat(model.remarkLines()).containsExactly(
+            "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง",
+            "2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน",
+            "3.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า");
 
         Sheet sheet = renderLegacyModel(model);
-        // Thai never carries a bank block (see #thaiDocument_neverCarriesTheBankBlock_...), so the
-        // dropped line was always remark index 2 (row 23 + 2 = 25); the old LINE4 (ขนาดของ
-        // กระเบื้องจริง...) now renumbers down to "3." and slides into that row.
-        assertThat(str(sheet, 25, 1)).startsWith("3.ขนาดของกระเบื้องจริง");
+        assertThat(str(sheet, 23, 1)).isEqualTo(model.remarkLines().get(0));
+        assertThat(str(sheet, 24, 1)).isEqualTo(model.remarkLines().get(1));
+        assertThat(str(sheet, 25, 1)).isEqualTo(model.remarkLines().get(2));
         assertThat(str(sheet, 25, 1)).doesNotContain("ระยะเวลานำเข้า");
-        // Row 30 (the old 8th packed slot) is no longer part of the box.
-        assertThat(str(sheet, 30, 1)).isBlank();
+        // The box closes directly under line 3 — row 26 onward is no longer part of it.
+        assertThat(str(sheet, 26, 1)).isBlank();
+    }
+
+    /** Wrong-way-round Thai twin: a MIXED document keeps the tile remark set unchanged. */
+    @Test
+    void remarks_aMixedThaiDocument_keepsTheTileRemarkSet_unchanged() throws Exception {
+        DealQuotationDto mixed = withItems(thaiQuotation(), List.of(
+            tileNoLeadTime(1), plainRow(2, "ค่าติดตั้ง")));
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(mixed, null, null);
+        assertThat(model.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
+        assertThat(model.remarkLines().get(2)).startsWith("3.ขนาดของกระเบื้องจริง");
+    }
+
+    /**
+     * V182: a PLAIN-only document whose rows DO carry a lead time — reachable since D1 wired an
+     * OPTIONAL ระยะเวลานำเข้า input onto {@code QuotationPlainItemRow} (see
+     * {@link #plainRowWithLeadTime}'s own comment) — prints the full FOUR-line non-tile set, not
+     * the three-line dropped one. {@code DealQuotationRenderAdapter#leadTimeGroups} reads the
+     * field off ANY item regardless of {@code lineType}, which is what lets this fixture exercise
+     * the path directly at the render-adapter layer.
+     *
+     * <p>Owner ruling (review of V182, 2026-09-16): both rows share the SAME (30, 45) range and are
+     * consecutive (seq 1, 2), so they group into ONE "รายการที่ 1-2" span — the ALWAYS-per-item form
+     * (owner feedback #7) rather than a bare "30-45 วัน", even though every item here agrees.
+     */
+    @Test
+    void remarks_aPlainOnlyThaiDocumentWithLeadTime_printsAllFourNonTileLines() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRowWithLeadTime(1, "ค่าขนส่งกระเบื้อง", 30, 45),
+            plainRowWithLeadTime(2, "ค่าติดตั้ง", 30, 45)));
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null);
+        assertThat(model.remarkLines()).containsExactly(
+            "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง",
+            "2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน",
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1-2 ประมาณ 30-45 วัน "
+                + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว",
+            "4.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า");
+
+        Sheet sheet = renderLegacyModel(model);
+        for (int i = 0; i < model.remarkLines().size(); i++) {
+            assertThat(str(sheet, 23 + i, 1)).as("row %d", 23 + i).isEqualTo(model.remarkLines().get(i));
+        }
+        // The box closes directly under line 4 — row 27 onward is no longer part of it.
+        assertThat(str(sheet, 27, 1)).isBlank();
+    }
+
+    /**
+     * D2 (Opus review, 2026-09-15): every non-tile test above asserts cell TEXT only, which cannot
+     * catch a geometry regression — the reviewer mutated {@code QuotationRenderer#compactRemarksSection}'s
+     * closing call from {@code clampToPackedSlots(actualLineCount)} to
+     * {@code Math.max(clampToPackedSlots(actualLineCount), REMARK_V2_MIN_LINES)} and all 213 tests
+     * still passed, while the real render lost the box's bottom rule under line 4 and grew a
+     * spurious rule under รวมเป็นเงินทั้งสิ้น. This pins the box's closing bottom rule on the ACTUAL
+     * last packed row for the FOUR-line non-tile case — mirrors
+     * {@code DealQuotationRenderAdapterV3Test#leadTime_noItemHasOne_rendererWritesExactlySevenRemarkRows}'s
+     * own border assertion, applied to the non-tile set the tile-only test suite never exercised.
+     */
+    @Test
+    void remarks_nonTileFourLine_boxClosesOnTheActualLastRow_notAHardcodedMinimum() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRowWithLeadTime(1, "ค่าขนส่งกระเบื้อง", 30, 45),
+            plainRowWithLeadTime(2, "ค่าติดตั้ง", 30, 45)));
+        Sheet sheet = render(allPlain);
+        // 4 lines -> rows 23..26; the closing bottom rule must sit on row 26, across every column.
+        for (int c = 0; c <= 8; c++) {
+            assertThat(sheet.getRow(26).getCell(c).getCellStyle().getBorderBottom())
+                .as("row 26 col %d must carry the box's closing bottom rule", c)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        // Row 27 must NOT be pulled inside the box's side borders -- the REMARK_V2_MIN_LINES(7)
+        // mutation above would leave the (unwritten) rows 27..29 sitting inside them.
+        assertThat(borderLeftOrNone(sheet, 27, 1))
+            .as("row 27 must not be inside the box's left border once it has shrunk to 4 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+    }
+
+    /** D2 twin: the THREE-line case (lead time dropped, no lead time on any row). */
+    @Test
+    void remarks_nonTileThreeLine_boxClosesOnTheActualLastRow_notAHardcodedMinimum() throws Exception {
+        DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
+            plainRow(1, "ค่าขนส่งกระเบื้อง"), plainRow(2, "ค่าติดตั้ง")));
+        Sheet sheet = render(allPlain);
+        // 3 lines -> rows 23..25; the closing bottom rule must sit on row 25.
+        for (int c = 0; c <= 8; c++) {
+            assertThat(sheet.getRow(25).getCell(c).getCellStyle().getBorderBottom())
+                .as("row 25 col %d must carry the box's closing bottom rule", c)
+                .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+        }
+        assertThat(borderLeftOrNone(sheet, 26, 1))
+            .as("row 26 must not be inside the box's left border once it has shrunk to 3 lines")
+            .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
+    }
+
+    private org.apache.poi.ss.usermodel.BorderStyle borderLeftOrNone(Sheet sheet, int row, int col) {
+        var cell = sheet.getRow(row) == null ? null : sheet.getRow(row).getCell(col);
+        return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderLeft();
+    }
+
+    /** The English twin, in both bank-block layouts — same per-item grouping as the Thai twin
+     * above (both rows share one (30, 45) range and group into ONE "items 1-2" span). */
+    @Test
+    void remarks_aPlainOnlyEnglishDocumentWithLeadTime_printsAllFourNonTileLines_inBothLayouts() throws Exception {
+        DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
+            plainRowWithLeadTime(1, "Supply of Porcelain Tiles", 30, 45),
+            plainRowWithLeadTime(2, "Freight China to Male", 30, 45))));
+        for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
+            String layout = block.isEmpty() ? "no bank" : "bank";
+            QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(allPlain, null, null, block);
+            List<String> expected = block.isEmpty()
+                ? List.of(
+                    "1.The price above includes delivery to the ground floor within the Bangkok "
+                        + "Metropolitan Area, but excludes installation.",
+                    "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
+                    "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                        + "approximately 30-45 days, after the 30% deposit is received.",
+                    "4.Goods sold are not returnable or exchangeable. Please check the order carefully "
+                        + "before confirming or signing for delivery.")
+                : List.of(
+                    "1.The price above includes delivery to the ground floor within the Bangkok "
+                        + "Metropolitan Area, but excludes installation.",
+                    "2.A deposit of 30% is required upon order confirmation, the balance on 30 days credit.",
+                    BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2),
+                    "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                        + "approximately 30-45 days, after the 30% deposit is received.",
+                    "4.Goods sold are not returnable or exchangeable. Please check the order carefully "
+                        + "before confirming or signing for delivery.");
+            assertThat(model.remarkLines()).as("adapter, %s layout", layout).containsExactlyElementsOf(expected);
+
+            Sheet sheet = renderLegacyModel(model);
+            for (int i = 0; i < expected.size(); i++) {
+                assertThat(str(sheet, 23 + i, 1)).as("%s layout row %d", layout, 23 + i)
+                    .isEqualTo(expected.get(i));
+            }
+            assertThat(str(sheet, 23 + expected.size(), 1)).as("%s layout: no leftover remark row", layout)
+                .isBlank();
+        }
+    }
+
+    /**
+     * Owner ruling (review of V182, 2026-09-16, answering the reviewer's own recommendation
+     * question): a non-tile document with genuinely mixed lead times must use the SAME per-item
+     * grouping the tile set's own remark 3 uses (see {@code
+     * DealQuotationRenderAdapterV3Test#leadTime_differentRangesStaySeparateGroups}) — NOT a
+     * min-of-mins/max-of-maxes envelope, which this test used to assert (and which this class's own
+     * {@code nonTileLeadTimeLine} used to compute via the now-deleted {@code nonTileLeadTimeRange}).
+     * An envelope like "20-50 วัน" across two 20-30/40-50 rows could misstate a customer's actual
+     * wait; grouping by item — mirroring the owner's own reference text "รายการที่ 1-2 ประมาณ 75-90
+     * วัน  รายการที่ 3 ประมาณ 30-45 วัน" — cannot.
+     *
+     * <p>Three items, TWO different ranges: 1-2 share (75, 90) and are consecutive, so they group
+     * into ONE "รายการที่ 1-2"; item 3's (30, 45) is a separate group. Deposit 50% (not the 30%
+     * default) so this also pins that the grouped list and the deposit clause compose correctly.
+     */
+    @Test
+    void remarks_nonTileLeadTime_groupsConsecutiveItemsByRange_likeTheTileSetDoes() throws Exception {
+        DealQuotationDto q = withDepositPercent(withItems(thaiQuotation(), List.of(
+            plainRowWithLeadTime(1, "A", 75, 90),
+            plainRowWithLeadTime(2, "B", 75, 90),
+            plainRowWithLeadTime(3, "C", 30, 45))), 50);
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1-2 ประมาณ 75-90 วัน  "
+                + "รายการที่ 3 ประมาณ 30-45 วัน หลังจากได้รับมัดจำ 50% เรียบร้อยแล้ว");
+    }
+
+    /** The English twin — same three-item, two-range fixture, English grouping words. */
+    @Test
+    void remarks_nonTileLeadTime_englishTwin_groupsConsecutiveItemsByRange() throws Exception {
+        DealQuotationDto q = withDepositPercent(englishQuotation(qt -> withItems(qt, List.of(
+            plainRowWithLeadTime(1, "A", 75, 90),
+            plainRowWithLeadTime(2, "B", 75, 90),
+            plainRowWithLeadTime(3, "C", 30, 45)))), 50);
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null, List.of());
+        assertThat(model.remarkLines().get(2)).isEqualTo(
+            "3.If the factory has the goods ready to ship, the import lead time is items 1-2 "
+                + "approximately 75-90 days  item 3 approximately 30-45 days, after the 50% deposit "
+                + "is received.");
+    }
+
+    /**
+     * V182: a non-tile document taking NO deposit ({@code depositPercent == 0}) drops just the
+     * "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว" clause (naming a deposit that does not exist would be
+     * nonsensical) and keeps the lead-time claim itself — chosen deliberately over dropping the
+     * whole line, since the import lead time is still true regardless of deposit terms.
+     */
+    @Test
+    void remarks_nonTileNoDeposit_dropsOnlyTheDepositClause_keepsTheLeadTimeSentence() throws Exception {
+        DealQuotationDto q = withDepositPercent(
+            withItems(thaiQuotation(), List.of(plainRowWithLeadTime(1, "A", 30, 45))), 0);
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
+        assertThat(model.remarkLines().get(2))
+            .isEqualTo("3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 30-45 วัน");
+    }
+
+    /**
+     * V182: an ADJUSTMENT-only item list counts as non-tile too — see {@code
+     * DealQuotationRenderAdapter#hasAnyTileLine}'s own Javadoc. An ADJUSTMENT row never carries a
+     * lead time, so the set drops to three lines.
+     *
+     * <p>Comment correction (review, 2026-09-16): this is NOT a real "credit-note-ish" document a
+     * rep can actually save — {@code DealQuotationService#buildItems} refuses both an empty item
+     * list and an all-ADJUSTMENT one before either is ever written (see its own Javadoc). Kept
+     * anyway as a cheap guard on the render adapter's OWN logic: {@code toRenderModel} is a pure
+     * function with no access to the service's save-time rules, so it must still answer
+     * sensibly (never throw, never misclassify) if it is ever handed a list shaped like this one —
+     * by a future caller, a test, or a re-render of data the current rules would no longer accept.
+     */
+    @Test
+    void remarks_anAdjustmentOnlyDocument_countsAsNonTile() throws Exception {
+        DealQuotationDto q = withItems(thaiQuotation(), List.of(adjustmentRow(1)));
+        QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(q, null, null);
+        assertThat(model.remarkLines()).containsExactly(
+            "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง",
+            "2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน",
+            "3.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า");
     }
 
     /** B1 must be the owner's own spelling from her F-SM-008 form, not the older "&amp; R." one. */
@@ -1052,7 +1306,9 @@ class DealQuotationEnglishFormTest {
             q.approverHasSignature(), q.items(), q.createdAt(), q.updatedAt());
     }
 
-    /** A PLAIN row: description, 1 lot at 500.00, and — like every real PLAIN row — no lead time. */
+    /** A PLAIN row: description, 1 lot at 500.00, no lead time — the ordinary case (a rep who
+     * leaves ระยะเวลานำเข้า blank), still the common one even after D1 wired an OPTIONAL lead-time
+     * input onto QuotationPlainItemRow (see {@link #plainRowWithLeadTime} for the other case). */
     private DealQuotationItemDto plainRow(int seq, String description) {
         return new DealQuotationItemDto((long) seq, seq,
             null, null, null, null, null, null, null, null,     // location … size text
@@ -1063,6 +1319,46 @@ class DealQuotationEnglishFormTest {
             new BigDecimal("500.00"), new BigDecimal("500.00"), // net, line amount
             description, null, null,
             WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "lot", null, null, null, null, null);
+    }
+
+    /** V182 fixture — a PLAIN row that DOES carry a lead time (สินค้า/บริการอื่น — sanitaryware
+     * sold on ชุด, an owner example being QN6900971-4's own "ระยะเวลานำเข้า 75-90 วัน" row).
+     *
+     * <p>D1 correction (review, 2026-09-16): this Javadoc used to say a real PLAIN row can never
+     * carry a lead time — that was true only because {@code QuotationPlainItemRow} had no input
+     * for it; the field itself always lived on {@code DealQuotationItemDto} (shared with the TILE
+     * row) and {@code DealQuotationService#buildPlainItem} always forwarded it. Now that the editor
+     * has the control, this fixture is a faithful stand-in for a real saved row rather than an
+     * unreachable one — see {@code DealQuotationIntegrationTest#plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks}
+     * for the same shape proven through the real {@code ItemInput} → service → render path. Kept as
+     * a direct-DTO fixture here (rather than going through the service in every test in this file)
+     * because {@code DealQuotationRenderAdapter#leadTimeGroups} reads the field off ANY item
+     * regardless of {@code lineType} — this is a render-adapter unit test, not a save-path one. */
+    private DealQuotationItemDto plainRowWithLeadTime(int seq, String description, int minDays, int maxDays) {
+        return new DealQuotationItemDto((long) seq, seq,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null,
+            new BigDecimal("500.00"), null, null,
+            minDays, maxDays, null,
+            null, 0, 0, 0, null,
+            new BigDecimal("500.00"), new BigDecimal("500.00"),
+            description, null, null,
+            WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "lot", null, null, null, null, null);
+    }
+
+    /** V182 test helper — {@code q} with {@code depositPercent} replaced, everything else kept. */
+    private DealQuotationDto withDepositPercent(DealQuotationDto q, int depositPercent) {
+        return new DealQuotationDto(q.id(), q.number(), q.ticketId(), q.docStatus(), q.revisionNo(),
+            q.parentQuotationId(), q.createdById(), q.createdByName(), q.createdByNameEn(),
+            q.salesRepId(), q.salesRepName(), q.salesRepNameEn(), q.salesRepPhone(),
+            q.submittedAt(), q.approvedById(), q.approvedByName(), q.approvedByNameEn(), q.approvedAt(),
+            q.approvalNote(), q.quotationDate(), q.customerName(), q.customerAddress(),
+            q.customerTaxId(), q.customerPhone(), q.contactId(), q.contactName(), q.contactPhone(),
+            q.contactEmail(), q.projectName(), q.deptCode(), q.unitCode(), q.offerDate(),
+            depositPercent, q.remainderMode(), q.creditDays(), q.validityDays(),
+            q.validityDate(), q.customerNotes(), q.priceMode(), q.documentLanguage(),
+            q.subtotalAmount(), q.vatAmount(), q.grandTotal(), q.currency(),
+            q.approverHasSignature(), q.items(), q.createdAt(), q.updatedAt());
     }
 
     /** The three employee names blanked in English, to exercise the Thai fallback. */
@@ -1146,6 +1442,20 @@ class DealQuotationEnglishFormTest {
         return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
             new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
             WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), BigDecimal.ZERO, null, 30, 45,
+            null, new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
+            "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
+    }
+
+    /** V182 fixture — a plain TILE row (no discount, no special pricing of its own) with NO lead
+     * time set, used alongside {@link #adjustmentRow} so a "DATE-mode validity + no lead time"
+     * test keeps exercising the TILE remark set (a document needs at least one TILE line for that
+     * — see {@link DealQuotationRenderAdapter#hasAnyTileLine}) rather than becoming a non-tile
+     * document, whose remark set has no validity/DATE line at all. */
+    private DealQuotationItemDto tileNoLeadTime(int seq) {
+        return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), null, null, null, null,
             null, new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
             "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);

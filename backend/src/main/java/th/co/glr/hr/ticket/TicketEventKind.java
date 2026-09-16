@@ -70,6 +70,12 @@ public final class TicketEventKind {
     public static final String DEAL_QUOTATION_SUBMITTED = "DEAL_QUOTATION_SUBMITTED";
     public static final String DEAL_QUOTATION_APPROVED  = "DEAL_QUOTATION_APPROVED";
     public static final String DEAL_QUOTATION_REJECTED  = "DEAL_QUOTATION_REJECTED";
+    // Owner request (2026-09-16): a submit whose row is a revision (parentQuotationId != null --
+    // covers BOTH #createRevision's own submit and the resubmit-after-ตีกลับ path) must read as a
+    // REVISION to sales_manager/ceo, not the identical "รออนุมัติ" text DEAL_QUOTATION_SUBMITTED
+    // sends for a first-time submit. Distinct kind so the mail subject itself says ฉบับแก้ไข --
+    // see NotificationRepository.TICKET_EVENT_TITLES and DealQuotationService#notifySubmitted.
+    public static final String DEAL_QUOTATION_REVISION_SUBMITTED = "DEAL_QUOTATION_REVISION_SUBMITTED";
 
     private TicketEventKind() {}
 }

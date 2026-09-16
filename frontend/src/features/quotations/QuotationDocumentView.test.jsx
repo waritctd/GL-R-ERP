@@ -151,6 +151,56 @@ describe('QuotationDocumentView -- ยืนราคา (V178, owner ruling 202
   });
 });
 
+// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — mirrors
+// DealQuotationRenderAdapter#depositLine's own "0% is ไม่รับมัดจำ, not a phantom deposit" fix.
+describe('QuotationDocumentView -- มัดจำ / ไม่รับมัดจำ (V181, owner ruling 2026-09-16)', () => {
+  function fieldText(container, label) {
+    const span = Array.from(container.querySelectorAll('span'))
+      .find((el) => el.textContent === label);
+    return span.nextElementSibling.textContent;
+  }
+
+  it('an ordinary positive deposit is unchanged: มัดจำ N%, ส่วนที่เหลือ label', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30,
+    })} />);
+    expect(fieldText(container, 'มัดจำ')).toBe('30%');
+    expect(fieldText(container, 'ส่วนที่เหลือ')).toBe('เครดิต 30 วัน');
+  });
+
+  it('depositPercent 0 with a chosen term shows "ไม่รับมัดจำ" and the term text', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY',
+    })} />);
+    expect(fieldText(container, 'มัดจำ')).toBe('ไม่รับมัดจำ');
+    expect(fieldText(container, 'เงื่อนไขการชำระเงิน'))
+      .toBe('บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า');
+  });
+
+  it('the ON_OR_BEFORE_DELIVERY term shows the owner-corrected "เมื่อ...หรือก่อน..." word order', () => {
+    const { container } = render(<QuotationDocumentView quotation={docQuotation({
+      depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_OR_BEFORE_DELIVERY',
+    })} />);
+    expect(fieldText(container, 'เงื่อนไขการชำระเงิน'))
+      .toBe('บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า');
+  });
+
+  // LEGACY (pre-V181): a zero-deposit row saved before this feature has no fullPaymentTerm --
+  // this summary must keep reading the SAME remainderMode-based text the printed document does
+  // (DealQuotationRenderAdapter#depositLine's own legacy fallback), never a blank.
+  it('a legacy zero-deposit row (no fullPaymentTerm) falls back to the remainderMode-based text', () => {
+    const { container: credit } = render(<QuotationDocumentView quotation={docQuotation({
+      depositPercent: 0, remainderMode: 'CREDIT', creditDays: 45, fullPaymentTerm: null,
+    })} />);
+    expect(fieldText(credit, 'เงื่อนไขการชำระเงิน')).toBe('ชำระเต็มจำนวนเป็นเครดิต 45 วัน');
+
+    const { container: delivery } = render(<QuotationDocumentView quotation={docQuotation({
+      depositPercent: 0, remainderMode: 'ON_DELIVERY', creditDays: null, fullPaymentTerm: null,
+    })} />);
+    expect(fieldText(delivery, 'เงื่อนไขการชำระเงิน')).toBe('ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า');
+  });
+});
+
 describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10)', () => {
   // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
   // pinned here — both were measured in a real browser and can only be RE-measured in one. This is

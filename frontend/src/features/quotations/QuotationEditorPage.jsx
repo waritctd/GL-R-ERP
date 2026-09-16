@@ -19,18 +19,19 @@ import {
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
-  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
+  isEffectiveZeroDeposit,
+  estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   locationGroupsFromItems, newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
-  VALIDITY_MODE_OPTIONS,
+  VALIDITY_MODE_OPTIONS, FULL_PAYMENT_TERM_OPTIONS,
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealCustomerCard } from './DealCustomerCard.jsx';
 import { QuotationDealFields } from './QuotationDealFields.jsx';
-import { QuotationChecklist } from './QuotationChecklist.jsx';
+import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 import {
@@ -85,10 +86,20 @@ function pickCalculatedFields(source) {
 // is on the server. วันที่ is deliberately never remembered: it is always today.
 function emptyTerms(defaults = null) {
   const depositPercent = defaults?.depositPercent ?? '';
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): noDeposit must NEVER
+  // be seeded from a remembered default, unlike depositPercent/validityMode above. Ticking it once
+  // would otherwise make every LATER new quotation start with no deposit — a rep could send one
+  // with no deposit by accident. A brand-new quotation always starts with the normal deposit
+  // controls; no-deposit is a deliberate per-quotation choice. (quotationPrefs.js no longer even
+  // carries either field, so `defaults` never has them — but this stays explicit rather than
+  // reading `defaults?.noDeposit` at all, in case a stale stored blob still has the key.)
+  const noDeposit = false;
   return {
     deptCode: '', unitCode: '', offerDate: todayIso(),
     depositPercent,
     depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
+    noDeposit,
+    fullPaymentTerm: '',
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
@@ -109,6 +120,9 @@ function emptyTerms(defaults = null) {
     // deal's own project name instead of leaving a rep looking at an empty box for a project the
     // deal already has.
     projectName: '',
+    // Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16) — per-quotation, NOT remembered (see
+    // this field's own comment on the request DTO): a brand-new quotation always starts UNticked.
+    omitContactHonorific: false,
   };
 }
 
@@ -236,10 +250,13 @@ export function QuotationEditorPage({ user, showToast }) {
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // DealCustomerCard still reports ผู้สั่งซื้อ through the same one-patch-upward contract as
   // ลูกค้า/โครงการ (including `contact: null` when picking a different customer clears it), so
-  // that key is split back out to the page-level `contact` state rather than kept twice.
+  // that key is split back out to the page-level `contact` state rather than kept twice. Item 2
+  // ("ไม่เติม “คุณ”", V180) — omitContactHonorific lives on `terms` (it is saved on the quotation,
+  // not the deal), so it is split out the SAME way `contact` is, rather than kept a third time.
   function updateDealForm(patch) {
-    const { contact: nextContact, ...rest } = patch;
+    const { contact: nextContact, omitContactHonorific, ...rest } = patch;
     if ('contact' in patch) setContact(nextContact);
+    if ('omitContactHonorific' in patch) setTerms((t) => ({ ...t, omitContactHonorific }));
     if (Object.keys(rest).length) setDealForm((prev) => ({ ...prev, ...rest }));
     setDirty(true);
   }
@@ -292,6 +309,15 @@ export function QuotationEditorPage({ user, showToast }) {
     if (next) editSeqRef.current += 1;
     setDirtyState(next);
   }, []);
+  // D4 fix (Opus review 2026-09-16): a "latest value" mirror of `dirty`, kept current by an effect
+  // that runs after every render where it changed (react-hooks/refs forbids writing a ref's
+  // `.current` directly during render). handleDownload (below) is an async function that awaits
+  // across several `await`s -- reading the plain `dirty` closure variable there means reading
+  // whatever it was at the moment the button was CLICKED, which can go stale the instant an edit
+  // lands during one of those awaits. Reading `dirtyRef.current` instead always sees the live
+  // value, no matter how many renders happened while the handler was suspended.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   // V178 (owner ruling 2026-09-14): ระบุวันที่ is offered only on a document with special
   // pricing — mirrors DealQuotationRenderAdapter#hasSpecialPricing exactly (quotationMeta.js).
   const docHasSpecialPricing = useMemo(
@@ -308,6 +334,20 @@ export function QuotationEditorPage({ user, showToast }) {
       setDirty(true);
     }
   }, [docHasSpecialPricing, terms.validityMode, setDirty]);
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% stops being a typeable percentage —
+  // the custom "อื่นๆ" input points the rep at the checkbox instead. This message alone is only
+  // VISUAL, though: nothing here stops the state from being typed and saved (Opus review F2,
+  // 2026-09-16 — this comment used to claim the custom input "REJECTS" 0 and that "the backend
+  // does not refuse a typed 0 at all", and both were wrong. `onChange` below just writes whatever
+  // is typed, and DealQuotationService#submit's isZeroDeposit() gate refuses depositPercent === 0
+  // identically whether it arrived via this custom field or the checkbox — see
+  // #hasUnresolvedZeroDeposit a few lines down, which is the ACTUAL guard that now blocks ส่ง
+  // ขออนุมัติ for this exact state; this `depositZeroError` stays exactly what it always was, an
+  // inline hint on the input itself).
+  const depositZeroError = !terms.noDeposit && terms.depositPercentCustom
+    && terms.depositPercent !== '' && Number(terms.depositPercent) === 0
+    ? 'ถ้าไม่รับมัดจำ ให้ติ๊ก “ไม่รับมัดจำ” แทนการพิมพ์ 0'
+    : undefined;
   const [initializedFor, setInitializedFor] = useState(null);
   // Item completeness (M4/owner ruling 2026-09-10): which rows should show their per-field inline
   // red hints yet. A row seeded from the server (an existing DRAFT the rep reopened) is touched
@@ -319,6 +359,10 @@ export function QuotationEditorPage({ user, showToast }) {
   // always reflects every row, touched or not, since that is what the disabled บันทึกร่าง/
   // ส่งขออนุมัติ buttons are explaining.
   const [touchedRowIds, setTouchedRowIds] = useState(() => new Set());
+  // Bug fix (owner re-report 2026-09-16): lets the download flush (below) and submit's own
+  // pre-save await QuotationContactPicker's in-flight โทร./อีเมล save before reading/saving the
+  // quotation itself — see QuotationContactPicker's own `flushPendingContactSave` comment.
+  const contactPickerRef = useRef(null);
   const calcTimers = useRef({});
   // #H2: a per-row request sequence. Bumped once per `updateItem` call (i.e. once per debounce
   // restart, not once per fired request); a response is applied only if it still matches the
@@ -361,6 +405,10 @@ export function QuotationEditorPage({ user, showToast }) {
         offerDate: quotation.offerDate ?? todayIso(),
         depositPercent: quotation.depositPercent ?? '',
         depositPercentCustom: quotation.depositPercent != null && !DEPOSIT_PERCENT_PRESETS.includes(quotation.depositPercent),
+        // Item 4 ("ไม่รับมัดจำ", V181) — depositPercent === 0 is the ONE signal the server stores
+        // (see WastageCalculator's own comment); a null/other percentage is never "no deposit".
+        noDeposit: quotation.depositPercent === 0,
+        fullPaymentTerm: quotation.fullPaymentTerm ?? '',
         remainderMode: quotation.remainderMode ?? '', creditDays: quotation.creditDays ?? '',
         validityDays: quotation.validityDays ?? '', customerNotes: quotation.customerNotes ?? '',
         // V178: a stored NULL validityMode (every pre-V178 row) normalises to DAYS, same as the
@@ -505,6 +553,17 @@ export function QuotationEditorPage({ user, showToast }) {
   function applyPriceMode(priceMode, {
     prefill = true, documentLanguage = docSettings.documentLanguage, clearPrices = false,
   } = {}) {
+    // Review fix F1 (2026-09-16), narrowed by Option B (2026-09-16): English per-sqm WITH a box
+    // area cannot express a loose-piece quantity — the checkbox is disabled AND renders unchecked
+    // for that combination (roundToFullBoxDisabledReason, QuotationItemRow), so a row ticked under
+    // NET/TH before the switch had no on-screen control left to un-tick it, and
+    // validateQuotationItem's own checklist branch blocked บันทึกร่าง/ส่งขออนุมัติ forever. Reset
+    // the STORED flag back to `true` here, the moment the document reaches this mode AND the row
+    // already carries a box area (both changePriceMode and changeLanguage route through this
+    // function), so the state can never linger — matching itemInputFromRow's own wire-level force
+    // for the same reason. A row with NO box area keeps whatever roundToFullBox it already had —
+    // that combination is legal now, so resetting it would silently discard a rep's choice.
+    const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
     const next = (clearPrices ? rowsWithPricesCleared(items) : items).map((it) => {
       if (lineTypeOf(it) !== LINE_TYPE_TILE) return it;
       const carried = prefill && priceMode === 'DIRECT_NET'
@@ -512,7 +571,10 @@ export function QuotationEditorPage({ user, showToast }) {
         ? { directNetPrice: it.netUnitPrice } : {};
       // The previous mode's derived money is dropped until the new preview lands — see the
       // calc-error note above for why a stale net must never be shown under the new mode.
-      return { ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true };
+      return {
+        ...it, ...carried, netUnitPrice: null, lineAmount: null, specialPriceLine: null, calcPending: true,
+        ...(perSqm && Number(it.sqmPerBox) > 0 ? { roundToFullBox: true } : {}),
+      };
     });
     setItems(next);
     setDirty(true);
@@ -784,6 +846,23 @@ export function QuotationEditorPage({ user, showToast }) {
   const leadTimeBlockMessage = hasMissingLeadTimes
     ? `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}` : null;
 
+  // Item 4 ("ไม่รับมัดจำ", V181) + Opus review fix (2026-09-16, F2): mirrors
+  // DealQuotationService#submit's own gate (isZeroDeposit(depositPercent) &&
+  // isBlank(fullPaymentTerm)) — SUBMIT only, exactly like hasMissingLeadTimes above: a draft with
+  // this same shape still saves (buildQuotationChecklist's own FULL_PAYMENT_TERM check stays
+  // non-blocking for exactly that reason — DealQuotationService#create/#update accept it), only
+  // #submit refuses it. Previously only the "ไม่รับมัดจำ" checkbox (`terms.noDeposit`) was checked
+  // here; typing "0" into the custom "อื่นๆ" percent input while UNticked reaches the same
+  // depositPercent = 0 on save (buildUpsertPayload's own ternary) but was never gated at all — a
+  // rep hit the server's 400 with no warning beyond `depositZeroError`'s inline hint, which blocked
+  // nothing. #isEffectiveZeroDeposit (quotationMeta.js) is the ONE place both routes are recognised,
+  // shared with buildQuotationChecklist's own check below so the two can never disagree.
+  const hasUnresolvedZeroDeposit = isEffectiveZeroDeposit({
+    noDeposit: terms.noDeposit, depositPercentCustom: terms.depositPercentCustom, depositPercent: terms.depositPercent,
+  }) && (!terms.fullPaymentTerm || !terms.fullPaymentTerm.trim());
+  const zeroDepositBlockMessage = hasUnresolvedZeroDeposit
+    ? 'มัดจำ 0% ต้องเลือกเงื่อนไขการชำระเงินก่อนส่งขออนุมัติ' : null;
+
   // ── "ข้อมูลที่ยังไม่ครบ" (owner, 2026-09-11) ───────────────────────────────────────────────
   // ONE derivation (quotationMeta#buildQuotationChecklist) feeds three things: the checklist
   // panel, the disabled บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only — the set lives in
@@ -812,8 +891,6 @@ export function QuotationEditorPage({ user, showToast }) {
     projectName: checklistProjectName,
     contact,
     contactFieldId: isInlineCreate ? 'deal-contact' : 'quotation-contact',
-    terms,
-    designerFieldId: `${isInlineCreate ? 'inline-quotation' : 'quotation'}-designer-picker`,
     items,
     itemErrorsByRow,
     adjustments,
@@ -822,11 +899,24 @@ export function QuotationEditorPage({ user, showToast }) {
     // Wrong-way-round: a mode the language does not offer (none today — owner decision 2026-09-13
     // made SPECIAL_SQM available on English) stays unsaveable if some path ever reaches it.
     priceModeLanguageConflict: !availablePriceModes(docSettings.documentLanguage).some((opt) => opt.code === docSettings.priceMode),
-  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, terms, items, itemErrorsByRow,
-    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings]);
+    noDeposit: terms.noDeposit,
+    // Opus review fix (2026-09-16, F2): the checklist entry now recognises BOTH routes to
+    // depositPercent = 0 (the checkbox and a custom-typed "0") — see #isEffectiveZeroDeposit's own
+    // Javadoc in quotationMeta.js for why both must feed the SAME check.
+    depositPercentCustom: terms.depositPercentCustom,
+    depositPercent: terms.depositPercent,
+    fullPaymentTerm: terms.fullPaymentTerm,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, checklistProjectName, contact, items, itemErrorsByRow,
+    adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
+    terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
+  // D4 fix (Opus review 2026-09-16): same "latest value" mirror as `dirtyRef` above, and for the
+  // same reason -- handleDownload reads this across several `await`s and must never act on a
+  // value that went stale while it was suspended.
+  const hasValidationErrorsRef = useRef(hasValidationErrors);
+  useEffect(() => { hasValidationErrorsRef.current = hasValidationErrors; }, [hasValidationErrors]);
   /**
    * Whether to SHOW that checklist — separate from whether it exists, which still gates the save
    * buttons exactly as before.
@@ -857,9 +947,17 @@ export function QuotationEditorPage({ user, showToast }) {
     deptCode: terms.deptCode || null,
     unitCode: terms.unitCode || null,
     offerDate: terms.offerDate || null,
-    depositPercent: terms.depositPercent === '' ? null : Number(terms.depositPercent),
-    remainderMode: terms.remainderMode || null,
-    creditDays: terms.creditDays === '' ? null : Number(terms.creditDays),
+    // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): noDeposit always wins over whatever
+    // terms.depositPercent still holds from before the checkbox was ticked — depositPercent = 0 is
+    // the ONE signal the server reads as "no deposit" (mirrors DealQuotationService's own
+    // isZeroDeposit), so remainderMode/creditDays (irrelevant once there is no deposit to take a
+    // remainder of) go null and fullPaymentTerm carries the chosen term instead. The server
+    // enforces this same rule independently either way — this just avoids showing the rep briefly
+    // stale data before the next fetch.
+    depositPercent: terms.noDeposit ? 0 : (terms.depositPercent === '' ? null : Number(terms.depositPercent)),
+    remainderMode: terms.noDeposit ? null : (terms.remainderMode || null),
+    creditDays: terms.noDeposit ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
+    fullPaymentTerm: terms.noDeposit ? (terms.fullPaymentTerm || null) : null,
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
     // V178: validityDays is ALWAYS sent, in both modes (the days select keeps its last value even
     // while ระบุวันที่ is showing — see the toggle below) so DAYS mode has a real number to fall
@@ -882,6 +980,10 @@ export function QuotationEditorPage({ user, showToast }) {
     // able to correct it") — genuinely editable now, no "missing keeps stored": always sent
     // explicitly, blank included, same discipline as customerNotes just above.
     projectName: terms.projectName || null,
+    // Item 2 ("ไม่เติม “คุณ”", V180, owner ruling 2026-09-16) — always sent explicitly (same
+    // discipline as printedByDisplayId/projectName above): the checkbox is always rendered, so a
+    // full PUT always carries the payload's own current value, false included.
+    omitContactHonorific: !!terms.omitContactHonorific,
     // F1: still the FLAT items array the API has always taken, in group order — `items` is
     // already stored that way (see insertIntoGroup), so this is a plain map with no sort. Each
     // row's `locationLabel` is stamped from ITS GROUP, which is the only place that text lives
@@ -959,6 +1061,10 @@ export function QuotationEditorPage({ user, showToast }) {
   function rememberDefaults() {
     writeQuotationDefaults(user?.id, {
       depositPercent: terms.depositPercent,
+      // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): noDeposit/
+      // fullPaymentTerm are deliberately NOT sent here any more — see emptyTerms's own comment
+      // above and quotationPrefs.js's DEFAULT_TERM_FIELDS. Remembering noDeposit would make every
+      // later new quotation start with no deposit, which is the one thing this must never do.
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,
@@ -1043,6 +1149,42 @@ export function QuotationEditorPage({ user, showToast }) {
     },
   });
 
+  // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): the
+  // download handler (below) needs to know whether an update is ALREADY on the wire — from an
+  // autosave OR a manual บันทึกร่าง — so it can await the SAME request instead of firing a second,
+  // overlapping one. `runSave` is where autosave and บันทึกร่าง trigger `updateMutation` from here
+  // on, and both track this ref.
+  //
+  // D3 correction (Opus review 2026-09-16): the paragraph above used to also claim `runSave` is
+  // "the ONE place anything triggers `updateMutation`", which is not true — submitMutation's own
+  // mutationFn (below) issues its own pre-save PUT directly via `api.dealQuotations.update`,
+  // *outside* `runSave`. It is tracked in `pendingSaveRef` there too (assigned by hand, the same
+  // self-clearing shape `runSave` uses just below), specifically so a download flush racing a
+  // pending submit sees it and awaits it instead of firing a second, overlapping PUT. It is
+  // deliberately NOT routed through `runSave`/`updateMutation` itself: that would fire
+  // `updateMutation`'s own onSuccess/onError (an extra "บันทึกร่างแล้ว" toast on success, or a
+  // SECOND error toast alongside submitMutation's own onError on failure) — side effects submit's
+  // silent, atomic save-then-submit UX does not want. So `pendingSaveRef` is genuinely
+  // comprehensive (every PUT this page issues sets it), but it is not exclusively `runSave`'s.
+  const pendingSaveRef = useRef(null);
+  // The autosave debounce's own pending timer, if any — cleared by the download flush so a stale
+  // debounce firing mid-download can never race it (a second concurrent PUT while the flush's own
+  // save is already in flight).
+  const autosaveTimerRef = useRef(null);
+  const { mutateAsync: runUpdateAsync } = updateMutation;
+  const runSave = useCallback((auto) => {
+    const promise = runUpdateAsync(auto ? { auto: true } : undefined);
+    pendingSaveRef.current = promise;
+    // A separate handled chain off the SAME promise so an autosave/บันทึกร่าง caller that never
+    // awaits the return value (fire-and-forget, same as before this fix) does not surface as an
+    // unhandled rejection — updateMutation's own onError already toasts either way. A caller that
+    // DOES await `runSave(...)` directly (the download flush) still sees the real rejection.
+    promise.catch(() => {}).finally(() => {
+      if (pendingSaveRef.current === promise) pendingSaveRef.current = null;
+    });
+    return promise;
+  }, [runUpdateAsync]);
+
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
 
   const submitMutation = useMutation({
@@ -1057,9 +1199,28 @@ export function QuotationEditorPage({ user, showToast }) {
     // buildSaveRequest/applySavedQuotation exactly like updateMutation's own mutationFn/onSuccess,
     // so a submit's pre-save adopts server ids and clears `dirty` the same way an autosave would.
     mutationFn: async () => {
+      // Opus review fix (2026-09-16): a rep who blurs the ผู้สั่งซื้อ โทร./อีเมล field and
+      // immediately confirms submit could have THIS pre-save's PUT (below) reach the server before
+      // that field's own PUT commits — DealQuotationService#resolveContact re-reads the LIVE
+      // contact row, so whichever write lands first in Postgres decides what gets frozen into the
+      // submitted document. Awaiting the picker's own in-flight save first (a no-op promise when
+      // nothing is pending) guarantees that write has committed before this one reads it.
+      await contactPickerRef.current?.flushPendingContactSave?.();
       if (dirty) {
         const { payload, sentSeq, sentClientIds } = buildSaveRequest();
-        const saved = await api.dealQuotations.update(id, payload);
+        // D3 fix (Opus review 2026-09-16): tracked in `pendingSaveRef` by hand, the same
+        // self-clearing shape `runSave` uses — purely so a download flush racing this pre-save
+        // sees it via `pendingSaveRef.current` and awaits it instead of firing a second, overlapping
+        // PUT (DealQuotationService#resolveContact reads live state, so two concurrent writes can
+        // otherwise race each other into Postgres in either order). Deliberately NOT routed
+        // through `runSave`/`updateMutation` itself — see `pendingSaveRef`'s own comment above for
+        // why that would change submit's toasts.
+        const savePromise = api.dealQuotations.update(id, payload);
+        pendingSaveRef.current = savePromise;
+        savePromise.catch(() => {}).finally(() => {
+          if (pendingSaveRef.current === savePromise) pendingSaveRef.current = null;
+        });
+        const saved = await savePromise;
         queryClient.setQueryData(queryKeys.dealQuotationDetail(id), saved.quotation);
         applySavedQuotation(saved.quotation, sentSeq, sentClientIds);
         lastFailedAutoPayloadRef.current = null;
@@ -1114,7 +1275,7 @@ export function QuotationEditorPage({ user, showToast }) {
   const autoSaveEligible = Boolean(id) && dirty && !hasValidationErrors && !!quotation
     && isDealQuotationEditable(quotation) && canEditDealQuotation(user, quotation)
     && !submitConfirmOpen && !submitMutation.isPending;
-  const { mutate: runUpdate, isPending: updatePending } = updateMutation;
+  const { isPending: updatePending } = updateMutation;
   useEffect(() => {
     if (!autoSaveEligible || updatePending) return undefined;
     // #S4: the same payload that just failed is refused again with no further edit — see
@@ -1123,14 +1284,25 @@ export function QuotationEditorPage({ user, showToast }) {
       && JSON.stringify(buildUpsertPayload()) === lastFailedAutoPayloadRef.current) {
       return undefined;
     }
-    const timer = setTimeout(() => runUpdate({ auto: true }), AUTOSAVE_DELAY_MS);
-    return () => clearTimeout(timer);
+    // Bug fix (2026-09-16): the timer id is now also kept in `autosaveTimerRef` (not only this
+    // effect's own closure) so the download flush below can `clearTimeout` it directly — cancelling
+    // the debounce, per that fix's own brief, rather than letting a stale autosave possibly fire
+    // mid-download and race the flush's own save.
+    const timer = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      runSave(true);
+    }, AUTOSAVE_DELAY_MS);
+    autosaveTimerRef.current = timer;
+    return () => {
+      clearTimeout(timer);
+      if (autosaveTimerRef.current === timer) autosaveTimerRef.current = null;
+    };
     // `groups` feeds `labelByGroupId`, which buildUpsertPayload (via buildSaveRequest) reads for
     // every row's locationLabel — an edit that only renames a group must restart the debounce too.
     // `buildUpsertPayload` itself is listed for the #S4 backoff comparison above; it is a
     // useCallback keyed on exactly these same values, so listing both is redundant but harmless,
     // never a source of extra debounce restarts.
-  }, [autoSaveEligible, updatePending, runUpdate, items, adjustments, docSettings, terms, contact, groups, buildUpsertPayload]);
+  }, [autoSaveEligible, updatePending, runSave, items, adjustments, docSettings, terms, contact, groups, buildUpsertPayload]);
 
   // Owner ask 2026-09-10 ("inline deal creation"): the FIRST บันทึกร่าง on an inline-create visit
   // has to mint the ticket itself before there is anything to hang a quotation off of --
@@ -1183,7 +1355,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   function handleSaveDraft() {
-    if (id) updateMutation.mutate();
+    if (id) runSave(false);
     else if (isInlineCreate) handleInlineCreate();
     else createMutation.mutate();
   }
@@ -1252,9 +1424,102 @@ export function QuotationEditorPage({ user, showToast }) {
   });
 
   const [downloading, setDownloading] = useState(null);
+  // Shared by both refusal points in handleDownload below (D1 fix needs to check this twice — see
+  // that function's own comment for why).
+  function refuseDownloadForValidation() {
+    showToast('error', 'ยังดาวน์โหลดไม่ได้ — กรุณากรอกข้อมูลให้ครบก่อน');
+    const firstBlockingField = checklist.find((entry) => entry.blocking && entry.targetId);
+    if (firstBlockingField) {
+      focusQuotationField(firstBlockingField.targetId);
+    } else if (typeof document !== 'undefined') {
+      // No single field to focus (a checklist entry with no targetId, e.g. a duplicate
+      // ตำแหน่งติดตั้ง group) — scroll the whole checklist into view instead. `scrollIntoView`
+      // is optional-chained the same way focusQuotationField's own does: jsdom does not
+      // implement it.
+      document.querySelector('[data-testid="quotation-checklist"]')
+        ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }
+  }
+  /**
+   * Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): the
+   * PDF/XLSX are rendered fresh from the DB on every request (DealQuotationService), which can
+   * only ever be as fresh as the LAST successful save — an edit still sitting only in this
+   * editor's own state (autosave hasn't fired yet, or a save is still on the wire) was invisible
+   * to it, so a rep who edited a size/รหัสสินค้า and downloaded immediately kept seeing the OLD
+   * figures. On an editable (DRAFT, editable-by-this-user) quotation, download now flushes first:
+   *   1. Await the ผู้สั่งซื้อ picker's own in-flight โทร./อีเมล save, if any (same race submit's
+   *      pre-save now guards against — see that mutationFn's own comment).
+   *   2. Await whatever save is ALREADY in flight (autosave, a manual บันทึกร่าง, or submit's own
+   *      tracked pre-save — see pendingSaveRef's own comment), so this flush never overlaps it.
+   *   3. Cancel any pending autosave debounce (it would otherwise fire mid-flush and race the
+   *      save below) — done AFTER the two awaits above, not before, so a timer an edit schedules
+   *      DURING either of them is the one actually cancelled (see D4 below for why the order
+   *      matters).
+   *   4. Refuse — never download a stale PDF — only if there is unsaved work this flush cannot
+   *      save: blocking validation errors AND (the form is dirty OR a save was in flight). An
+   *      existing incomplete DRAFT that the rep has not touched (sent back for correction, or a
+   *      row missing ความหนา — ~41% of the catalogue lacks it) has nothing here to save, so it
+   *      still downloads the stored document exactly as before this fix (D1, Opus review
+   *      2026-09-16 — the earlier version of this fix refused ANY invalid form, even a clean one).
+   *   5. If still dirty, save once more — reusing `runSave`, the SAME update-mutation path
+   *      บันทึกร่าง/autosave already use, never a second save implementation. Re-checked against
+   *      the LIVE validation state right before this, in case an edit landed during step 2's
+   *      await and made the form newly invalid.
+   * A non-editable (submitted/approved/read-only) quotation is already frozen server-side, so it
+   * downloads exactly as before — nothing to flush.
+   *
+   * D4 correction (Opus review 2026-09-16): steps 4/5 above read `dirtyRef.current`/
+   * `hasValidationErrorsRef.current` (refs, always current), never the plain `dirty`/
+   * `hasValidationErrors` closure variables. This function is defined fresh on every render and
+   * closes over that render's values, but it keeps running (suspended at each `await`) across
+   * however many renders happen while it waits — an edit landing mid-flush used to re-render with
+   * `dirty: true`, yet THIS invocation's own frozen `dirty` closure stayed `false` from the click,
+   * silently skipping the save (and, worse, the debounced autosave that edit itself scheduled was
+   * then cancelled by step 3 with nothing left to reschedule it). Reading the refs instead means
+   * this function always acts on whatever is true right now, however many edits happened while it
+   * was suspended — the same edit that gets a fresh timer cancelled at step 3 is exactly the edit
+   * step 5's live `dirtyRef.current` check picks up and saves, so no separate "reschedule the
+   * cancelled timer" step is needed: it is folded into this flush's own save instead.
+   */
   async function handleDownload(format) {
+    if (downloading) return; // one flush+download in flight at a time — no double-fire
     setDownloading(format);
     try {
+      if (isEditable) {
+        await contactPickerRef.current?.flushPendingContactSave?.();
+        if (pendingSaveRef.current) {
+          // Already toasted by updateMutation's own onError if it fails — fall through to the
+          // live dirty/validation checks below rather than assume it succeeded.
+          await pendingSaveRef.current.catch(() => {});
+        }
+        // D4: cancel whatever autosave timer is pending NOW, after both awaits above — see this
+        // function's own header comment for why the timing matters.
+        if (autosaveTimerRef.current) {
+          clearTimeout(autosaveTimerRef.current);
+          autosaveTimerRef.current = null;
+        }
+        // D1: only refuse when there is unsaved work this flush cannot save.
+        if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
+          refuseDownloadForValidation();
+          return;
+        }
+        if (dirtyRef.current) {
+          // D4: re-checked here (not just above) in case an edit landed during the pendingSaveRef
+          // await and made the form newly invalid.
+          if (hasValidationErrorsRef.current) {
+            refuseDownloadForValidation();
+            return;
+          }
+          try {
+            await runSave(false);
+          } catch {
+            // D2: updateMutation's own onError already toasted this failure — showing it again
+            // from the outer catch below would stack a second, identical toast. Returning here
+            // (rather than rethrowing) skips the download without re-toasting.
+            return;
+          }
+        }
+      }
       const blob = format === 'pdf' ? await api.dealQuotations.downloadPdf(id) : await api.dealQuotations.downloadXlsx(id);
       downloadBlob(blob, quotation?.number ?? 'quotation', format);
     } catch (error) {
@@ -1346,8 +1611,28 @@ export function QuotationEditorPage({ user, showToast }) {
           <>
             {quotation ? (
               <>
-                <Button variant="secondary" disabled={downloading === 'pdf'} onClick={() => handleDownload('pdf')}>ดาวน์โหลด PDF</Button>
-                <Button variant="secondary" disabled={downloading === 'xlsx'} onClick={() => handleDownload('xlsx')}>ดาวน์โหลด Excel</Button>
+                {/* Bug fix (2026-09-16): `loading` shows the busy spinner on whichever format was
+                    actually clicked; `disabled` (with no spinner) covers the OTHER button while a
+                    flush+download is already running, so a second click can never fire a second,
+                    overlapping save+download. Same Tailwind Button primitive as everywhere else —
+                    no layout shift, and the spinner is an overlay (Button.jsx), so the header
+                    action bar's width/height on mobile is unaffected either way. */}
+                <Button
+                  variant="secondary"
+                  loading={downloading === 'pdf'}
+                  disabled={downloading != null && downloading !== 'pdf'}
+                  onClick={() => handleDownload('pdf')}
+                >
+                  ดาวน์โหลด PDF
+                </Button>
+                <Button
+                  variant="secondary"
+                  loading={downloading === 'xlsx'}
+                  disabled={downloading != null && downloading !== 'xlsx'}
+                  onClick={() => handleDownload('xlsx')}
+                >
+                  ดาวน์โหลด Excel
+                </Button>
               </>
             ) : null}
             {quotation && canSubmitDealQuotation(user, quotation) ? (
@@ -1357,8 +1642,8 @@ export function QuotationEditorPage({ user, showToast }) {
                 // handleInlineCreate — the same three `saving` already covers), so a rep cannot
                 // open the confirm dialog and submit while an autosave the dialog hasn't had a
                 // chance to suppress yet is still on the wire.
-                disabled={hasValidationErrors || hasMissingLeadTimes || saving}
-                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? undefined)}
+                disabled={hasValidationErrors || hasMissingLeadTimes || hasUnresolvedZeroDeposit || saving}
+                title={hasValidationErrors ? validationErrors.join(' ') : (leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined)}
                 onClick={() => setSubmitConfirmOpen(true)}
               >
                 ส่งขออนุมัติ
@@ -1413,7 +1698,7 @@ export function QuotationEditorPage({ user, showToast }) {
             // nothing to summarize until the first บันทึกร่าง mints the ticket.
             <>
               <DealCustomerCard
-                value={{ ...dealForm, contact }}
+                value={{ ...dealForm, contact, omitContactHonorific: terms.omitContactHonorific }}
                 onChange={updateDealForm}
                 errors={{
                   customer: showValidationSummary && !dealForm.customer ? 'กรุณาเลือกลูกค้า' : undefined,
@@ -1497,6 +1782,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     diverge between the two. Prefilled from the deal's own contact (see the init
                     effect) and changeable from here. */}
                 <QuotationContactPicker
+                  ref={contactPickerRef}
                   customerId={contactCustomerId}
                   customerName={customerName}
                   value={contact}
@@ -1505,6 +1791,8 @@ export function QuotationEditorPage({ user, showToast }) {
                   error={contactError}
                   showToast={showToast}
                   idPrefix="quotation-contact"
+                  omitContactHonorific={terms.omitContactHonorific}
+                  onChangeOmitContactHonorific={(next) => { setTerms((t) => ({ ...t, omitContactHonorific: next })); setDirty(true); }}
                 />
                 <QuotationDealFields
                   terms={terms}
@@ -1760,44 +2048,92 @@ export function QuotationEditorPage({ user, showToast }) {
               >
                 <input id="offerDate" type="date" value={terms.offerDate} onChange={(e) => { setTerms((t) => ({ ...t, offerDate: e.target.value })); setDirty(true); }} />
               </FormField>
-              <FormField label="มัดจำ %" htmlFor="depositPercent">
-                <div className="flex flex-wrap gap-2">
-                  {DEPOSIT_PERCENT_PRESETS.map((pct) => (
-                    <button
-                      key={pct}
-                      type="button"
-                      aria-pressed={!terms.depositPercentCustom && Number(terms.depositPercent) === pct}
-                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                      onClick={() => { setTerms((t) => ({ ...t, depositPercent: pct, depositPercentCustom: false })); setDirty(true); }}
-                    >
-                      {pct}%
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    aria-pressed={terms.depositPercentCustom}
-                    className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
-                    onClick={() => { setTerms((t) => ({ ...t, depositPercentCustom: true })); setDirty(true); }}
+              {/* Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% is no longer a percentage
+                  a rep types — the custom input below REJECTS it (see depositZeroError) — so a
+                  document with no deposit ticks this box instead. Ticking swaps out BOTH the %
+                  chips/custom input AND the ส่วนที่เหลือ controls (a remainder is meaningless once
+                  there is no deposit) for the fixed เงื่อนไขการชำระเงิน select. Label/htmlFor swap
+                  with it, so the one FormField always names whichever control it currently shows. */}
+              <FormField
+                label={terms.noDeposit ? 'เงื่อนไขการชำระเงิน' : 'มัดจำ %'}
+                htmlFor={terms.noDeposit ? 'fullPaymentTerm' : 'depositPercent'}
+                error={terms.noDeposit ? undefined : depositZeroError}
+              >
+                <label
+                  htmlFor="noDeposit"
+                  className="mb-2 flex min-h-[38px] w-fit cursor-pointer items-center gap-2 rounded-md px-1 py-1 mobile:min-h-[44px] mobile:py-2"
+                >
+                  <input
+                    id="noDeposit"
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0"
+                    checked={terms.noDeposit}
+                    onChange={(e) => {
+                      const noDeposit = e.target.checked;
+                      // Unticking clears fullPaymentTerm (it is about to become meaningless again,
+                      // and would otherwise resurface stale if the rep re-ticks the box later);
+                      // ticking leaves depositPercent/remainderMode/creditDays alone on screen —
+                      // #buildUpsertPayload is what actually forces them to 0/null on save, so
+                      // re-unticking mid-edit still shows the rep's last typed values, not blanks.
+                      setTerms((t) => ({ ...t, noDeposit, fullPaymentTerm: noDeposit ? t.fullPaymentTerm : '' }));
+                      setDirty(true);
+                    }}
+                  />
+                  <span className="text-xs font-bold">ไม่รับมัดจำ</span>
+                </label>
+                {terms.noDeposit ? (
+                  <select
+                    id="fullPaymentTerm"
+                    className="w-full"
+                    value={terms.fullPaymentTerm}
+                    onChange={(e) => { setTerms((t) => ({ ...t, fullPaymentTerm: e.target.value })); setDirty(true); }}
                   >
-                    อื่นๆ
-                  </button>
-                  {terms.depositPercentCustom ? (
-                    <input
-                      id="depositPercent"
-                      type="number"
-                      className="w-20"
-                      value={terms.depositPercent}
-                      onChange={(e) => { setTerms((t) => ({ ...t, depositPercent: e.target.value })); setDirty(true); }}
-                    />
-                  ) : null}
-                </div>
+                    <option value="">- เลือกเงื่อนไข -</option>
+                    {FULL_PAYMENT_TERM_OPTIONS.map((opt) => (
+                      <option key={opt.code} value={opt.code}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {DEPOSIT_PERCENT_PRESETS.map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        aria-pressed={!terms.depositPercentCustom && Number(terms.depositPercent) === pct}
+                        className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${!terms.depositPercentCustom && Number(terms.depositPercent) === pct ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                        onClick={() => { setTerms((t) => ({ ...t, depositPercent: pct, depositPercentCustom: false })); setDirty(true); }}
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      aria-pressed={terms.depositPercentCustom}
+                      className={`min-h-[38px] mobile:min-h-[44px] rounded-md border px-3 text-xs font-bold ${terms.depositPercentCustom ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface'}`}
+                      onClick={() => { setTerms((t) => ({ ...t, depositPercentCustom: true })); setDirty(true); }}
+                    >
+                      อื่นๆ
+                    </button>
+                    {terms.depositPercentCustom ? (
+                      <input
+                        id="depositPercent"
+                        type="number"
+                        className="w-20"
+                        value={terms.depositPercent}
+                        onChange={(e) => { setTerms((t) => ({ ...t, depositPercent: e.target.value })); setDirty(true); }}
+                      />
+                    ) : null}
+                  </div>
+                )}
               </FormField>
               {/* No `htmlFor`: ส่วนที่เหลือ is a SET of toggle buttons, not one control. The label
                   used to point at `remainderMode`, an id that belongs to the เครดิต day-count
                   input below — which is a different field with a different meaning, and which only
                   exists at all while CREDIT is selected, so for the other modes the label pointed
                   at nothing. `role="group"` + aria-label is how a group of controls carries one
-                  name; the day input now carries its own. */}
+                  name; the day input now carries its own. Hidden entirely under "ไม่รับมัดจำ" — a
+                  remainder is meaningless once there is no deposit to take a remainder of. */}
+              {terms.noDeposit ? null : (
               <FormField label="ส่วนที่เหลือ">
                 <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ส่วนที่เหลือ">
                   {REMAINDER_MODE_OPTIONS.map((opt) => (
@@ -1833,6 +2169,7 @@ export function QuotationEditorPage({ user, showToast }) {
                   ) : null}
                 </div>
               </FormField>
+              )}
               {/* V178 (owner ruling 2026-09-14): ระบุวันที่ ("กำหนดวันที่ได้") is a SECOND way to
                   say กำหนดยืนยันราคา, for when a promotion or a factory allocation needs an exact
                   deadline rather than "N days from now" — but it only makes sense on a document
@@ -2005,10 +2342,10 @@ export function QuotationEditorPage({ user, showToast }) {
                 variant="primary"
                 loading={submitMutation.isPending}
                 // #7: defensive — the opening button above is already disabled while
-                // `hasMissingLeadTimes`, so this only matters if an edit made mid-dialog removed a
-                // lead time the rep had entered.
-                disabled={saving || hasMissingLeadTimes}
-                title={leadTimeBlockMessage ?? undefined}
+                // `hasMissingLeadTimes`/`hasUnresolvedZeroDeposit`, so this only matters if an edit
+                // made mid-dialog removed a lead time or re-typed a 0% deposit.
+                disabled={saving || hasMissingLeadTimes || hasUnresolvedZeroDeposit}
+                title={leadTimeBlockMessage ?? zeroDepositBlockMessage ?? undefined}
                 onClick={() => submitMutation.mutate()}
               >
                 ส่งขออนุมัติ
@@ -2017,12 +2354,17 @@ export function QuotationEditorPage({ user, showToast }) {
           )}
         >
           <p>ส่งใบเสนอราคา {quotation?.number} ให้ผู้จัดการฝ่ายขายหรือผู้บริหารอนุมัติ ต้องการดำเนินการต่อหรือไม่</p>
-          {/* #7: unlike checklistWarnings below, this ONE genuinely blocks — the opening button is
-              disabled while it is true, so this only shows if the dialog was already open when a
-              concurrent edit removed a lead time. */}
+          {/* #7: unlike checklistWarnings below, these TWO genuinely block — the opening button is
+              disabled while either is true, so they only show if the dialog was already open when
+              a concurrent edit removed a lead time or re-typed a 0% deposit. */}
           {leadTimeBlockMessage ? (
             <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
               {leadTimeBlockMessage}
+            </p>
+          ) : null}
+          {zeroDepositBlockMessage ? (
+            <p role="alert" className="mt-3 rounded-md border border-danger-border bg-danger/10 p-3 text-xs text-danger">
+              {zeroDepositBlockMessage}
             </p>
           ) : null}
           {/* The optional gaps, restated at the moment of sending — never a blocker (see

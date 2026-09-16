@@ -1149,6 +1149,34 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     expect(document.getElementById('validityDays')).toHaveProperty('value', '45');
   });
 
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): wrong-way-round case.
+  // Ticking "ไม่รับมัดจำ" on one quotation must NOT make the NEXT new quotation start that way —
+  // that would be a rep sending a quotation with no deposit by accident. Contrast with the test
+  // just above: depositPercent/validityMode DO carry over, noDeposit deliberately never does.
+  it('a new quotation does NOT start with no-deposit even after the previous quotation used it', async () => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    const first = renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    await fillCompleteQuotationItem();
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    renderEditor('/quotations/new?ticket=18');
+
+    await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ });
+    // The normal deposit controls are back: unticked checkbox, % chips visible, no payment-term
+    // dropdown.
+    expect(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }).checked).toBe(false);
+    expect(screen.getByRole('button', { name: '30%' })).not.toBeNull();
+    expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
+  });
+
   // The whole prefs layer must degrade silently: the ACCESSOR itself throws in a private window,
   // so a bare read would take the editor down rather than starting from the app defaults.
   it('renders normally when localStorage throws on every access', async () => {
@@ -1240,4 +1268,127 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     await new Promise((resolve) => { setTimeout(resolve, 2600); });
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
   }, 10000);
+});
+
+// ── Item 2 ("ไม่เติม “คุณ”", V180) + Item 4 ("ไม่รับมัดจำ", V181) — owner ruling 2026-09-16 ──────
+describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-09-16)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.customers.contacts.mockResolvedValue({ contacts: CONTACT_OPTIONS });
+    api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
+  });
+
+  function existingDraftWithOneItem(overrides = {}) {
+    return baseQuotation({
+      contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล',
+      items: [groupedItem(0, 'ชั้น 1', 'Trilogy')],
+      ...overrides,
+    });
+  }
+
+  it('"ไม่เติม “คุณ”" checkbox defaults unticked and sends false on save', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    const checkbox = await screen.findByRole('checkbox', { name: /ไม่เติม/ });
+    expect(checkbox.checked).toBe(false);
+
+    // Dirty the form some OTHER way (ticking a checkbox that is already unticked would be a no-op
+    // patch) so บันทึกร่าง has something to send.
+    fireEvent.change(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/), { target: { value: 'ชั้น 1 - โซน A' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.update.mock.calls[0][1].omitContactHonorific).toBe(false);
+  });
+
+  it('ticking "ไม่เติม “คุณ”" sends true on save', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /ไม่เติม/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.update.mock.calls[0][1].omitContactHonorific).toBe(true);
+  });
+
+  it('ticking "ไม่รับมัดจำ" hides the % chips and ส่วนที่เหลือ, and shows the three payment terms', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    expect(screen.getByRole('group', { name: 'ส่วนที่เหลือ' })).not.toBeNull();
+    expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+
+    expect(screen.queryByRole('button', { name: '30%' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '50%' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'ส่วนที่เหลือ' })).toBeNull();
+    const select = screen.getByLabelText('เงื่อนไขการชำระเงิน');
+    expect(within(select).getAllByRole('option')).toHaveLength(4); // placeholder + 3 terms
+  });
+
+  it('saving with "ไม่รับมัดจำ" ticked sends depositPercent 0, clears remainderMode/creditDays, and sends the chosen term', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    api.dealQuotations.update.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    const payload = api.dealQuotations.update.mock.calls[0][1];
+    expect(payload.depositPercent).toBe(0);
+    expect(payload.remainderMode).toBeNull();
+    expect(payload.creditDays).toBeNull();
+    expect(payload.fullPaymentTerm).toBe('ON_DELIVERY');
+  });
+
+  // This is the ONLY thing this change leaves untouched (task scope: prefs, not editing). An
+  // existing quotation always loads its own server-stored terms regardless of what is (or is not)
+  // remembered for a NEW quotation — noDeposit here comes from `quotation.depositPercent === 0`,
+  // never from quotationPrefs.js.
+  it('loading an existing quotation saved with depositPercent 0 restores the ticked checkbox and its chosen term', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: existingDraftWithOneItem({ depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY' }),
+    });
+    renderEditor('/quotations/5');
+
+    const checkbox = await screen.findByRole('checkbox', { name: /ไม่รับมัดจำ/ });
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByLabelText('เงื่อนไขการชำระเงิน')).toHaveProperty('value', 'ON_DELIVERY');
+    expect(screen.queryByRole('button', { name: '30%' })).toBeNull();
+  });
+
+  it('typing 0 into the custom "อื่นๆ" มัดจำ input is rejected with a message pointing at the checkbox', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
+
+    expect(screen.getByText('ถ้าไม่รับมัดจำ ให้ติ๊ก “ไม่รับมัดจำ” แทนการพิมพ์ 0')).not.toBeNull();
+  });
+
+  it('a positive custom มัดจำ value (not 0) shows no rejection message', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: existingDraftWithOneItem() });
+    renderEditor('/quotations/5');
+
+    await screen.findByRole('button', { name: '30%' });
+    fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
+    fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '15' } });
+
+    expect(screen.queryByText('ถ้าไม่รับมัดจำ ให้ติ๊ก “ไม่รับมัดจำ” แทนการพิมพ์ 0')).toBeNull();
+  });
 });

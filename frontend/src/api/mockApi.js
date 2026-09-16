@@ -4992,10 +4992,18 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
       : 0;
   const piecesAfterWastage = piecesBeforeWastage + wastageExtra;
   const piecesPerBox = Number(input.piecesPerBox) || 0;
+  // Owner-approved "sell loose pieces" (2026-09-16, V182) — mirrors WastageCalculator.Input#
+  // roundToFullBox: null/undefined reads as true (today's only prior behaviour). false skips the
+  // ceil-to-box-multiple step entirely; piecesFinal is then the wastage-adjusted count, unrounded.
+  const roundToFullBox = input.roundToFullBox !== false;
   const piecesFinal = piecesPerBox > 0
-    ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox
+    ? (roundToFullBox ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox : piecesAfterWastage)
     : piecesAfterWastage;
-  const boxes = piecesPerBox > 0 ? piecesFinal / piecesPerBox : null;
+  const boxes = piecesPerBox > 0 ? Math.floor(piecesFinal / piecesPerBox) : null;
+  // The frontend's own arithmetic (not a wire field — see DealQuotationItemDto's Javadoc on
+  // roundToFullBox): the remainder that does not make a full box. Always 0 when roundToFullBox is
+  // true (piecesFinal is then itself a multiple of piecesPerBox).
+  const loosePieces = piecesPerBox > 0 ? piecesFinal - boxes * piecesPerBox : null;
   const unitPrice = Number(input.unitPrice) || 0;
   const discountPct = Number(input.discountPct) || 0;
   const netUnitPrice = round2(unitPrice * (1 - discountPct / 100));
@@ -5019,13 +5027,63 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     : en
       ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} pcs allowance`)
       : (wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`);
-  const qtyText = en
-    ? (quantityMode === 'PIECES'
-      ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`
-      : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}, rounded up to full boxes = ${piecesFinal} pcs)`)
-    : (quantityMode === 'PIECES'
-      ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`
-      : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText} และปัดลงกล่อง = ${piecesFinal} แผ่น)`);
+  const hasWastage = wastageMode !== 'NONE' && wastageValue !== 0;
+  const hasBox = piecesPerBox > 0;
+  let qtyText;
+  if (hasBox && !roundToFullBox) {
+    // Owner-approved "sell loose pieces" — mirrors DealQuotationLines#thaiLoosePiecesLine/
+    // #englishLoosePiecesLine: the intermediate "= N pcs/แผ่น" clause prints only when it says
+    // something the box/loose split does not already say on its own (wastage moved the number,
+    // AND there is a full-box count to split it from); loose=0 drops the "+ N" tail; boxes=0 drops
+    // the box wording entirely.
+    const base = quantityMode === 'PIECES'
+      ? (en ? `Quantity ${piecesBeforeWastage} pcs${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
+      : (en
+        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}`
+        : `พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}`);
+    let tail = '';
+    if (hasWastage && boxes > 0) {
+      tail += en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`;
+    }
+    if (boxes > 0 && loosePieces > 0) {
+      tail += en
+        ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'} + ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}`
+        : ` = ${boxes} กล่อง + ${loosePieces} แผ่น`;
+    } else if (boxes > 0) {
+      tail += en ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'}` : ` = ${boxes} กล่อง`;
+    } else {
+      tail += en ? ` = ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}` : ` = ${loosePieces} แผ่น`;
+    }
+    qtyText = `(${base}${tail})`;
+  } else {
+    // Owner decision (2026-09-16): the Thai default was "และปัดลงกล่อง" ("rounded DOWN") — wrong
+    // about its own direction, since this ceils; corrected to "และปัดขึ้นเต็มกล่อง" ("rounded UP
+    // to a full box"), mirroring DealQuotationLines' own correction. English already said "rounded
+    // up to full boxes" and is unchanged.
+    //
+    // F1 fix (2026-09-16 review): this branch used to print BOTH the rounding wording AND the
+    // trailing "= N" clause unconditionally, even with NO piecesPerBox at all -- e.g.
+    // "(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 32 แผ่น)" with no box data whatsoever, a nonsensical
+    // rounding claim AND a pure echo of the count already stated. Mirrors
+    // DealQuotationLines#calculationLine's own default-branch fix: the rounding phrase prints only
+    // when there IS a box (hasBox), and the trailing "= N" clause prints only when box rounding or
+    // wastage may actually have moved piecesFinal away from piecesBeforeWastage (hasBox ||
+    // hasWastage) -- see DealQuotationLinesTest's "F1" section for the exact production-bug shapes
+    // this closes on the backend side.
+    const roundingPart = hasBox
+      ? (en ? ', rounded up to full boxes' : ' และปัดขึ้นเต็มกล่อง')
+      : '';
+    const echoTail = hasBox || hasWastage
+      ? (en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`)
+      : '';
+    qtyText = en
+      ? (quantityMode === 'PIECES'
+        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`
+        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`)
+      : (quantityMode === 'PIECES'
+        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`
+        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`);
+  }
   const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;
 
@@ -5038,6 +5096,7 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     piecesAfterWastage,
     piecesFinal,
     boxes,
+    roundToFullBox,
     netUnitPrice,
     lineAmount,
     descriptionLine,
@@ -5117,13 +5176,25 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
     ...tile, ...v3Nulls, lineType: 'TILE', quantity: tile.piecesFinal, unit: documentLanguage === 'EN' ? 'PCS' : 'แผ่น',
   };
   if (priceMode === 'SPECIAL_SQM' && documentLanguage === 'EN') {
-    // English per-sqm — the RULE is mirrored (no box data → 400, never a pieces fallback), the
-    // quantity/amount MATH is not (boxes × ตร.ม./กล่อง is the server's; null here, and said so).
-    const missing = [];
-    if (!(Number(input.piecesPerBox) >= 1)) missing.push('แผ่น/กล่อง');
-    if (!(Number(input.sqmPerBox) > 0)) missing.push('ตร.ม./กล่อง');
-    if (missing.length) {
-      fail(`ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ ${missing.join(' และ ')}`, 400);
+    // English per-sqm — the RULE is mirrored, never the quantity/amount MATH (boxes × ตร.ม./กล่อง,
+    // or pieces × ตร.ม./แผ่น — both the server's; null here, and said so).
+    //
+    // Option B (owner decision, 2026-09-16): a box area (ตร.ม./กล่อง) is now OPTIONAL —
+    //   - WITH one: both box figures are still required (a partially-filled pair is refused —
+    //     you cannot count boxes without pieces per box) and roundToFullBox must stay true (a
+    //     box-area quantity has no "loose pieces" term to express). Byte-identical to before.
+    //   - WITHOUT one: แผ่น/กล่อง and roundToFullBox are both free, exactly like any other tile
+    //     row without a pieces-per-box.
+    // Mirrors DealQuotationService#buildTileItem's `hasBoxArea` branching, not its own private
+    // helper names.
+    const hasBoxArea = Number(input.sqmPerBox) > 0;
+    if (hasBoxArea) {
+      if (!(Number(input.piecesPerBox) >= 1)) {
+        fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) คิดจำนวนจากกล่อง จึงต้องระบุ แผ่น/กล่อง', 400);
+      }
+      if (input.roundToFullBox === false) {
+        fail('ราคาต่อ ตร.ม. (เอกสารภาษาอังกฤษ) ที่ระบุ ตร.ม./กล่อง ต้องปัดขึ้นเต็มกล่องเสมอ ไม่รองรับการขายแผ่นไม่เต็มกล่อง', 400);
+      }
     }
     const price = input.specialPriceSqm == null ? null : round2(Number(input.specialPriceSqm));
     return {
@@ -5131,7 +5202,9 @@ function computeDealQuotationV3Line(input = {}, priceMode = 'NET', documentLangu
       specialPriceSqm: price, discountPct: null, unitPrice: price, netUnitPrice: price,
       unit: 'SQM', quantity: null, lineAmount: null,
       calculationLine: `${tile.calculationLine} ${MOCK_NOT_COMPUTED}`,
-      specialPriceLine: `(1 box = ${Number(input.piecesPerBox).toLocaleString('en-US')} pcs = ${Number(input.sqmPerBox)} sqm)`,
+      specialPriceLine: hasBoxArea
+        ? `(1 box = ${Number(input.piecesPerBox).toLocaleString('en-US')} pcs = ${Number(input.sqmPerBox)} sqm)`
+        : null,
     };
   }
   if (priceMode === 'SPECIAL_SQM') {
@@ -5189,6 +5262,35 @@ function resolveDealQuotationV3Header(payload, current = null) {
   // (The SPECIAL_SQM-on-English refusal is gone — owner decision 2026-09-13; see
   // DealQuotationService's per-sqm branch and computeDealQuotationV3Line below.)
   return { priceMode, documentLanguage, currency };
+}
+
+/**
+ * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — mirrors
+ * DealQuotationService#isZeroDeposit/#resolveFullPaymentTerm exactly: `depositPercent === 0` is
+ * the ONE signal for "no deposit" (null/undefined defaults to 30% elsewhere — see
+ * DealQuotationRenderAdapter#depositLine — so it is NOT the same as zero).
+ * remainderMode/creditDays are forced null on a zero-deposit document (irrelevant once there is
+ * no deposit to take a remainder of) and fullPaymentTerm is forced null on any OTHER deposit
+ * percentage, so a rep who unticks "ไม่รับมัดจำ" and re-enters an ordinary percentage can never
+ * leave a stale term attached. An unrecognised code 400s here, before the row is ever touched —
+ * same three codes WastageCalculator's FULL_PAYMENT_TERM_* constants declare. Called identically
+ * by create/update — a full PUT always carries the payload's own depositPercent, so there is no
+ * "missing keeps stored" case to thread through a `current` row, unlike
+ * resolveDealQuotationValidity above.
+ */
+function resolveDealQuotationDepositTerms(payload) {
+  const depositPercent = payload.depositPercent ?? null;
+  const noDeposit = depositPercent === 0;
+  const remainderMode = noDeposit ? null : (payload.remainderMode ?? null);
+  const creditDays = noDeposit ? null : (payload.creditDays ?? null);
+  let fullPaymentTerm = null;
+  if (noDeposit) {
+    fullPaymentTerm = payload.fullPaymentTerm ? String(payload.fullPaymentTerm).trim() : null;
+    if (fullPaymentTerm && !['BEFORE_DELIVERY', 'ON_DELIVERY', 'ON_OR_BEFORE_DELIVERY'].includes(fullPaymentTerm)) {
+      fail('ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY', 400);
+    }
+  }
+  return { depositPercent, remainderMode, creditDays, fullPaymentTerm };
 }
 
 /**
@@ -5291,6 +5393,10 @@ function buildDealQuotationDto(row) {
     contactName: row.contactName,
     contactPhone: row.contactPhone ?? null,
     contactEmail: row.contactEmail ?? null,
+    // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16): NOT NULL DEFAULT FALSE on the real
+    // column — a stored/never-set value normalises to false here, same device as priceMode/
+    // documentLanguage above. Mirrors DealQuotationDto#omitContactHonorific.
+    omitContactHonorific: row.omitContactHonorific ?? false,
     projectName: row.projectName,
     deptCode: row.deptCode,
     unitCode: row.unitCode,
@@ -5298,6 +5404,10 @@ function buildDealQuotationDto(row) {
     depositPercent: row.depositPercent,
     remainderMode: row.remainderMode,
     creditDays: row.creditDays,
+    // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): null on every row that predates this
+    // feature and on every row whose depositPercent is not exactly 0 — mirrors
+    // DealQuotationDto#fullPaymentTerm / DealQuotationService#resolveFullPaymentTerm.
+    fullPaymentTerm: row.fullPaymentTerm ?? null,
     validityDays: row.validityDays,
     validityDate: row.validityDate,
     // V178: never null on the wire — a stored null normalises to DAYS, as the DTO does.
@@ -12274,9 +12384,7 @@ export const api = {
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? now.slice(0, 10),
-        depositPercent: payload.depositPercent ?? null,
-        remainderMode: payload.remainderMode ?? null,
-        creditDays: payload.creditDays ?? null,
+        ...resolveDealQuotationDepositTerms(payload),
         validityDays: payload.validityDays ?? null,
         validityMode, validityUntil,
         validityDate: null,
@@ -12285,6 +12393,9 @@ export const api = {
         // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Item 2 (V180, "ไม่เติม “คุณ”", owner ruling 2026-09-16) — UNticked is the only behaviour
+        // on CREATE, same device as DealQuotationService#create.
+        omitContactHonorific: payload.omitContactHonorific === true,
         items,
         createdAt: now, updatedAt: now,
       };
@@ -12319,9 +12430,7 @@ export const api = {
         deptCode: payload.deptCode ?? null,
         unitCode: payload.unitCode ?? null,
         offerDate: payload.offerDate ?? null,
-        depositPercent: payload.depositPercent ?? null,
-        remainderMode: payload.remainderMode ?? null,
-        creditDays: payload.creditDays ?? null,
+        ...resolveDealQuotationDepositTerms(payload),
         validityDays: payload.validityDays ?? null,
         validityMode, validityUntil,
         customerNotes: payload.customerNotes ?? null,
@@ -12334,6 +12443,9 @@ export const api = {
         // name"), so there is no "missing keeps stored" fallback here either.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
+        // Item 2 (V180) — same DIRECT-assignment discipline: the editor always sends its CURRENT
+        // value (the checkbox is always rendered), so a missing/false value clears it.
+        omitContactHonorific: payload.omitContactHonorific === true,
         // Opus review fix (2026-09-14): was missing entirely, so editing โครงการ silently never
         // persisted under VITE_USE_MOCKS=true -- CLAUDE.md's "mock omits a field the feature keys
         // on" shape. Same #M7 DIRECT-assignment discipline as every other field in this
@@ -12377,6 +12489,12 @@ export const api = {
       // F2: submit REQUIRES a ผู้สั่งซื้อ too, not just create/update -- a pre-V167 row can carry
       // none, and that document cannot go for approval with an empty signature slot.
       if (row.contactId == null) fail('กรุณาระบุผู้สั่งซื้อ', 400);
+      // Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): a zero-deposit document must name a
+      // payment term before an approver ever sees it -- create/update allow a DRAFT with none
+      // chosen yet. Mirrors DealQuotationService#submit exactly.
+      if (row.depositPercent === 0 && !row.fullPaymentTerm) {
+        fail('กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน', 400);
+      }
       // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
       // date before the quotation's OWN date, so this is the re-check against TODAY, the last
       // gate before an approver ever sees the document. Mirrors DealQuotationService#submit.

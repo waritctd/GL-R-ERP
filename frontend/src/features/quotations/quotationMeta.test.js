@@ -22,6 +22,7 @@ import {
   LINE_TYPE_PLAIN,
   LINE_TYPE_TILE,
   listPricePerSqmIncVat,
+  parseSizeText,
   piecesPerSqmFromSqmPerPiece,
   quotationItemMissingSummary,
   remainderModeLabel,
@@ -542,6 +543,154 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
   });
 });
 
+// ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่
+// PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are ALSO
+// asserted, verbatim, in backend/src/test/java/.../DealQuotationLinesTest.java's own
+// "SHARED GRAMMAR vector table" section, against `DealQuotationLines#parseTwoDimensions`. The two
+// must never drift apart again without both going red.
+describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
+  it('basic separators and case', () => {
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30*60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30 X 60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30×60')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('english units, per-number or trailing', () => {
+    expect(parseSizeText('30x60cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30 cm x 60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('300x600mm')).toEqual({ width: 300, height: 600, unit: 'mm' });
+    expect(parseSizeText('600x600mm')).toEqual({ width: 600, height: 600, unit: 'mm' });
+  });
+
+  it('thai units (ซม / ซม. / ซ.ม.)', () => {
+    expect(parseSizeText('30x60 ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30ซม.x60ซม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60 ซ.ม.')).toEqual({ width: 30, height: 60, unit: 'cm' });
+  });
+
+  it('decimal comma, ignored third dimension, ignored trailing parenthetical', () => {
+    // "29,7" is 29.7 -- decimal comma, not a thousands separator.
+    expect(parseSizeText('29,7x59,7')).toEqual({ width: 29.7, height: 59.7, unit: null });
+    // Third dimension (thickness) ignored, never a second dimension pair.
+    expect(parseSizeText('30x60x1')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('60X60x0.9')).toEqual({ width: 60, height: 60, unit: null });
+    // Trailing free text in parentheses ignored.
+    expect(parseSizeText('30x60 (หนา 9)')).toEqual({ width: 30, height: 60, unit: null });
+  });
+
+  it('unparseable', () => {
+    expect(parseSizeText('รูปทรงอิสระ')).toBeNull();
+    expect(parseSizeText('60x')).toBeNull();
+    expect(parseSizeText('JOLLY 60x60')).toBeNull();
+    expect(parseSizeText('1,2X20 JOLLY COCO')).toBeNull();
+    expect(parseSizeText('0x60')).toBeNull();
+    expect(parseSizeText('')).toBeNull();
+    expect(parseSizeText(null)).toBeNull();
+  });
+
+  // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. JS's `\s` is Unicode-aware
+  // and its own `.trim()`/`\s` already treat NBSP etc. as whitespace, while Java's `\s` is
+  // ASCII-only and `String.trim()` strips only <= U+0020 -- so the two engines disagreed on every
+  // character in this class (in one direction or the other). Both must now agree, via a shared
+  // pre-fold rather than trying to reconcile two different `\s` definitions inside the pattern
+  // itself. The SAME vectors are pinned in DealQuotationLinesTest.java's own "F2" section, against
+  // `DealQuotationLines#parseTwoDimensions` -- same inputs, same result, on both sides. ───────────
+  it('agrees with the backend on every measured whitespace divergence', () => {
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // NBSP
+    expect(parseSizeText('30x60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
+    expect(parseSizeText('30x60　cm')).toEqual({ width: 30, height: 60, unit: 'cm' }); // ideographic space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
+    expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
+    expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
+    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator
+    // The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
+    // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+    expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
+  });
+});
+
+// ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing vectors
+// below must stay well under 50ms; a regression in either the grammar fix or the length guard alone
+// would blow one of them up (the first is short enough to bypass the guard entirely and exercises
+// the grammar fix in isolation; the second is the reviewer's own reported shape, which also
+// exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 389ms / 3,357ms at
+// 128 / 248 chars (the reviewer's own run measured 130ms / 4,092ms). Same vectors pinned in
+// DealQuotationLinesTest.java's own "F1" section. ──────────────────────────────────────────────
+describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
+  it('pathological whitespace under the 64-char length guard does not catastrophically backtrack', () => {
+    const attack = '30' + ' '.repeat(18) + 'x60' + ' '.repeat(18) + 'x1' + ' '.repeat(18) + '!';
+    expect(attack.length).toBeLessThanOrEqual(64);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it("the reviewer's own 248-char pathological shape does not catastrophically backtrack", () => {
+    const attack = '30' + ' '.repeat(80) + 'x60' + ' '.repeat(80) + 'x1' + ' '.repeat(80) + '!';
+    expect(attack.length).toBe(248);
+    const start = performance.now();
+    const result = parseSizeText(attack);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBeNull();
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step
+    // could shrink it away -- this pins the length guard itself, not just the regex fix.
+    const genuineButLong = '30' + ' '.repeat(60) + 'x60';
+    expect(genuineButLong.length).toBe(65);
+    expect(parseSizeText(genuineButLong)).toBeNull();
+  });
+});
+
+// ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a catalog-linked 60x60 row must
+// recompute แผ่น/ตร.ม. from the TYPED size (0.18), not silently keep the catalogue's 0.36 -- the old
+// SIZE_CM_PATTERN already tolerated a third dimension, so this specific vector was never broken on
+// the frontend; it is pinned here anyway because it is the exact pairing that exposed the
+// backend/frontend disagreement (backend printed the catalogue while this recomputed from the typed
+// text -- see the matching backend test for the PDF-side half of the bug). ─────────────────────────
+describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on the 2026-09-16 bug pairing', () => {
+  it('"30x60x1" against a catalogSizeText of "60x60" recomputes 0.18 and is confirmed different', () => {
+    expect(sqmPerPieceFromSizeCm('30x60x1')).toBe(0.18);
+    expect(sizeTextDiffersFromCatalogFaceSize('30x60x1', '60x60')).toBe(true);
+  });
+
+  it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
+    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18
+    // sqm/piece and get rejected by the sanity bound, which is exactly the bug this unit-aware
+    // conversion avoids.
+    expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
+  });
+
+  it('explicit unit wins: "300x600mm" is a different tile than a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('300x600mm', '60x60')).toBe(true);
+  });
+
+  it('explicit unit wins the other way too: "600x600mm" still matches a 60x60cm catalogue row', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('600x600mm', '60x60')).toBe(false);
+  });
+
+  /**
+   * F5-style bonus (2026-09-16 review): the two vectors above never distinguish an explicit unit
+   * from "no unit, check both readings" -- both happen to land on the same reading regardless (the
+   * backend's own equivalent test had this exact vacuity, see DealQuotationLinesTest's F5 section).
+   * This one does: catalogue 30cm x 60cm, typed "60x30mm" -- an explicit MM reading that matches
+   * NEITHER the catalogue's mm figures (300,600) NOR its cm figures directly (30,60), but DOES match
+   * the catalogue's cm figures order-swapped (60==60, 30==30) if the explicit unit were ignored and
+   * both readings checked anyway. Mutation-checked the same way as the backend test: forcing the
+   * typed `unit` to `null` in `compareToCatalogFaceSize` turns this red (it wrongly reads as
+   * "matches"); the real unit resolution turns it green.
+   */
+  it('pins unit resolution -- mutation-discriminating (F5-style), unlike the two vectors above', () => {
+    expect(sizeTextDiffersFromCatalogFaceSize('60x30mm', '30x60')).toBe(true);
+  });
+});
+
 describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mirrors DealQuotationLines#sizeLine\'s REFINEMENT)', () => {
   it('matches when the typed size equals the catalogue size exactly', () => {
     expect(sizeTextMatchesCatalogFaceSize('60x60', '60x60')).toBe(true);
@@ -604,6 +753,25 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
     // when there is nothing reliable to compare it against.
     expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
+  });
+});
+
+// ── F3 (MEDIUM-LOW, 2026-09-16 review): the catalogue side of the comparison can carry its own
+// unit token (sizeTextFromCatalog's sizeRaw/size fallback, ~49 prod rows with no width_mm/
+// height_mm) and must honour it rather than reading the digits as bare cm -- see parseSizeCmPair's
+// own doc for the false claim this replaces and the "600x1200 mm read as 600cm x 1200cm" bug. ────
+describe('parseSizeCmPair / catalogue-side unit honouring (F3, 2026-09-16 review)', () => {
+  it('an explicit mm unit on the CATALOGUE side is converted to its actual cm face size, not read as bare cm digits', () => {
+    // Pre-fix bug: reading "600x1200 mm" as literal cm digits (600,1200) made a rep's correctly
+    // typed "60x120" (the tile's REAL cm size) fail to match its own catalogue row.
+    expect(sizeTextMatchesCatalogFaceSize('60x120', '600x1200 mm')).toBe(true);
+    // A genuinely different tile must still read as different.
+    expect(sizeTextMatchesCatalogFaceSize('30x60', '600x1200 mm')).toBe(false);
+  });
+
+  it('a junk size_raw fallback (not a size at all) is a parse failure, never a wrong reading', () => {
+    expect(sizeTextMatchesCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
+    expect(sizeTextDiffersFromCatalogFaceSize('60x120', 'JOLLY COCO 60x120')).toBe(false);
   });
 });
 
@@ -913,16 +1081,59 @@ describe('v3 row validation', () => {
     piecesPerBox: 3, sqmPerPiece: 0.36, unitPrice: 850, quantityMode: 'AREA', areaSqm: 20,
   };
 
-  it('English per-sqm needs the USD/ตร.ม. and ตร.ม./กล่อง — and NOT a list price per piece', () => {
+  it('English per-sqm needs the USD/ตร.ม. — and NOT a list price per piece; ตร.ม./กล่อง is OPTIONAL', () => {
     const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
     expect(meta.validateQuotationItem(perSqm, 'SPECIAL_SQM', 'EN')).toEqual({});
-    expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({ sqmPerBox: 'กรุณาระบุ ตร.ม./กล่อง' });
     expect(meta.validateQuotationItem({ ...perSqm, specialPriceSqm: '' }, 'SPECIAL_SQM', 'EN')).toEqual({ specialPriceSqm: 'กรุณาระบุราคา (USD/ตร.ม.)' });
+    // ตร.ม./กล่อง PRESENT: แผ่น/กล่อง is still required (a partially-filled pair is refused).
     expect(meta.validateQuotationItem({ ...perSqm, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox).toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
     // The same row in THAI ราคาพิเศษ still needs its list price, and never asks for ตร.ม./กล่อง.
     expect(meta.validateQuotationItem({ ...perSqm, sqmPerBox: null }, 'SPECIAL_SQM', 'TH')).toEqual({ unitPrice: 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' });
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
+  });
+
+  // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+  describe('English per-sqm with a blank box area (Option B)', () => {
+    const perSqmNoBox = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: null };
+
+    it('is accepted with แผ่น/กล่อง filled — no sqmPerBox required at all', () => {
+      expect(meta.validateQuotationItem(perSqmNoBox, 'SPECIAL_SQM', 'EN')).toEqual({});
+    });
+
+    it('is accepted with NEITHER box field filled — exactly like any other tile row with no pieces-per-box', () => {
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: null }, 'SPECIAL_SQM', 'EN')).toEqual({});
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, piecesPerBox: '' }, 'SPECIAL_SQM', 'EN')).toEqual({});
+    });
+
+    it('still refuses a filled ตร.ม./กล่อง paired with a blank แผ่น/กล่อง (the partial pair)', () => {
+      const partial = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6, piecesPerBox: null };
+      expect(meta.validateQuotationItem(partial, 'SPECIAL_SQM', 'EN').piecesPerBox).toBeTruthy();
+    });
+
+    it('still flags a typed ตร.ม./กล่อง with too many decimals, even though the field is optional', () => {
+      expect(meta.validateQuotationItem({ ...perSqmNoBox, sqmPerBox: 0.1234567 }, 'SPECIAL_SQM', 'EN').sqmPerBox)
+        .toBe('ทศนิยมได้ไม่เกิน 6 ตำแหน่ง');
+    });
+  });
+
+  // Review fix F1 (2026-09-16): validateQuotationItem used to flag `roundToFullBox === false` here
+  // as "defence in depth" against DealQuotationService#requireBoxDataForPerSqm's 400. That claim
+  // was false (itemInputFromRow already forces `roundToFullBox: true` onto the wire in this mode
+  // regardless of the row's own state — see quotationItemInput.test.jsx), and the branch was
+  // actively harmful: it permanently blocked บันทึกร่าง/ส่งขออนุมัติ for a row ticked under NET/TH
+  // and then switched to English per-sqm, with no on-screen control left to un-tick it (the
+  // checkbox is disabled AND unchecked in this mode). Fixed at the source instead —
+  // QuotationEditorPage's `applyPriceMode` now resets the stored flag to `true` the moment the
+  // document reaches this mode — so the branch was dropped rather than kept pointing at a state
+  // that can no longer occur. The SERVER-side rejection of roundToFullBox=false under English
+  // per-sqm is unchanged; only this frontend checklist branch was removed.
+  it('English per-sqm no longer flags roundToFullBox=false in the checklist — that state is now unreachable, not merely re-guarded', () => {
+    const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
+    expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN')).toEqual({});
+    // Unaffected everywhere else, same as before: Thai ราคาพิเศษ, and NET in any language.
+    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'SPECIAL_SQM', 'TH').roundToFullBox).toBeUndefined();
+    expect(meta.validateQuotationItem({ ...tile, roundToFullBox: false }, 'NET', 'EN').roundToFullBox).toBeUndefined();
   });
 
   it('SPECIAL_SQM needs the ราคาพิเศษ — and still the list price, which the server requires on every tile row', () => {
@@ -956,6 +1167,66 @@ describe('v3 row validation', () => {
   });
 });
 
+// ── Owner-approved "sell loose pieces" (2026-09-16, V182) ───────────────────────────────────────
+describe('roundToFullBoxDisabledReason', () => {
+  it('is disabled until แผ่น/กล่อง is filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: null }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 0 }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
+  });
+
+  // Option B (owner decision, 2026-09-16): only disabled when a box AREA (ตร.ม./กล่อง) is present —
+  // mirrors DealQuotationService#buildTileItem's hasBoxArea branching.
+  it('is disabled in English per-sqm mode, once แผ่น/กล่อง AND ตร.ม./กล่อง are both filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN'))
+      .toBe(meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON);
+    // The ppb-missing reason takes priority when BOTH apply — one reason at a time.
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '', sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN')).toBe('กรอกแผ่น/กล่องก่อน');
+  });
+
+  it('is enabled (null) in English per-sqm mode when ตร.ม./กล่อง is blank, even with แผ่น/กล่อง filled', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: null }, 'SPECIAL_SQM', 'EN')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: '' }, 'SPECIAL_SQM', 'EN')).toBeNull();
+  });
+
+  it('is enabled (null) once แผ่น/กล่อง is filled, outside English per-sqm', () => {
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'NET', 'TH')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'SPECIAL_SQM', 'TH')).toBeNull();
+    expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10 }, 'DIRECT_NET', 'EN')).toBeNull();
+  });
+});
+
+describe('roundToFullBoxSummary', () => {
+  it('is null before the server has computed anything (no แผ่น/กล่อง, or no calc yet)', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: '' })).toBeNull();
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: null, boxes: null })).toBeNull();
+  });
+
+  it('off (round up): "ปัดขึ้นเต็มกล่อง → N กล่อง (M แผ่น)"', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4, roundToFullBox: true }))
+      .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
+    // Undefined reads the same as true (a pre-V182 row, or a freshly loaded server row that has
+    // not round-tripped yet) -- this helper must never treat "not yet known" as "loose pieces".
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4 }))
+      .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
+  });
+
+  it('on (loose pieces): "N กล่อง + M แผ่น (P แผ่น)"', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 32, boxes: 3, roundToFullBox: false }))
+      .toBe('3 กล่อง + 2 แผ่น (32 แผ่น)');
+  });
+
+  it('loose = 0: no "+ N แผ่น" tail', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 30, boxes: 3, roundToFullBox: false }))
+      .toBe('3 กล่อง (30 แผ่น)');
+  });
+
+  it('full boxes = 0: no "กล่อง" wording at all', () => {
+    expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 7, boxes: 0, roundToFullBox: false }))
+      .toBe('7 แผ่น (ไม่ครบ 1 กล่อง)');
+  });
+});
+
 // ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ─────────────────────────────────────────
 describe('buildQuotationChecklist', () => {
   const customer = { id: 5, name: 'บริษัท ก จำกัด', address: '1 ถนนสุขุมวิท', taxId: '0105551234567', phone: '02-000-0000' };
@@ -971,7 +1242,7 @@ describe('buildQuotationChecklist', () => {
       ['contact', 'customer', 'items', 'locationLabels', 'priceModeLanguage', 'project'],
     );
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking.
-    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject', 'designer']
+    ['customerAddress', 'customerTaxId', 'customerPhone', 'contactPhone', 'contactEmail', 'dealProject']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
   });
 
@@ -979,11 +1250,14 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
   });
 
-  it('WARNS (does not block) when a designer has not been selected, and passes when the saved code exists', () => {
-    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '' } });
-    expect(blocking(entries)).toEqual([]);
-    expect(entries).toEqual([{ check: 'designer', message: 'ยังไม่ได้เลือกผู้ออกแบบ', targetId: 'quotation-designer-picker', blocking: false }]);
-    expect(meta.buildQuotationChecklist({ ...complete, terms: { unitCode: 'A001' } })).toEqual([]);
+  // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on
+  // the backend and never blocking; the checklist still listed "ยังไม่ได้เลือกผู้ออกแบบ" as missing
+  // information, which read as required. Wrong-way-round: neither a blank designer (unitCode) nor a
+  // blank ฝ่าย (deptCode) may produce ANY checklist entry, warning or blocking.
+  it('never lists ผู้ออกแบบ or ฝ่าย as missing — both are optional', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '', deptCode: '' } });
+    expect(entries).toEqual([]);
+    expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('designer');
   });
 
   it('BLOCKS on a missing ผู้สั่งซื้อ, with the backend\'s own wording, and targets the picker', () => {
@@ -1053,6 +1327,67 @@ describe('buildQuotationChecklist', () => {
 
   it('BLOCKS the English + ราคาพิเศษ pairing the server 400s', () => {
     expect(blocking(meta.buildQuotationChecklist({ ...complete, priceModeLanguageConflict: true }))).toEqual(['priceModeLanguage']);
+  });
+
+  // ── Opus review fix (2026-09-16, F2): FULL_PAYMENT_TERM now recognises BOTH routes to
+  // depositPercent = 0 (the "ไม่รับมัดจำ" checkbox AND a custom-typed "0"), not just the checkbox —
+  // see #isEffectiveZeroDeposit's own tests below for the shared computation. The entry itself
+  // stays NON-blocking (DealQuotationService#create/#update accept a zero-deposit DRAFT with no
+  // term yet — only #submit refuses it; QuotationEditorPage's own separate hasUnresolvedZeroDeposit
+  // guard is what disables ส่งขออนุมัติ for this state).
+  it('lists (but does not block) a missing เงื่อนไขการชำระเงิน on the checkbox route', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: '' });
+    expect(entries).toEqual([{
+      check: 'fullPaymentTerm', message: 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน',
+      targetId: 'fullPaymentTerm', blocking: false,
+    }]);
+  });
+
+  it('ALSO lists it for a custom-typed 0% deposit, even with the checkbox unticked', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: '',
+    });
+    expect(blocking(entries)).toEqual([]);
+    expect(entries.map((e) => e.check)).toEqual(['fullPaymentTerm']);
+  });
+
+  it('does NOT list it for an ordinary 30% deposit', () => {
+    const entries = meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: false, depositPercent: 30, fullPaymentTerm: '',
+    });
+    expect(entries).toEqual([]);
+  });
+
+  it('does NOT list it once a term is chosen', () => {
+    expect(meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: 'CREDIT_30' })).toEqual([]);
+    expect(meta.buildQuotationChecklist({
+      ...complete, noDeposit: false, depositPercentCustom: true, depositPercent: '0', fullPaymentTerm: 'CREDIT_30',
+    })).toEqual([]);
+  });
+});
+
+describe('isEffectiveZeroDeposit', () => {
+  it('is true when the "ไม่รับมัดจำ" checkbox is ticked, regardless of the percent fields', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: true })).toBe(true);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: true, depositPercentCustom: false, depositPercent: 30 })).toBe(true);
+  });
+
+  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be
+  // recognised identically to the checkbox — this is the exact gap that let a rep save/attempt to
+  // submit depositPercent = 0 with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
+  it('is true for a custom-typed "0" even with the checkbox unticked', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '0' })).toBe(true);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: 0 })).toBe(true);
+  });
+
+  it('is false for a non-zero custom percent, a preset percent, or an empty field', () => {
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '10' })).toBe(false);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: false, depositPercent: 30 })).toBe(false);
+    expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '' })).toBe(false);
+  });
+
+  it('defaults to false when called with no arguments', () => {
+    expect(meta.isEffectiveZeroDeposit()).toBe(false);
   });
 });
 

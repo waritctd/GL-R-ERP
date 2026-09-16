@@ -61,6 +61,16 @@ function writeJson(key, value) {
 // there) but `validityUntil` NEVER does — a remembered CALENDAR DATE from a previous deal would
 // silently be a date in the past, or simply the wrong one, on every quotation after the first.
 
+// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): `noDeposit`/`fullPaymentTerm` were added
+// here alongside `validityMode`, then DELIBERATELY REMOVED the same day on a second owner ruling.
+// Unlike `validityMode`, remembering `noDeposit` is not a harmless convenience: ticking it once on
+// one quotation would make EVERY later new quotation start with no deposit, which is a rep sending
+// a quotation with no deposit BY ACCIDENT rather than by deliberate choice each time. A new
+// quotation must always start with the normal deposit controls — see `emptyTerms` below, which no
+// longer reads either field off `defaults`. Leaving both OUT of this list also means
+// `readQuotationDefaults` silently drops a stale `noDeposit`/`fullPaymentTerm` already sitting in
+// localStorage from the brief window this shipped — no special-casing needed, the picker below
+// already ignores any field not in DEFAULT_TERM_FIELDS.
 const DEFAULT_TERM_FIELDS = [
   'depositPercent', 'remainderMode', 'creditDays', 'validityDays', 'validityMode', 'originCountry',
 ];

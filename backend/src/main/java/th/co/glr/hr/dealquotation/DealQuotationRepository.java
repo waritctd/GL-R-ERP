@@ -185,9 +185,15 @@ public class DealQuotationRepository {
         BigDecimal catalogWidthMm, BigDecimal catalogHeightMm,
         // V176 (owner decision 2026-09-13) — the supplier-stated sqm per box. PERSISTED
         // (sales.quotation_item.sqm_per_box); an English per-sqm row's quantity is boxes × this.
-        BigDecimal sqmPerBox
+        BigDecimal sqmPerBox,
+        // V182 (owner-approved "sell loose pieces", 2026-09-16) — PERSISTED
+        // (sales.quotation_item.round_to_full_box). true on every PLAIN/ADJUSTMENT row (the flag
+        // is meaningless there — neither has a piecesPerBox) and on every TILE row unless the rep
+        // opted out; see WastageCalculator.Input's own Javadoc for what it changes.
+        boolean roundToFullBox
     ) {
-        /** The pre-V176 shape (no sqmPerBox) — PLAIN/ADJUSTMENT rows and existing call sites. */
+        /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing
+         * call sites, for which the flag is moot; hardcodes {@code roundToFullBox = true}. */
         public NewItem(
             String locationLabel, Long catalogPriceId, String productCode,
             String brand, String model, String color, String texture, String sizeText,
@@ -207,7 +213,7 @@ public class DealQuotationRepository {
                 piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
                 discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
-                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, null);
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, null, true);
         }
     }
 
@@ -234,6 +240,8 @@ public class DealQuotationRepository {
         // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
         // printedByDisplayId/salesRepDisplayId Javadoc. Null on every path that does not set one.
         Long printedByDisplayId, Long salesRepDisplayId,
+        // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+        boolean omitContactHonorific, String fullPaymentTerm,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
         List<NewItem> items) {}
 
@@ -254,6 +262,7 @@ public class DealQuotationRepository {
                  dept_code, unit_code, offer_date, deposit_percent, remainder_mode, credit_days,
                  validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
                  printed_by_display_id, sales_rep_display_id,
+                 omit_contact_honorific, full_payment_term,
                  parent_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
@@ -263,6 +272,7 @@ public class DealQuotationRepository {
                  :deptCode, :unitCode, :offerDate, :depositPercent, :remainderMode, :creditDays,
                  :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
                  :printedByDisplayId, :salesRepDisplayId,
+                 :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, now())
             """,
             new MapSqlParameterSource()
@@ -300,6 +310,8 @@ public class DealQuotationRepository {
                 .addValue("currency", p.currency())
                 .addValue("printedByDisplayId", p.printedByDisplayId())
                 .addValue("salesRepDisplayId", p.salesRepDisplayId())
+                .addValue("omitContactHonorific", p.omitContactHonorific())
+                .addValue("fullPaymentTerm", p.fullPaymentTerm())
                 .addValue("parentQuotationId", p.parentQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
@@ -366,7 +378,9 @@ public class DealQuotationRepository {
             .addValue("adjustmentPct", item.adjustmentPct())
             .addValue("adjustmentDeadline", item.adjustmentDeadline())
             // V176
-            .addValue("sqmPerBox", item.sqmPerBox());
+            .addValue("sqmPerBox", item.sqmPerBox())
+            // V182
+            .addValue("roundToFullBox", item.roundToFullBox());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -377,7 +391,8 @@ public class DealQuotationRepository {
              quantity_mode, area_sqm, pieces_input, wastage_mode, wastage_value, pieces_per_box,
              pieces_before_wastage, pieces_after_wastage, boxes, discount_pct, origin_country,
              lead_time_min_days, lead_time_max_days, item_notes,
-             line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box)
+             line_type, special_price_sqm, adjustment_pct, adjustment_deadline, sqm_per_box,
+             round_to_full_box)
         VALUES
             (:quotationId, :seq, :brand, :model, :color, :texture, :size, :rawUnit, :qty, :unitPrice, :amount,
              :salesDiscount, :finalUnitPrice, :lineSubtotal, :vat, :lineTotal, :description,
@@ -385,7 +400,8 @@ public class DealQuotationRepository {
              :quantityMode, :areaSqm, :piecesInput, :wastageMode, :wastageValue, :piecesPerBox,
              :piecesBeforeWastage, :piecesAfterWastage, :boxes, :discountPct, :originCountry,
              :leadTimeMinDays, :leadTimeMaxDays, :itemNotes,
-             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox)
+             :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
+             :roundToFullBox)
         """;
 
     /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
@@ -451,7 +467,7 @@ public class DealQuotationRepository {
                    item_notes = :itemNotes,
                    line_type = :lineType, special_price_sqm = :specialPriceSqm,
                    adjustment_pct = :adjustmentPct, adjustment_deadline = :adjustmentDeadline,
-                   sqm_per_box = :sqmPerBox
+                   sqm_per_box = :sqmPerBox, round_to_full_box = :roundToFullBox
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }
@@ -511,7 +527,15 @@ public class DealQuotationRepository {
                             // Owner feedback 2026-09-14 — project_name was write-once at INSERT
                             // only until now; genuinely editable on every DRAFT save, same as
                             // customer_notes just below it.
-                            String projectName) {
+                            String projectName,
+                            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc
+                            // on each field. Both always sent on every DRAFT save, same "no
+                            // missing-keeps-stored" discipline as printedByDisplayId/projectName
+                            // above: DealQuotationService resolves the WHOLE value (including
+                            // forcing fullPaymentTerm/remainderMode/creditDays null where they don't
+                            // apply) before calling this method, so there is nothing left to default
+                            // here.
+                            boolean omitContactHonorific, String fullPaymentTerm) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET contact_id = :contactId, contact_name = :contactName,
@@ -526,6 +550,7 @@ public class DealQuotationRepository {
                    customer_notes = :customerNotes, price_mode = :priceMode,
                    document_language = :documentLanguage, currency = :currency,
                    printed_by_display_id = :printedByDisplayId, sales_rep_display_id = :salesRepDisplayId,
+                   omit_contact_honorific = :omitContactHonorific, full_payment_term = :fullPaymentTerm,
                    total_amount = :subtotal, updated_at = now()
              WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
             """,
@@ -555,7 +580,66 @@ public class DealQuotationRepository {
                 .addValue("currency", currency)
                 .addValue("printedByDisplayId", printedByDisplayId)
                 .addValue("salesRepDisplayId", salesRepDisplayId)
+                .addValue("omitContactHonorific", omitContactHonorific)
+                .addValue("fullPaymentTerm", fullPaymentTerm)
                 .addValue("subtotal", subtotal));
+    }
+
+    /**
+     * Quotation-editor bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลัง
+     * ไม่ได้"): {@link #updateHeader}'s own re-snapshot only fires on the DRAFT's OWN next save —
+     * so correcting a typo'd email/phone on the CONTACT record itself never reached a draft the
+     * rep was not actively re-saving, and the printed PDF (rendered fresh from the DB on every
+     * download, see {@code DealQuotationService}'s render path) kept the stale value indefinitely.
+     *
+     * <p>Called from {@code CustomerService#updateContact} in the same request as the contact
+     * write itself (that method wraps both in one {@code @Transactional} boundary) — every DRAFT
+     * quotation row currently pointing at this contact id picks up its LIVE phone/email the moment
+     * the contact is corrected, not on its own next save. Reads {@code customers.contact} directly
+     * (a {@code FROM} join, not parameters) so this can never drift from whatever
+     * {@code ContactRepository#update} just committed.
+     *
+     * <p>{@code refreshName} is {@code false} for a phone/email-only edit (the common case): the
+     * printed ผู้สั่งซื้อ NAME is a bigger, more visible change than a phone/email typo fix, so it is
+     * only re-snapshotted when the caller confirms the edit actually touched {@code first_name}/
+     * {@code last_name} — never recomputed as an incidental side effect of some other field's PATCH.
+     *
+     * <p>Mirrors {@link #updateHeader}'s own {@code doc_status = 'DRAFT'} predicate exactly, so a
+     * PENDING_APPROVAL/APPROVED/REJECTED/CANCELLED row's frozen snapshot is never touched — only a
+     * quotation still open for editing moves. Same soft-reference discipline as V167's own contact
+     * columns: this UPDATE only ever runs because the contact row still exists (it was just
+     * written), so there is nothing to guard against here that {@code contact_id} being a
+     * non-FK reference would otherwise risk.
+     *
+     * <p>D6 fix (Opus review 2026-09-16): {@code contact_phone}/{@code contact_email} are wrapped
+     * in {@code NULLIF(TRIM(...), '')}, matching the {@code contact_name} case just below AND
+     * {@code DealQuotationService#resolveContact}'s own {@code blankToNull(contact.phone())}/
+     * {@code blankToNull(contact.email())} — every OTHER writer of these two columns normalises a
+     * blank to {@code NULL}. {@code ContactRepository#update}'s own {@code COALESCE(:email, email)}
+     * treats an explicit {@code ""} (as opposed to a literal {@code null} parameter, which means
+     * "leave unchanged") as "clear this field", so {@code customers.contact.email/phone} can
+     * genuinely hold {@code ''} for a cleared field — copying it here raw diverged from the {@code
+     * NULL}-never-{@code ''} invariant every other writer of {@code sales.quotation.contact_phone}/
+     * {@code contact_email} maintains.
+     */
+    public int refreshDraftContactSnapshot(long contactId, boolean refreshName) {
+        return jdbc.update("""
+            UPDATE sales.quotation q
+               SET contact_phone = NULLIF(TRIM(c.phone), ''),
+                   contact_email = NULLIF(TRIM(c.email), ''),
+                   contact_name  = CASE WHEN :refreshName
+                                        THEN NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '')
+                                        ELSE q.contact_name END,
+                   updated_at = now()
+              FROM customers.contact c
+             WHERE c.contact_id = :contactId
+               AND q.contact_id = :contactId
+               AND q.origin = 'DEAL_DIRECT'
+               AND q.doc_status = 'DRAFT'
+            """,
+            new MapSqlParameterSource()
+                .addValue("contactId", contactId)
+                .addValue("refreshName", refreshName));
     }
 
     /** Compare-and-set DRAFT -> PENDING_APPROVAL. Rowcount 0 means not open for submit. Clears any
@@ -903,7 +987,7 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement, sqm_per_box,
+                   picture_placement, sqm_per_box, round_to_full_box,
                    -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
                    -- (and, for the English per-sqm quantity, its price mode), resolved at read time
                    -- so every existing English quotation picks them up.
@@ -931,7 +1015,7 @@ public class DealQuotationRepository {
                    item_notes, pieces_before_wastage, pieces_after_wastage, qty AS pieces_final, boxes,
                    final_unit_price, amount,
                    raw_unit, description, line_type, special_price_sqm, adjustment_pct, adjustment_deadline,
-                   picture_placement, sqm_per_box,
+                   picture_placement, sqm_per_box, round_to_full_box,
                    -- Owner ruling 2026-09-13: the printed item lines follow the DOCUMENT's language
                    -- (and, for the English per-sqm quantity, its price mode), resolved at read time
                    -- so every existing English quotation picks them up.
@@ -988,6 +1072,9 @@ public class DealQuotationRepository {
                    q.credit_days, q.validity_days, q.validity_date, q.validity_mode, q.validity_until,
                    q.customer_notes, q.price_mode,
                    q.document_language,
+                   -- V180/V181 (items 2/4, 2026-09-16): "ไม่เติม “คุณ”" flag and the zero-deposit
+                   -- full-payment-term code — see each column's own COMMENT ON COLUMN.
+                   q.omit_contact_honorific, q.full_payment_term,
                    q.total_amount, q.currency, q.issued_at AS created_at, q.updated_at,
                    CASE WHEN aps.quotation_id IS NOT NULL THEN aps.signature_image IS NOT NULL
                         ELSE EXISTS (SELECT 1 FROM hr.employee_signature es WHERE es.employee_id = q.approved_by)
@@ -1101,6 +1188,9 @@ public class DealQuotationRepository {
             rs.getString("sales_rep_display_name"),
             rs.getString("sales_rep_display_name_en"),
             rs.getString("sales_rep_display_phone"),
+            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+            rs.getBoolean("omit_contact_honorific"),
+            rs.getString("full_payment_term"),
             items,
             createdAt,
             instant(rs, "updated_at")
@@ -1128,6 +1218,9 @@ public class DealQuotationRepository {
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
+        // V182: NOT NULL DEFAULT TRUE (every pre-V182 row backfills to true at the ALTER TABLE
+        // itself), so this is never NULL — no fallback needed, unlike the nullable columns above.
+        boolean roundToFullBox = rs.getBoolean("round_to_full_box");
         int piecesBeforeWastage = rs.getInt("pieces_before_wastage");
         int piecesAfterWastage = rs.getInt("pieces_after_wastage");
         BigDecimal sqmPerPiece = rs.getBigDecimal("sqm_per_piece");
@@ -1203,8 +1296,9 @@ public class DealQuotationRepository {
         // English per-sqm (owner decision 2026-09-13) or the ordinary pieces print — decided in
         // DealQuotationLines#tilePrint, the SAME call DealQuotationService#toItemDto makes.
         DealQuotationLines.TilePrint print = DealQuotationLines.tilePrint(documentLanguage, priceMode, quantityMode,
-            areaSqm, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal, piecesPerBox,
-            nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm);
+            areaSqm, sqmPerPiece, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesFinal,
+            piecesPerBox, nullableInt(rs, "boxes"), sqmPerBox, quantity, rs.getString("raw_unit"), specialPriceSqm,
+            roundToFullBox);
         return new DealQuotationItemDto(
             rs.getLong("quotation_item_id"),
             rs.getInt("seq"),
@@ -1249,7 +1343,7 @@ public class DealQuotationRepository {
             // carry a flat amount. Routed through the same helper anyway so the two branches can
             // never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
-        ).withSqmPerBox(sqmPerBox);
+        ).withSqmPerBox(sqmPerBox).withRoundToFullBox(roundToFullBox);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

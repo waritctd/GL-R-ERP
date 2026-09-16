@@ -20,6 +20,7 @@ import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.customer.ContactRepository;
@@ -28,6 +29,7 @@ import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.CustomerService;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -80,7 +82,8 @@ class DealEntryAccessIntegrationTest extends AbstractPostgresIntegrationTest {
         ProjectRepository projects = new ProjectRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         employeeAuth = new EmployeeAuthRepository(jdbc);
-        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth);
+        CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth,
+            new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
 
         // pricingRequests (dead-deal cascade only) is never reached by create() -- null is safe,
         // exactly as DealQuotationIntegrationTest's own wiring already does.
