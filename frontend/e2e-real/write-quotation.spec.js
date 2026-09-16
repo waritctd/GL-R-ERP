@@ -315,8 +315,13 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   test('refusals: every one the editor avoids offering is a real 400 from the service', async () => {
     const create = (overrides) => apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId, overrides));
     const refusals = [
-      // Owner decision 2026-09-13: English per-sqm IS allowed now — but never without box data.
-      ['an English per-sqm row with no ตร.ม./กล่อง', { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [tile({ specialPriceSqm: 64, sqmPerBox: null })] }, 'ตร.ม./กล่อง'],
+      // Option B (owner decision 2026-09-16) superseded 2026-09-13's "never without box data": a
+      // bare English per-sqm row (no box area at all) is now ACCEPTED, its sqm quantity derived
+      // from pieces instead. The ONE combination still refused is a PARTIALLY filled box pair —
+      // ตร.ม./กล่อง present, piecesPerBox blank — requireItemComplete (not requireBoxDataForPerSqm,
+      // which never actually runs first on create/update) catches this and names the field
+      // "จำนวนแผ่นต่อกล่อง" — see DealQuotationService#requireItemComplete's piecesPerBoxOptional.
+      ['an English per-sqm row with ตร.ม./กล่อง but no piecesPerBox', { priceMode: 'SPECIAL_SQM', documentLanguage: 'EN', items: [tile({ specialPriceSqm: 64, sqmPerBox: 0.6, piecesPerBox: null })] }, 'จำนวนแผ่นต่อกล่อง'],
       ['a ส่วนลดพิเศษ larger than the rows above it', { items: [tile(), adjustment({ adjustmentPct: null, adjustmentAmount: 99999999 })] }, 'ติดลบ'],
       ['a ส่วนลดพิเศษ that is both a percent and an amount', { items: [tile(), adjustment({ adjustmentAmount: 100 })] }, 'อย่างใดอย่างหนึ่ง'],
       ['a quotation that is ONLY a ส่วนลดพิเศษ', { items: [adjustment()] }, 'ส่วนลดพิเศษ'],
@@ -329,13 +334,14 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     }
 
     // Moving a stored ราคาพิเศษ document to English keeps SPECIAL_SQM (a PUT that omits priceMode keeps
-    // the stored one), which on English is per-sqm — refused here because its rows carry no ตร.ม./กล่อง.
+    // the stored one), which on English is per-sqm — still refused here, but for a PARTIAL box pair
+    // (ตร.ม./กล่อง present, piecesPerBox blank), not for having no box data at all (Option B).
     const before = await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json();
     const move = await apiWrite(sessions.sales, 'put', `/api/deal-quotations/${thaiId}`, draftBody(contactId, {
-      documentLanguage: 'EN', items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350 }), plain, adjustment()],
+      documentLanguage: 'EN', items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350, sqmPerBox: 0.6, piecesPerBox: null }), plain, adjustment()],
     }));
-    expect(move.status(), 'EN per-sqm without box data must be refused').toBe(400);
-    expect((await move.json()).message).toContain('ตร.ม./กล่อง');
+    expect(move.status(), 'EN per-sqm with a partial box pair must still be refused').toBe(400);
+    expect((await move.json()).message).toContain('จำนวนแผ่นต่อกล่อง');
     const after = await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json();
     expect(after.quotation.documentLanguage, 'a refused PUT must change nothing').toBe('TH');
     expect(after.quotation.grandTotal).toBe(before.quotation.grandTotal);
@@ -473,8 +479,12 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await expect(checklist.getByTestId('checklist-warnings')).toContainText('ผู้สั่งซื้อยังไม่มีอีเมล');
     await expect(checklist.getByTestId('checklist-blocking')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
-    // The ผู้สั่งซื้อ's own details, prefilled from the contact record.
-    await expect(page.getByTestId('quotation-contact-details')).toHaveText('โทร. 089-111-2222 · อีเมล ยังไม่มี');
+    // The ผู้สั่งซื้อ's own โทร./อีเมล, prefilled from the contact record and editable in place
+    // (feat/quotation-contact-edit, 2026-09-15) — no longer a plain read-only text summary.
+    const contactDetails = page.getByTestId('quotation-contact-details');
+    await expect(contactDetails.getByRole('textbox', { name: 'แก้ไขโทรศัพท์ผู้สั่งซื้อ' })).toHaveValue('089-111-2222');
+    await expect(contactDetails.getByRole('textbox', { name: 'แก้ไขอีเมลผู้สั่งซื้อ' })).toHaveValue('');
+    await expect(contactDetails).toContainText('อีเมล (ยังไม่มี)');
 
     // Clicking the entry lands on the field; typing + leaving it saves to the customer master…
     await checklist.getByRole('button', { name: 'ยังไม่ได้กรอกที่อยู่ลูกค้า' }).click();
@@ -505,12 +515,16 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await expect(page.locator('#special-0')).toHaveValue('');
     await expect.poll(() => page.$$eval('input', (els) => els.map((el) => el.value))).not.toContain('1800');
     await expect(page.locator('body')).not.toContainText('1,210.25');
-    // Nothing is previewed or saveable until the USD/ตร.ม. and the ตร.ม./กล่อง are both stated.
-    await expect(page.getByTestId('checklist-blocking')).toContainText('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
+    // Nothing is previewed or saveable until the USD/ตร.ม. is stated — ตร.ม./กล่อง is OPTIONAL for
+    // English per-sqm since Option B (owner decision 2026-09-16, quotationMeta#validateQuotationItem).
+    await expect(page.getByTestId('checklist-blocking')).toContainText('รายการที่ 1: ขาด ราคาต่อ ตร.ม.');
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeDisabled();
 
-    // Re-entering both clears the block — against the REAL service's English per-sqm preview.
+    // Re-entering the price ALONE already clears the block — Option B, pinned end to end against
+    // the REAL service's English per-sqm preview. Then filling ตร.ม./กล่อง too, to prove the
+    // box-area path still works exactly as before.
     await page.locator('#special-0').fill('64');
+    await expect(page.getByTestId('checklist-blocking')).toHaveCount(0);
     await page.locator('#sqm-box-0').fill('0.6');
     await expect(page.getByTestId('checklist-blocking')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
