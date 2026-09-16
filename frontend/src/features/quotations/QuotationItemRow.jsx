@@ -715,7 +715,7 @@ export function QuotationItemRow({
           </div>
         </FormField>
 
-        <FormField label="เผื่อ (wastage)" htmlFor={`waste-${index}`}>
+        <FormField label="เผื่อ (wastage)" htmlFor={`waste-${index}`} error={errors.wastageValue}>
           <div className="flex flex-wrap gap-2">
             {WASTAGE_PERCENT_PRESETS.map((pct) => (
               <button

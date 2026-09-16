@@ -813,6 +813,31 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
     if (!(Number(item?.piecesInput) >= 1)) errors.piecesInput = 'กรุณาระบุจำนวนแผ่น';
   } else if (!(Number(item?.areaSqm) > 0)) {
     errors.areaSqm = 'กรุณาระบุพื้นที่ (ตร.ม.)';
+  } else if (item?.piecesBeforeWastage === 0) {
+    // Wording-scan fix 4 (2026-09-17): mirrors DealQuotationService's new AREA-mode "computes to
+    // zero pieces" refusal. `piecesBeforeWastage` arrives from the debounced calculate-line
+    // preview merge (QuotationEditorPage), so this is null (unknown, not yet computed) until a
+    // preview has actually run -- never mistaken for a genuine zero from an unrelated row.
+    errors.areaSqm = 'พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น';
+  }
+  // Wording-scan fix 5 (2026-09-17): mirrors DealQuotationService's new PIECES-wastage
+  // whole-number refusal -- PERCENT wastage is untouched, a percentage genuinely can be
+  // fractional (2.5%).
+  if (item?.wastageMode === 'PIECES' && item?.wastageValue !== '' && item?.wastageValue != null
+    && Number.isFinite(Number(item.wastageValue)) && !Number.isInteger(Number(item.wastageValue))) {
+    errors.wastageValue = 'จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม';
+  }
+  // Wording-scan fix 3 (2026-09-17): mirrors DealQuotationService#requireValidLeadTime -- once a
+  // lead time is ENTERED (both fields present), min must be >= 1 day and max must be >= min.
+  // Refused on SAVE (blocking, see QUOTATION_CHECK.ITEMS below), unlike the missing-lead-time
+  // check right after it, which is submit-only. A lone value (the other field still blank) is an
+  // incompleteness question for the `requireLeadTime` branch below, not this one.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
   }
   // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
@@ -829,7 +854,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
-  'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
+  'wastageValue', 'adjustmentPct', 'adjustmentAmount', 'leadTimeMinDays',
 ];
 const QUOTATION_ITEM_FIELD_LABELS = {
   model: 'รุ่น', color: 'สี', texture: 'ผิว', sizeText: 'ขนาด', thicknessMm: 'ความหนา',
@@ -841,6 +866,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   adjustmentPct: 'เปอร์เซ็นต์ส่วนลด', adjustmentAmount: 'จำนวนเงินส่วนลด',
   // #7 (2026-09-14): submit-only, see validateQuotationItem's `requireLeadTime`.
   leadTimeMinDays: 'ระยะเวลานำเข้า (วัน)',
+  // Wording-scan fix 5 (2026-09-17): the fractional-PIECES-wastage refusal.
+  wastageValue: 'เผื่อ (จำนวนแผ่น)',
 };
 
 /** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
@@ -1221,6 +1248,16 @@ export function validatePlainItem(item) {
   else if (!withinDecimals(item.quantity, 2)) errors.quantity = 'จำนวนทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
   if (!item?.unit?.trim()) errors.unit = 'กรุณาเลือกหน่วย';
   if (!(Number(item?.unitPrice) > 0)) errors.unitPrice = 'กรุณาระบุราคา/หน่วย';
+  // Wording-scan fix 3 (2026-09-17): the SAME lead-time value rule as a TILE row (D1, 2026-09-16:
+  // a PLAIN row's lead time is optional but, once entered, must still be a real range) — mirrors
+  // DealQuotationService#requireValidLeadTime, called unconditionally for both line types there.
+  if (item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null) {
+    const leadMin = Number(item.leadTimeMinDays);
+    const leadMax = Number(item.leadTimeMaxDays);
+    if (!(leadMin >= 1) || !(leadMax >= leadMin)) {
+      errors.leadTimeMinDays = 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด';
+    }
+  }
   return errors;
 }
 
@@ -1307,8 +1344,14 @@ const ITEM_FIELD_ID_PREFIX = {
     directNetPrice: 'direct-net', areaSqm: 'qty', piecesInput: 'qty',
     // Matches QuotationItemRow's `lead-${index}` input id.
     leadTimeMinDays: 'lead',
+    // Wording-scan fix 5 (2026-09-17): matches QuotationItemRow's `waste-${index}` input id.
+    wastageValue: 'waste',
   },
-  PLAIN: { description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price' },
+  PLAIN: {
+    description: 'plain-desc', quantity: 'plain-qty', unit: 'plain-unit', unitPrice: 'plain-price',
+    // Wording-scan fix 3 (2026-09-17): matches QuotationPlainItemRow's `plain-lead-${index}` id.
+    leadTimeMinDays: 'plain-lead',
+  },
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },
 };
 

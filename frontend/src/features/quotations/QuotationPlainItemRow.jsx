@@ -137,7 +137,10 @@ export function QuotationPlainItemRow({
             (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE rows), so a row
             left blank here saves exactly as it always did. Mirrors that control's shape (same
             labels, same sr-only max-field pattern) so the two read as one feature. */}
-        <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ">
+        <FormField
+          label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ"
+          error={errors.leadTimeMinDays}
+        >
           <div className="flex items-center gap-1.5">
             <input
               id={`plain-lead-${index}`} type="number" disabled={readOnly} className="w-16"

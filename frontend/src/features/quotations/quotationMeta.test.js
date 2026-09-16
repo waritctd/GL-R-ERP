@@ -30,6 +30,7 @@ import {
   sqmPerPieceFromSizeCm,
   sizeTextMatchesCatalogFaceSize,
   sizeTextDiffersFromCatalogFaceSize,
+  validatePlainItem,
   validateQuotationItem,
 } from './quotationMeta.js';
 
@@ -432,9 +433,87 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
 
-    it('a zero lead time (an exact same-day range) is a valid value, not a missing one', () => {
+    // Wording-scan fix 3 (2026-09-17): a lead time of 0 (or negative) used to be read as a valid
+    // "exact same-day" value once BOTH fields were present, not a missing one — this test now pins
+    // the OPPOSITE: 0 is a genuinely INVALID value (min must be >= 1 day), refused with the same
+    // message the backend uses, unconditionally (not gated on `requireLeadTime`).
+    it('a zero lead time is refused as an invalid value, not accepted as an exact same-day range', () => {
       const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 0 });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true }))
+        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
+    });
+
+    /** Wrong-way-round: the SMALLEST genuinely valid exact-day range (1, 1) passes. */
+    it('an exact one-day lead time (1, 1) is a valid value', () => {
+      const item = completeItem({ leadTimeMinDays: 1, leadTimeMaxDays: 1 });
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+    });
+  });
+
+  // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ──────
+  describe('lead-time value validity (owner-approved wording-scan finding 3)', () => {
+    it('refuses min < 1 unconditionally (not gated on requireLeadTime)', () => {
+      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 3 });
+      expect(validateQuotationItem(item, 'NET', 'TH'))
+        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด' });
+    });
+
+    it('refuses max < min', () => {
+      const item = completeItem({ leadTimeMinDays: 90, leadTimeMaxDays: 75 });
+      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays)
+        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
+    });
+
+    it('does not fire on a partially-entered lead time (the other field still blank)', () => {
+      const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: null });
+      expect(validateQuotationItem(item, 'NET', 'TH').leadTimeMinDays).toBeUndefined();
+    });
+
+    it('the SAME rule applies to a PLAIN row (validatePlainItem)', () => {
+      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 0, leadTimeMaxDays: 3 };
+      expect(validatePlainItem(plain).leadTimeMinDays)
+        .toBe('ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด');
+    });
+
+    it('wrong-way-round: a valid range on a PLAIN row is untouched', () => {
+      const plain = { description: 'สุขภัณฑ์', quantity: 1, unit: 'ชุด', unitPrice: 5000, leadTimeMinDays: 75, leadTimeMaxDays: 90 };
+      expect(validatePlainItem(plain).leadTimeMinDays).toBeUndefined();
+    });
+  });
+
+  // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ────────────
+  describe('AREA-mode zero-pieces rejection (owner-approved wording-scan finding 4)', () => {
+    it('refuses when the debounced preview reports piecesBeforeWastage === 0', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01, piecesBeforeWastage: 0 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBe('พื้นที่น้อยเกินไป คำนวณได้ 0 แผ่น');
+    });
+
+    it('wrong-way-round: a positive piecesBeforeWastage is untouched', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.36, piecesBeforeWastage: 1 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
+    });
+
+    it('does not fire before a preview has run (piecesBeforeWastage still null/undefined)', () => {
+      const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01 });
+      expect(validateQuotationItem(item, 'NET', 'TH').areaSqm).toBeUndefined();
+    });
+  });
+
+  // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────────
+  describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
+    it('refuses a fractional value in PIECES mode', () => {
+      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBe('จำนวนแผ่นที่เผื่อต้องเป็นจำนวนเต็ม');
+    });
+
+    it('wrong-way-round: a whole-number PIECES value is untouched', () => {
+      const item = completeItem({ wastageMode: 'PIECES', wastageValue: 2 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
+    });
+
+    it('PERCENT wastage keeps accepting a fractional value', () => {
+      const item = completeItem({ wastageMode: 'PERCENT', wastageValue: 2.5 });
+      expect(validateQuotationItem(item, 'NET', 'TH').wastageValue).toBeUndefined();
     });
   });
 });
