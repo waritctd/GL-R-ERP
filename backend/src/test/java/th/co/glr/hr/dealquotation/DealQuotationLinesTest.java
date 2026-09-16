@@ -92,21 +92,28 @@ class DealQuotationLinesTest {
     // the SAME size typed in an unreliable unit (the 200x300mm regression). ────────────────────
 
     /** The exact prod bug: catalogue is 600x600mm, rep retyped "30x60" (a genuinely different
-     * tile) -- must print the rep's typed size, not "60 cm x 60 cm". */
+     * tile) -- must print the rep's typed size, not "60 cm x 60 cm".
+     *
+     * <p>F2 fix (2026-09-16 review): "30x60" carries no unit token, so this now prints in the
+     * catalogue's OWN cm format ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60" the
+     * old FALLBACK printed -- see {@link DealQuotationLines#sizeLine}'s Javadoc "F2" note. It is
+     * still emphatically NOT the catalogue's "60 cm x 60 cm": the typed pair, read as centimetres
+     * (the field's own label), not the catalogue's dims. */
     @Test
     void sizeLine_typedSizeDiffersFromCatalogue_30x60_printsTypedText_notTheCatalogue600x600() {
         assertThat(DealQuotationLines.sizeLine("30x60", new BigDecimal("20"),
             new BigDecimal("600"), new BigDecimal("600")))
-            .isEqualTo("ขนาด 30x60 x 20 mm (ขนาดโดยประมาณ)")
+            .isEqualTo("ขนาด 30 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)")
             .doesNotContain("60 cm x 60 cm");
     }
 
-    /** The second prod line: "3x60" against the same 600x600mm catalogue row. */
+    /** The second prod line: "3x60" against the same 600x600mm catalogue row. F2 fix: unit-less,
+     * so it now prints as cm, same as the "30x60" case above. */
     @Test
     void sizeLine_typedSizeDiffersFromCatalogue_3x60_printsTypedText_notTheCatalogue600x600() {
         assertThat(DealQuotationLines.sizeLine("3x60", new BigDecimal("20"),
             new BigDecimal("600"), new BigDecimal("600")))
-            .isEqualTo("ขนาด 3x60 x 20 mm (ขนาดโดยประมาณ)")
+            .isEqualTo("ขนาด 3 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)")
             .doesNotContain("60 cm x 60 cm");
     }
 
@@ -163,13 +170,75 @@ class DealQuotationLinesTest {
     }
 
     /** The EN variant of the exact prod bug: typed "30x60" against a 600x600mm catalogue row must
-     * print the rep's text, not the catalogue's centimetre conversion. */
+     * print the rep's text, not the catalogue's centimetre conversion. F2 fix: unit-less, so this
+     * now prints in cm ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60". */
     @Test
     void english_sizeLine_typedSizeDiffersFromCatalogue_printsTypedText() {
         assertThat(DealQuotationLines.sizeLine(EN, "30x60", new BigDecimal("20"),
             new BigDecimal("600"), new BigDecimal("600")))
-            .isEqualTo("Size 30x60 x 20 mm (approx.)")
+            .isEqualTo("Size 30 cm x 60 cm x 20 mm (approx.)")
             .doesNotContain("60 cm x 60 cm");
+    }
+
+    // ── F2 (2026-09-16 review): a size typed WITHOUT a unit must never read as millimetres ───────
+    // Production bug: tile with แผ่น/กล่อง = 26, ขายแผ่นไม่เต็มกล่อง ticked, rep typed "14.8x14.8"
+    // into the field labelled "ขนาด (ซม.)" -- printed "ขนาด 14.8x14.8 x 7 mm", reading as 14.8
+    // MILLIMETRES. These are the exact wrong-way-round mutation-check fixtures for that fix:
+    // reverting sizeLine to print the typed text verbatim again turns every one of these red.
+
+    /** The exact production example: no catalogue link at all, typed "14.8x14.8" with no unit. */
+    @Test
+    void sizeLine_F2_productionExample_unitlessTypedSize_noCatalogue_printsInCentimetres() {
+        assertThat(DealQuotationLines.sizeLine("14.8x14.8", new BigDecimal("7"), null, null))
+            .isEqualTo("ขนาด 14.8 cm x 14.8 cm x 7 mm (ขนาดโดยประมาณ)")
+            .as("must never read an unlabelled typed size as millimetres")
+            .doesNotContain("14.8 mm");
+    }
+
+    /** The English mirror of the production example. */
+    @Test
+    void sizeLine_F2_productionExample_english_unitlessTypedSize_printsInCentimetres() {
+        assertThat(DealQuotationLines.sizeLine(EN, "14.8x14.8", new BigDecimal("7"), null, null))
+            .isEqualTo("Size 14.8 cm x 14.8 cm x 7 mm (approx.)")
+            .doesNotContain("14.8 mm");
+    }
+
+    /** Same typed size, but the row DOES carry a catalogue link whose face size differs -- the
+     * "typed text wins over the catalogue" REFINEMENT rule still applies; F2 only changes HOW the
+     * winning typed text is formatted (cm, not verbatim) when it carries no unit. */
+    @Test
+    void sizeLine_F2_unitlessTypedSize_catalogueLinkedButDiffers_printsTypedTextInCentimetres() {
+        assertThat(DealQuotationLines.sizeLine("14.8x14.8", new BigDecimal("7"),
+            new BigDecimal("260"), new BigDecimal("260")))  // catalogue: 26cm x 26cm
+            .isEqualTo("ขนาด 14.8 cm x 14.8 cm x 7 mm (ขนาดโดยประมาณ)")
+            .doesNotContain("26 cm x 26 cm").doesNotContain("14.8 mm");
+    }
+
+    /** An EXPLICIT unit is untouched by F2 -- "14.8x14.8mm" says what it means and keeps printing
+     * verbatim, exactly as it did before this fix. Genuinely different behaviour from the unitless
+     * case directly above, on the identical numbers. */
+    @Test
+    void sizeLine_F2_explicitUnit_isUnaffected_staysVerbatim() {
+        assertThat(DealQuotationLines.sizeLine("14.8x14.8mm", new BigDecimal("7"), null, null))
+            .isEqualTo("ขนาด 14.8x14.8mm x 7 mm (ขนาดโดยประมาณ)");
+        assertThat(DealQuotationLines.sizeLine("14.8x14.8 ซม.", new BigDecimal("7"), null, null))
+            .isEqualTo("ขนาด 14.8x14.8 ซม. x 7 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** An unparseable typed size is untouched by F2 -- printed verbatim, exactly as before. */
+    @Test
+    void sizeLine_F2_unparseable_isUnaffected_staysVerbatim() {
+        assertThat(DealQuotationLines.sizeLine("รูปทรงพิเศษ", new BigDecimal("7"), null, null))
+            .isEqualTo("ขนาด รูปทรงพิเศษ x 7 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** A typed size that MATCHES the catalogue (order/unit-ambiguous, as today) keeps printing the
+     * catalogue's own format exactly as before -- F2 only changes the two FALLBACK branches. */
+    @Test
+    void sizeLine_F2_unitlessTypedSize_matchesCatalogue_staysCatalogueFormat() {
+        assertThat(DealQuotationLines.sizeLine("14.8x14.8", new BigDecimal("7"),
+            new BigDecimal("148"), new BigDecimal("148")))  // catalogue: 14.8cm x 14.8cm, matches
+            .isEqualTo("ขนาด 14.8 cm x 14.8 cm x 7 mm (ขนาดโดยประมาณ)");
     }
 
     // ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
@@ -306,9 +375,12 @@ class DealQuotationLinesTest {
     // printing the catalogue's 60x60. ────────────────────────────────────────────────────────────
     @Test
     void sizeLine_typedSizeWithThirdDimension_differsFromCatalogue_printsTypedText_theExact20260916Bug() {
+        // F2 fix (2026-09-16 review): "30x60x1" carries no unit token on either of its first two
+        // numbers (the third, thickness, is ignored and never carries a unit either) -- so this
+        // now prints "30 cm x 60 cm" rather than the ambiguous verbatim "30x60x1".
         assertThat(DealQuotationLines.sizeLine("30x60x1", new BigDecimal("9"),
             new BigDecimal("600"), new BigDecimal("600")))
-            .isEqualTo("ขนาด 30x60x1 x 9 mm (ขนาดโดยประมาณ)")
+            .isEqualTo("ขนาด 30 cm x 60 cm x 9 mm (ขนาดโดยประมาณ)")
             .doesNotContain("60 cm x 60 cm");
     }
 
@@ -354,12 +426,20 @@ class DealQuotationLinesTest {
 
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
+    /**
+     * F2 fix (2026-09-16 review): a typed size with NO unit and NO catalogue to cross-check
+     * against now prints in centimetres -- {@code "200 cm x 300 cm"} -- matching the field's own
+     * label ("ขนาด (ซม.)"), rather than the old ambiguous verbatim "200x300". This is a deliberate
+     * narrowing of the older "no splitting, no unit-guessing" caution this test used to document:
+     * that caution was about NOT overriding a catalogue that says otherwise (the 200x300mm
+     * regression test above, where a catalogue link disambiguates and still wins) -- it was never
+     * meant to leave a genuinely unit-less, catalogue-less size printing as bare digits with no
+     * unit at all, which is its own production bug (F2: "ขนาด 14.8x14.8 x 7 mm" read as 14.8mm).
+     */
     @Test
-    void sizeLine_noCatalogueDimensions_printsTheRepsTypedTextVerbatim_unconverted() {
-        // No splitting, no unit-guessing -- this is exactly the shape the deleted heuristic got
-        // wrong (a typed "200x300" is NOT reliably centimetres; see the regression test above).
+    void sizeLine_noCatalogueDimensions_unitlessTypedText_printsInCentimetres() {
         assertThat(DealQuotationLines.sizeLine("200x300", new BigDecimal("9"), null, null))
-            .isEqualTo("ขนาด 200x300 x 9 mm (ขนาดโดยประมาณ)");
+            .isEqualTo("ขนาด 200 cm x 300 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
     @Test
@@ -374,17 +454,28 @@ class DealQuotationLinesTest {
     void sizeLine_noCatalogueDimensions_unparseableFaceSize_isPrintedAsTyped_notMangled() {
         assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9"), null, null))
             .isEqualTo("ขนาด รูปทรงอิสระ x 9 mm (ขนาดโดยประมาณ)");
+    }
+
+    /** F2 fix (2026-09-16 review): "60x120x5" DOES parse (the third number is the ignored
+     * thickness, per the shared grammar's own third-dimension allowance -- see
+     * {@code parseTwoDimensions_sharedGrammarVectors_decimalCommaAndThirdDimensionAndTrailingText}),
+     * and carries no unit on either of its first two numbers -- so it now prints in centimetres,
+     * same as any other unit-less typed pair, rather than staying bare digits with no unit. */
+    @Test
+    void sizeLine_noCatalogueDimensions_thirdDimensionUnitless_printsInCentimetres() {
         assertThat(DealQuotationLines.sizeLine("60x120x5", new BigDecimal("9"), null, null))
-            .isEqualTo("ขนาด 60x120x5 x 9 mm (ขนาดโดยประมาณ)");
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
     /** Only ONE catalogue dimension present (e.g. a corrupt row) is treated the same as neither --
-     * a half-known geometry is not enough to print a face size from, so this falls back too. */
+     * a half-known geometry is not enough to print a face size from, so this falls back too.
+     * F2 fix (2026-09-16 review): the fallback itself now prints an unparsed, unit-less pair in
+     * centimetres ("60 cm x 120 cm") rather than the ambiguous verbatim "60x120". */
     @Test
     void sizeLine_onlyOneCatalogueDimension_fallsBackToTypedText() {
         assertThat(DealQuotationLines.sizeLine("60x120", new BigDecimal("9"),
             new BigDecimal("600"), null))
-            .isEqualTo("ขนาด 60x120 x 9 mm (ขนาดโดยประมาณ)");
+            .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
     /** A blank face size, with no catalogue dimensions either, prints only the thickness -- no
@@ -670,8 +761,10 @@ class DealQuotationLinesTest {
 
     @Test
     void english_sizeLine_fallbacksMirrorTheThaiOnes() {
+        // F2 fix (2026-09-16 review): "60x60" carries no unit and no catalogue link, so this now
+        // prints in centimetres, same as the Thai FALLBACK's own F2 fix.
         assertThat(DealQuotationLines.sizeLine(EN, "60x60", new BigDecimal("10"), null, null))
-            .isEqualTo("Size 60x60 x 10 mm (approx.)");
+            .isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
         assertThat(DealQuotationLines.sizeLine(EN, null, new BigDecimal("10"), null, null))
             .isEqualTo("Size 10 mm (approx.)");
     }

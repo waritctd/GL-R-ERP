@@ -249,19 +249,23 @@ public final class DealQuotationLines {
         }
         String thicknessPart = format(thicknessMm) + " mm";
         String facePart = faceSizeFromCatalogMm(catalogWidthMm, catalogHeightMm);
+        // F2 fix (2026-09-16 review): resolved once, used by BOTH fallback branches below.
+        ParsedSize typed = parseTwoDimensions(sizeText);
         if (facePart != null) {
-            ParsedSize typed = parseTwoDimensions(sizeText);
             if (typed != null && !matchesCatalogFaceSize(typed, catalogWidthMm, catalogHeightMm)) {
                 // The rep typed a genuinely DIFFERENT size than the row's linked catalogue tile --
                 // print exactly what they typed rather than the (wrong-for-this-line) catalogue
                 // dims. See this method's Javadoc "REFINEMENT" section -- bug prod QT-2026-0034-1.
-                facePart = sizeText.trim();
+                // F2: UNLESS they typed no unit at all, in which case print it in the catalogue's
+                // own cm format rather than the ambiguous verbatim text -- see the Javadoc below.
+                facePart = typed.unit() == null ? formatUnitlessTypedSize(typed) : sizeText.trim();
             }
         } else if (!blank(sizeText)) {
             // FALLBACK: no catalogue geometry -- print exactly what the rep typed. Never split it
             // on "x", never unit-suffix it, never treat SIZE_HAS_UNIT as license to reformat it --
-            // see this method's Javadoc for why guessing here was the bug.
-            facePart = sizeText.trim();
+            // see this method's Javadoc for why guessing here was the bug. F2: EXCEPT a typed size
+            // that parses with no unit at all, printed in cm instead -- see the Javadoc below.
+            facePart = typed != null && typed.unit() == null ? formatUnitlessTypedSize(typed) : sizeText.trim();
         }
         if (blank(facePart)) {
             return label + thicknessPart + approx;
@@ -405,6 +409,23 @@ public final class DealQuotationLines {
             return null;
         }
         return format(widthMm.movePointLeft(1)) + " cm x " + format(heightMm.movePointLeft(1)) + " cm";
+    }
+
+    /**
+     * F2 fix (2026-09-16 review) — a typed size that parses via {@link #parseTwoDimensions} but
+     * carries explicitly NO unit token. Production bug: a rep typed {@code "14.8x14.8"} into the
+     * field labelled {@code "ขนาด (ซม.)"} — centimetres by the field's own label — and both
+     * FALLBACK branches of {@link #sizeLine} printed it VERBATIM, appending only the thickness in
+     * millimetres, so the printed document read {@code "ขนาด 14.8x14.8 x 7 mm"} — 14.8
+     * MILLIMETRES, a 10x misread of a genuinely centimetre-typed size. Format the parsed pair in
+     * the catalogue's own {@code "{w} cm x {h} cm"} shape instead — same {@link #format} discipline
+     * (trailing zeros dropped), the numbers read AS TYPED (unit-less means cm by the field's own
+     * label, never guessed), never converted. An EXPLICIT unit ({@code "14.8x14.8mm"},
+     * {@code "300x600mm"}) is untouched by this fix — it says what it means and keeps printing
+     * verbatim, same as an unparseable size.
+     */
+    private static String formatUnitlessTypedSize(ParsedSize typed) {
+        return format(typed.width()) + " cm x " + format(typed.height()) + " cm";
     }
 
     /**

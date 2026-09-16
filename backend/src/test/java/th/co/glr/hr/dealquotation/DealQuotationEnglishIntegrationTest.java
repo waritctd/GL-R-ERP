@@ -613,7 +613,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             salesActor);
         var tile = created.items().get(0);
         assertThat(tile.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        assertThat(tile.sizeLine()).isEqualTo("Size 60x60 x 10 mm (approx.)");
+        // F2 fix (2026-09-16 review): tileItem's "60x60" carries no unit and no catalogue link, so
+        // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
+        // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
+        assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
         assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
@@ -659,7 +662,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             thaiRequest(List.of(tileItem("100.00", 10), adjustmentItem("3", LocalDate.of(2026, 7, 31)))),
             salesActor);
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
-        assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60x60 x 10 mm (ขนาดโดยประมาณ)");
+        // F2 fix (2026-09-16 review): same "60x60", no unit, no catalogue link -- centimetres now.
+        assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
         assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดขึ้นเต็มกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
