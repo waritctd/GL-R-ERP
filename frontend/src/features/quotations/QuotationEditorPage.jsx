@@ -86,16 +86,20 @@ function pickCalculatedFields(source) {
 // is on the server. วันที่ is deliberately never remembered: it is always today.
 function emptyTerms(defaults = null) {
   const depositPercent = defaults?.depositPercent ?? '';
-  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): remembers like depositPercent itself —
-  // a rep who always quotes with no deposit keeps starting there. fullPaymentTerm rides along
-  // (meaningless while noDeposit is false, so remembering it costs nothing either way).
-  const noDeposit = defaults?.noDeposit === true;
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): noDeposit must NEVER
+  // be seeded from a remembered default, unlike depositPercent/validityMode above. Ticking it once
+  // would otherwise make every LATER new quotation start with no deposit — a rep could send one
+  // with no deposit by accident. A brand-new quotation always starts with the normal deposit
+  // controls; no-deposit is a deliberate per-quotation choice. (quotationPrefs.js no longer even
+  // carries either field, so `defaults` never has them — but this stays explicit rather than
+  // reading `defaults?.noDeposit` at all, in case a stale stored blob still has the key.)
+  const noDeposit = false;
   return {
     deptCode: '', unitCode: '', offerDate: todayIso(),
     depositPercent,
     depositPercentCustom: depositPercent !== '' && !DEPOSIT_PERCENT_PRESETS.includes(Number(depositPercent)),
     noDeposit,
-    fullPaymentTerm: noDeposit ? (defaults?.fullPaymentTerm ?? '') : '',
+    fullPaymentTerm: '',
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
@@ -1055,11 +1059,10 @@ export function QuotationEditorPage({ user, showToast }) {
   function rememberDefaults() {
     writeQuotationDefaults(user?.id, {
       depositPercent: terms.depositPercent,
-      // Item 4 ("ไม่รับมัดจำ", V181) — remembered like depositPercent itself; fullPaymentTerm
-      // rides along (writeQuotationDefaults already drops it when blank, so this costs nothing
-      // for a rep who never ticks the box).
-      noDeposit: terms.noDeposit,
-      fullPaymentTerm: terms.fullPaymentTerm,
+      // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): noDeposit/
+      // fullPaymentTerm are deliberately NOT sent here any more — see emptyTerms's own comment
+      // above and quotationPrefs.js's DEFAULT_TERM_FIELDS. Remembering noDeposit would make every
+      // later new quotation start with no deposit, which is the one thing this must never do.
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,

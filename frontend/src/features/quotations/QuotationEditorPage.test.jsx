@@ -1149,6 +1149,34 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     expect(document.getElementById('validityDays')).toHaveProperty('value', '45');
   });
 
+  // Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16, REVERSED same day): wrong-way-round case.
+  // Ticking "ไม่รับมัดจำ" on one quotation must NOT make the NEXT new quotation start that way —
+  // that would be a rep sending a quotation with no deposit by accident. Contrast with the test
+  // just above: depositPercent/validityMode DO carry over, noDeposit deliberately never does.
+  it('a new quotation does NOT start with no-deposit even after the previous quotation used it', async () => {
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
+    const first = renderEditor('/quotations/new?ticket=18');
+
+    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
+    await fillCompleteQuotationItem();
+    fireEvent.click(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }));
+    fireEvent.change(screen.getByLabelText('เงื่อนไขการชำระเงิน'), { target: { value: 'ON_DELIVERY' } });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
+    first.unmount();
+
+    renderEditor('/quotations/new?ticket=18');
+
+    await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ });
+    // The normal deposit controls are back: unticked checkbox, % chips visible, no payment-term
+    // dropdown.
+    expect(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }).checked).toBe(false);
+    expect(screen.getByRole('button', { name: '30%' })).not.toBeNull();
+    expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
+  });
+
   // The whole prefs layer must degrade silently: the ACCESSOR itself throws in a private window,
   // so a bare read would take the editor down rather than starting from the app defaults.
   it('renders normally when localStorage throws on every access', async () => {
@@ -1324,6 +1352,22 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     expect(payload.remainderMode).toBeNull();
     expect(payload.creditDays).toBeNull();
     expect(payload.fullPaymentTerm).toBe('ON_DELIVERY');
+  });
+
+  // This is the ONLY thing this change leaves untouched (task scope: prefs, not editing). An
+  // existing quotation always loads its own server-stored terms regardless of what is (or is not)
+  // remembered for a NEW quotation — noDeposit here comes from `quotation.depositPercent === 0`,
+  // never from quotationPrefs.js.
+  it('loading an existing quotation saved with depositPercent 0 restores the ticked checkbox and its chosen term', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: existingDraftWithOneItem({ depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY' }),
+    });
+    renderEditor('/quotations/5');
+
+    const checkbox = await screen.findByRole('checkbox', { name: /ไม่รับมัดจำ/ });
+    expect(checkbox.checked).toBe(true);
+    expect(screen.getByLabelText('เงื่อนไขการชำระเงิน')).toHaveProperty('value', 'ON_DELIVERY');
+    expect(screen.queryByRole('button', { name: '30%' })).toBeNull();
   });
 
   it('typing 0 into the custom "อื่นๆ" มัดจำ input is rejected with a message pointing at the checkbox', async () => {
