@@ -2239,6 +2239,35 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
+     * D5 (Opus review 2026-09-16): {@code refreshDraftContactSnapshot}'s own {@code UPDATE} carries
+     * no actor/ownership predicate at all -- it moves EVERY DRAFT pointing at this contact id,
+     * regardless of whose ticket it belongs to, even though a DRAFT is otherwise visible only to
+     * its owning rep plus CEO/sales_manager (DealEntryAccess is role-only). Pinned here as the
+     * INTENDED behaviour, not an authz gap: the snapshot is derived data rep B's own next save on
+     * their DRAFT would reproduce verbatim anyway (same contact row, same {@code resolveContact}
+     * read), so this carries no information about rep B's ticket that rep A could not already see
+     * by looking at the (shared) contact record itself. See this test's own PR-body paragraph
+     * (in the branch's PR description) for the full reasoning a reviewer needs to tell this apart
+     * from a genuine cross-rep leak.
+     */
+    @Test
+    void updateContact_anotherRepsDraftOnTheSameContact_isAlsoRefreshed() {
+        DealQuotationDto repBsDraft = quotationService.create(otherTicketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor);
+        assertThat(repBsDraft.contactEmail()).isEqualTo(contact.email());
+        assertThat(repBsDraft.salesRepId()).isEqualTo(otherSalesId);
+
+        // Rep A (or anyone reaching CustomerService#updateContact -- it takes no actor) corrects
+        // the SHARED contact. Rep B never touched their own draft.
+        transactional(customerService).updateContact(customer.id(), contact.id(),
+            null, null, null, "shared-contact-new-email@customer.test", "085-000-1111");
+
+        DealQuotationDto reloaded = quotationRepository.findById(repBsDraft.id()).orElseThrow();
+        assertThat(reloaded.contactEmail()).isEqualTo("shared-contact-new-email@customer.test");
+        assertThat(reloaded.contactPhone()).isEqualTo("085-000-1111");
+    }
+
+    /**
      * D6 (Opus review 2026-09-16): {@code ContactRepository#update}'s own
      * {@code COALESCE(:email, email)} treats an explicit {@code ""} (as opposed to a literal
      * {@code null} parameter, which means "leave unchanged") as "clear this field", so
