@@ -135,12 +135,34 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
       .toBeLessThan(api.dealQuotations.downloadPdf.mock.invocationCallOrder[0]);
   });
 
-  it('a blocking validation error (no ผู้สั่งซื้อ) refuses the download outright -- no PDF call, a Thai toast instead', async () => {
+  // D1 fix (Opus review 2026-09-16): the original version of this fix refused a download for ANY
+  // blocking validation error, even on a quotation the rep never touched -- an existing incomplete
+  // DRAFT (sent back for correction, or a row missing ความหนา, ~41% of the prod catalogue) has
+  // nothing this flush needs to save, so it must still download the stored document exactly as it
+  // could before this whole fix landed. Refusal is now gated on there being unsaved work the flush
+  // actually cannot save (dirty AND invalid) -- see the next test for that case.
+  it('a CLEAN, untouched quotation with a blocking validation error (no ผู้สั่งซื้อ) still downloads the stored document -- nothing to flush (D1 fix)', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }),
     });
     const showToast = renderEditor('/quotations/5');
     await screen.findByText('ข้อมูลที่ยังไม่ครบ');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด PDF' }));
+
+    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledWith('5'));
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+    expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
+  it('a DIRTY quotation with a blocking validation error (no ผู้สั่งซื้อ) still refuses the download outright -- no PDF call, a Thai toast instead', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }),
+    });
+    const showToast = renderEditor('/quotations/5');
+    await screen.findByText('ข้อมูลที่ยังไม่ครบ');
+    // Touch the form -- there is now unsaved work this flush cannot save because it is invalid.
+    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'พิกัดใหม่' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด PDF' }));
 
@@ -183,5 +205,26 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
 
     await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledTimes(1));
     expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
+  });
+
+  // D4 fix (Opus review 2026-09-16): handleDownload used to read `dirty`/`hasValidationErrors`
+  // from the render closure captured at CLICK time, and stays suspended across several `await`s.
+  // Here the quotation is clean (not dirty) at the moment of the click, so the OLD code's frozen
+  // `dirty: false` would skip the save entirely -- and would also have just cancelled the fresh
+  // autosave debounce the edit below schedules, with nothing left to reschedule it, losing the
+  // edit until the next keystroke. `fireEvent.change` right after `fireEvent.click` (with no
+  // `await` in between) lands synchronously, before the microtask that resumes handleDownload past
+  // its first `await` ever gets a turn -- so this reliably reproduces "an edit lands while the
+  // flush is already suspended", regardless of how fast the contact-picker flush resolves.
+  it('an edit made DURING the flush (after the click, before it decided whether to save) is still saved -- no further typing needed (D4 fix)', async () => {
+    renderEditor('/quotations/5');
+    await screen.findByLabelText('หมายเหตุเพิ่มเติม'); // freshly loaded: clean, not dirty.
+
+    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด PDF' }));
+    fireEvent.change(screen.getByLabelText('หมายเหตุเพิ่มเติม'), { target: { value: 'edit during flush' } });
+
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.update.mock.calls[0][1].customerNotes).toBe('edit during flush');
+    await waitFor(() => expect(api.dealQuotations.downloadPdf).toHaveBeenCalledWith('5'));
   });
 });

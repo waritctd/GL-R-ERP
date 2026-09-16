@@ -292,6 +292,15 @@ export function QuotationEditorPage({ user, showToast }) {
     if (next) editSeqRef.current += 1;
     setDirtyState(next);
   }, []);
+  // D4 fix (Opus review 2026-09-16): a "latest value" mirror of `dirty`, kept current by an effect
+  // that runs after every render where it changed (react-hooks/refs forbids writing a ref's
+  // `.current` directly during render). handleDownload (below) is an async function that awaits
+  // across several `await`s -- reading the plain `dirty` closure variable there means reading
+  // whatever it was at the moment the button was CLICKED, which can go stale the instant an edit
+  // lands during one of those awaits. Reading `dirtyRef.current` instead always sees the live
+  // value, no matter how many renders happened while the handler was suspended.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   // V178 (owner ruling 2026-09-14): ระบุวันที่ is offered only on a document with special
   // pricing — mirrors DealQuotationRenderAdapter#hasSpecialPricing exactly (quotationMeta.js).
   const docHasSpecialPricing = useMemo(
@@ -829,6 +838,11 @@ export function QuotationEditorPage({ user, showToast }) {
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
+  // D4 fix (Opus review 2026-09-16): same "latest value" mirror as `dirtyRef` above, and for the
+  // same reason -- handleDownload reads this across several `await`s and must never act on a
+  // value that went stale while it was suspended.
+  const hasValidationErrorsRef = useRef(hasValidationErrors);
+  useEffect(() => { hasValidationErrorsRef.current = hasValidationErrors; }, [hasValidationErrors]);
   /**
    * Whether to SHOW that checklist — separate from whether it exists, which still gates the save
    * buttons exactly as before.
@@ -1320,6 +1334,22 @@ export function QuotationEditorPage({ user, showToast }) {
   });
 
   const [downloading, setDownloading] = useState(null);
+  // Shared by both refusal points in handleDownload below (D1 fix needs to check this twice — see
+  // that function's own comment for why).
+  function refuseDownloadForValidation() {
+    showToast('error', 'ยังดาวน์โหลดไม่ได้ — กรุณากรอกข้อมูลให้ครบก่อน');
+    const firstBlockingField = checklist.find((entry) => entry.blocking && entry.targetId);
+    if (firstBlockingField) {
+      focusQuotationField(firstBlockingField.targetId);
+    } else if (typeof document !== 'undefined') {
+      // No single field to focus (a checklist entry with no targetId, e.g. a duplicate
+      // ตำแหน่งติดตั้ง group) — scroll the whole checklist into view instead. `scrollIntoView`
+      // is optional-chained the same way focusQuotationField's own does: jsdom does not
+      // implement it.
+      document.querySelector('[data-testid="quotation-checklist"]')
+        ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }
+  }
   /**
    * Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): the
    * PDF/XLSX are rendered fresh from the DB on every request (DealQuotationService), which can
@@ -1329,14 +1359,37 @@ export function QuotationEditorPage({ user, showToast }) {
    * figures. On an editable (DRAFT, editable-by-this-user) quotation, download now flushes first:
    *   1. Await the ผู้สั่งซื้อ picker's own in-flight โทร./อีเมล save, if any (same race submit's
    *      pre-save now guards against — see that mutationFn's own comment).
-   *   2. Cancel any pending autosave debounce (it would otherwise fire mid-flush and race it).
-   *   3. Refuse outright — never download a stale PDF — if blocking validation errors mean this
-   *      form CANNOT be saved right now; point the rep at the checklist instead.
-   *   4. Await whatever save is ALREADY in flight (autosave or a manual บันทึกร่าง), then, if the
-   *      form is still dirty, save once more — reusing `runSave`, the SAME update-mutation path
-   *      บันทึกร่าง/autosave already use, never a second save implementation.
+   *   2. Await whatever save is ALREADY in flight (autosave, a manual บันทึกร่าง, or submit's own
+   *      tracked pre-save — see pendingSaveRef's own comment), so this flush never overlaps it.
+   *   3. Cancel any pending autosave debounce (it would otherwise fire mid-flush and race the
+   *      save below) — done AFTER the two awaits above, not before, so a timer an edit schedules
+   *      DURING either of them is the one actually cancelled (see D4 below for why the order
+   *      matters).
+   *   4. Refuse — never download a stale PDF — only if there is unsaved work this flush cannot
+   *      save: blocking validation errors AND (the form is dirty OR a save was in flight). An
+   *      existing incomplete DRAFT that the rep has not touched (sent back for correction, or a
+   *      row missing ความหนา — ~41% of the catalogue lacks it) has nothing here to save, so it
+   *      still downloads the stored document exactly as before this fix (D1, Opus review
+   *      2026-09-16 — the earlier version of this fix refused ANY invalid form, even a clean one).
+   *   5. If still dirty, save once more — reusing `runSave`, the SAME update-mutation path
+   *      บันทึกร่าง/autosave already use, never a second save implementation. Re-checked against
+   *      the LIVE validation state right before this, in case an edit landed during step 2's
+   *      await and made the form newly invalid.
    * A non-editable (submitted/approved/read-only) quotation is already frozen server-side, so it
    * downloads exactly as before — nothing to flush.
+   *
+   * D4 correction (Opus review 2026-09-16): steps 4/5 above read `dirtyRef.current`/
+   * `hasValidationErrorsRef.current` (refs, always current), never the plain `dirty`/
+   * `hasValidationErrors` closure variables. This function is defined fresh on every render and
+   * closes over that render's values, but it keeps running (suspended at each `await`) across
+   * however many renders happen while it waits — an edit landing mid-flush used to re-render with
+   * `dirty: true`, yet THIS invocation's own frozen `dirty` closure stayed `false` from the click,
+   * silently skipping the save (and, worse, the debounced autosave that edit itself scheduled was
+   * then cancelled by step 3 with nothing left to reschedule it). Reading the refs instead means
+   * this function always acts on whatever is true right now, however many edits happened while it
+   * was suspended — the same edit that gets a fresh timer cancelled at step 3 is exactly the edit
+   * step 5's live `dirtyRef.current` check picks up and saves, so no separate "reschedule the
+   * cancelled timer" step is needed: it is folded into this flush's own save instead.
    */
   async function handleDownload(format) {
     if (downloading) return; // one flush+download in flight at a time — no double-fire
@@ -1344,31 +1397,29 @@ export function QuotationEditorPage({ user, showToast }) {
     try {
       if (isEditable) {
         await contactPickerRef.current?.flushPendingContactSave?.();
+        if (pendingSaveRef.current) {
+          // Already toasted by updateMutation's own onError if it fails — fall through to the
+          // live dirty/validation checks below rather than assume it succeeded.
+          await pendingSaveRef.current.catch(() => {});
+        }
+        // D4: cancel whatever autosave timer is pending NOW, after both awaits above — see this
+        // function's own header comment for why the timing matters.
         if (autosaveTimerRef.current) {
           clearTimeout(autosaveTimerRef.current);
           autosaveTimerRef.current = null;
         }
-        if (hasValidationErrors) {
-          showToast('error', 'ยังดาวน์โหลดไม่ได้ — กรุณากรอกข้อมูลให้ครบก่อน');
-          const firstBlockingField = checklist.find((entry) => entry.blocking && entry.targetId);
-          if (firstBlockingField) {
-            focusQuotationField(firstBlockingField.targetId);
-          } else if (typeof document !== 'undefined') {
-            // No single field to focus (a checklist entry with no targetId, e.g. a duplicate
-            // ตำแหน่งติดตั้ง group) — scroll the whole checklist into view instead. `scrollIntoView`
-            // is optional-chained the same way focusQuotationField's own does: jsdom does not
-            // implement it.
-            document.querySelector('[data-testid="quotation-checklist"]')
-              ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
-          }
+        // D1: only refuse when there is unsaved work this flush cannot save.
+        if ((dirtyRef.current || pendingSaveRef.current) && hasValidationErrorsRef.current) {
+          refuseDownloadForValidation();
           return;
         }
-        if (pendingSaveRef.current) {
-          // Already toasted by updateMutation's own onError if it fails — fall through to the
-          // `dirty` check below rather than assume it succeeded.
-          await pendingSaveRef.current.catch(() => {});
-        }
-        if (dirty) {
+        if (dirtyRef.current) {
+          // D4: re-checked here (not just above) in case an edit landed during the pendingSaveRef
+          // await and made the form newly invalid.
+          if (hasValidationErrorsRef.current) {
+            refuseDownloadForValidation();
+            return;
+          }
           await runSave(false); // rejects on failure — caught below, which skips the download.
         }
       }
