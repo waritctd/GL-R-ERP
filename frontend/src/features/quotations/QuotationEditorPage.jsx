@@ -1048,8 +1048,20 @@ export function QuotationEditorPage({ user, showToast }) {
   // Bug fix (owner re-report 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่ PDF ยังใช้ค่าเดิม"): the
   // download handler (below) needs to know whether an update is ALREADY on the wire — from an
   // autosave OR a manual บันทึกร่าง — so it can await the SAME request instead of firing a second,
-  // overlapping one. `runSave` is the ONE place anything triggers `updateMutation` from here on
-  // (autosave, บันทึกร่าง, and the download flush), so `pendingSaveRef` can never miss one.
+  // overlapping one. `runSave` is where autosave and บันทึกร่าง trigger `updateMutation` from here
+  // on, and both track this ref.
+  //
+  // D3 correction (Opus review 2026-09-16): the paragraph above used to also claim `runSave` is
+  // "the ONE place anything triggers `updateMutation`", which is not true — submitMutation's own
+  // mutationFn (below) issues its own pre-save PUT directly via `api.dealQuotations.update`,
+  // *outside* `runSave`. It is tracked in `pendingSaveRef` there too (assigned by hand, the same
+  // self-clearing shape `runSave` uses just below), specifically so a download flush racing a
+  // pending submit sees it and awaits it instead of firing a second, overlapping PUT. It is
+  // deliberately NOT routed through `runSave`/`updateMutation` itself: that would fire
+  // `updateMutation`'s own onSuccess/onError (an extra "บันทึกร่างแล้ว" toast on success, or a
+  // SECOND error toast alongside submitMutation's own onError on failure) — side effects submit's
+  // silent, atomic save-then-submit UX does not want. So `pendingSaveRef` is genuinely
+  // comprehensive (every PUT this page issues sets it), but it is not exclusively `runSave`'s.
   const pendingSaveRef = useRef(null);
   // The autosave debounce's own pending timer, if any — cleared by the download flush so a stale
   // debounce firing mid-download can never race it (a second concurrent PUT while the flush's own
@@ -1092,7 +1104,19 @@ export function QuotationEditorPage({ user, showToast }) {
       await contactPickerRef.current?.flushPendingContactSave?.();
       if (dirty) {
         const { payload, sentSeq, sentClientIds } = buildSaveRequest();
-        const saved = await api.dealQuotations.update(id, payload);
+        // D3 fix (Opus review 2026-09-16): tracked in `pendingSaveRef` by hand, the same
+        // self-clearing shape `runSave` uses — purely so a download flush racing this pre-save
+        // sees it via `pendingSaveRef.current` and awaits it instead of firing a second, overlapping
+        // PUT (DealQuotationService#resolveContact reads live state, so two concurrent writes can
+        // otherwise race each other into Postgres in either order). Deliberately NOT routed
+        // through `runSave`/`updateMutation` itself — see `pendingSaveRef`'s own comment above for
+        // why that would change submit's toasts.
+        const savePromise = api.dealQuotations.update(id, payload);
+        pendingSaveRef.current = savePromise;
+        savePromise.catch(() => {}).finally(() => {
+          if (pendingSaveRef.current === savePromise) pendingSaveRef.current = null;
+        });
+        const saved = await savePromise;
         queryClient.setQueryData(queryKeys.dealQuotationDetail(id), saved.quotation);
         applySavedQuotation(saved.quotation, sentSeq, sentClientIds);
         lastFailedAutoPayloadRef.current = null;
