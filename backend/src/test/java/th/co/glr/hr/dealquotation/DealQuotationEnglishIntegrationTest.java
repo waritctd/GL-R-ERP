@@ -374,8 +374,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.boxes()).isEqualTo(120);
         assertThat(item.sqmPerBox()).isNull();
         assertThat(item.specialPriceLine()).isNull(); // no box sub-line without a box area
+        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
+        // so the box count (new information on this branch, which has no "= N boxes" tail of its
+        // own before this fix) prints instead of the misleading rounding phrase + pure echo.
         assertThat(item.calculationLine())
-            .isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs) (28 pcs/box)");
+            .isEqualTo("(Quantity 3,360 pcs = 120 boxes) (28 pcs/box)");
 
         // Stored: qty stays the PIECE count, sqm_per_box stays NULL.
         assertThat(jdbc.getJdbcOperations().queryForObject(
@@ -598,7 +601,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
         DealQuotationItemDto preview = quotationService.calculateLine(perSqmItem(3360, 28, "0.6", "64"), "EN", salesActor);
         assertThat(preview.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
+        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
+        // so the rounding phrase and its "= 3,360 pcs" echo drop; see DealQuotationLinesTest's
+        // matching tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox.
+        assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes)");
         assertThat(preview.specialPriceLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
         assertThat(preview.quantity()).isEqualByComparingTo("72.00");
         assertThat(preview.unit()).isEqualTo("SQM");
@@ -607,7 +613,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         // An English NET preview: English lines, PCS, pieces.
         DealQuotationItemDto net = quotationService.calculateLine(tileItem("100.00", 10), "EN", salesActor);
-        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        // Wording-scan fix 1 (2026-09-17): tileItem's piecesPerBox=1 makes box rounding a no-op
+        // (see englishQuotation_itemLinesUnitAndDiscountTextAreEnglish_storedColumnsUntouched's
+        // matching comment) -- box count prints instead of the old rounding-phrase echo.
+        assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs = 10 boxes) (1 pcs/box)");
         assertThat(net.unit()).isEqualTo("PCS");
 
         assertThatThrownBy(() -> quotationService.calculateLine(tileItem("100.00", 10), "FR", salesActor))
@@ -682,7 +691,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
         // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
         assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
-        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs, rounded up to full boxes = 10 pcs) (1 pcs/box)");
+        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 makes box rounding a no-op (see the Thai
+        // mirror of this test, anExistingRowReadsInTheDocumentsCurrentLanguage_withNoRewrite) --
+        // the box count prints instead of the old rounding-phrase echo.
+        assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs = 10 boxes) (1 pcs/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
         assertThat(adjustment.descriptionLine()).isEqualTo("Special discount 3% for orders placed by July 31, 2026");
@@ -729,7 +741,11 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
         // F2 fix (2026-09-16 review): same "60x60", no unit, no catalogue link -- centimetres now.
         assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
-        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น และปัดขึ้นเต็มกล่อง = 10 แผ่น) (บรรจุ 1 แผ่น/กล่อง)");
+        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 -- tileItem's own fixed value -- makes
+        // EVERY piece count trivially "already a whole number of boxes", so this row's box
+        // rounding was always a no-op; the misleading "และปัดขึ้นเต็มกล่อง = 10 แผ่น" echo drops and
+        // the box count (10 boxes of 1 pc) prints instead.
+        assertThat(thai.items().get(0).calculationLine()).isEqualTo("(จำนวน 10 แผ่น = 10 กล่อง) (บรรจุ 1 แผ่น/กล่อง)");
         assertThat(thai.items().get(0).unit()).isEqualTo("แผ่น");
         assertThat(thai.items().get(1).descriptionLine()).isEqualTo("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 

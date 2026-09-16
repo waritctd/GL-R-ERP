@@ -512,22 +512,44 @@ public final class DealQuotationLines {
             return thaiLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
         }
 
+        // Wording-scan fix 1 (2026-09-17): the box-rounding phrase and its "= N แผ่น" echo used to
+        // print even when box rounding was a pure no-op -- the count going in (piecesAfterWastage,
+        // re-derived here via WastageCalculator#applyWastage, the single source of truth for that
+        // number) was ALREADY a whole number of boxes, so "และปัดขึ้นเต็มกล่อง = 20 แผ่น" on a row
+        // that never rounded anything was actively misleading (21 real production items print this
+        // shape). Only when box rounding genuinely moved the count does the old wording/echo stay;
+        // otherwise the line ends with the box count instead -- new, genuine information the old
+        // line never stated at all.
+        //
+        // "Changed" is asked directly of the box arithmetic itself -- piecesAfterWastage % ppb != 0
+        // -- rather than by comparing against piecesFinal: ceilToMultiple is a no-op EXACTLY when
+        // its input is already a multiple, so this is the more direct question, and (unlike a
+        // piecesFinal comparison) it stays correct even if a caller's piecesFinal ever disagreed
+        // with what ceilToMultiple(piecesAfterWastage, ppb) would produce -- it can never derive a
+        // box count that does not evenly divide piecesFinal in the branch below.
+        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
+        boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
+
         // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
         // rounds UP (ceilToMultiple), so that wording was wrong about its own direction. Corrected
         // to "และปัดขึ้นเต็มกล่อง" ("rounded up to a full box"). English's "rounded up to full
         // boxes" was already right and is untouched.
-        String roundingPart = hasBox ? " และปัดขึ้นเต็มกล่อง" : "";
+        String roundingPart = boxRoundingChangedCount ? " และปัดขึ้นเต็มกล่อง" : "";
 
         // F1 fix (2026-09-16 review): the trailing "= N แผ่น" clause only states something new
         // when box rounding or wastage may have moved piecesFinal away from the count
         // quantityPart already states. Without a แผ่น/กล่อง and without wastage, piecesFinal
         // always equals piecesBeforeWastage -- printing "= N แผ่น" then is a pure echo, e.g. the
-        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". hasBox alone still justifies the clause even
-        // when the rounding happened to not change the number, because roundingPart itself already
-        // says an operation occurred.
+        // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". Wording-scan fix 1 narrows this further:
+        // box rounding only "still justifies the clause" when it actually CHANGED the count --
+        // when it did not, the box COUNT below is the new information instead, not another echo of
+        // the same piece count quantityPart already gave.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
-        if (hasBox || hasWastage) {
+        if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
+        }
+        if (hasBox && !boxRoundingChangedCount) {
+            sb.append(" = ").append(format(piecesFinal / piecesPerBox)).append(" กล่อง");
         }
         sb.append(")");
         String line = sb.toString();
@@ -615,20 +637,42 @@ public final class DealQuotationLines {
             return englishLoosePiecesLine(quantityPart, wastagePart, hasWastage, piecesFinal, piecesPerBox);
         }
 
-        String roundingPart = hasBox ? ", rounded up to full boxes" : "";
+        // Wording-scan fix 1 (2026-09-17): the Thai mirror of this method's own comment applies
+        // here verbatim -- see #calculationLine's matching block for the full reasoning, including
+        // why "changed" is asked of piecesAfterWastage % ppb directly rather than by comparing
+        // against piecesFinal. piecesAfterWastage is re-derived (never duplicated) via
+        // WastageCalculator#applyWastage, the single source of truth for that number.
+        int piecesAfterWastage = WastageCalculator.applyWastage(piecesBeforeWastage, wastageMode, wastageValue);
+        boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
+        String roundingPart = boxRoundingChangedCount ? ", rounded up to full boxes" : "";
         if (boxes != null) {
-            return "(" + quantityPart + wastagePart + roundingPart + " = " + format(piecesFinal) + " pcs = "
-                + format(boxes) + (boxes == 1 ? " box)" : " boxes)");
+            // The per-sqm box-AREA variant: the box count is this branch's own defining fact (the
+            // printed sqm quantity is derived FROM it), so it is always stated, whether or not box
+            // rounding itself changed anything -- only the rounding phrase and the "= N pcs" echo
+            // (dropped when it says nothing the quantity part or the wastage did not already say)
+            // follow fix 1's rule.
+            StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
+            if (boxRoundingChangedCount || hasWastage) {
+                sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+            }
+            sb.append(" = ").append(format(boxes)).append(boxes == 1 ? " box)" : " boxes)");
+            return sb.toString();
         }
         // F1 fix (2026-09-16 review): mirrors the Thai branch above -- omit a trailing "= N pcs"
         // that only echoes a count quantityPart already states (no pcs/box, no wastage), e.g. the
         // production-class duplicates "(Quantity 3,360 pcs = 3,360 pcs)" and, in AREA mode,
         // "(Area 1,000 sqm @ 2.78 pcs/sqm = 2,780 pcs = 2,780 pcs)" -- AREA mode's own "= 2,780
         // pcs" clause (baked into quantityPart, converting sqm to pieces) is genuine information
-        // and stays untouched; only this SECOND, redundant echo is dropped.
+        // and stays untouched; only this SECOND, redundant echo is dropped. Wording-scan fix 1
+        // narrows this further: when box rounding did not change anything, the box COUNT below is
+        // the new information instead of yet another echo of the same piece count.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
-        if (hasBox || hasWastage) {
+        if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" pcs");
+        }
+        if (hasBox && !boxRoundingChangedCount) {
+            int boxCount = piecesFinal / piecesPerBox;
+            sb.append(" = ").append(format(boxCount)).append(boxCount == 1 ? " box" : " boxes");
         }
         sb.append(")");
         String line = sb.toString();

@@ -552,17 +552,23 @@ class DealQuotationLinesTest {
     // ── owner feedback pass 3 (2026-09-11): zero wastage prints nothing, magnitudes get commas ──
 
     /** "ตัด '+ เผื่อ 0%' ออกทั้งหมด" -- a ZERO percent wastage must print no wastage phrase at all,
-     * not "+ เผื่อ 0%". The rest of the line, piecesFinal included, is byte-identical to what a
-     * PERCENT line with real wastage would print around it -- this is a printing change only, the
-     * quantity math upstream (piecesFinal here still counts as though no wastage were applied) is
-     * untouched by this method. */
+     * not "+ เผื่อ 0%".
+     *
+     * <p>Wording-scan fix 1 (2026-09-17): this fixture's box math (piecesFinal 20, piecesPerBox 4)
+     * happens to already be a whole number of boxes (20 / 4 = 5 exactly), so it now ALSO falls
+     * under fix 1's "box rounding was a no-op" rule -- the old docstring's "byte-identical to what
+     * a PERCENT line with real wastage would print around it" claim no longer holds in general (a
+     * real-wastage line with the SAME already-whole box numbers changes the same way). Updated to
+     * the new shape; {@link #calculationLine_zeroPiecesWastage_omitsTheWastagePhraseEntirely} right
+     * below deliberately keeps its own piecesPerBox=12 NOT dividing piecesFinal=100, so that test
+     * still pins the ORIGINAL rounding-phrase shape this docstring used to describe. */
     @Test
     void calculationLine_zeroPercentWastage_omitsTheWastagePhraseEntirely() {
         String line = DealQuotationLines.calculationLine(
             WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("2"),
             20, WastageCalculator.WASTAGE_MODE_PERCENT, BigDecimal.ZERO, 20, 4);
 
-        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 20 แผ่น) (บรรจุ 4 แผ่น/กล่อง)");
+        assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น = 5 กล่อง) (บรรจุ 4 แผ่น/กล่อง)");
         assertThat(line).doesNotContain("เผื่อ");
     }
 
@@ -605,6 +611,77 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo(
             "(พื้นที่ 300 ตร.ม.ๆละ 16.39 แผ่น รวม 4,917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5,180 แผ่น) "
                 + "(บรรจุ 10 แผ่น/กล่อง)");
+    }
+
+    // ── Wording-scan fix 1 (2026-09-17): a whole-box count must NOT be echoed back with the
+    // misleading "และปัดขึ้นเต็มกล่อง" ("rounded up") phrase when box rounding never rounded
+    // anything -- 21 real production items print this shape. Pinned here directly against
+    // #calculationLine (not only through #tilePrint) with the owner-approved wording verbatim. ──
+
+    /** No wastage, already whole boxes: {@code (จำนวน 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)}. */
+    @Test
+    void calculationLine_noWastage_alreadyWholeBoxes_printsBoxCount_noRoundingPhrase() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            20, WastageCalculator.WASTAGE_MODE_NONE, null, 20, 10);
+
+        assertThat(line).isEqualTo("(จำนวน 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)");
+        // Wrong-way-round: the old rounding phrase and the pure "= 20 แผ่น" echo must not appear.
+        assertThat(line).doesNotContain("ปัดขึ้น").doesNotContain("= 20 แผ่น");
+    }
+
+    /** Wastage that lands exactly on a whole box count:
+     * {@code (จำนวน 18 แผ่น + เผื่อ 2 แผ่น = 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)} -- the
+     * wastage-adjusted total STILL prints (it is new information over quantityPart's own "18
+     * แผ่น"), but the rounding phrase does not (box rounding itself was a no-op). */
+    @Test
+    void calculationLine_wastageLandsOnWholeBoxes_printsTotalAndBoxCount_noRoundingPhrase() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            18, WastageCalculator.WASTAGE_MODE_PIECES, new BigDecimal("2"), 20, 10);
+
+        assertThat(line).isEqualTo("(จำนวน 18 แผ่น + เผื่อ 2 แผ่น = 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)");
+        assertThat(line).doesNotContain("ปัดขึ้น");
+    }
+
+    /** AREA mode, already whole boxes: {@code (พื้นที่ … รวม 26 แผ่น = 2 กล่อง) (บรรจุ 13
+     * แผ่น/กล่อง)}. */
+    @Test
+    void calculationLine_areaMode_alreadyWholeBoxes_printsBoxCount_noRoundingPhrase() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("9.35"), new BigDecimal("2.78"),
+            26, WastageCalculator.WASTAGE_MODE_NONE, null, 26, 13);
+
+        assertThat(line).isEqualTo("(พื้นที่ 9.35 ตร.ม.ๆละ 2.78 แผ่น รวม 26 แผ่น = 2 กล่อง) (บรรจุ 13 แผ่น/กล่อง)");
+        assertThat(line).doesNotContain("ปัดขึ้น");
+    }
+
+    /** Rounding that DID change the count stays EXACTLY as it always printed -- the wrong-way-round
+     * twin of the three tests above, so this fix cannot be mistaken for "never print the rounding
+     * phrase again". */
+    @Test
+    void calculationLine_roundingThatChangedTheCount_isUnaffectedByFix1() {
+        String line = DealQuotationLines.calculationLine(
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            32, WastageCalculator.WASTAGE_MODE_NONE, null, 40, 10);
+
+        assertThat(line).isEqualTo("(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 40 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
+        // The box COUNT ("= N กล่อง") is NOT printed on this branch -- only the box-area-per-sqm
+        // variant and the "no rounding happened" branches print that; the trailing "(บรรจุ ...
+        // แผ่น/กล่อง)" tail is a different thing (the box SIZE, always printed whenever hasBox) and
+        // is expected here.
+        assertThat(line).doesNotContain("= 4 กล่อง");
+    }
+
+    /** English mirror of the first test above. */
+    @Test
+    void english_noWastage_alreadyWholeBoxes_printsBoxCount_noRoundingPhrase() {
+        String line = DealQuotationLines.calculationLine(EN,
+            WastageCalculator.QUANTITY_MODE_PIECES, null, null,
+            20, WastageCalculator.WASTAGE_MODE_NONE, null, 20, 10);
+
+        assertThat(line).isEqualTo("(Quantity 20 pcs = 2 boxes) (10 pcs/box)");
+        assertThat(line).doesNotContain("rounded").doesNotContain("= 20 pcs");
     }
 
     /** PIECES quantity mode also gets commas on its own count when it exceeds 999.
@@ -923,7 +1000,12 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.6"), null, 3360,
             WastageCalculator.WASTAGE_MODE_NONE, null, 3360, 28, 120, new BigDecimal("0.6"),
             new BigDecimal("3360"), "SQM", new BigDecimal("64.00"));
-        assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs = 120 boxes)");
+        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op, so
+        // the misleading "rounded up to full boxes" phrase and its pure "= 3,360 pcs" echo are both
+        // dropped; the box count (already stated by this branch's own "= 259/120 boxes" tail either
+        // way -- see #tilePrint_englishPerSqm_areaMode above, whose OWN box numbers genuinely did
+        // round and so is untouched) is all that remains.
+        assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes)");
         assertThat(p.subLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
         assertThat(p.quantity()).isEqualByComparingTo("72.00");
         assertThat(DealQuotationLines.tilePrint(EN, "SPECIAL_SQM", WastageCalculator.QUANTITY_MODE_PIECES, null,
@@ -943,7 +1025,12 @@ class DealQuotationLinesTest {
             assertThat(p.quantity()).isEqualByComparingTo("3360");
             assertThat(p.unit()).isEqualTo("PCS");
             assertThat(p.subLine()).isNull();
-            assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs, rounded up to full boxes = 3,360 pcs) (28 pcs/box)");
+            // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- see the matching comment
+            // on tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox above. This branch
+            // (the plain calculationLine path, not the per-sqm box-area one) has no "= N boxes" tail
+            // of its own before this fix, so the box count is genuinely NEW information here, not
+            // merely an echo dropped from an existing one.
+            assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes) (28 pcs/box)");
         }
     }
 
