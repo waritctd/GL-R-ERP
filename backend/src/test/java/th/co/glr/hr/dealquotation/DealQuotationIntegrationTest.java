@@ -1360,6 +1360,84 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0)).isNotNull();
     }
 
+    // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ──────────
+
+    /** {@code ส่วนที่เหลือเครดิต 0 วัน} can print today. An explicit 0 (or negative) is refused on
+     * SAVE (create/update), matching the "invalid value" half of the rule; a BLANK value still
+     * saves (see {@link #submit_refusesACreditRemainderWithNoCreditDays} for the submit-time half,
+     * mirroring how {@code fullPaymentTerm} is gated for a zero-deposit document). */
+    @Test
+    void create_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** A negative creditDays is refused the same way (bean {@code @Min(0)} already blocks anything
+     * below -1... this proves the SERVICE rule, not the bean bound, is what actually names zero). */
+    @Test
+    void update_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.update(created.id(),
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** The blank-on-draft half: create/update still accept a CREDIT remainder with NO creditDays
+     * typed yet (a draft may be incomplete) -- only {@link #submit} refuses to advance it, the
+     * EXACT "create/update permissive, submit strict" split {@code fullPaymentTerm} already uses. */
+    @Test
+    void create_stillAcceptsACreditRemainderWithBlankCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(created.remainderMode()).isEqualTo("CREDIT");
+        assertThat(created.creditDays()).isNull();
+    }
+
+    /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance
+     * past DRAFT. */
+    @Test
+    void submit_refusesACreditRemainderWithNoCreditDays() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", null, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+    }
+
+    /** Wrong-way-round: a positive creditDays, or a non-CREDIT remainder mode with creditDays left
+     * however it likes, is completely untouched by this rule. */
+    @Test
+    void create_acceptsAPositiveCreditDays_andANonCreditRemainderModeRegardlessOfCreditDays() {
+        DealQuotationDto credit = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 1, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(credit.creditDays()).isEqualTo(1);
+
+        DealQuotationDto delivery = quotationService.create(ticketId,
+            new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "ON_DELIVERY", 0, 30,
+                "หมายเหตุทดสอบ", List.of(sampleItem("100.00", 10))),
+            salesActor);
+        assertThat(delivery.remainderMode()).isEqualTo("ON_DELIVERY");
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {

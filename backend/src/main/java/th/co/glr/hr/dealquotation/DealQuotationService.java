@@ -185,6 +185,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"):
         // the FIRST issued document now carries the revision suffix too, so a fresh sequence value
@@ -366,6 +367,7 @@ public class DealQuotationService {
         boolean noDeposit = isZeroDeposit(request.depositPercent());
         String remainderMode = noDeposit ? null : blankToNull(request.remainderMode());
         Integer creditDays = noDeposit ? null : request.creditDays();
+        requireValidCreditDays(remainderMode, creditDays);
         String fullPaymentTerm = resolveFullPaymentTerm(request.depositPercent(), request.fullPaymentTerm());
         // Item 2 ("ไม่เติม “คุณ”", V180) — the editor always sends its CURRENT value (the checkbox
         // is always rendered, never omitted), so, same as printedByDisplayId/projectName, there is
@@ -475,6 +477,19 @@ public class DealQuotationService {
         // is null, so this condition can only ever fire on a genuinely zero-deposit document.
         if (isZeroDeposit(quotation.depositPercent()) && isBlank(quotation.fullPaymentTerm())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกเงื่อนไขการชำระเงินเต็มจำนวน");
+        }
+        // Wording-scan fix 6 (2026-09-17) — the submit-time half of the credit-days rule, the exact
+        // "create/update permissive, submit strict" split the fullPaymentTerm gate just above uses:
+        // create/update already refuse an explicit invalid VALUE (0 or negative — #requireValidCreditDays),
+        // but still let a CREDIT-remainder draft save with creditDays left BLANK; submit is what
+        // actually requires it be filled in before an approver ever sees the document. Deliberately
+        // NOT re-checked for a value that is not exactly null (an explicit invalid one could only
+        // reach a stored row from before this fix existed, and re-validating every stored value here
+        // would be the same defensive re-check #requireStoredItemComplete already does for items,
+        // which this quotation-level field does not need — a value already accepted by create/update
+        // going forward is never invalid).
+        if ("CREDIT".equals(quotation.remainderMode()) && quotation.creditDays() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
         }
         // V178: a DATE-mode validity deadline that has already passed must not go to an approver —
         // create/update already refuse one before the quotation's OWN date, but time keeps moving
@@ -1291,6 +1306,23 @@ public class DealQuotationService {
      */
     private String resolveFullPaymentTerm(Integer depositPercent, String fullPaymentTerm) {
         return isZeroDeposit(depositPercent) ? blankToNull(fullPaymentTerm) : null;
+    }
+
+    /**
+     * Wording-scan fix 6 (2026-09-17) — the save-time half of the credit-days rule; the submit-time
+     * half (a BLANK value, once {@code remainderMode} is CREDIT, may not advance past DRAFT) lives
+     * inline in {@link #submit}, matching {@link #resolveFullPaymentTerm}'s own "create/update
+     * permissive, submit strict" split for the zero-deposit payment term — the precedent this fix
+     * was asked to follow. The two halves differ in ONE way {@code fullPaymentTerm} has no
+     * equivalent for: an explicit non-blank but INVALID value (0 or negative) is refused HERE,
+     * immediately, on every save — there is no "let a wrong number sit in a draft" case to permit,
+     * unlike a merely blank one, which still may (create/update never call this for a blank value —
+     * see the {@code creditDays <= 0} guard below, which a null short-circuits past).
+     */
+    private void requireValidCreditDays(String remainderMode, Integer creditDays) {
+        if ("CREDIT".equals(remainderMode) && creditDays != null && creditDays <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
+        }
     }
 
     /** V178: {@code null}/blank reads as DAYS — today's behaviour, and what every pre-V178 row
