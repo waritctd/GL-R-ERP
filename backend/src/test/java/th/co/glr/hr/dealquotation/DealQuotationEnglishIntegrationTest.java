@@ -528,6 +528,42 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo("แผ่น");
     }
 
+    /**
+     * F4 (2026-09-16 review) — {@code DealQuotationService#requireStoredItemComplete}'s guard is
+     * {@code piecesPerBoxOptional = perSqm && !hasBoxArea}: a box AREA present with แผ่น/กล่อง
+     * BLANK is refused at create/update/preview time (proven above by {@code
+     * englishPerSqm_boxAreaFilledButPiecesPerBoxBlank_isStillRefused_onCreateUpdateAndPreview}),
+     * and this test proves the SAME combination is ALSO refused by submit's defensive re-check
+     * over an already-STORED row — defence in depth for a legacy or hand-edited row that reached
+     * the database despite the create-time gate. The row is written straight through jdbc
+     * (bypassing create/update's own validation entirely), the same technique {@code
+     * DealQuotationIntegrationTest#submit_reChecksStoredItems_incompleteRowIsBadRequest} uses.
+     *
+     * <p>Mutation-check (2026-09-16): narrowing the guard from {@code perSqm && !hasBoxArea} to
+     * {@code perSqm} alone would make this exact combination submittable — {@code
+     * piecesPerBoxOptional} would then read {@code true} for ANY English per-sqm row regardless of
+     * a box area being present, silently accepting the partially-filled pair this test exists to
+     * refuse. Confirmed to go red under that mutation, and reverted (see the PR body).
+     */
+    @Test
+    void submit_reChecksStoredItems_boxAreaPresentButPiecesPerBoxNull_isBadRequest() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
+                List.of(perSqmItem(3360, 28, "0.6", "64"))), salesActor);
+        // Straight through jdbc, bypassing create/update's own requireItemComplete gate -- proves
+        // the combination is caught EVEN when it reaches storage some other way (a legacy row from
+        // before this rule, or a direct DB edit), not merely refused at write time.
+        jdbc.update("""
+            UPDATE sales.quotation_item SET pieces_per_box = NULL
+             WHERE quotation_id = :id
+            """, java.util.Map.of("id", created.id()));
+
+        assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1").hasMessageContaining("แผ่นต่อกล่อง");
+    }
+
     /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
     @Test
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
