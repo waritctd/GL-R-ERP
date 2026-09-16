@@ -327,8 +327,11 @@ public final class DealQuotationDtos {
          * {@code DealQuotationRequests.ItemInput#id}) — only an item saved without its id (new, or
          * one whose id was foreign/stale/a duplicate) gets a new id and therefore a new URL. */
         String pictureUrl,
-        /** V176 — the supplier-stated square metres per box (TILE rows; null when unknown). An
-         * ENGLISH per-sqm quotation's {@code quantity} is {@code boxes × sqmPerBox} (2dp). */
+        /** V176 — the supplier-stated square metres per box (TILE rows; null when unknown).
+         * OPTIONAL for an ENGLISH per-sqm quotation (Option B, owner decision 2026-09-16): WITH one,
+         * {@code quantity} is {@code boxes × sqmPerBox} (2dp); WITHOUT one, it derives from
+         * {@code piecesFinal × sqmPerPiece} instead (see {@code WastageCalculator#sqmQuantityFromPieces}
+         * and {@code DealQuotationLines#tilePrint}). */
         BigDecimal sqmPerBox,
         /** Owner-approved "sell loose pieces" (2026-09-16, V182). {@code true} (the default, and
          * every pre-V182 row) prints/charges {@code piecesFinal} rounded UP to the next
