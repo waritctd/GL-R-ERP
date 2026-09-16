@@ -5022,10 +5022,14 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
   const sizeLine = input.sizeText
     ? `${en ? 'Size' : 'ขนาด'} ${input.sizeText}${input.thicknessMm != null ? `x${input.thicknessMm}` : ''} cm. ${en ? '(approx.)' : '(ขนาดโดยประมาณ)'}`
     : '';
+  // Wording-scan fix 7 (2026-09-17) — mirrors DealQuotationLines#plural: the ONE shared English
+  // singular/plural picker, so this mock's counts agree with the real document rather than each
+  // hardcoding "pcs"/re-deriving its own ternary.
+  const pl = (count, singular, pluralWord) => (Number(count) === 1 ? singular : pluralWord);
   const wastageText = wastageMode === 'NONE'
     ? ''
     : en
-      ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} pcs allowance`)
+      ? (wastageMode === 'PERCENT' ? ` + ${wastageValue}% allowance` : ` + ${wastageValue} ${pl(wastageValue, 'pc', 'pcs')} allowance`)
       : (wastageMode === 'PERCENT' ? ` + เผื่อ ${wastageValue}%` : ` + เผื่อ ${wastageValue} แผ่น`);
   const hasWastage = wastageMode !== 'NONE' && wastageValue !== 0;
   const hasBox = piecesPerBox > 0;
@@ -5037,22 +5041,22 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // AND there is a full-box count to split it from); loose=0 drops the "+ N" tail; boxes=0 drops
     // the box wording entirely.
     const base = quantityMode === 'PIECES'
-      ? (en ? `Quantity ${piecesBeforeWastage} pcs${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
+      ? (en ? `Quantity ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}` : `จำนวน ${piecesBeforeWastage} แผ่น${wastageText}`)
       : (en
-        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}`
+        ? `Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} ${pl(piecesPerSqm, 'pc', 'pcs')}/sqm = ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}`
         : `พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}`);
     let tail = '';
     if (hasWastage && boxes > 0) {
-      tail += en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`;
+      tail += en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`;
     }
     if (boxes > 0 && loosePieces > 0) {
       tail += en
-        ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'} + ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}`
+        ? ` = ${boxes} ${pl(boxes, 'box', 'boxes')} + ${loosePieces} ${pl(loosePieces, 'pc', 'pcs')}`
         : ` = ${boxes} กล่อง + ${loosePieces} แผ่น`;
     } else if (boxes > 0) {
-      tail += en ? ` = ${boxes} ${boxes === 1 ? 'box' : 'boxes'}` : ` = ${boxes} กล่อง`;
+      tail += en ? ` = ${boxes} ${pl(boxes, 'box', 'boxes')}` : ` = ${boxes} กล่อง`;
     } else {
-      tail += en ? ` = ${loosePieces} ${loosePieces === 1 ? 'pc' : 'pcs'}` : ` = ${loosePieces} แผ่น`;
+      tail += en ? ` = ${loosePieces} ${pl(loosePieces, 'pc', 'pcs')}` : ` = ${loosePieces} แผ่น`;
     }
     qtyText = `(${base}${tail})`;
   } else {
@@ -5061,30 +5065,34 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // to a full box"), mirroring DealQuotationLines' own correction. English already said "rounded
     // up to full boxes" and is unchanged.
     //
-    // F1 fix (2026-09-16 review): this branch used to print BOTH the rounding wording AND the
-    // trailing "= N" clause unconditionally, even with NO piecesPerBox at all -- e.g.
-    // "(จำนวน 32 แผ่น และปัดขึ้นเต็มกล่อง = 32 แผ่น)" with no box data whatsoever, a nonsensical
-    // rounding claim AND a pure echo of the count already stated. Mirrors
-    // DealQuotationLines#calculationLine's own default-branch fix: the rounding phrase prints only
-    // when there IS a box (hasBox), and the trailing "= N" clause prints only when box rounding or
-    // wastage may actually have moved piecesFinal away from piecesBeforeWastage (hasBox ||
-    // hasWastage) -- see DealQuotationLinesTest's "F1" section for the exact production-bug shapes
-    // this closes on the backend side.
-    const roundingPart = hasBox
+    // Wording-scan fix 1 (2026-09-17) — mirrors DealQuotationLines#calculationLine's own fix: the
+    // rounding phrase and its "= N" echo print ONLY when box rounding actually changed the count
+    // (piecesAfterWastage was not already a whole multiple of piecesPerBox) — 21 real production
+    // items printed the misleading "rounded up" wording on a row that never rounded anything.
+    // When it did NOT change, the box COUNT prints instead (new information the old line never
+    // gave), computed the same way DealQuotationLines does (piecesFinal / piecesPerBox — exact
+    // whenever this branch is reached, since piecesFinal is only ever piecesAfterWastage itself, or
+    // Math.ceil()'d to the next box multiple).
+    const boxRoundingChangedCount = hasBox && (piecesAfterWastage % piecesPerBox !== 0);
+    const roundingPart = boxRoundingChangedCount
       ? (en ? ', rounded up to full boxes' : ' และปัดขึ้นเต็มกล่อง')
       : '';
-    const echoTail = hasBox || hasWastage
-      ? (en ? ` = ${piecesFinal} pcs` : ` = ${piecesFinal} แผ่น`)
+    const echoTail = boxRoundingChangedCount || hasWastage
+      ? (en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`)
+      : '';
+    const boxCount = hasBox ? Math.floor(piecesFinal / piecesPerBox) : 0;
+    const boxCountTail = hasBox && !boxRoundingChangedCount
+      ? (en ? ` = ${boxCount} ${pl(boxCount, 'box', 'boxes')}` : ` = ${boxCount} กล่อง`)
       : '';
     qtyText = en
       ? (quantityMode === 'PIECES'
-        ? `(Quantity ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`
-        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} pcs/sqm = ${piecesBeforeWastage} pcs${wastageText}${roundingPart}${echoTail})`)
+        ? `(Quantity ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}${roundingPart}${echoTail}${boxCountTail})`
+        : `(Area ${areaSqm} sqm @ ${piecesPerSqm ?? '-'} ${pl(piecesPerSqm, 'pc', 'pcs')}/sqm = ${piecesBeforeWastage} ${pl(piecesBeforeWastage, 'pc', 'pcs')}${wastageText}${roundingPart}${echoTail}${boxCountTail})`)
       : (quantityMode === 'PIECES'
-        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`
-        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail})`);
+        ? `(จำนวน ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail}${boxCountTail})`
+        : `(พื้นที่ ${areaSqm} ตร.ม.ๆละ ${piecesPerSqm ?? '-'} แผ่น รวม ${piecesBeforeWastage} แผ่น${wastageText}${roundingPart}${echoTail}${boxCountTail})`);
   }
-  const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} pcs/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
+  const boxText = piecesPerBox > 0 ? (en ? ` (${piecesPerBox} ${pl(piecesPerBox, 'pc', 'pcs')}/box)` : ` (บรรจุ ${piecesPerBox} แผ่น/กล่อง)`) : '';
   const calculationLine = `${qtyText}${boxText}`;
 
   return {
