@@ -1219,9 +1219,85 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุระยะเวลานำเข้า");
     }
 
+    // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ────
+
+    /** {@code ประมาณ 0-3 วัน} saved on 2 approved quotations, and {@code 90-75}/negatives would too
+     * -- refused on save now, TILE row, the exact message the frontend validator mirrors. */
+    @Test
+    void create_refusesATileLeadTimeMinBelowOne() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, 3)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("รายการที่ 1")
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Same rule, the "max < min" half -- "90-75" is a range running backwards. */
+    @Test
+    void create_refusesATileLeadTimeMaxBelowMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(90, 75)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** A negative min is refused the same way as zero. */
+    @Test
+    void create_refusesANegativeTileLeadTimeMin() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(-5, 10)))), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** The SAME rule applies to a PLAIN (สินค้า/บริการอื่น) row's optional lead time, not only TILE. */
+    @Test
+    void create_refusesAnInvalidLeadTimeOnAPlainRowToo() {
+        assertThatThrownBy(() -> quotationService.create(ticketId,
+            upsertRequest(List.of(plainItemWithLeadTime("สุขภัณฑ์", "1", "ชุด", "5000.00", 0, 3))),
+            salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
+            .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
+    }
+
+    /** Wrong-way-round: a valid range (including the min==max exact-day case) is untouched -- this
+     * rule refuses only genuinely invalid values, never a well-formed one. */
+    @Test
+    void create_acceptsAValidLeadTimeRange_minEqualsMaxIncluded() {
+        DealQuotationDto range = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(75, 90)))), salesActor);
+        assertThat(range.items().get(0).leadTimeMinDays()).isEqualTo(75);
+        DealQuotationDto exact = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(1, 1)))), salesActor);
+        assertThat(exact.items().get(0).leadTimeMinDays()).isEqualTo(1);
+        assertThat(exact.items().get(0).leadTimeMaxDays()).isEqualTo(1);
+    }
+
+    /** A lone value (the OTHER field still blank) is an INCOMPLETENESS question, not an invalid
+     * one -- this rule must not fire until BOTH fields are entered (the "is it required at all"
+     * rules are unchanged and untested here; see the #7 section above). */
+    @Test
+    void create_doesNotValidateAPartiallyEnteredLeadTime() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(itemMutated(m -> m.withLeadTime(0, null)))), salesActor);
+        assertThat(created.items().get(0).leadTimeMinDays()).isEqualTo(0);
+        assertThat(created.items().get(0).leadTimeMaxDays()).isNull();
+    }
+
     /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
      * incompleteness tests -- avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
+        return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
+    }
+
+    /** Same builder, different name for a mutation that is not about INCOMPLETENESS (a value the
+     * validation rejects while every required field is still present) -- shares the exact same
+     * fixture and mechanism as {@link #itemMissing}. */
+    private ItemInput itemMutated(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
         return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
     }
 
@@ -1259,6 +1335,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         ItemInputBuilder withPiecesInput(Integer v) { piecesInput = v; return this; }
         // #7 (2026-09-14): submit's new lead-time requirement.
         ItemInputBuilder withNoLeadTime() { leadTimeMinDays = null; leadTimeMaxDays = null; return this; }
+        // Wording-scan fix 3 (2026-09-17): an explicit (possibly invalid) lead-time range.
+        ItemInputBuilder withLeadTime(Integer min, Integer max) { leadTimeMinDays = min; leadTimeMaxDays = max; return this; }
 
         ItemInput build() {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture,

@@ -1408,6 +1408,14 @@ public class DealQuotationService {
         // ALWAYS, including the lenient preview path — see #requirePriceValidForType's Javadoc for
         // why this is not gated on rowNumber the way the completeness check is.
         requirePriceValidForType(input, lineType, priceMode, documentLanguage, rowNumber);
+        // Wording-scan fix 3 (2026-09-17): an invalid lead-time VALUE (min < 1, or max < min) is
+        // refused unconditionally, the same "always, including the lenient preview" reasoning as
+        // requirePriceValidForType above — these are wrong values, not an incomplete row, so there
+        // is no honest number to preview either. Applies to TILE and PLAIN rows alike (an
+        // ADJUSTMENT row has no lead-time concept at all — see WastageCalculator.LINE_TYPE_ADJUSTMENT).
+        if (!WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)) {
+            requireValidLeadTime(input.leadTimeMinDays(), input.leadTimeMaxDays(), rowNumber);
+        }
         // v3b: the stored per-item vat/line_total columns follow the DOCUMENT's language, so an EN
         // row stores 0.00 VAT rather than a 7% figure nothing on that document ever charges. These
         // two columns are internal (neither is on DealQuotationItemDto, and the renderer never
@@ -1902,6 +1910,34 @@ public class DealQuotationService {
         if (WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
             && (input.directNetPrice() == null || input.directNetPrice().signum() <= 0)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, where + "ราคาสุทธิต้องมากกว่าศูนย์");
+        }
+    }
+
+    /**
+     * Wording-scan fix 3 (2026-09-17) — a lead-time range is only validated once it is actually
+     * ENTERED (both {@code min}/{@code max} present): a lone value, or neither, is an incompleteness
+     * question for {@link #requireItemComplete}/{@link #requireEveryTileItemHasALeadTime} to answer
+     * (submit-only, unchanged by this fix), not an invalid-value one. Once both are present:
+     * {@code min} must be at least 1 day (a lead time of 0 or negative days is not a real range) and
+     * {@code max} must be at least {@code min} (so "90-75" cannot be saved as a range that runs
+     * backwards). Refused on save — these are wrong VALUES, not a gap to fill in later — with the
+     * exact message the frontend validator mirrors, so a rep sees the same sentence whichever side
+     * catches it.
+     *
+     * <p>A stored row that predates this fix (0, or min &gt; max) is untouched by this check — it
+     * only ever runs on a freshly-submitted {@code ItemInput}, never re-validates an
+     * already-persisted {@link DealQuotationItemDto} — so an old row with such values still RENDERS
+     * exactly as it always did (see {@code DealQuotationRenderAdapter#flushLeadTimeGroup}, which
+     * prints whatever it is given rather than validating it).
+     */
+    private void requireValidLeadTime(Integer leadTimeMinDays, Integer leadTimeMaxDays, Integer rowNumber) {
+        if (leadTimeMinDays == null || leadTimeMaxDays == null) {
+            return;
+        }
+        if (leadTimeMinDays < 1 || leadTimeMaxDays < leadTimeMinDays) {
+            String where = rowNumber == null ? "" : "รายการที่ " + rowNumber + ": ";
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                where + "ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
         }
     }
 
