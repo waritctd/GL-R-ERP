@@ -13,6 +13,15 @@ import { Button } from './Button.jsx';
  * otherwise Confirm stays disabled until the reason is non-empty. `validateReason`
  * is an optional second gate for consequential flows that require a deliberate
  * typed phrase rather than any non-empty note.
+ *
+ * `onDismiss` (optional, defaults to `onCancel`): the action for the "gesture" dismissals Modal
+ * itself wires to `onClose` — Escape, backdrop mousedown, header ✕ (see Modal.jsx/useDialogFocus.js)
+ * — as opposed to a deliberate click on the `cancelLabel` BUTTON. For most callers `cancelLabel`'s
+ * button already means "just back out, nothing destructive", so the two are the same action and
+ * the default covers them. It exists because a caller may need `cancelLabel` to be bound to
+ * something other than a plain dismissal (see TicketCreateModal.jsx's closeFlushFailed branch,
+ * where `cancelLabel` is the DESTRUCTIVE "ปิดโดยไม่บันทึก" option) — an accidental Escape/backdrop
+ * click must never trigger that, only a deliberate button press should.
  */
 export function ConfirmDialog({
   open,
@@ -30,6 +39,7 @@ export function ConfirmDialog({
   reasonInvalidMessage,
   onConfirm,
   onCancel,
+  onDismiss,
 }) {
   const [reason, setReason] = useState('');
   const reasonRef = useRef(null);
@@ -71,7 +81,7 @@ export function ConfirmDialog({
   return (
     <Modal
       title={title}
-      onClose={busy ? undefined : onCancel}
+      onClose={busy ? undefined : (onDismiss ?? onCancel)}
       footer={
         <>
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
