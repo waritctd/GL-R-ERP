@@ -1521,6 +1521,52 @@ class TicketServiceTest {
         verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
     }
 
+    // ── create: V183 stock-sourced deal-line pricing ────────────────────────
+    // tickets.create(...) calls TicketRepository#insertItems directly off the raw
+    // TicketItemRequest list -- no DTO merge step exists on this path, so the
+    // stockSalePrice required+positive-iff-sourcedFromStock invariant is validated up front,
+    // before any DB write is attempted (same style as create_rejectsInvalidPriority above).
+
+    @Test
+    void create_rejectsStockSourcedItemWithoutPositivePrice() {
+        TicketItemRequest missingPrice = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, null);
+        var request = createRequest(77L, List.of(missingPrice));
+
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_rejectsStockSourcedItemWithZeroOrNegativePrice() {
+        TicketItemRequest zeroPrice = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, BigDecimal.ZERO);
+        var request = createRequest(77L, List.of(zeroPrice));
+
+        assertBadRequest(() -> service.create(request, salesActor));
+        verify(ticketRepo, never()).create(any(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
+    }
+
+    @Test
+    void create_allowsStockSourcedItemWithValidPrice() {
+        TicketItemRequest fromStock = new TicketItemRequest(
+            "Brand", "Model", "White", "Matte", "60x60", null,
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, new BigDecimal("500.00"));
+        var request = createRequest(77L, List.of(fromStock));
+        when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
+        when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
+        stubTicket(10L, 1L, TicketStatus.DRAFT);
+
+        service.create(request, salesActor); // must not throw
+
+        verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
+    }
+
     // ── deal pipeline: manual stage updates (V50) ─────────────────────────
 
     @Test
@@ -2387,6 +2433,92 @@ class TicketServiceTest {
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), otherSales));
     }
 
+    // ── editItems: V183 stock-sourced deal-line pricing ─────────────────────
+    // sourcedFromStock/stockSalePrice are LEGITIMATELY sales-writable (unlike proposedPrice/
+    // approvedPrice/calcedCost/manualPrice, which stay guarded to `prior`) — see
+    // mergeEditedItemsPreservingPricing's own comment. These tests cover: (b) an invalid
+    // price is rejected with 400, (c) sourcedFromStock=false forces stockSalePrice to null
+    // even if the request sent one, and (d) a request that omits both fields preserves the
+    // prior row's value instead of resetting it.
+
+    @Test
+    void editItems_rejectsStockSourcedItemWithoutPositivePrice() {
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null);
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            null, null, null, null, "THB", null, null, true, null);
+
+        assertBadRequest(() ->
+            service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor));
+    }
+
+    @Test
+    void editItems_sourcedFromStockFalseForcesStockSalePriceNull() {
+        // A prior row that was stock-sourced, un-flagged in this edit but with a stray
+        // price still riding along in the request — the resolved row must not persist that
+        // stray price (never trust a value through when the flag itself is false).
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, null, null,
+            null, null, null, null, null, 1, true, new BigDecimal("500.00"));
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        TicketItemRequest edited = new TicketItemRequest(
+            "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), "PIECE",
+            null, null, null, null, "THB", null, null, false, new BigDecimal("999.00"));
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+        assertThat(merged.sourcedFromStock()).isFalse();
+        assertThat(merged.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void editItems_omittingStockFieldsPreservesPriorValue() {
+        // A request that says nothing about sourcedFromStock (null, the "not specified" value
+        // for this Boolean field, as opposed to an explicit false) must not silently reset a
+        // flag a previous save set — same null-safe-fallback treatment unitBasis already gets.
+        TicketItemDto existing = new TicketItemDto(
+            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
+            new BigDecimal("5"), new BigDecimal("10"), null, null, null,
+            null, null, "THB", 0, null, null, null, "PIECE", null, null,
+            BigDecimal.ZERO, BigDecimal.ZERO, null, null, null,
+            null, null, null, null, null, 1, true, new BigDecimal("500.00"));
+        stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
+
+        // Explicit null (via the canonical 18-arg constructor), not the 14-arg compat shape --
+        // that compat constructor resolves sourcedFromStock to an explicit false per its own
+        // Javadoc (mirroring the codebase's existing "compat defaults to a real value" pattern),
+        // which correctly does NOT preserve the prior flag. A real JSON request that simply
+        // omits the field is what Jackson binds to null on the canonical constructor, which is
+        // the case this test means to cover.
+        TicketItemRequest edited = new TicketItemRequest(
+            "NewBrand", "Model", null, null, null, "Cotto",
+            new BigDecimal("6"), new BigDecimal("12"), "PIECE",
+            null, null, null, null, "THB", null, null, null, null);
+
+        service.editItems(10L, new EditItemsRequest(List.of(edited), null), salesActor);
+
+        ArgumentCaptor<List<TicketItemDto>> captor = ArgumentCaptor.forClass(List.class);
+        verify(ticketRepo).replaceItemsPreservingPricing(eq(10L), captor.capture());
+        TicketItemDto merged = captor.getValue().get(0);
+        assertThat(merged.brand()).isEqualTo("NewBrand"); // descriptive field still follows the request
+        assertThat(merged.sourcedFromStock()).isTrue();
+        assertThat(merged.stockSalePrice()).isEqualByComparingTo("500.00");
+    }
+
     // ── overrideItemPrice ────────────────────────────────────────────────
     // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
     // no audit trail at all.
@@ -2514,6 +2646,26 @@ class TicketServiceTest {
             BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB");
 
         assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), salesManagerActor));
+    }
+
+    // Wrong-way-round authz pin (no behaviour change): mockApi.js's editItems grants role
+    // 'import' write access while the ticket sits IN_REVIEW/PRICE_PROPOSED (a KNOWN mock ->
+    // production divergence, commented at that call site) — but the real salesCanEdit check
+    // above is `SALES_ROLES.contains(actor.role()) && isOwner`, with no import branch at all, so
+    // import gets a real 403 here regardless of status or ownership. Covers a V183 payload
+    // specifically (sourcedFromStock/stockSalePrice) so this new field pair does not accidentally
+    // open a path around the existing role gate.
+    @Test
+    void editItems_rejectsImportRole() {
+        // createdById=1L (salesActor's id, not importActor's 3L) so this is unambiguously the
+        // "wrong-way-round" case — import is rejected on role alone, not merely on ownership.
+        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
+        TicketItemRequest req = new TicketItemRequest(
+            "Brand", "Model", "Color", "Texture", "Size", "Factory",
+            BigDecimal.ONE, null, "PIECE", null, null, null, null, "THB",
+            null, null, true, new BigDecimal("350.00"));
+
+        assertForbidden(() -> service.editItems(10L, new EditItemsRequest(List.of(req), null), importActor));
     }
 
     @Test

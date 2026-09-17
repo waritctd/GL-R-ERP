@@ -293,6 +293,11 @@ describe('TicketCreateModal validation', () => {
         qtySqm: null,
         catalogPriceId: null,
         catalogProductCode: null,
+        // Stock-sourced pricing (V183): validItem() defaults sourcedFromStock to false, so this
+        // pins the "not from stock" payload shape — see the stock-sourced-pricing describe block
+        // below for the flagged-and-priced case.
+        sourcedFromStock: false,
+        stockSalePrice: null,
       }],
     });
   });
@@ -433,6 +438,143 @@ describe('TicketCreateModal validation', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// V183 (stock-sourced deal-line pricing, owner ruling): sales may flag a line "from warehouse"
+// and type in its own selling price. CAPTURE-ONLY today — nothing downstream (PricingRequest,
+// quotation, commission) reads this pair yet, so a flagged line can still be attached to an
+// ordinary PricingRequest exactly as before; wiring it into that chain is a later follow-up.
+// Covers the checkbox + price-field wiring TicketCreateModal.jsx adds to renderItemEditor and
+// both of the item editor's own exits ("บันทึกรายการ" and the "กลับไปรายการสินค้า" back link) —
+// the equivalent backend behaviour (validation, request-wins-with-fallback merge) is covered by
+// TicketServiceTest/TicketRepositoryIntegrationTest.
+describe('TicketCreateModal stock-sourced pricing (V183)', () => {
+  it('sends sourcedFromStock/stockSalePrice once the checkbox is checked and a price is typed', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit, initialItems: [validItem()] });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
+    const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    goToSection('กลับไปรายการสินค้า');
+    goToSection('กลับ');
+
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
+      sourcedFromStock: true,
+      stockSalePrice: 420.5,
+    });
+  });
+
+  it('blocks submit with a Thai error when a row already carries the invalid stock-price state', async () => {
+    const onSubmit = vi.fn();
+    // Seeds the invalid state directly rather than checking the checkbox then trying to escape
+    // the item editor: BOTH editor exits ("บันทึกรายการ" and "กลับไปรายการสินค้า") now route
+    // through closeItemEditor() and block on an empty price before the summary is ever reachable
+    // — see the dedicated "both exits blocked" tests below. This test covers the OTHER way this
+    // state can exist at final-submit time: a row that already carries sourcedFromStock=true with
+    // no price (e.g. restored from a saved draft, or an item passed in via `initialItems`) still
+    // blocks the final สร้างดีล submit, proving that guard is not the ONLY thing standing between
+    // an invalid line and a create request.
+    renderModal({ onSubmit, initialItems: [validItem({ sourcedFromStock: true, stockSalePrice: '' })] });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+
+    submitForm();
+
+    // submit()'s own jumpToField opens the item editor and focuses the invalid price field —
+    // no manual navigation into the row needed.
+    const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBe('true'));
+    expect(screen.getByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1')).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  // Gap A, second exit (review follow-up): the item editor has TWO ways out — the footer's
+  // "บันทึกรายการ" button (covered below) and this "กลับไปรายการสินค้า" back link at the top of
+  // the editor. The back link used to call setEditingItemIndex(null) directly, unguarded — a
+  // flagged/empty line could dodge the footer button's check entirely just by using the back
+  // link instead. Both now route through the same closeItemEditor().
+  it('"กลับไปรายการสินค้า" back link also blocks leaving the item editor when จากสต็อก is checked with no price', async () => {
+    renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
+
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
+    const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
+
+    fireEvent.click(screen.getByRole('button', { name: 'กลับไปรายการสินค้า' }));
+
+    // Still in the item editor — the back link did not close it.
+    expect(screen.getByPlaceholderText('เช่น 350.00')).toBeTruthy();
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBe('true'));
+    expect(screen.getByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1')).toBeTruthy();
+
+    // Filling a valid price lets the same back link work again.
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'กลับไปรายการสินค้า' }));
+    expect(screen.queryByPlaceholderText('เช่น 350.00')).toBeNull();
+  });
+
+  it('clears the price and hides the field again once the checkbox is unchecked', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ onSubmit, initialItems: [validItem()] });
+
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    const checkbox = screen.getByRole('checkbox', { name: /จากสต็อก/ });
+    fireEvent.click(checkbox);
+    const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+
+    fireEvent.click(checkbox);
+    expect(screen.queryByPlaceholderText('เช่น 350.00')).toBeNull();
+    goToSection('กลับไปรายการสินค้า');
+    goToSection('กลับ');
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
+      sourcedFromStock: false,
+      stockSalePrice: null,
+    });
+  });
+
+  // Gap A (task): "บันทึกรายการ" used to close the item editor with zero validation — a
+  // จากสต็อก line with an empty price was only ever caught (if at all) at final submit. Now the
+  // footer button itself blocks and keeps the editor open, focusing the offending price field.
+  it('"บันทึกรายการ" blocks closing the item editor when จากสต็อก is checked with no price', async () => {
+    renderModal({ onSubmit: vi.fn(), initialItems: [validItem()] });
+
+    goToSection('รายการสินค้า');
+    fireEvent.click(screen.getByRole('button', { name: /^แก้ไขรายการที่ 1/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /จากสต็อก/ }));
+    const priceInput = await screen.findByPlaceholderText('เช่น 350.00');
+
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
+
+    // Still in the item editor (the price field is still on screen) and the field is now flagged.
+    expect(screen.getByPlaceholderText('เช่น 350.00')).toBeTruthy();
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBe('true'));
+    expect(screen.getByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 1')).toBeTruthy();
+
+    // Filling a valid price lets the same button close the editor back to the summary list.
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
+    expect(screen.queryByPlaceholderText('เช่น 350.00')).toBeNull();
+    expect(screen.getByText(/420\.50/)).toBeTruthy();
   });
 });
 

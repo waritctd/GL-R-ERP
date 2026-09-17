@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDate;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -215,6 +216,21 @@ public class TicketService {
                 && !Priority.isValid(request.priority())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
+        }
+        // V183 (stock-sourced deal-line pricing): tickets.create(...) below calls
+        // TicketRepository#insertItems directly off the raw TicketItemRequest list — there is no
+        // DTO merge step (like editItems' mergeEditedItemsPreservingPricing) to hook validation
+        // into before persistence, so the invariant chk_ticket_item_stock_sale_price enforces at
+        // the DB layer is checked here instead, before any DB write, same style as the
+        // priority/entryChannel guards immediately above.
+        if (request.items() != null) {
+            for (TicketItemRequest item : request.items()) {
+                if (Boolean.TRUE.equals(item.sourcedFromStock())
+                        && !isStorablePositivePrice(item.stockSalePrice())) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
+                }
+            }
         }
         String code = tickets.nextTicketCode();
         long id = tickets.create(request, code, actor.id(), actor.name());
@@ -2260,6 +2276,24 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
+    /**
+     * V183: is this a stock sale price that will still be positive once Postgres has STORED it?
+     *
+     * <p>{@code sales.ticket_item.stock_sale_price} is {@code numeric(14,2)}, and Postgres rounds
+     * a value to the column's scale BEFORE {@code chk_ticket_item_stock_sale_price} sees it. A
+     * bare {@code signum() > 0} therefore does NOT match the CHECK: {@code 0.004} is positive in
+     * Java, is stored as {@code 0.00}, and the constraint then rejects the row — surfacing as a
+     * {@link org.springframework.dao.DataIntegrityViolationException}, which
+     * {@code ApiExceptionHandler.handleDataAccess} reports as a 500 (with the raw driver message),
+     * not the clean Thai 400 this validation exists to give. Rounding HALF_UP at scale 2 is
+     * exactly Postgres' own numeric rounding, so this predicate agrees with the CHECK for every
+     * input. Verified against real Postgres 17: {@code 0.004} violates the constraint,
+     * {@code 0.005} stores as {@code 0.01}.
+     */
+    private static boolean isStorablePositivePrice(BigDecimal price) {
+        return price != null && price.setScale(2, RoundingMode.HALF_UP).signum() > 0;
+    }
+
     private List<TicketItemDto> mergeEditedItemsPreservingPricing(
             long ticketId, List<TicketItemDto> existingItems, List<TicketItemRequest> requestItems) {
         List<TicketItemDto> merged = new ArrayList<>(requestItems.size());
@@ -2278,6 +2312,33 @@ public class TicketService {
             String currency = prior != null
                 ? prior.currency()
                 : ((r.currency() != null && !r.currency().isBlank()) ? r.currency() : "THB");
+            // V183: unlike proposedPrice/approvedPrice/calcedCost/manualPrice (guarded, "prior
+            // always wins" because only import/CEO may set them), sourcedFromStock/stockSalePrice
+            // are a sales decision made at deal-entry/edit time -- the request WINS, mirroring
+            // unitBasis's own null-safe-fallback treatment just above: a request that says
+            // nothing about these fields (r.sourcedFromStock() == null) inherits the prior row's
+            // value rather than silently resetting the flag to "not from stock" on every
+            // unrelated edit.
+            boolean sourcedFromStock = r.sourcedFromStock() != null
+                ? r.sourcedFromStock()
+                : (prior != null && prior.sourcedFromStock());
+            BigDecimal stockSalePrice = r.sourcedFromStock() != null
+                ? r.stockSalePrice()
+                : (prior != null ? prior.stockSalePrice() : null);
+            // Same invariant chk_ticket_item_stock_sale_price enforces at the DB layer --
+            // checked here too so a bad request 400s with a clear Thai message instead of
+            // reaching replaceItemsPreservingPricing and failing as an opaque 500 from a
+            // constraint violation.
+            if (sourcedFromStock) {
+                if (!isStorablePositivePrice(stockSalePrice)) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                        "ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก");
+                }
+            } else {
+                // Force-null regardless of what the request sent — never trust a stray price
+                // through when the item isn't flagged as stock-sourced.
+                stockSalePrice = null;
+            }
             merged.add(new TicketItemDto(
                 prior != null ? prior.id() : 0L,
                 ticketId,
@@ -2302,6 +2363,10 @@ public class TicketService {
                 // this stays a pure passthrough with no merge logic of its own.
                 BigDecimal.ZERO, BigDecimal.ZERO, null,
                 r.catalogPriceId(), r.catalogProductCode(),
+                // source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece are read-path-only
+                // (resolved by findItemsByTicketId's LEFT JOIN, never written back) — same derivation
+                // the compat constructors use.
+                r.catalogPriceId() != null ? "catalog" : "custom", null, null, null, null,
                 // V148: weightMultiplier is a sales_manager/CEO decision (setItemWeightMultipliers),
                 // never something this sales/import item-edit request carries an opinion on -- same
                 // "guarded, prior wins" treatment as proposedPrice/approvedPrice/calcedCost above,
@@ -2309,7 +2374,8 @@ public class TicketService {
                 // gives every edited row a brand-new item_id (DELETE + re-INSERT), so this is the
                 // ONLY thing standing between an innocuous item edit and silently resetting a
                 // manager-approved weight back to the column default of 1.
-                prior != null ? prior.weightMultiplier() : 1
+                prior != null ? prior.weightMultiplier() : 1,
+                sourcedFromStock, stockSalePrice
             ));
         }
         return merged;

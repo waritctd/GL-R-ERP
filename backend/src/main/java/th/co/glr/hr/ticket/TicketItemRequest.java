@@ -35,7 +35,18 @@ public record TicketItemRequest(
     // ("custom") line, or once the frontend clears the link because the user hand-edited a
     // descriptive field after picking it (see TicketCreateModal.jsx's updateItem).
     Long catalogPriceId,
-    String catalogProductCode
+    String catalogProductCode,
+    // Stock-sourced pricing (owner ruling, see the matching migration V183's header for the full
+    // context): sales may mark a line as "from warehouse" and type in its own selling price. This
+    // is CAPTURE-ONLY today -- nothing downstream (PricingRequest, quotation, commission) reads
+    // this pair yet, so a flagged line can still be routed through a PricingRequest exactly as
+    // before; wiring it into that chain is a later follow-up. Null/false is the "not from stock,
+    // priced normally" default every pre-existing call site keeps via the compat constructor
+    // below. TicketService validates the pairing (stockSalePrice required+positive iff
+    // sourcedFromStock is true) before either write path (create/editItems) persists it -- see
+    // TicketService#create's item-validation loop and #mergeEditedItemsPreservingPricing.
+    Boolean sourcedFromStock,
+    BigDecimal stockSalePrice
 ) {
     // Compat shape for call sites written before V110 (mostly tests) that construct this
     // record positionally without the two new trailing fields -- defaults both to null,
@@ -58,5 +69,31 @@ public record TicketItemRequest(
     ) {
         this(brand, model, color, texture, size, factory, qty, qtySqm, unitBasis,
             rawPrice, rawCurrency, rawUnit, proposedPrice, currency, null, null);
+    }
+
+    // Compat shape for call sites written before the stock-sourced-pricing fields (the pre-V183
+    // canonical shape, ending catalogProductCode) -- defaults sourcedFromStock/stockSalePrice to
+    // false/null, same "not from stock" meaning as an explicit false.
+    public TicketItemRequest(
+        String brand,
+        String model,
+        String color,
+        String texture,
+        String size,
+        String factory,
+        BigDecimal qty,
+        BigDecimal qtySqm,
+        String unitBasis,
+        BigDecimal rawPrice,
+        String rawCurrency,
+        String rawUnit,
+        BigDecimal proposedPrice,
+        String currency,
+        Long catalogPriceId,
+        String catalogProductCode
+    ) {
+        this(brand, model, color, texture, size, factory, qty, qtySqm, unitBasis,
+            rawPrice, rawCurrency, rawUnit, proposedPrice, currency,
+            catalogPriceId, catalogProductCode, false, null);
     }
 }
