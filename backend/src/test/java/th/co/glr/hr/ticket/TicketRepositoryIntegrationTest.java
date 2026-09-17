@@ -169,6 +169,109 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogProductCode()).isNull();
     }
 
+    // ── V183: stock-sourced deal-line pricing (sourced_from_stock / stock_sale_price) ──────────
+    // Sales may flag a line "from warehouse" and type in its own selling price. CAPTURE-ONLY
+    // today — nothing downstream reads this pair yet, so a flagged line can still be attached to,
+    // and priced through, an ordinary PricingRequest exactly as before — see the migration's
+    // header for the full owner ruling. Round-tripped through BOTH write paths (insertItems via
+    // ticket creation, and replaceItemsPreservingPricing via an items edit) and read back through
+    // findItemsByTicketId, same discipline as the catalog-link tests above — a mocked repository
+    // would happily "pass" this while the real CHECK constraint / columns did something else.
+
+    @Test
+    void createTicket_persistsStockSourcedPriceAndReadsItBack() {
+        long ticketId = tickets.create(sampleTicket(
+            itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", new BigDecimal("555.00"))),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isTrue();
+        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("555.00");
+    }
+
+    @Test
+    void createTicket_notFromStockHasNullStockSalePrice() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isFalse();
+        assertThat(persisted.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void editItems_roundTripsStockSourcedPriceThroughReplaceItemsPreservingPricing() {
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(existing.sourcedFromStock()).isFalse(); // sanity: started not-from-stock
+
+        TicketItemDto edited = new TicketItemDto(
+            existing.id(), ticketId, existing.brand(), existing.model(), existing.color(),
+            existing.texture(), existing.size(), existing.factory(),
+            existing.qty(), existing.qtySqm(), null, null, null,
+            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
+            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
+            existing.manualPrice(), existing.manualOverrideReason(),
+            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
+            existing.catalogPriceId(), existing.catalogProductCode(),
+            null, null, null, null, null, 1,
+            true, new BigDecimal("620.00"));
+
+        tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isTrue();
+        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("620.00");
+    }
+
+    @Test
+    void createTicket_forcesStockSalePriceNullWhenNotFlaggedFromStock() {
+        // Review follow-up: TicketService.create validates "flag true => positive price" but
+        // deliberately does not reject the INVERSE, so a malformed request carrying
+        // {sourcedFromStock:false, stockSalePrice:500} used to reach
+        // chk_ticket_item_stock_sale_price and come back as a 500 (DataIntegrityViolationException
+        // -> ApiExceptionHandler.handleDataAccess) rather than being normalised. insertItems now
+        // force-nulls it, exactly as mergeEditedItemsPreservingPricing already did on the edit
+        // path. Real Postgres, real CHECK — a mocked repository could not prove this.
+        TicketItemRequest strayPrice = new TicketItemRequest(
+            "Toyota", "Hilux", "White", "Matte", "L", null,
+            new BigDecimal("1"), null, null, null, null, null, null, "THB",
+            null, null, false, new BigDecimal("500.00"));
+
+        long ticketId = tickets.create(sampleTicket(strayPrice),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isFalse();
+        assertThat(persisted.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void stockSalePrice_rejectsMismatchWithSourcedFromStockFlag() {
+        // chk_ticket_item_stock_sale_price (V183): sourcedFromStock=false with a non-null price
+        // must be refused at the DB layer, not merely by TicketService's own guard — this proves
+        // the CHECK constraint itself, independent of the service-level validation.
+        long ticketId = tickets.create(sampleTicket(
+            item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
+
+        TicketItemDto edited = new TicketItemDto(
+            existing.id(), ticketId, existing.brand(), existing.model(), existing.color(),
+            existing.texture(), existing.size(), existing.factory(),
+            existing.qty(), existing.qtySqm(), null, null, null,
+            existing.proposedPrice(), existing.approvedPrice(), existing.currency(), 0,
+            existing.calcedCost(), existing.calcedPrice(), existing.calcConfigVersion(), "PIECE",
+            existing.manualPrice(), existing.manualOverrideReason(),
+            existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
+            existing.catalogPriceId(), existing.catalogProductCode(),
+            null, null, null, null, null, 1,
+            false, new BigDecimal("620.00")); // sourcedFromStock=false but a price is set
+
+        assertThatThrownBy(() -> tickets.replaceItemsPreservingPricing(ticketId, List.of(edited)))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
     @Test
     void catalogPriceId_rejectsAnIdThatDoesNotExistInPriceCatalog() {
         long ticketId = tickets.create(sampleTicket(
@@ -566,5 +669,12 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         return new TicketItemRequest(brand, model, color, texture, size, null,
             new BigDecimal("1"), null, null, null, null, null, null, "THB",
             catalogPriceId, catalogProductCode);
+    }
+
+    private TicketItemRequest itemFromStock(String brand, String model, String color, String texture,
+                                            String size, BigDecimal stockSalePrice) {
+        return new TicketItemRequest(brand, model, color, texture, size, null,
+            new BigDecimal("1"), null, null, null, null, null, null, "THB",
+            null, null, true, stockSalePrice);
     }
 }

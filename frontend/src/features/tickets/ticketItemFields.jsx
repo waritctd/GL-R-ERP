@@ -71,6 +71,45 @@ export function missingQtyMessage(unitBasis, rowNumber) {
     : `กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${rowNumber}`;
 }
 
+// ── stock-sourced deal-line pricing (V183) ──────────────────────────────────
+// Owner ruling: sales may flag a deal line "จากสต็อก" (from warehouse) and type in its own
+// selling price at deal-entry OR edit time — see migration V183's header for the full context.
+// CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation, commission) reads this pair
+// yet, so a flagged line can still be attached to, and priced through, an ordinary
+// PricingRequest exactly as before; wiring it into that chain is a later follow-up. Shared by
+// TicketCreateModal.jsx (deal-creation time) and TicketDetailPage.jsx's edit-items mode (after
+// the deal exists) so the flag/price rule can be set from either surface without drifting, the
+// same reason every other item-editor rule above lives here.
+//
+// Mirrors TicketService's own invariant (both TicketService.create's item-validation loop and
+// #mergeEditedItemsPreservingPricing): sourcedFromStock=true requires a real, positive price.
+// The rounding matches TicketService's own isStorablePositivePrice: stock_sale_price is
+// numeric(14,2), and Postgres rounds HALF_UP to that scale before
+// chk_ticket_item_stock_sale_price ever sees the value, so 0.004 (which stores as 0.00) must
+// read as missing here too, or the client would accept a price the server then rejects.
+export function isStockSalePriceMissing(item) {
+  if (!item?.sourcedFromStock) return false;
+  const price = item?.stockSalePrice;
+  if (price === '' || price == null) return true;
+  const n = Number(price);
+  return !(Number.isFinite(n) && Math.round(n * 100) > 0);
+}
+
+/** Mirrors missingQtyMessage's row-numbered convention — used by the create modal's zod schema. */
+export function missingStockSalePriceMessage(rowNumber) {
+  return `กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ ${rowNumber}`;
+}
+
+/**
+ * No row-number suffix — mirrors requiredItemFieldErrors' convention (the error renders inline
+ * under the row's own price field, so which row it belongs to is already visually unambiguous;
+ * unlike missingQtyMessage, which the create modal's schema also surfaces as a toast-adjacent
+ * message where the row context is lost). Used directly by TicketDetailPage's edit-items mode.
+ */
+export function stockSalePriceError(item) {
+  return isStockSalePriceMissing(item) ? 'กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก' : null;
+}
+
 // ── catalog pick / hand-edit rules ──────────────────────────────────────────
 // Every field a hand-edit to which invalidates a previously-picked catalog link — what's typed no
 // longer necessarily matches what the link points at. Mirrors PricingRequestCreateModal.updateItem's

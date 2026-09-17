@@ -12,6 +12,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import { cn } from '../../utils/cn.js';
 import {
@@ -52,6 +53,7 @@ import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
   CatalogAutocompleteField,
+  isStockSalePriceMissing,
   ITEM_FIELD_META,
   ItemField,
   ItemFieldLabel,
@@ -61,6 +63,7 @@ import {
   requiredItemFieldErrors,
   requiredQtyField,
   searchCatalog,
+  stockSalePriceError,
 } from './ticketItemFields.jsx';
 import { resolveWorkState } from './workState.js';
 
@@ -135,6 +138,47 @@ function scrollToSection(id) {
   // only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
+}
+
+// Read-only items table (V183, gap B): a saved จากสต็อก line otherwise shows no indication
+// outside edit mode — the ราคาที่อนุมัติ/ราคาขาย cell just reads "-" whenever the line happens to
+// have no approvedPrice/calced price of its own yet. sourcedFromStock is CAPTURE-ONLY today
+// (nothing downstream reads it — see ticketItemFields.jsx's own comment), so a flagged line is
+// NOT guaranteed to lack a real price: it can still be attached to, and priced through, an
+// ordinary PricingRequest exactly like any other line. That is exactly why this component takes
+// BOTH `primary` (today's real price, if any) and `children` (today's rendering of it) instead of
+// assuming primary is always null for a stock-sourced line — see the branches below, which handle
+// primary null and non-null identically regardless of why primary is null. `children` is exactly
+// what this cell renders TODAY for a non-stock-sourced (or already-priced) line — unchanged in
+// every branch except the one gap this fills. `primary` is whatever value that rendering is built
+// from: approvedPrice for the plain ราคาที่อนุมัติ column, manualPrice ?? calcedPrice for the
+// calc-breakdown ราคาขาย (THB/ชิ้น) column — so this can tell "nothing to show yet" (primary ==
+// null) from "already has a real price" without re-deriving either column's own logic.
+// No new grid column (would break itemsGridCols and the mobile card reflow's data-label wiring,
+// which requires data-label on a DIRECT child of .data-row) — this only adds a secondary <small>
+// line inside the existing cell, same nesting the ราคาขาย (THB/ชิ้น) column already uses for its
+// own "override" line.
+function StockAwarePriceCell({ item, primary, children }) {
+  if (!item.sourcedFromStock || item.stockSalePrice == null) return children;
+  if (primary == null) {
+    // formatMoney (not a currency-aware helper): every other price in this table — approvedPrice,
+    // proposedPrice, calcedPrice/manualPrice — already renders through the same ฿-prefixed,
+    // currency-agnostic formatter regardless of the item's own `currency`, so this stays
+    // consistent with the column it fills in for rather than inventing per-item currency display
+    // this table doesn't otherwise have.
+    return (
+      <>
+        <code className="font-bold text-success">{formatMoney(item.stockSalePrice)}</code>
+        <small className="block text-2xs text-text-muted">ราคาสต็อก</small>
+      </>
+    );
+  }
+  return (
+    <>
+      {children}
+      <small className="block text-2xs text-text-muted">ราคาสต็อก: {formatMoney(item.stockSalePrice)}</small>
+    </>
+  );
 }
 
 // Ticket-detail IA rebuild Phase 2: the "ประวัติการดำเนินการ" events panel that
@@ -1795,11 +1839,67 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, proposedPrice: e.target.value === '' ? null : Number(e.target.value) } : r))} />
                         </label>
                       )}
+                      {/* Stock-sourced pricing (owner ruling, V183): sales may flag this line "from
+                          warehouse" and type in its own selling price — matches
+                          TicketCreateModal.jsx's item editor (same labels/copy/validation), so the
+                          flag can be set/changed both at deal-creation time and afterward here.
+                          CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation,
+                          commission) reads this pair yet, so a flagged line can still be attached
+                          to, and priced through, an ordinary PricingRequest exactly as before —
+                          wiring it into that chain is a later follow-up. Reuses
+                          ticketItemFields.jsx's ItemField for the price input, same as every other
+                          field in this row, so its error markup/aria wiring is identical. */}
+                      <div className="col-span-full flex flex-col gap-1.5 rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
+                        <label className="m-0 flex cursor-pointer items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 cursor-pointer accent-info-dot"
+                            checked={Boolean(item.sourcedFromStock)}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setEditDraft((d) => d.map((r, i) => i === index
+                                ? { ...r, sourcedFromStock: checked, stockSalePrice: checked ? r.stockSalePrice : '' }
+                                : r));
+                              // Unchecking clears any stale error the same way every other
+                              // per-row field error is cleared on edit above.
+                              if (!checked) clearFieldError(`editItems.stockSalePrice.${index}`);
+                            }} />
+                          <strong>จากสต็อก</strong>
+                        </label>
+                        <p className="m-0 pl-6 text-2xs font-semibold text-text-muted">
+                          สินค้าที่มีอยู่ในคลัง — ฝ่ายขายระบุราคาขายเอง
+                        </p>
+                        {item.sourcedFromStock ? (
+                          <ItemField
+                            id={`edit-item-stock-sale-price-${index}`}
+                            label="ราคาขาย (สต็อก)"
+                            required
+                            error={fieldErrors[`editItems.stockSalePrice.${index}`]}
+                          >
+                            <input type="number" min="0" step="0.01"
+                              id={`edit-item-stock-sale-price-${index}`}
+                              ref={(el) => { fieldRefs.current[`editItems.stockSalePrice.${index}`] = el; }}
+                              value={item.stockSalePrice ?? ''}
+                              placeholder="เช่น 350.00"
+                              onChange={(e) => {
+                                setEditDraft((d) => d.map((r, i) => i === index ? { ...r, stockSalePrice: e.target.value } : r));
+                                clearFieldError(`editItems.stockSalePrice.${index}`);
+                              }}
+                              aria-required="true"
+                              aria-invalid={fieldErrors[`editItems.stockSalePrice.${index}`] ? true : undefined}
+                              aria-describedby={fieldErrors[`editItems.stockSalePrice.${index}`] ? fieldErrorId(`edit-item-stock-sale-price-${index}`) : undefined}
+                            />
+                          </ItemField>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 ))}
                 <Button type="button" variant="secondary"
-                  onClick={() => setEditDraft((d) => [...d, { brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null }])}
+                  onClick={() => setEditDraft((d) => [...d, {
+                    brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null,
+                    sourcedFromStock: false, stockSalePrice: '',
+                  }])}
                   className="mb-3">
                   <Icon name="plus" size={14} /> เพิ่มรายการ
                 </Button>
@@ -1858,6 +1958,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           rowErrors[key] = missingQtyMessage(item.unitBasis, i + 1);
                           order.push(key);
                         }
+                        // V183: a จากสต็อก-flagged row must carry a real, positive price — same
+                        // invariant TicketService enforces server-side in
+                        // mergeEditedItemsPreservingPricing (this is UX, not the source of truth).
+                        // No row-number suffix here — stockSalePriceError() mirrors
+                        // requiredItemFieldErrors' inline-under-the-field convention, not
+                        // missingQtyMessage's toast-style one.
+                        if (isStockSalePriceMissing(item)) {
+                          const key = `editItems.stockSalePrice.${i}`;
+                          rowErrors[key] = stockSalePriceError(item);
+                          order.push(key);
+                        }
                       });
                       if (order.length > 0) {
                         setFieldErrorsForPrefix('editItems.', rowErrors);
@@ -1880,6 +1991,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           // it), and the row inputs above clear it on any descriptive hand-edit.
                           catalogPriceId: item.catalogPriceId ?? null,
                           catalogProductCode: item.catalogProductCode?.trim() || null,
+                          // Stock-sourced pricing (V183) — see this row's own UI comment above.
+                          // Sent unconditionally (both true and false) so an edit that un-flags a
+                          // previously stock-sourced line actually reaches the backend as false,
+                          // not merely as an absent field the merge would read as "unspecified,
+                          // inherit prior".
+                          sourcedFromStock: Boolean(item.sourcedFromStock),
+                          stockSalePrice: item.sourcedFromStock && item.stockSalePrice !== ''
+                            ? Number(item.stockSalePrice) : null,
                         })),
                         note: editNote.trim() || null,
                       }), 'บันทึกการแก้ไขแล้ว');
@@ -1921,6 +2040,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       <strong>{item.brand}</strong>
                       {item.model && <small className="text-text-muted">{item.model}</small>}
                       {item.factory && <small className="text-2xs text-text-muted">{item.factory}</small>}
+                      {/* Gap B (V183): a saved จากสต็อก line otherwise shows no indication in the
+                          read-only table — see StockAwarePriceCell's own comment for the price
+                          side of this fix. */}
+                      {item.sourcedFromStock ? (
+                        <span className="mt-0.5 block w-fit"><StatusBadge tone="warning">จากสต็อก</StatusBadge></span>
+                      ) : null}
                     </span>
                     <span data-label="สี / เนื้อผิว" className="flex flex-col gap-0.5">
                       {item.color && <span>{item.color}</span>}
@@ -1958,19 +2083,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </span>
                         <code data-label="ต้นทุน (THB/ชิ้น)" className="text-info">{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
-                            {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
-                          </code>
-                          {/* CEO manual-override entry (D10) was ticket-native and retired along
-                              with calculatePrices/approve — this is now a read-only readout of
-                              whatever the 3 stranded legacy tickets already carry. */}
-                          {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
+                          <StockAwarePriceCell item={item} primary={item.manualPrice ?? item.calcedPrice ?? null}>
+                            <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
+                              {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
+                            </code>
+                            {/* CEO manual-override entry (D10) was ticket-native and retired along
+                                with calculatePrices/approve — this is now a read-only readout of
+                                whatever the 3 stranded legacy tickets already carry. */}
+                            {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
+                          </StockAwarePriceCell>
                         </span>
                       </>
                     ) : (
                       <>
                         {showProposed && <code data-label="ราคาที่เสนอ">{formatMoney(item.proposedPrice)}</code>}
-                        {showApproved && <code data-label="ราคาที่อนุมัติ">{formatMoney(item.approvedPrice)}</code>}
+                        {showApproved && (
+                          <span data-label="ราคาที่อนุมัติ">
+                            <StockAwarePriceCell item={item} primary={item.approvedPrice}>
+                              <code>{formatMoney(item.approvedPrice)}</code>
+                            </StockAwarePriceCell>
+                          </span>
+                        )}
                       </>
                     )}
                   </div>
