@@ -48,6 +48,7 @@ import { nextStageIn, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
+import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { resolveWorkState } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -807,7 +808,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
     recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
     setBilling:         hasAction('SET_BILLING') && isAccount,
-    downloadRemainingInvoice: st === 'quotation_issued' && fs === 'GOODS_RECEIVED' && isSales,
+    downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
 
   // Slice C2b: the FIX 2 (Opus review) per-instance เอกสาร (attachments)
