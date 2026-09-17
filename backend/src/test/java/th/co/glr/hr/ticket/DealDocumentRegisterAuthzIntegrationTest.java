@@ -266,7 +266,11 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
     void nonParticipantSalesRep_cannotReachAnotherRepsDocuments() throws Exception {
         assertForbidden(() -> ticketService.get(ticketId, salesOtherActor));
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, salesOtherActor));
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, salesOtherActor));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, salesOtherActor, null, null, null, null));
+        // The options preview endpoint (finding 4: it shares requireTicketViewer with the /file
+        // download above, so it must refuse identically, before ever reaching the quotation-
+        // qualification logic).
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, salesOtherActor));
         assertForbidden(() -> pricingRequestService.get(pricingRequestId, salesOtherActor));
         assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, salesOtherActor));
         assertAttachmentsForbidden(salesOtherActor);
@@ -281,7 +285,8 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         for (UserPrincipal actor : List.of(hrActor, employeeActor)) {
             assertForbidden(() -> ticketService.get(ticketId, actor));
             assertForbidden(() -> depositNoticeService.listByTicket(ticketId, actor));
-            assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, actor));
+            assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, actor, null, null, null, null));
+            assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, actor));
             assertForbidden(() -> pricingRequestService.get(pricingRequestId, actor));
             assertForbidden(() -> quotationService.listForPricingRequest(pricingRequestId, actor));
             assertAttachmentsForbidden(actor);
@@ -332,7 +337,8 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         // getRemainingInvoiceXlsx calls requireTicketViewer FIRST, so this 403s even though the
         // ticket is nowhere near 'quotation_issued' — the auth check never reaches the status
         // check for a caller requireTicketViewer already refuses.
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importAssigneeActor));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importAssigneeActor, null, null, null, null));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importAssigneeActor));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -352,8 +358,49 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertThatCode(() -> ticketService.get(ticketId, importNonParticipantActor)).doesNotThrowAnyException();
         assertThat(ticketService.get(ticketId, importNonParticipantActor).quotations()).isEmpty();
         assertForbidden(() -> depositNoticeService.listByTicket(ticketId, importNonParticipantActor));
-        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importNonParticipantActor));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceXlsx(ticketId, importNonParticipantActor, null, null, null, null));
+        assertForbidden(() -> depositNoticeService.getRemainingInvoiceOptions(ticketId, importNonParticipantActor));
         assertAttachmentsForbidden(importNonParticipantActor);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // REQUIRED CASE (owner ruling A — quotation selection, 2026-09-17): a `quotationId` that does
+    // not belong to (or does not qualify for) THIS ticket must be refused with 400, even for the
+    // deal's own owner — "never allow picking another ticket's quotation" is the load-bearing
+    // guarantee, proven here against the REAL findQualifyingQuotations query on real Postgres, not
+    // a mock that could be made to "pass" while the SQL/lookup did something else.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void ownerCannotPickAQuotationIdThatDoesNotQualifyForThisTicket() {
+        // No CustomerQuotation exists at all yet for this ticket's pricing request (it is still
+        // SUBMITTED, not through PricingDecision/CustomerQuotation issue+accept) — so ANY
+        // quotationId, including one that belongs to a wholly different ticket/pricing request
+        // elsewhere in the same database, is necessarily outside this ticket's qualifying set.
+        // The owner otherwise has full access to this ticket (requireTicketViewer passes) — the
+        // 400 below is entirely the quotationId cross-reference guard, not a viewer-role refusal.
+        //
+        // Ticket status is force-set to quotation_issued directly (fixture-only shortcut, same
+        // pattern as this class's own `assigned_to` UPDATE above) so this test isolates the
+        // quotationId gate from the separate status gate (requireQuotationIssuedForRemainingInvoice)
+        // — driving a real deal all the way to quotation_issued through PricingDecision/
+        // CustomerQuotation/OrderConfirmationService is out of scope for what THIS test needs to
+        // prove, and that status gate already has its own coverage elsewhere.
+        jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :ticketId",
+            Map.of("ticketId", ticketId));
+
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceXlsx(
+                ticketId, salesOwnerActor, null, null, null, null, 999999L))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
+
+        // getRemainingInvoiceOptions with an explicit invalid quotationId also refuses outright
+        // (400) rather than silently falling back to a default — see resolveRemainingInvoice's
+        // own Javadoc: a caller-supplied id always wins or is refused, never ignored.
+        assertThatThrownBy(() -> depositNoticeService.getRemainingInvoiceOptions(
+                ticketId, 999999L, salesOwnerActor))
+            .isInstanceOfSatisfying(ApiException.class, e ->
+                assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

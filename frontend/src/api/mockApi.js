@@ -6386,12 +6386,69 @@ export const api = {
 
     // ── Dual-track post-quotation (ข้อ 13) ──────────────────────────────────
 
-    async downloadRemainingInvoice(id) {
+    // Mirrors DepositNoticeService.getRemainingInvoiceOptions: read gate + status check first,
+    // then a demo-safe preview from the mock's own ticket data. Capacity/reference-default logic,
+    // the quotation-selection rulings (qualifying-quotation matching, notice-sourced items per
+    // ruling D11, negative-net refusal) and blockingReason are NOT reimplemented here — per
+    // CLAUDE.md, VITE_USE_MOCKS=true is not evidence for a computation like this; the numbers
+    // below are for the dialog's plumbing (including the quotationId param's arity) to exercise,
+    // never for verifying the real 22-row capacity, the receipt/deposit-notice default
+    // precedence, or any of the owner's matching/sourcing rules — those are real-service-only
+    // concerns (see DepositNoticeServiceTest).
+    // `quotationId` is accepted (arity parity with hrApi.js) but not acted on — the mock has no
+    // concept of multiple qualifying quotations.
+    async remainingInvoiceOptions(id, quotationId) { // eslint-disable-line no-unused-vars
+      const { ticket } = requireDepositNoticeViewer(id);
+      if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
+      const today = new Date();
+      const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
+      const docNumber = `GLR${thaiYear2}${String(id).padStart(3, '0')}`;
+      const firstQ = (ticket.quotations ?? [])[0];
+      const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+      const itemsTotal = priceItems.reduce(
+        (sum, it) => sum + (Number(it.approvedPrice) || 0) * (Number(it.qty) || 0), 0);
+      const depositAmount = 0;
+      const netAmount = itemsTotal - depositAmount;
+      const vatAmount = Math.round(netAmount * 0.07 * 100) / 100;
+      const totalPayable = Math.round((netAmount + vatAmount) * 100) / 100;
+      return delay({
+        options: {
+          docNumber,
+          defaultIssueDate: today.toISOString().slice(0, 10),
+          defaultReference: firstQ ? firstQ.number : null,
+          referenceOptions: firstQ ? [{ value: firstQ.number, label: firstQ.number }] : [],
+          defaultDepositReference: null,
+          depositReferenceOptions: [{ value: '', label: '(ไม่ระบุ)' }],
+          noteTemplates: mockNoteTemplates,
+          itemCount: priceItems.length,
+          maxItems: 22,
+          itemsTotal,
+          depositAmount,
+          netAmount,
+          vatAmount,
+          totalPayable,
+          // Not reimplemented in the mock (see this method's own header comment) — a deal with
+          // several qualifying quotations never shows the picker under VITE_USE_MOCKS=true.
+          quotationOptions: [],
+          defaultQuotationId: null,
+          blockingReason: null,
+        },
+      });
+    },
+
+    async downloadRemainingInvoice(id, params) {
       // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first — and,
       // per Phase B, that gate now denies import outright (a financial document).
       const { ticket } = requireDepositNoticeViewer(id);
       if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
-      const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file`);
+      const qs = new URLSearchParams();
+      if (params?.reference !== undefined) qs.set('reference', params.reference ?? '');
+      if (params?.depositReference !== undefined) qs.set('depositReference', params.depositReference ?? '');
+      if (params?.issueDate !== undefined) qs.set('issueDate', params.issueDate ?? '');
+      if (params?.noteIds !== undefined) qs.set('noteIds', (params.noteIds ?? []).join(','));
+      if (params?.quotationId !== undefined && params?.quotationId !== null) qs.set('quotationId', params.quotationId);
+      const query = qs.toString();
+      const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file${query ? `?${query}` : ''}`);
       return blob ?? buildMockRemainingInvoiceXlsx(Number(id));
     },
 

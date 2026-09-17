@@ -169,7 +169,24 @@ export const API_ROUTES = {
     issue: (id) => `/api/deposit-notices/${id}/issue`,
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
-    remainingInvoiceFile: (ticketId) => `/api/tickets/${ticketId}/remaining-invoice/file`,
+    // `quotationId` (optional): live-preview a specific qualifying quotation — see
+    // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc.
+    remainingInvoiceOptions: (ticketId, quotationId) =>
+      `/api/tickets/${ticketId}/remaining-invoice/options${quotationId != null ? `?quotationId=${quotationId}` : ''}`,
+    // params: { reference?, depositReference?, issueDate?, noteIds?, quotationId? } — every key
+    // optional; a key present with an empty string means "leave that field blank" (NOT the same
+    // as omitting it, which means "use the default"). See DepositNoticeController's own
+    // query-param Javadoc.
+    remainingInvoiceFile: (ticketId, params = {}) => {
+      const qs = new URLSearchParams();
+      if (params.reference !== undefined) qs.set('reference', params.reference ?? '');
+      if (params.depositReference !== undefined) qs.set('depositReference', params.depositReference ?? '');
+      if (params.issueDate !== undefined) qs.set('issueDate', params.issueDate ?? '');
+      if (params.noteIds !== undefined) qs.set('noteIds', (params.noteIds ?? []).join(','));
+      if (params.quotationId !== undefined && params.quotationId !== null) qs.set('quotationId', params.quotationId);
+      const query = qs.toString();
+      return `/api/tickets/${ticketId}/remaining-invoice/file${query ? `?${query}` : ''}`;
+    },
   },
   // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
   // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —

@@ -119,6 +119,7 @@ export const queryKeys = {
   // slice C (DepositNoticePage/CeoSettingsPage/NotificationBell)
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
+  remainingInvoiceOptions: (ticketId, quotationId) => ['remainingInvoice', 'options', ticketId, quotationId ?? null],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor, owner 2026-09-11). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id — see

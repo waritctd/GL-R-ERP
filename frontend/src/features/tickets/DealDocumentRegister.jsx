@@ -14,6 +14,7 @@ import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.
 import { canViewDealQuotation } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 
 /**
  * Slice D ("the เอกสาร document register"): one read-only roll-up of every document a deal can
@@ -94,6 +95,7 @@ export function DealDocumentRegister({
   attachLoading = false,
 }) {
   const [busyKey, setBusyKey] = useState(null);
+  const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
 
   // Unchanged from the pre-Slice-D `documents` tab gate (ticketDetailTabs.js) — see this file's
   // own header comment for why it stays a two-part role+section check rather than collapsing to
@@ -191,10 +193,8 @@ export function DealDocumentRegister({
     downloadBlob(blob, doc.docNumber ?? 'deposit-notice', format);
   }
 
-  async function downloadRemainingInvoice() {
-    const key = 'remaining-invoice';
-    const blob = await handleDownload(key, () => api.tickets.downloadRemainingInvoice(ticketId));
-    downloadBlob(blob, `remaining-invoice-${ticketId}`, 'xlsx');
+  function openRemainingInvoiceDialog() {
+    setRemainingInvoiceDialogOpen(true);
   }
 
   const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab;
@@ -300,7 +300,7 @@ export function DealDocumentRegister({
               meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและรับสินค้าครบก่อน)'}
               status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
               actions={remainingInvoiceReady ? [
-                { label: 'Excel', busy: busyKey === 'remaining-invoice', onClick: downloadRemainingInvoice },
+                { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },
               ] : []}
             />
           </div>
@@ -332,6 +332,10 @@ export function DealDocumentRegister({
             </div>
           )}
         </div>
+      ) : null}
+
+      {remainingInvoiceDialogOpen ? (
+        <RemainingInvoiceDialog ticketId={ticketId} onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
     </Panel>
   );

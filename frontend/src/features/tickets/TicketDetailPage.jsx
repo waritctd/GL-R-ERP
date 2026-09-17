@@ -30,6 +30,7 @@ import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
+import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
@@ -341,7 +342,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // one shared flag that would disable every download button at once. Not
   // server-state mutations (no cache to invalidate), so left as local state.
   const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
-  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
+  const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
 
   const ticketQuery = useQuery({
     queryKey: queryKeys.ticketDetail(ticketId),
@@ -1238,18 +1239,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  async function handleDownloadRemainingInvoice() {
-    setDownloadingInvoice(true);
-    try {
-      const blob = await api.tickets.downloadRemainingInvoice(ticketId);
-      downloadBlob(blob, `remaining-invoice-${ticketId}`, 'xlsx');
-    } catch (err) {
-      showToast('error', err.message || 'ดาวน์โหลดไม่สำเร็จ');
-    } finally {
-      setDownloadingInvoice(false);
-    }
-  }
-
   async function handleComment() {
     if (!commentText.trim()) return;
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
@@ -1424,9 +1413,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </Button>
             )}
             {can.downloadRemainingInvoice && (
-              <Button type="button" variant="secondary" disabled={downloadingInvoice}
-                onClick={handleDownloadRemainingInvoice}>
-                {downloadingInvoice ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ'}
+              <Button type="button" variant="secondary" onClick={() => setRemainingInvoiceDialogOpen(true)}>
+                ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ
               </Button>
             )}
           </>
@@ -2330,6 +2318,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
       {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel
           (Phase 3 Slice S4). */}
+
+      {remainingInvoiceDialogOpen ? (
+        <RemainingInvoiceDialog ticketId={ticketId} onClose={() => setRemainingInvoiceDialogOpen(false)} />
+      ) : null}
 
       <ConfirmDialog
         open={confirm?.kind === 'deleteAttachment'}

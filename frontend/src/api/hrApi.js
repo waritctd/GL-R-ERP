@@ -421,9 +421,27 @@ export const api = {
     createDocDraft: (id, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(id), { method: 'POST', body: payload }),
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
-    downloadRemainingInvoice: async (id) => {
-      const res = await fetch(API_ROUTES.depositNotices.remainingInvoiceFile(id), { credentials: 'include' });
-      if (!res.ok) throw new Error('Download failed');
+    // Prefill + preview for the remaining-invoice download dialog. Mirrors
+    // DepositNoticeService#getRemainingInvoiceOptions. `quotationId` (optional): live-preview a
+    // specific qualifying quotation when several exist — see RemainingInvoiceOptionsDto's own
+    // quotationOptions/defaultQuotationId Javadoc.
+    remainingInvoiceOptions: (id, quotationId) =>
+      apiRequest(API_ROUTES.depositNotices.remainingInvoiceOptions(id, quotationId)),
+    // params (all optional): { reference, depositReference, issueDate, noteIds, quotationId } —
+    // see routes.js's own remainingInvoiceFile Javadoc for the "omitted vs empty" semantics a
+    // bare call (no params) still needs to keep working with server defaults.
+    //
+    // Surfaces the backend's own Thai message on failure (e.g. a 409 "ยอดหลังหักมัดจำติดลบ...")
+    // instead of a generic English string — same res.json()-then-fallback pattern
+    // several other blob downloads' error paths in this file already use (see e.g.
+    // leave.downloadAttachment/downloadMyReport/downloadTeamReport above — NOT
+    // leave.downloadPolicyDocument, which still throws the older generic 'Download failed').
+    downloadRemainingInvoice: async (id, params) => {
+      const res = await fetch(API_ROUTES.depositNotices.remainingInvoiceFile(id, params), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');
+      }
       return res.blob();
     },
     confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
