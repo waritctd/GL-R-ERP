@@ -48,6 +48,20 @@ import { nextStageIn, useStageCatalog } from './stageCatalog.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
+import {
+  applyCatalogPick,
+  applyDescriptiveFieldEdit,
+  CatalogAutocompleteField,
+  ITEM_FIELD_META,
+  ItemField,
+  ItemFieldLabel,
+  isRequiredItemField,
+  missingQtyMessage,
+  REQUIRED_ITEM_FIELD_LABELS,
+  requiredItemFieldErrors,
+  requiredQtyField,
+  searchCatalog,
+} from './ticketItemFields.jsx';
 import { resolveWorkState } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -253,6 +267,40 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState([]);
   const [editNote, setEditNote] = useState('');
+  // Catalog autocomplete for the ยี่ห้อ/รุ่น fields in edit mode — same shape as
+  // TicketCreateModal's catalogResults/catalogFocus (`{ index, field }`), kept as this page's own
+  // state because edit-items and create are two separate mounted trees.
+  const [editCatalogResults, setEditCatalogResults] = useState([]);
+  const [editCatalogFocus, setEditCatalogFocus] = useState(null);
+  // Mirrors TicketCreateModal's onCatalogInput/applyCatalogItem — brand/model typing searches the
+  // catalog (debounced), a pick fills the row via the shared applyCatalogPick and clears that row's
+  // required-field errors.
+  //
+  // Real keystroke: mutates the row AND searches. Kept separate from onEditCatalogFieldFocus below
+  // — review round 2 caught a regression where re-focusing an already-filled ยี่ห้อ/รุ่น box (no
+  // keystroke, value unchanged) used to run through this same mutating path, silently re-running
+  // the brand→factory lockstep and catalog-link CLEAR on every focus. For a row loaded from the
+  // server with a real catalog link (catalogPriceId/catalogProductCode), simply tabbing into and
+  // back out of the field wiped that link before save — a data-loss bug proved end-to-end (focus
+  // brand+model, then save, dropped catalogPriceId and reset factory from the unchanged brand).
+  function onEditCatalogInput(index, field, value) {
+    setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, field, value) : r)));
+    clearFieldError(`editItems.${field}.${index}`);
+    setEditCatalogFocus({ index, field });
+    searchCatalog(value, setEditCatalogResults);
+  }
+  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a re-focus of
+  // a field the rep never actually retyped.
+  function onEditCatalogFieldFocus(index, field, value) {
+    setEditCatalogFocus({ index, field });
+    if (value) searchCatalog(value, setEditCatalogResults);
+  }
+  function applyEditCatalogPick(index, cat) {
+    setEditDraft((d) => d.map((r, i) => (i === index ? applyCatalogPick(r, cat) : r)));
+    Object.keys(REQUIRED_ITEM_FIELD_LABELS).forEach((f) => clearFieldError(`editItems.${f}.${index}`));
+    setEditCatalogResults([]);
+    setEditCatalogFocus(null);
+  }
 
   // Revision form
   const [showReviseForm, setShowReviseForm] = useState(false);
@@ -261,9 +309,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
   // delivery modals, plus (5b) the revise form (a modal since Slice C2a) and
-  // the edit-items quantities. One shared dict, keyed per-form/per-row so a stale error can
+  // the edit-items rows. One shared dict, keyed per-form/per-row so a stale error can
   // never bleed into another: 'payment.amount' | 'revise.reason' |
-  // 'editItems.qty.<rowIndex>' (per-row — see the edit-items save handler).
+  // 'editItems.<field>.<rowIndex>' (per-row, per-field — brand/model/size/qty; see the
+  // fix/ticket-edit-items-required-markers required-field check and the edit-items save handler).
   // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
   // with ticket-native pricing/quotation — Phase 2 Slice S1/S2; 'delivery.lines'
   // moved out along with the delivery/stock modals themselves — Phase 3 Slice
@@ -1520,7 +1569,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   setEditDraft(items.map((item) => ({ ...item })));
                   setEditNote('');
                   setEditMode(true);
-                  setFieldErrorsForPrefix('editItems.qty.', {});
+                  setFieldErrorsForPrefix('editItems.', {});
                 }}>
                 <Icon name="pencil" size={14} />
                 แก้ไขรายการสินค้า
@@ -1545,11 +1594,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                               let changed = false;
                               const next = {};
                               Object.entries(prev).forEach(([k, v]) => {
-                                const m = k.match(/^editItems\.qty\.(\d+)$/);
+                                // Any editItems.<field>.<rowIndex> key — brand/model/size/qty —
+                                // not just qty, so a required-field error never ends up pinned to
+                                // the wrong (now different) row after a delete.
+                                const m = k.match(/^editItems\.([a-zA-Z]+)\.(\d+)$/);
                                 if (!m) { next[k] = v; return; }
-                                const idx = Number(m[1]);
+                                const [, field, idxStr] = m;
+                                const idx = Number(idxStr);
                                 if (idx === index) { changed = true; return; }
-                                if (idx > index) { next[`editItems.qty.${idx - 1}`] = v; changed = true; return; }
+                                if (idx > index) { next[`editItems.${field}.${idx - 1}`] = v; changed = true; return; }
                                 next[k] = v;
                               });
                               return changed ? next : prev;
@@ -1560,31 +1613,80 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      {[
-                        { key: 'brand', label: 'ชื่อยี่ห้อ', placeholder: 'เช่น SCG, Cotto' },
-                        { key: 'model', label: 'ชื่อรุ่น', placeholder: 'ชื่อรุ่น' },
-                        { key: 'color', label: 'สี', placeholder: 'เช่น ขาว, เทา' },
-                        { key: 'texture', label: 'เนื้อผิว', placeholder: 'เช่น ด้าน, มัน' },
-                        { key: 'size', label: 'ขนาด', placeholder: 'เช่น 60x60 ซม.' },
-                        { key: 'factory', label: 'โรงงาน', placeholder: 'เช่น SCG Ceramics' },
-                      ].map(({ key, label, placeholder }) => (
-                        <label key={key} className="m-0">
-                          <span className="text-xs">{label}</span>
-                          <input value={item[key] || ''} placeholder={placeholder}
-                            onChange={(e) => setEditDraft((d) => d.map((r, i) => {
-                              if (i !== index) return r;
-                              const next = { ...r, [key]: e.target.value };
-                              // A hand-edit to a descriptive field invalidates a catalog link
-                              // picked at deal-creation time — what's typed no longer
-                              // necessarily matches what the link points at. Mirrors
-                              // TicketCreateModal.jsx's updateItem/PricingRequestCreateModal's
-                              // updateItem, same rule.
-                              next.catalogPriceId = null;
-                              next.catalogProductCode = '';
-                              return next;
-                            }))} />
-                        </label>
-                      ))}
+                      {/* Fields/labels/placeholders and the catalog autocomplete on ยี่ห้อ/รุ่น now
+                          come from ticketItemFields.jsx, shared with TicketCreateModal.jsx — this
+                          used to be a hand-rolled 6-field map (including its own separate โรงงาน
+                          input, no asterisks, no catalog search) that had drifted from create's
+                          labels ('ชื่อยี่ห้อ' vs 'ยี่ห้อ / โรงงาน') and dropped required-field
+                          validation entirely (UAT: reopening a deal to edit items showed no red
+                          asterisks and only failed with a backend 400). ยี่ห้อ and โรงงาน are one
+                          field, same as create — see applyDescriptiveFieldEdit's brand branch. */}
+                      <CatalogAutocompleteField
+                        id={`edit-item-${index}-brand`}
+                        label={ITEM_FIELD_META.brand.label}
+                        placeholder={ITEM_FIELD_META.brand.placeholder}
+                        required={isRequiredItemField('brand')}
+                        value={item.brand || ''}
+                        onInput={(value) => onEditCatalogInput(index, 'brand', value)}
+                        onFocusSearch={() => onEditCatalogFieldFocus(index, 'brand', item.brand)}
+                        onBlur={() => setTimeout(() => setEditCatalogFocus(null), 180)}
+                        expanded={editCatalogFocus?.index === index && editCatalogFocus?.field === 'brand'}
+                        results={editCatalogResults}
+                        onPick={(cat) => applyEditCatalogPick(index, cat)}
+                        error={fieldErrors[`editItems.brand.${index}`]}
+                        inputRef={(el) => { fieldRefs.current[`editItems.brand.${index}`] = el; }}
+                      />
+                      <CatalogAutocompleteField
+                        id={`edit-item-${index}-model`}
+                        label={ITEM_FIELD_META.model.label}
+                        placeholder={ITEM_FIELD_META.model.placeholder}
+                        required={isRequiredItemField('model')}
+                        value={item.model || ''}
+                        onInput={(value) => onEditCatalogInput(index, 'model', value)}
+                        onFocusSearch={() => onEditCatalogFieldFocus(index, 'model', item.model)}
+                        onBlur={() => setTimeout(() => setEditCatalogFocus(null), 180)}
+                        expanded={editCatalogFocus?.index === index && editCatalogFocus?.field === 'model'}
+                        results={editCatalogResults}
+                        onPick={(cat) => applyEditCatalogPick(index, cat)}
+                        error={fieldErrors[`editItems.model.${index}`]}
+                        inputRef={(el) => { fieldRefs.current[`editItems.model.${index}`] = el; }}
+                      />
+                      <ItemField
+                        id={`edit-item-${index}-size`}
+                        label={ITEM_FIELD_META.size.label}
+                        required={isRequiredItemField('size')}
+                        error={fieldErrors[`editItems.size.${index}`]}
+                      >
+                        <input
+                          id={`edit-item-${index}-size`}
+                          ref={(el) => { fieldRefs.current[`editItems.size.${index}`] = el; }}
+                          value={item.size || ''}
+                          placeholder={ITEM_FIELD_META.size.placeholder}
+                          aria-required="true"
+                          aria-invalid={fieldErrors[`editItems.size.${index}`] ? true : undefined}
+                          aria-describedby={fieldErrors[`editItems.size.${index}`] ? fieldErrorId(`edit-item-${index}-size`) : undefined}
+                          onChange={(e) => {
+                            setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'size', e.target.value) : r)));
+                            clearFieldError(`editItems.size.${index}`);
+                          }}
+                        />
+                      </ItemField>
+                      <ItemField id={`edit-item-${index}-color`} label={ITEM_FIELD_META.color.label} hint={ITEM_FIELD_META.color.hint}>
+                        <input
+                          id={`edit-item-${index}-color`}
+                          value={item.color || ''}
+                          placeholder={ITEM_FIELD_META.color.placeholder}
+                          onChange={(e) => setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'color', e.target.value) : r)))}
+                        />
+                      </ItemField>
+                      <ItemField id={`edit-item-${index}-texture`} label={ITEM_FIELD_META.texture.label} hint={ITEM_FIELD_META.texture.hint}>
+                        <input
+                          id={`edit-item-${index}-texture`}
+                          value={item.texture || ''}
+                          placeholder={ITEM_FIELD_META.texture.placeholder}
+                          onChange={(e) => setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, 'texture', e.target.value) : r)))}
+                        />
+                      </ItemField>
                       {/* Unit basis toggle */}
                       <div className="col-span-full m-0">
                         <span className="mb-1 block text-xs">หน่วยที่ใช้สั่ง</span>
@@ -1615,8 +1717,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {/* Qty inputs */}
                       {(item.unitBasis || 'PIECE') === 'PIECE' ? (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">จำนวน (แผ่น)</span>
+                          <label className="m-0 text-xs" htmlFor={`edit-item-qty-${index}`}>
+                            <ItemFieldLabel label="จำนวน (แผ่น)" required={requiredQtyField(item.unitBasis) === 'qty'} />
                             <input type="number" value={item.qty ?? ''} step="1"
                               id={`edit-item-qty-${index}`}
                               ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
@@ -1629,6 +1731,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                                 }));
                                 clearFieldError(`editItems.qty.${index}`);
                               }}
+                              aria-required={requiredQtyField(item.unitBasis) === 'qty' ? 'true' : undefined}
                               aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qty-${index}`) : undefined}
                             />
@@ -1647,8 +1750,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </>
                       ) : (
                         <>
-                          <label className="m-0">
-                            <span className="text-xs">พื้นที่ (ตร.ม.)</span>
+                          <label className="m-0 text-xs" htmlFor={`edit-item-qtysqm-${index}`}>
+                            <ItemFieldLabel label="พื้นที่ (ตร.ม.)" required={requiredQtyField(item.unitBasis) === 'qtySqm'} />
                             {/* Governs qty when this row is in SQM mode (qty is
                                 derived from qtySqm × sqmPerPiece below) — so the
                                 per-row qty error, if any, attaches here rather
@@ -1665,6 +1768,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                                 }));
                                 clearFieldError(`editItems.qty.${index}`);
                               }}
+                              aria-required={requiredQtyField(item.unitBasis) === 'qtySqm' ? 'true' : undefined}
                               aria-invalid={fieldErrors[`editItems.qty.${index}`] ? true : undefined}
                               aria-describedby={fieldErrors[`editItems.qty.${index}`] ? fieldErrorId(`edit-item-qtysqm-${index}`) : undefined}
                             />
@@ -1706,24 +1810,61 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <div className="flex gap-2">
                   <Button type="button" variant="primary" disabled={actionLoading}
                     onClick={() => {
-                      // UX-03 (slice 5b): this used to be one toast covering every
-                      // row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ") — the exact
-                      // "one message for many fields" defect the finding names.
-                      // Flag each offending row's own qty input instead, keyed by
-                      // row index, so the user sees exactly which rows are wrong.
-                      const qtyErrors = {};
+                      // UX-03 (slice 5b) covered qty only ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ" →
+                      // one message per row). fix/ticket-edit-items-required-markers adds the
+                      // ยี่ห้อ/รุ่น/ขนาด required-field check that TicketCreateModal has always had
+                      // and edit-items never did — the UAT report this branch fixes. Errors are
+                      // built row-then-field (brand, model, size, then qty/qtySqm), which is also
+                      // the order focusFirstInvalid walks to land on the first invalid control
+                      // top-to-bottom.
+                      const rowErrors = {};
+                      const order = [];
                       editDraft.forEach((item, i) => {
-                        if (!item.qty || Number(item.qty) <= 0) {
-                          qtyErrors[`editItems.qty.${i}`] = 'กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง';
+                        const itemErrors = requiredItemFieldErrors(item);
+                        for (const field of ['brand', 'model', 'size']) {
+                          if (itemErrors[field]) {
+                            const key = `editItems.${field}.${i}`;
+                            rowErrors[key] = itemErrors[field];
+                            order.push(key);
+                          }
+                        }
+                        // Qty rule now matches create's basis-aware requiredQtyField — a review
+                        // round found the OLD rule (always check item.qty, regardless of basis)
+                        // could deadlock the SQM branch: for a catalog row with NO ตร.ม./แผ่น
+                        // factor, "จำนวน (แผ่น)" renders as a read-only derived display in SQM
+                        // mode (never an input), so a rep who filled พื้นที่ (ตร.ม.) correctly
+                        // could never satisfy a check on a field they had no way to edit.
+                        // Confirmed safe to align rather than leave as a known gap: create's own
+                        // zod schema (ticketItemFields.jsx's missingQtyMessage call site in
+                        // TicketCreateModal.jsx's makeItemSchema) never validates qty for SQM
+                        // basis either, and the backend already accepts that shape —
+                        // TicketItemRequest.java's qty/qtySqm (backend/src/main/java/th/co/glr/hr/
+                        // ticket/TicketItemRequest.java:24-25) carry no @NotNull/@Positive,
+                        // TicketService#mergeEditedItemsPreservingPricing (TicketService.java:
+                        // 2263-2316) passes both straight through, and sales.ticket_item.qty is
+                        // NOT NULL with no CHECK > 0 (db/migration/V6__sales_ticket_schema.sql:46;
+                        // the only qty>0 CHECKs in the schema are on unrelated tables —
+                        // sales.delivery_record_item, V54__fulfilment_and_delivery.sql:26, and
+                        // sales.pricing_request_item, V59__pricing_request_foundation.sql:77, a
+                        // later-stage entity with its own DB-enforced positive qty that a ticket
+                        // item's qty never feeds into directly). Both create's and edit's payloads
+                        // already coerce to `qty: Number(item.qty) || 0` regardless, so this is a
+                        // shape create already sends and the backend already accepts via the same
+                        // editItems endpoint — not a new contract.
+                        const qtyField = requiredQtyField(item.unitBasis);
+                        const qtyValue = item[qtyField];
+                        if (!qtyValue || Number(qtyValue) <= 0) {
+                          const key = `editItems.qty.${i}`;
+                          rowErrors[key] = missingQtyMessage(item.unitBasis, i + 1);
+                          order.push(key);
                         }
                       });
-                      const order = Object.keys(qtyErrors);
                       if (order.length > 0) {
-                        setFieldErrorsForPrefix('editItems.qty.', qtyErrors);
+                        setFieldErrorsForPrefix('editItems.', rowErrors);
                         focusFirstInvalid(order[0]);
                         return;
                       }
-                      setFieldErrorsForPrefix('editItems.qty.', {});
+                      setFieldErrorsForPrefix('editItems.', {});
                       doAction(() => api.tickets.editItems(ticketId, {
                         items: editDraft.map((item) => ({
                           brand: item.brand, model: item.model, color: item.color,
@@ -1746,7 +1887,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                     บันทึกการแก้ไข
                   </Button>
                   <Button type="button" variant="secondary" disabled={actionLoading}
-                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.qty.', {}); }}>
+                    onClick={() => { setEditMode(false); setEditDraft([]); setEditNote(''); setFieldErrorsForPrefix('editItems.', {}); }}>
                     ยกเลิก
                   </Button>
                 </div>

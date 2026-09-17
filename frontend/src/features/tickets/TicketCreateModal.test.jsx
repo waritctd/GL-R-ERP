@@ -663,6 +663,40 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     });
   });
 
+  // Review round 2: onFocusSearch used to call the SAME mutating path a real keystroke does
+  // (onBrandInput/onModelInput -> updateItem), so merely re-focusing an already-picked ยี่ห้อ/รุ่น
+  // box — no retyping, value unchanged — silently re-ran the brand->factory lockstep and cleared
+  // the catalog link, exactly as if the rep had hand-edited it. Proved with a real pick then a
+  // real focus event, not a shortcut around either.
+  it('re-focusing ยี่ห้อ/รุ่น after a catalog pick does NOT clear the catalog link (search-only focus, no row mutation)', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+    renderModal({ onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    const brandInput = await addItemAndSearchBrand('Bode');
+    await pickFromDropdown('Bode');
+    await waitFor(() => expect(brandInput.value).toBe('Bode'));
+
+    // Re-focus both fields with no keystroke in between — simulates tabbing back through the row.
+    const modelInput = screen.getByPlaceholderText('เช่น Stone Villa, Eco stone');
+    fireEvent.focus(brandInput);
+    fireEvent.focus(modelInput);
+
+    fireEvent.click(screen.getByRole('button', { name: /บันทึกรายการ/ }));
+    goToSection('กลับ');
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].items[0]).toMatchObject({
+      brand: 'Bode',
+      factory: 'Bode',
+      catalogPriceId: 501,
+      catalogProductCode: 'BNFJ30126CA',
+    });
+  });
+
   // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolves ตร.ม./แผ่น the same way
   // the quotation item editor does (resolveTileSqmPerPiece) — the catalog's own sqm_per_piece,
   // nothing guessed from the free-text size.
