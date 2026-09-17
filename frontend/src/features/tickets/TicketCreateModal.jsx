@@ -11,7 +11,19 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
 import { formatCatalogPrice } from './catalogPriceDisplay.js';
-import { resolveTileSqmPerPiece } from '../quotations/QuotationItemRow.jsx';
+import {
+  applyCatalogPick,
+  applyDescriptiveFieldEdit,
+  CatalogAutocompleteField,
+  ITEM_FIELD_META,
+  ItemField,
+  isRequiredItemField,
+  missingQtyMessage,
+  REQUIRED_ITEM_FIELD_LABELS,
+  requiredItemFieldErrors,
+  requiredQtyField,
+  searchCatalog,
+} from './ticketItemFields.jsx';
 
 // ── REMOVED (owner ruling 2026-09-12, "แก้ด้วย — ใช้ catalog เหมือนกัน") ─────────────────────────
 // This file used to carry its own deriveSqmPerPiece(sizeRaw): a magnitude guess (both dimensions
@@ -19,9 +31,10 @@ import { resolveTileSqmPerPiece } from '../quotations/QuotationItemRow.jsx';
 // with no sqm_per_piece of their own. Deleted along with WastageCalculator's twin heuristic
 // (parseSqmPerPieceFromSize/detectUnit, see WastageCalculatorTest) for the same reason: the owner
 // ruled that a unit must never be GUESSED from a size string, catalogue only. This modal now
-// resolves ตร.ม./แผ่น the same way the quotation item editor does — see resolveTileSqmPerPiece
-// (imported above) for the resolution order (catalog's own sqm_per_piece; never for a
-// per_linear_m row; otherwise nothing is invented and the rep types both quantities by hand).
+// resolves ตร.ม./แผ่น the same way the quotation item editor does — see ticketItemFields.jsx's
+// applyCatalogPick (which calls resolveTileSqmPerPiece) for the resolution order (catalog's own
+// sqm_per_piece; never for a per_linear_m row; otherwise nothing is invented and the rep types
+// both quantities by hand).
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 const emptyItem = () => ({
@@ -44,12 +57,6 @@ const emptyItem = () => ({
   // hand-edits a descriptive field the link no longer accurately describes.
   catalogPriceId: null, catalogProductCode: '',
 });
-
-let _catalogTimer = null;
-function debouncedCatalogSearch(q, cb) {
-  clearTimeout(_catalogTimer);
-  _catalogTimer = setTimeout(() => cb(q), 280);
-}
 
 // ── client-side draft (no server draft entity — see handoff 107) ───────────
 // localStorage-scoped key: 'DRAFT-tmp' style local persistence for an
@@ -101,18 +108,10 @@ const PRIORITY_OPTIONS = ['LOW', 'NORMAL', 'HIGH'].map((code) => ({ code, label:
 // field is now reported (keyed the same way as `fieldErrors` state below:
 // 'customer', 'project', `items.<index>.<field>`), so a long form doesn't
 // force the user to fix-and-resubmit one message at a time.
-// สี and เนื้อผิว are deliberately NOT here. The live catalog fills `color` on 21% of active rows
-// and `surface` on 22% (both only for factories CDE/LEA/Panaria, plus Bode for surface), so
-// requiring them forced a rep to invent a value on ~4 of every 5 catalog picks. They are optional
-// on both sides now — `sales.ticket_item.color`/`.texture` were already nullable, and
-// TicketItemRequest's @NotBlank on the two was removed to match. ยี่ห้อ/รุ่น/ขนาด stay required:
-// the factory name, collection and size_raw are present on ~100% of rows.
-const REQUIRED_ITEM_FIELD_LABELS = {
-  brand: 'ยี่ห้อ / โรงงาน',
-  model: 'ชื่อรุ่น / Collection',
-  size: 'ขนาด',
-};
-
+// REQUIRED_ITEM_FIELD_LABELS/requiredItemFieldErrors/requiredQtyField/missingQtyMessage moved to
+// ticketItemFields.jsx (fix/ticket-edit-items-required-markers) — shared with TicketDetailPage's
+// edit-items mode, which used to have none of this validation at all. See that file's own comments
+// for the สี/เนื้อผิว-are-optional and per-basis-qty reasoning.
 function makeItemSchema(rowNumber) {
   return z.object({
     brand: z.string(),
@@ -124,17 +123,13 @@ function makeItemSchema(rowNumber) {
     qty: z.union([z.string(), z.number()]).nullable().optional(),
     qtySqm: z.union([z.string(), z.number()]).nullable().optional(),
   }).superRefine((item, ctx) => {
-    for (const field of Object.keys(REQUIRED_ITEM_FIELD_LABELS)) {
-      if (!String(item[field] ?? '').trim()) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `กรุณากรอก${REQUIRED_ITEM_FIELD_LABELS[field]}` });
-      }
+    const fieldErrors = requiredItemFieldErrors(item);
+    for (const [field, message] of Object.entries(fieldErrors)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
     }
-    const basis = item.unitBasis || 'PIECE';
-    if (basis === 'PIECE' && (!item.qty || Number(item.qty) <= 0)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qty'], message: `กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${rowNumber}` });
-    }
-    if (basis === 'SQM' && (!item.qtySqm || Number(item.qtySqm) <= 0)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['qtySqm'], message: `กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ ${rowNumber}` });
+    const qtyField = requiredQtyField(item.unitBasis);
+    if (!item[qtyField] || Number(item[qtyField]) <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [qtyField], message: missingQtyMessage(item.unitBasis, rowNumber) });
     }
   });
 }
@@ -284,117 +279,8 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
   );
 }
 
-/**
- * Label content for the item-editor fields.
- *
- * Everything is wrapped in ONE <span> on purpose. The global `label { display: grid }` rule in
- * styles.css turns every direct child of a <label> — including a bare text node — into its own
- * grid row, so an unwrapped `{label}` + required-marker + hint would render as three stacked
- * lines instead of one (the same trap FormField.jsx documents at length).
- */
-function ItemFieldLabel({ label, required, hint }) {
-  return (
-    <span>
-      {label}
-      {required ? <span className="text-danger" aria-hidden="true"> *</span> : null}
-      {hint ? <span className="ml-1 font-semibold text-text-muted">{hint}</span> : null}
-    </span>
-  );
-}
-
-/**
- * Label + control + error wrapper for the item editor, matching CatalogAutocompleteField's own
- * markup exactly so every cell of the two-column grid has an identical label row, gap and error
- * slot. That identity is the alignment fix: the editor previously mixed bare <label> fields with
- * hand-built <div> ones and read-only <div> boxes styled `px-2.5 py-[7px]` next to 40px-tall
- * inputs, so adjacent cells sat at visibly different heights and baselines.
- *
- * `content-start` keeps the control at its natural height instead of stretching it to the tallest
- * cell in the row — the row-stretch behaviour FormField.jsx documents as the app-wide field
- * stagger. The slack falls below the control, where it is invisible.
- */
-function ItemField({ id, label, hint, required, error, children }) {
-  const errorId = error ? fieldErrorId(id) : undefined;
-  return (
-    <div className="grid content-start gap-[7px]">
-      <label htmlFor={id} className="m-0 text-xs">
-        <ItemFieldLabel label={label} required={required} hint={hint} />
-      </label>
-      {children}
-      {error ? (
-        <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * One catalog-search row of the summary dropdown. Shared by the ยี่ห้อ/โรงงาน and รุ่น fields so a
- * result reads identically whichever box the rep is typing in.
- */
-function CatalogOption({ cat }) {
-  return (
-    <>
-      <strong>{cat.factoryName || cat.brand}</strong>
-      {' — '}
-      {cat.collection || cat.productName || cat.productCode || '—'}
-      <span className="ml-1 text-text-muted">
-        {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
-      </span>
-      {cat.price && (
-        <span className="ml-1.5 text-2xs font-semibold text-link">
-          {Number(cat.price).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {cat.currency}
-        </span>
-      )}
-    </>
-  );
-}
-
-/**
- * Text input with the catalog autocomplete attached. Extracted because ยี่ห้อ/โรงงาน and รุ่น
- * carried two byte-identical copies of the dropdown markup, which is how the two drifted apart in
- * the first place — a fix applied to one silently missed the other.
- */
-function CatalogAutocompleteField({
-  id, label, hint, required, value, placeholder, onInput, onFocusSearch,
-  onBlur, expanded, results, onPick, error, inputRef,
-}) {
-  const errorId = error ? fieldErrorId(id) : undefined;
-  return (
-    <div className="relative grid content-start gap-[7px]">
-      <label htmlFor={id} className="m-0 text-xs">
-        <ItemFieldLabel label={label} required={required} hint={hint} />
-      </label>
-      <input
-        id={id}
-        ref={inputRef}
-        value={value}
-        onChange={(e) => onInput(e.target.value)}
-        onFocus={onFocusSearch}
-        onBlur={onBlur}
-        placeholder={placeholder}
-        aria-required={required ? 'true' : undefined}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={errorId}
-      />
-      {error ? (
-        <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
-      ) : null}
-      {expanded && results.length > 0 && (
-        <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
-          {results.map((cat) => (
-            // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-            <div key={cat.priceId ?? cat.id} onMouseDown={() => onPick(cat)}
-              className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
-            >
-              <CatalogOption cat={cat} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+// ItemFieldLabel/ItemField/CatalogOption/CatalogAutocompleteField moved to ticketItemFields.jsx
+// (imported above) — shared with TicketDetailPage's edit-items mode.
 
 /** Back-to-hub / back-to-list link used at the top of every sub-view. */
 function BackLink({ onClick, label = 'กลับ' }) {
@@ -651,105 +537,50 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
     }
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
-      const updated = { ...item, [field]: value };
-      // ยี่ห้อ and โรงงาน are one input now (the brand a rep means IS the factory — Padana, Vives,
-      // LEA, Bode…), but the payload still carries both fields, so keep them in lockstep here
-      // rather than deriving at submit time only.
-      if (field === 'brand') updated.factory = value;
+      // Descriptive-field assignment, brand→factory lockstep and catalog-link clearing all live in
+      // the shared helper now (ticketItemFields.jsx) — non-descriptive fields (qty/qtySqm/unitBasis)
+      // pass through it as a plain assign, same as before.
+      let updated = applyDescriptiveFieldEdit(item, field, value);
       if (field === 'qty' && item.sqmPerPiece) {
-        updated.qtySqm = value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '';
+        updated = { ...updated, qtySqm: value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '' };
       }
       if (field === 'qtySqm' && item.sqmPerPiece) {
-        updated.qty = value ? Math.ceil(Number(value) / item.sqmPerPiece) : '';
+        updated = { ...updated, qty: value ? Math.ceil(Number(value) / item.sqmPerPiece) : '' };
       }
       if (field === 'unitBasis' && item.sqmPerPiece) {
-        if (value === 'SQM' && item.qty) updated.qtySqm = (Number(item.qty) * item.sqmPerPiece).toFixed(3);
-        if (value === 'PIECE' && item.qtySqm) updated.qty = Math.ceil(Number(item.qtySqm) / item.sqmPerPiece);
-      }
-      // A hand-edit to any field that describes WHICH product this row is invalidates a
-      // previously-picked catalog link — what's typed no longer necessarily matches what the
-      // link points at. Mirrors PricingRequestCreateModal.updateItem's identical rule.
-      if (['brand', 'model', 'color', 'texture', 'size', 'factory'].includes(field)) {
-        updated.source = 'custom';
-        updated.catalogPriceId = null;
-        updated.catalogProductCode = '';
-        updated.catalogPrice = null;
-        updated.catalogCurrency = null;
-        updated.catalogPriceUnit = null;
-        updated.catalogGrade = null;
+        if (value === 'SQM' && item.qty) updated = { ...updated, qtySqm: (Number(item.qty) * item.sqmPerPiece).toFixed(3) };
+        if (value === 'PIECE' && item.qtySqm) updated = { ...updated, qty: Math.ceil(Number(item.qtySqm) / item.sqmPerPiece) };
       }
       return updated;
     }));
   }
 
   function applyCatalogItem(index, cat) {
-    setItems((cur) => cur.map((item, i) => {
-      if (i !== index) return item;
-
-      // ยี่ห้อ = the factory name, unconditionally. The previous rule read the catalog's `grade`
-      // as the brand, on the reasoning that ProductPriceDto has no "brand" column of its own. The
-      // live catalog disproves it: `grade` holds only 'A01'/'A02', and only for factory Padana
-      // (9,076 of 22,455 active rows) — a quality code. So that rule wrote "A01" into ยี่ห้อ for
-      // Padana and left it blank for the other 60%, which is the "doesn't autofill everything"
-      // report from UAT. The factory names in this catalog — Padana, Vives, Equipe, REFIN, CDE,
-      // LEA, Panaria, Bode, CITY — are exactly what a rep calls the brand; this form's own ยี่ห้อ
-      // placeholder cites "Panaria", which is a factory row. ยี่ห้อ and โรงงาน are therefore one
-      // field, and no text a rep left in it survives a pick: whatever is in that box when the
-      // dropdown opens is the search query, not an independent brand entry.
-      const factory = cat.factoryName || cat.factory || cat.brand || '';
-
-      // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolved the same way the
-      // quotation item editor resolves it — see resolveTileSqmPerPiece's own Javadoc-style
-      // comment for the order (catalog's own sqm_per_piece; never for a per_linear_m row). The
-      // ~350 active catalog rows with no sqm_per_piece of their own (all of factory Bode, plus
-      // LEA's trim pieces) resolve to `null` here — nothing is guessed from the free-text size
-      // any more, so the แผ่น↔ตร.ม. toggle simply leaves both quantities editable for those rows
-      // (see the "ไม่มีค่า ตร.ม./แผ่น ในแคตตาล็อก" branch below).
-      const sizeRaw = cat.sizeRaw || cat.size || '';
-      const sqmPerPiece = resolveTileSqmPerPiece(cat);
-      const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
-
-      return {
-        ...item,
-        brand:       factory,
-        factory,
-        model:       cat.collection   || cat.productName || cat.productCode || '',
-        // Blank stays blank — สี and เนื้อผิว are absent for ~79% of the catalog and are optional
-        // now. Never substitute a product code or factory name for a colour the catalog lacks.
-        color:       cat.color        || '',
-        texture:     cat.surface      || '',
-        size:        sizeRaw,
-        sqmPerPiece,
-        qtySqm:      newQtySqm,
-        // UI-only provenance — see emptyItem()'s comment.
-        source: 'catalog',
-        catalogPrice: cat.price ?? null,
-        catalogCurrency: cat.currency ?? null,
-        catalogGrade: cat.grade ?? null,
-        // Persisted (V110) — see emptyItem()'s comment. cat.priceId is
-        // ProductPriceDto.priceId, the same price_catalog.product_prices.price_id that
-        // sales.pricing_request_item.product_id already points at (V68).
-        catalogPriceId: cat.priceId ?? null,
-        catalogProductCode: cat.productCode ?? '',
-        catalogPriceUnit: cat.priceUnit ?? null,
-      };
-    }));
+    setItems((cur) => cur.map((item, i) => (i === index ? applyCatalogPick(item, cat) : item)));
     // A catalog pick fills every required field in one shot — clear anything previously flagged.
     Object.keys(REQUIRED_ITEM_FIELD_LABELS).forEach((f) => clearFieldError(`items.${index}.${f}`));
     setCatalogResults([]);
     setCatalogFocus(null);
   }
 
+  // Real keystroke: mutates the row AND searches. Kept separate from onCatalogFieldFocus below —
+  // review round 2 caught a regression where re-focusing an already-filled ยี่ห้อ/รุ่น box (no
+  // keystroke, value unchanged) ran through this same mutating path via onFocusSearch, which
+  // silently re-ran the brand→factory lockstep and catalog-link CLEAR on every focus. For a row
+  // that already carried a picked catalog link, simply tabbing back into the field wiped
+  // catalogPriceId/catalogProductCode and reset factory from the (unchanged) brand value — a data
+  // loss bug a reviewer proved end-to-end (focus brand+model, then save, dropped the link).
   function onCatalogInput(index, field, value) {
     updateItem(index, field, value);
     setCatalogFocus({ index, field });
-    debouncedCatalogSearch(value, async (q) => {
-      if (!q.trim()) { setCatalogResults([]); return; }
-      try {
-        const res = await api.catalog.prices(q, undefined, 20);
-        setCatalogResults(res.items ?? []);
-      } catch { /* ignore */ }
-    });
+    searchCatalog(value, setCatalogResults);
+  }
+
+  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a
+  // re-focus of a field the rep never actually retyped.
+  function onCatalogFieldFocus(index, field, value) {
+    setCatalogFocus({ index, field });
+    if (value) searchCatalog(value, setCatalogResults);
   }
 
   function onBrandInput(index, value) { onCatalogInput(index, 'brand', value); }
@@ -1331,12 +1162,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <CatalogAutocompleteField
             id={`item-${index}-brand`}
-            label="ยี่ห้อ / โรงงาน"
-            required
+            label={ITEM_FIELD_META.brand.label}
+            required={isRequiredItemField('brand')}
             value={item.brand}
-            placeholder="เช่น Panaria, LEA, Bode"
+            placeholder={ITEM_FIELD_META.brand.placeholder}
             onInput={(value) => onBrandInput(index, value)}
-            onFocusSearch={() => { setCatalogFocus({ index, field: 'brand' }); if (item.brand) onBrandInput(index, item.brand); }}
+            onFocusSearch={() => onCatalogFieldFocus(index, 'brand', item.brand)}
             onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
             expanded={catalogFocus?.index === index && catalogFocus?.field === 'brand'}
             results={catalogResults}
@@ -1347,12 +1178,12 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           <CatalogAutocompleteField
             id={`item-${index}-model`}
-            label="ชื่อรุ่น / Collection"
-            required
+            label={ITEM_FIELD_META.model.label}
+            required={isRequiredItemField('model')}
             value={item.model}
-            placeholder="เช่น Stone Villa, Eco stone"
+            placeholder={ITEM_FIELD_META.model.placeholder}
             onInput={(value) => onModelInput(index, value)}
-            onFocusSearch={() => { setCatalogFocus({ index, field: 'model' }); if (item.model) onModelInput(index, item.model); }}
+            onFocusSearch={() => onCatalogFieldFocus(index, 'model', item.model)}
             onBlur={() => setTimeout(() => setCatalogFocus(null), 180)}
             expanded={catalogFocus?.index === index && catalogFocus?.field === 'model'}
             results={catalogResults}
@@ -1363,8 +1194,8 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           <ItemField
             id={`item-${index}-size`}
-            label="ขนาด"
-            required
+            label={ITEM_FIELD_META.size.label}
+            required={isRequiredItemField('size')}
             error={fieldErrors[`items.${index}.size`]}
           >
             <input
@@ -1372,7 +1203,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               ref={(el) => { fieldRefs.current[`items.${index}.size`] = el; }}
               value={item.size}
               onChange={(e) => updateItem(index, 'size', e.target.value)}
-              placeholder="เช่น 600x1200"
+              placeholder={ITEM_FIELD_META.size.placeholder}
               aria-required="true"
               aria-invalid={fieldErrors[`items.${index}.size`] ? true : undefined}
               aria-describedby={fieldErrors[`items.${index}.size`] ? fieldErrorId(`item-${index}-size`) : undefined}
@@ -1381,21 +1212,21 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
           {/* สี and เนื้อผิว are optional: the live catalog fills them on ~21% of active rows, so
               requiring them made a rep invent a value on 4 of every 5 catalog picks. */}
-          <ItemField id={`item-${index}-color`} label="สี" hint="(ไม่บังคับ)">
+          <ItemField id={`item-${index}-color`} label={ITEM_FIELD_META.color.label} hint={ITEM_FIELD_META.color.hint}>
             <input
               id={`item-${index}-color`}
               value={item.color}
               onChange={(e) => updateItem(index, 'color', e.target.value)}
-              placeholder="เช่น ขาว, เทา, ครีม"
+              placeholder={ITEM_FIELD_META.color.placeholder}
             />
           </ItemField>
 
-          <ItemField id={`item-${index}-texture`} label="เนื้อผิว" hint="(ไม่บังคับ)">
+          <ItemField id={`item-${index}-texture`} label={ITEM_FIELD_META.texture.label} hint={ITEM_FIELD_META.texture.hint}>
             <input
               id={`item-${index}-texture`}
               value={item.texture}
               onChange={(e) => updateItem(index, 'texture', e.target.value)}
-              placeholder="เช่น MATT, GLOSSY, ด้าน"
+              placeholder={ITEM_FIELD_META.texture.placeholder}
             />
           </ItemField>
         </div>
@@ -1430,7 +1261,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <ItemField
             id={`item-${index}-qty`}
             label="จำนวน (แผ่น)"
-            required={basis === 'PIECE'}
+            required={requiredQtyField(basis) === 'qty'}
             hint={hasFactor && basis === 'SQM' ? '(คำนวณให้)' : undefined}
             error={fieldErrors[`items.${index}.qty`]}
           >
@@ -1443,7 +1274,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               placeholder="จำนวนแผ่น"
               readOnly={hasFactor && basis === 'SQM'}
               className={hasFactor && basis === 'SQM' ? 'bg-surface-muted text-text-muted' : undefined}
-              aria-required={basis === 'PIECE' ? 'true' : undefined}
+              aria-required={requiredQtyField(basis) === 'qty' ? 'true' : undefined}
               aria-invalid={fieldErrors[`items.${index}.qty`] ? true : undefined}
               aria-describedby={fieldErrors[`items.${index}.qty`] ? fieldErrorId(`item-${index}-qty`) : undefined}
             />
@@ -1452,7 +1283,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           <ItemField
             id={`item-${index}-qtySqm`}
             label="พื้นที่ (ตร.ม.)"
-            required={basis === 'SQM'}
+            required={requiredQtyField(basis) === 'qtySqm'}
             hint={hasFactor && basis === 'PIECE' ? '(คำนวณให้)' : undefined}
             error={fieldErrors[`items.${index}.qtySqm`]}
           >
@@ -1465,7 +1296,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
               placeholder="เช่น 120.500"
               readOnly={hasFactor && basis === 'PIECE'}
               className={hasFactor && basis === 'PIECE' ? 'bg-surface-muted text-text-muted' : undefined}
-              aria-required={basis === 'SQM' ? 'true' : undefined}
+              aria-required={requiredQtyField(basis) === 'qtySqm' ? 'true' : undefined}
               aria-invalid={fieldErrors[`items.${index}.qtySqm`] ? true : undefined}
               aria-describedby={fieldErrors[`items.${index}.qtySqm`] ? fieldErrorId(`item-${index}-qtySqm`) : undefined}
             />
