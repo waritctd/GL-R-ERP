@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
+import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 
@@ -113,6 +114,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         brands: vi.fn(),
         pages: vi.fn(),
         download: vi.fn(),
+      },
+      // fix/ticket-edit-items-required-markers: edit-items mode's ยี่ห้อ/รุ่น fields now share
+      // TicketCreateModal's CatalogAutocompleteField, which searches this on every keystroke
+      // (debounced). Previously absent from this mock entirely — edit-items had no catalog search.
+      catalog: {
+        prices: vi.fn(),
       },
     },
   };
@@ -255,6 +262,9 @@ describe('TicketDetailPage', () => {
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
+    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete
+    // set their own — see the "edit-items required fields" describe block below.
+    api.catalog.prices.mockResolvedValue({ items: [] });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
     api.tickets.listActivities.mockResolvedValue({ items: [] });
@@ -993,9 +1003,13 @@ describe('TicketDetailPage', () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
+        // brand/model/size all filled — fix/ticket-edit-items-required-markers added a
+        // ยี่ห้อ/รุ่น/ขนาด required-field check alongside this qty one (see the dedicated
+        // required-field describe block below), so this fixture stays valid on those three to
+        // isolate what this test is actually about: per-row qty errors, not required fields.
         items: [
-          { id: 70101, brand: 'SCG', model: 'A1', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
-          { id: 70102, brand: 'Cotto', model: 'B2', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
         ],
       }),
     });
@@ -1016,9 +1030,13 @@ describe('TicketDetailPage', () => {
 
     // This is the headline assertion for this slice: the old code showed ONE
     // toast covering every row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ"); now
-    // each offending row gets its own inline error message and input.
-    const errors = await screen.findAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง');
-    expect(errors).toHaveLength(2);
+    // each offending row gets its own inline error message and input. The message text itself
+    // (fix/ticket-edit-items-required-markers, review round 2) is now the same basis-aware
+    // missingQtyMessage create uses — row-numbered, not the old generic
+    // "กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง" — see the save handler's own comment for why
+    // aligning was evidence-backed rather than a silent behaviour change.
+    expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 1')).toBeTruthy();
+    expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2')).toBeTruthy();
 
     const qtyInput0 = document.getElementById('edit-item-qty-0');
     const qtyInput1 = document.getElementById('edit-item-qty-1');
@@ -1032,7 +1050,8 @@ describe('TicketDetailPage', () => {
     fireEvent.change(qtyInput0, { target: { value: '3' } });
     await waitFor(() => expect(qtyInput0.getAttribute('aria-invalid')).toBeNull());
     expect(qtyInput1.getAttribute('aria-invalid')).toBe('true');
-    expect(screen.getAllByText('กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง')).toHaveLength(1);
+    expect(screen.queryByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 1')).toBeNull();
+    expect(screen.getByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2')).toBeTruthy();
 
     // Fixing row 2 too lets the save through with the unchanged payload shape.
     fireEvent.change(qtyInput1, { target: { value: '2' } });
@@ -1041,6 +1060,215 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
     expect(api.tickets.editItems.mock.calls[0][0]).toBe(701);
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
+  });
+
+  // fix/ticket-edit-items-required-markers: the UAT report this branch fixes — "เวลาเรียกดีลมาแก้
+  // ดาวแดงหายไป ไม่เหมือนเดิม" — reopening a deal to edit its items showed none of the create
+  // modal's required-field asterisks/validation, and a blank ยี่ห้อ/รุ่น/ขนาด only failed with a
+  // backend 400. These pin the fix: shared markers, shared catalog autocomplete, a real inline
+  // required-field guard before the API is ever called.
+  describe('edit-items: required-field markers (ยี่ห้อ/รุ่น/ขนาด) match create, and catalog autocomplete', () => {
+    function mockCatalogProduct(overrides = {}) {
+      return {
+        priceId: 501,
+        productCode: 'BNFJ30126CA',
+        factoryName: 'Bode',
+        grade: null,
+        collection: 'Stone gallary',
+        productName: null,
+        color: null,
+        surface: 'MATT',
+        sizeRaw: '600x1200',
+        price: 8.8,
+        currency: 'USD',
+        priceUnit: 'per_sqm',
+        sqmPerPiece: null,
+        ...overrides,
+      };
+    }
+
+    // item0Overrides lets a test seed row 0 with fields the default fixture doesn't carry (e.g. a
+    // real catalogPriceId/catalogProductCode, for the focus-does-not-mutate regression test below).
+    async function openEditMode(item0Overrides = {}) {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          summary: { status: 'submitted', createdById: 1 },
+          items: [
+            {
+              id: 70101, brand: 'SCG', model: 'A1', size: '60x60', factory: 'SCG Ceramics',
+              color: 'ขาว', texture: 'ด้าน', qty: 10, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
+              ...item0Overrides,
+            },
+            {
+              id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', factory: 'Cotto Industry',
+              color: null, texture: null, qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null,
+            },
+          ],
+        }),
+      });
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted' },
+        availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/สินค้าและราคา/);
+      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+      // Confirms edit mode has actually mounted before a test starts poking at row fields — the
+      // save button is unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per
+      // row and would make findByLabelText/findByPlaceholderText throw on "multiple elements").
+      await screen.findByRole('button', { name: 'บันทึกการแก้ไข' });
+    }
+
+    it('ยี่ห้อ/รุ่น/ขนาด carry the red required asterisk; สี/เนื้อผิว do not', async () => {
+      await openEditMode();
+      const brandLabel = document.querySelector('label[for="edit-item-0-brand"]');
+      const modelLabel = document.querySelector('label[for="edit-item-0-model"]');
+      const sizeLabel = document.querySelector('label[for="edit-item-0-size"]');
+      const colorLabel = document.querySelector('label[for="edit-item-0-color"]');
+      const textureLabel = document.querySelector('label[for="edit-item-0-texture"]');
+      expect(brandLabel.textContent).toContain('*');
+      expect(modelLabel.textContent).toContain('*');
+      expect(sizeLabel.textContent).toContain('*');
+      expect(colorLabel.textContent).not.toContain('*');
+      expect(textureLabel.textContent).not.toContain('*');
+    });
+
+    // Review round 2: the source-text pin test alone (ticketItemFields.test.jsx) does not catch a
+    // hand-typed literal passed into CatalogAutocompleteField's own `label` prop — the component
+    // happily renders whatever string it's given, imported or not. A reviewer proved this: edit's
+    // brand label was changed to a hand-typed `label="ชื่อยี่ห้อ"` and every existing test (including
+    // the source-text pin) stayed green. This asserts the actual RENDERED text instead, which a
+    // hand-typed label cannot fake past.
+    it('ยี่ห้อ/รุ่น labels render the exact canonical text from ITEM_FIELD_META — not a hand-typed drift like ชื่อยี่ห้อ', async () => {
+      await openEditMode();
+      const brandLabel = document.querySelector('label[for="edit-item-0-brand"]');
+      const modelLabel = document.querySelector('label[for="edit-item-0-model"]');
+      expect(brandLabel.textContent).toBe(ITEM_FIELD_META.brand.label + ' *');
+      expect(modelLabel.textContent).toBe(ITEM_FIELD_META.model.label + ' *');
+      expect(screen.queryByText('ชื่อยี่ห้อ')).toBeNull();
+      expect(screen.queryByText('ชื่อรุ่น')).toBeNull();
+    });
+
+    it('there is no separate โรงงาน input — ยี่ห้อ and โรงงาน are one field, same as create', async () => {
+      await openEditMode();
+      expect(document.getElementById('edit-item-0-factory')).toBeNull();
+      // A standalone "โรงงาน" label (as opposed to "ยี่ห้อ / โรงงาน") would mean the old separate
+      // input came back.
+      expect(screen.queryByText('โรงงาน')).toBeNull();
+    });
+
+    it('clearing ยี่ห้อ and saving blocks the save with an inline required-field error', async () => {
+      await openEditMode();
+      const brandInput = document.getElementById('edit-item-0-brand');
+      fireEvent.change(brandInput, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      expect(await screen.findByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+      expect(brandInput.getAttribute('aria-invalid')).toBe('true');
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+    });
+
+    it('typing into ยี่ห้อ then picking a catalog result fills model/size and carries the catalog link + factory into the payload; an untouched row keeps its original factory', async () => {
+      api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
+      await openEditMode();
+
+      const brandInput = document.getElementById('edit-item-0-brand');
+      fireEvent.change(brandInput, { target: { value: 'Bode' } });
+      const leaf = await screen.findByText('Bode');
+      fireEvent.mouseDown(leaf.parentElement);
+      await waitFor(() => expect(brandInput.value).toBe('Bode'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({
+        brand: 'Bode',
+        factory: 'Bode',
+        model: 'Stone gallary',
+        size: '600x1200',
+        catalogPriceId: 501,
+        catalogProductCode: 'BNFJ30126CA',
+      });
+      // Row 1 was never touched — its factory must round-trip unchanged, not fall back to null or
+      // pick up row 0's newly-picked factory.
+      expect(payloadItems[1]).toMatchObject({ brand: 'Cotto', factory: 'Cotto Industry' });
+    });
+
+    // Review round 2 (HIGH): a reviewer proved onFocusSearch ran through the SAME mutating path a
+    // real keystroke does (onEditCatalogInput -> applyDescriptiveFieldEdit), so merely re-focusing
+    // an already-filled ยี่ห้อ/รุ่น box — no retyping, value unchanged — silently re-ran the
+    // brand->factory lockstep and cleared the row's catalog link. Concretely: row {factory: 'Bode
+    // Factory', catalogPriceId: 501, catalogProductCode: 'BN1'}, focus brand then model, save ->
+    // payload factory became 'Bode' (from the raw brand string, dropping ' Factory') and
+    // catalogPriceId went null. That corrupts persisted data
+    // PricingRequestCreateModal.emptyItemFromTicketItem seeds its own catalog link from.
+    it('re-focusing ยี่ห้อ/รุ่น on a row that already has a catalog link does NOT clear it (search-only focus, no row mutation)', async () => {
+      await openEditMode({
+        brand: 'Bode', model: 'Stone gallary', factory: 'Bode Factory',
+        catalogPriceId: 501, catalogProductCode: 'BN1',
+      });
+
+      const brandInput = document.getElementById('edit-item-0-brand');
+      const modelInput = document.getElementById('edit-item-0-model');
+      // Re-focus both fields with no keystroke in between — simulates tabbing back through the row.
+      fireEvent.focus(brandInput);
+      fireEvent.focus(modelInput);
+
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({
+        brand: 'Bode',
+        factory: 'Bode Factory',
+        catalogPriceId: 501,
+        catalogProductCode: 'BN1',
+      });
+    });
+
+    it('deleting a row re-indexes a required-field error to the row that shifted into its place', async () => {
+      await openEditMode();
+      const brandInput1 = document.getElementById('edit-item-1-brand');
+      fireEvent.change(brandInput1, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+      expect(await screen.findByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+      expect(document.getElementById('edit-item-1-brand').getAttribute('aria-invalid')).toBe('true');
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+      // Delete row 0 (the row WITHOUT the error) — row 1 shifts down to index 0, and its error
+      // must follow it, not stay pinned to the old index or vanish.
+      fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
+
+      await waitFor(() => {
+        expect(document.getElementById('edit-item-0-brand').getAttribute('aria-invalid')).toBe('true');
+      });
+      expect(screen.getByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
+    });
+
+    // Review round 3 (MEDIUM): the qty rule now uses requiredQtyField/missingQtyMessage — same as
+    // create — instead of unconditionally checking item.qty. This pins the actual behaviour change
+    // rather than just the plumbing: a SQM-basis row with NO ตร.ม./แผ่น factor (qty is a read-only
+    // derived display in that mode, never an input) must not be blocked on a qty=0 it has no way to
+    // fill, and must send exactly what the rep typed into พื้นที่ (ตร.ม.).
+    it('SQM-basis row with no ตร.ม./แผ่น factor: qty 0 is not required — save sends the row as typed', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: 12, sqmPerPiece: null });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+      const payloadItems = api.tickets.editItems.mock.calls[0][1].items;
+      expect(payloadItems[0]).toMatchObject({ qty: 0, qtySqm: 12 });
+    });
+
+    it('SQM-basis row with no factor and a blank พื้นที่ (ตร.ม.) is blocked with the basis-aware message, not the old generic one', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: '', sqmPerPiece: null });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the
+      // string the save handler must produce for row 1 in SQM basis.
+      expect(await screen.findByText(missingQtyMessage('SQM', 1))).toBeTruthy();
+      expect(api.tickets.editItems).not.toHaveBeenCalled();
+    });
   });
 
   it('revise form: opens as a modal, the confirm button is disabled on a blank reason (pre-existing guard, unchanged), and submits once filled', async () => {
