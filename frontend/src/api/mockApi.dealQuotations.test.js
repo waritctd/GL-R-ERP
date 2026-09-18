@@ -263,13 +263,20 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 });
 
 // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- mirrors DealQuotationService#createReorder.
-// The core invariant: the SOURCE stays APPROVED forever, unlike a revision's parent.
+//
+// ⚠️ Owner ruling 2026-09-19 (INVERTS this describe block's own former header comment, which said
+// "the SOURCE stays APPROVED forever, unlike a revision's parent" -- that is now FALSE): a deal
+// may hold only ONE APPROVED DEAL_DIRECT quotation at a time. Clone CREATION itself still leaves
+// the source untouched (still APPROVED) -- that half is unchanged -- but once the CLONE ITSELF is
+// approved, DealQuotationService#approve's same-ticket sweep (mirrored here via
+// DealQuotationRepository#supersedeOtherApprovedOnTicket) supersedes the source, exactly like
+// approving a revision or a second, wholly independent first-issue quotation would.
 describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('clones an APPROVED quotation into a new DRAFT, same numbering family, no parent link, source stays APPROVED', async () => {
+  it('clones an APPROVED quotation into a new DRAFT, same numbering family, no parent link; source stays APPROVED while the clone is only DRAFT/PENDING_APPROVAL, then SUPERSEDED once the clone is approved', async () => {
     await api.auth.login(salesUser);
     const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
     const rootNumber = created.quotation.number;
@@ -286,13 +293,116 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect(reorder.derivedFromQuotationId).toBe(approved.quotation.id);
     expect(reorder.parentQuotationId).toBeNull();
     expect(reorder.items).toHaveLength(approved.quotation.items.length);
+    // Clone creation itself: source untouched, still APPROVED.
+    expect((await api.dealQuotations.get(approved.quotation.id)).quotation.docStatus).toBe('APPROVED');
 
-    // The moment of truth: submit + approve the CLONE and confirm the source is untouched.
     await api.dealQuotations.submit(reorder.id);
+    // Still APPROVED while the clone is only PENDING_APPROVAL -- not superseded until the clone
+    // itself actually reaches APPROVED.
+    expect((await api.dealQuotations.get(approved.quotation.id)).quotation.docStatus).toBe('APPROVED');
+
+    // The moment of truth: approve the CLONE and confirm the source is NOW superseded.
     await api.auth.login({ role: 'sales_manager' });
     await api.dealQuotations.approve(reorder.id, {});
     const reloadedSource = await api.dealQuotations.get(approved.quotation.id);
-    expect(reloadedSource.quotation.docStatus).toBe('APPROVED');
+    expect(reloadedSource.quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  /** Two wholly independent first-issue quotations on the SAME deal (no revision/clone lineage
+   * at all) -- the case the pre-existing ancestor walk could never reach, since neither carries
+   * the other's id anywhere. Approving the second must supersede the first. */
+  it('two independent first-issue quotations on one deal: approving the second supersedes the first', async () => {
+    await api.auth.login(salesUser);
+    const first = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(first.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedFirst = await api.dealQuotations.approve(first.quotation.id, {});
+    expect(approvedFirst.quotation.docStatus).toBe('APPROVED');
+
+    await api.auth.login(salesUser);
+    const second = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(second.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedSecond = await api.dealQuotations.approve(second.quotation.id, {});
+    expect(approvedSecond.quotation.docStatus).toBe('APPROVED');
+
+    const reloadedFirst = await api.dealQuotations.get(first.quotation.id);
+    expect(reloadedFirst.quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  /** A revision of the ORIGINAL source is approved while a CLONE of that same source is still
+   * DRAFT -- then the clone is approved too. Exactly one APPROVED row must remain (the clone,
+   * being the LAST one approved); the revision must be SUPERSEDED. Pins that the sweep applies
+   * uniformly regardless of WHICH lineage (ancestor-chain revision vs. derivedFrom clone) a
+   * sibling belongs to. */
+  it('a revision of the source approved while a clone is DRAFT, then the clone approved: exactly one APPROVED remains (the clone), the revision is SUPERSEDED', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const source = await api.dealQuotations.approve(created.quotation.id, {});
+
+    await api.auth.login(salesUser);
+    const { quotation: clone } = await api.dealQuotations.createReorder(source.quotation.id, {});
+    const { quotation: revision } = await api.dealQuotations.createRevision(source.quotation.id, {});
+    // Clone stays DRAFT throughout this test -- never submitted/approved until the very end.
+    expect(clone.docStatus).toBe('DRAFT');
+
+    await api.dealQuotations.submit(revision.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedRevision = await api.dealQuotations.approve(revision.id, {});
+    expect(approvedRevision.quotation.docStatus).toBe('APPROVED');
+    // The revision's approval supersedes the ORIGINAL source (its own parent)...
+    expect((await api.dealQuotations.get(source.quotation.id)).quotation.docStatus).toBe('SUPERSEDED');
+    // ...but the clone (unrelated lineage, still DRAFT) is untouched.
+    expect((await api.dealQuotations.get(clone.id)).quotation.docStatus).toBe('DRAFT');
+
+    await api.auth.login(salesUser);
+    await api.dealQuotations.submit(clone.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedClone = await api.dealQuotations.approve(clone.id, {});
+    expect(approvedClone.quotation.docStatus).toBe('APPROVED');
+
+    // Exactly ONE APPROVED row remains on this ticket -- the clone, the LAST one approved.
+    const all = (await api.dealQuotations.listForTicket(18)).items
+      .filter((q) => [created.quotation.id, source.quotation.id, revision.id, clone.id].includes(q.id));
+    const approvedCount = all.filter((q) => q.docStatus === 'APPROVED').length;
+    expect(approvedCount).toBe(1);
+    expect((await api.dealQuotations.get(clone.id)).quotation.docStatus).toBe('APPROVED');
+    expect((await api.dealQuotations.get(revision.id)).quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  /** A quotation on a DIFFERENT ticket must never be touched by this ticket's sweep -- the sweep
+   * is scoped to `ticketId`, not global. */
+  it('a quotation on a DIFFERENT deal is untouched by this deal\'s approval sweep', async () => {
+    await api.auth.login(salesUser);
+    const { customer } = await api.customers.create({
+      name: 'บริษัท ดีลอื่น ทดสอบ จำกัด', taxId: '0100000099', address: '99 ถนนทดสอบ',
+      branch: 'สาขาทดสอบ', phone: '02-999-9999',
+    });
+    const { project } = await api.customers.createProject(customer.id, { name: 'โครงการดีลอื่น' });
+    const { contact } = await api.customers.createContact(customer.id, { name: 'ผู้สั่งซื้อ ทดสอบดีลอื่น' });
+    const { ticket: otherTicket } = await api.tickets.create({
+      title: 'ดีลอื่น ทดสอบ GLA-74', priority: 'NORMAL', customerName: customer.name,
+      customerId: customer.id, projectId: project.id, contactId: contact.id,
+      items: [{ brand: 'SCG', model: 'Tile Mock', qty: 10, currency: 'THB' }],
+    });
+    const otherTicketId = otherTicket.summary.id;
+
+    const onOtherDeal = await api.dealQuotations.create(otherTicketId, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(onOtherDeal.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedOnOtherDeal = await api.dealQuotations.approve(onOtherDeal.quotation.id, {});
+    expect(approvedOnOtherDeal.quotation.docStatus).toBe('APPROVED');
+
+    // Now approve an UNRELATED quotation on ticket 18 -- must not touch the other deal at all.
+    await api.auth.login(salesUser);
+    const onTicket18 = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(onTicket18.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(onTicket18.quotation.id, {});
+
+    expect((await api.dealQuotations.get(onOtherDeal.quotation.id)).quotation.docStatus).toBe('APPROVED');
   });
 
   it('refuses (409) to clone a non-APPROVED source', async () => {

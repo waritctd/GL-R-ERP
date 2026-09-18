@@ -41,6 +41,10 @@ export const EVENT_KIND_LABEL = {
   // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without
   // ever revising, rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
   DEAL_QUOTATION_REORDERED: 'สร้างจากใบเดิม (สั่งเหมือนเดิม)',
+  // Owner ruling 2026-09-19 ("a deal may hold only ONE APPROVED DEAL_DIRECT quotation") -- the
+  // same-ticket sweep DealQuotationService#approve fires once per sibling it actually
+  // supersedes. Missing here would leave the raw kind string on screen (Opus review finding).
+  DEAL_QUOTATION_SUPERSEDED: 'ใบเสนอราคาถูกแทนที่',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',

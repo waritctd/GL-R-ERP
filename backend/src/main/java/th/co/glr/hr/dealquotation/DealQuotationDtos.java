@@ -127,22 +127,37 @@ public final class DealQuotationDtos {
         String fullPaymentTerm,
         /** GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186) — the APPROVED quotation this row
          * was CLONED from, for audit only. Null on every ordinary create/revision. Distinct from
-         * {@link #parentQuotationId}: a clone's source is never superseded by it, so
-         * {@code approve}'s ancestor walk, {@code hasOpenRevision} and the "แก้" bucket predicate
-         * never read this column — see {@code DealQuotationService#createReorder}. */
+         * {@link #parentQuotationId}: this column itself is never read by {@code approve}'s
+         * ancestor walk, {@code hasOpenRevision}, or the "แก้" bucket predicate — see
+         * {@code DealQuotationService#createReorder}. Owner ruling 2026-09-19: that does NOT mean
+         * the source is immune from supersession — a deal may hold only ONE APPROVED
+         * {@code DEAL_DIRECT} quotation, so once THIS row is itself approved, {@code approve}'s
+         * SEPARATE same-ticket sweep (keyed on {@code doc_status}/{@code ticket_id}, not on this
+         * column) supersedes the source then. Only clone CREATION leaves the source untouched. */
         Long derivedFromQuotationId,
         /** The source's own {@code number} at read time — a plain join, never frozen — purely so
          * the UI can print "สั่งเหมือนเดิมจาก {source.number}" without a second round trip. Null
          * exactly when {@link #derivedFromQuotationId} is null. */
         String derivedFromQuotationNumber,
+        /** The source's own {@code docStatus} at read time (Opus review, 2026-09-19) — same live
+         * join as {@link #derivedFromQuotationNumber}, added because the source's status is NOT
+         * frozen at clone time: once the source (or the clone itself) is later approved, the
+         * one-approved-per-deal sweep can flip the source from {@code APPROVED} to {@code
+         * SUPERSEDED} at any point after the clone exists. The UI needs this to word the
+         * provenance note correctly — "the original stays approved until approved" is only true
+         * while this reads {@code APPROVED}; once it reads {@code SUPERSEDED}, something
+         * (possibly NOT this clone) has already replaced it. Null exactly when
+         * {@link #derivedFromQuotationId} is null. */
+        String derivedFromQuotationStatus,
         List<DealQuotationItemDto> items,
         Instant createdAt,
         Instant updatedAt
     ) {
         /** The pre-GLA-74 shape (no {@link #derivedFromQuotationId}/
-         * {@link #derivedFromQuotationNumber}) — kept so every existing construction site (tests,
-         * mostly) compiles unchanged. Defaults both to null, which is correct for every one of
-         * those fixtures (nothing before this feature was ever a clone). */
+         * {@link #derivedFromQuotationNumber}/{@link #derivedFromQuotationStatus}) — kept so
+         * every existing construction site (tests, mostly) compiles unchanged. Defaults all
+         * three to null, which is correct for every one of those fixtures (nothing before this
+         * feature was ever a clone). */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
             Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
@@ -169,7 +184,7 @@ public final class DealQuotationDtos {
                 customerNotes, priceMode, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency,
                 approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn,
                 salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone,
-                omitContactHonorific, fullPaymentTerm, null, null, items, createdAt, updatedAt);
+                omitContactHonorific, fullPaymentTerm, null, null, null, items, createdAt, updatedAt);
         }
 
         /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —

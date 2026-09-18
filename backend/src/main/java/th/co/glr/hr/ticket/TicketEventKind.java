@@ -101,5 +101,16 @@ public final class TicketEventKind {
     // sharing that kind would misdescribe it in DealHistoryPanel.jsx's EVENT_KIND_LABEL ("ขอแก้ไข").
     public static final String DEAL_QUOTATION_REORDERED = "DEAL_QUOTATION_REORDERED";
 
+    // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+    // time -- approving a new one (a first issue, a revision, or a reorder clone) supersedes
+    // every OTHER currently-APPROVED DEAL_DIRECT quotation on the same ticket. A REAL
+    // sales.ticket_event.kind value (chk_event_kind widened for it in V186, still unmerged as of
+    // this writing so edited in place rather than a new migration). Written once per superseded
+    // sibling, by DealQuotationService#approve, message "ใบ {old} ถูกแทนที่ด้วย {new}" -- the
+    // pre-existing ancestor-chain supersede walk (a DIFFERENT, older rule: climbing a
+    // REJECTED/DRAFT parentQuotationId lineage) stays silent, as it always has; this kind is only
+    // for the NEW same-ticket sweep.
+    public static final String DEAL_QUOTATION_SUPERSEDED = "DEAL_QUOTATION_SUPERSEDED";
+
     private TicketEventKind() {}
 }

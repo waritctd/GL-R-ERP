@@ -1417,8 +1417,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม): clone an APPROVED quotation into a new,
   // INDEPENDENT draft. Same gate as reviseMutation above (canReviseDealQuotation -- see the
   // Confirm dialog below for why the same gate is reused rather than a new quotationMeta.js
-  // export: the rule is byte-for-byte identical, "APPROVED + edit access"). Unlike revising, the
-  // SOURCE quotation is never invalidated/refetched as changed -- it stays APPROVED, untouched.
+  // export: the rule is byte-for-byte identical, "APPROVED + edit access").
+  //
+  // ⚠️ Owner ruling 2026-09-19: the SOURCE is untouched only at THIS moment (clone creation) --
+  // not invalidated/refetched here because it genuinely has not changed YET. It stays APPROVED
+  // only until the NEW clone is itself later submitted and approved, at which point the backend's
+  // one-APPROVED-per-deal rule (DealQuotationService#approve's same-ticket sweep) supersedes it —
+  // a page open on the source at that later moment picks that up the same way it would pick up
+  // any other quotation's status changing under it (refetch/invalidation elsewhere), not here.
   const reorderMutation = useMutation({
     mutationFn: () => api.dealQuotations.createReorder(id, {}),
     onSuccess: (res) => {
@@ -1699,14 +1705,35 @@ export function QuotationEditorPage({ user, showToast }) {
 
       {/* GLA-74 part 1: makes the family readable — a clone shares its source's base number but
           carries NO parentQuotationId, so nothing else on this page would otherwise say "this is
-          not a revision, it is an independent copy of {source}". */}
+          not a revision, it is an independent copy of {source}".
+          ⚠️ Opus review (2026-09-19): the wording is conditional on BOTH this clone's own status
+          AND the source's CURRENT (live-read) status, not a blanket claim either way:
+          - This clone is APPROVED -> by the one-approved-per-deal invariant the source MUST now
+            be SUPERSEDED, so say it replaced the original.
+          - This clone is NOT approved AND the source still reads APPROVED -> "stays approved
+            until [ANY quotation in the deal, not just this one] is approved" -- a sibling
+            approval (another clone, a revision, a fresh first-issue) replaces the source just as
+            surely as this one would.
+          - This clone is NOT approved AND the source ALREADY reads SUPERSEDED -- something ELSE
+            already replaced it (a sibling's approval, not necessarily this clone's). Neither
+            "stays approved" nor "this one replaced it" is a true statement here, so say NEITHER
+            -- the neutral "เป็นเอกสารอิสระ" line alone, per the instruction to use neutral wording
+            whenever a specific claim cannot be stated as fact. */}
       {quotation?.derivedFromQuotationId ? (
         <div className="rounded-md border border-border bg-surface p-4 text-sm text-text-muted">
           สั่งเหมือนเดิมจากใบเสนอราคา{' '}
           <Link to={`/quotations/${quotation.derivedFromQuotationId}`} className="font-bold text-link underline">
             {quotation.derivedFromQuotationNumber ?? `#${quotation.derivedFromQuotationId}`}
           </Link>
-          {' '}— เป็นเอกสารอิสระ ใบเดิมยังคงสถานะอนุมัติแล้วเช่นเดิม
+          {' '}— เป็นเอกสารอิสระ
+          {quotation.docStatus === 'APPROVED' ? (
+            <> ใบนี้เข้ามาแทนที่ใบเดิมแล้ว (ใบเดิมถูกเปลี่ยนสถานะเป็นถูกแทนที่)</>
+          ) : quotation.derivedFromQuotationStatus === 'APPROVED' ? (
+            <>
+              {' '}ใบเดิมยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในดีลนี้ (รวมถึงใบนี้) จะได้รับอนุมัติ
+              ซึ่งจะเข้ามาแทนที่ใบที่อนุมัติอยู่ในปัจจุบันทันที
+            </>
+          ) : null}
         </div>
       ) : null}
 
@@ -2479,8 +2506,15 @@ export function QuotationEditorPage({ user, showToast }) {
       ) : null}
 
       {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — explains up front that this is NOT a
-          revision: the original stays approved and untouched, and the new draft is a completely
-          separate document the rep can freely edit before submitting again. */}
+          revision: the new draft is a completely separate document the rep can freely edit before
+          submitting again.
+          ⚠️ Owner ruling 2026-09-19: this copy USED TO say the original stays approved and
+          untouched, full stop — that is no longer true once ANY newer quotation in this deal
+          (not only the one this dialog is about to create) is approved. A deal may hold only ONE
+          APPROVED DEAL_DIRECT quotation, so the wording now says the original stays approved
+          only until SOME quotation in the deal is approved next, at which point THAT one replaces
+          it (DealQuotationService#approve's same-ticket sweep, which supersedes every OTHER
+          APPROVED sibling regardless of which one triggered it). */}
       {reorderConfirmOpen ? (
         <Modal
           title="สร้างใบเสนอราคาจากใบเดิม"
@@ -2496,7 +2530,9 @@ export function QuotationEditorPage({ user, showToast }) {
         >
           <p>
             ระบบจะคัดลอกรายการสินค้าและเงื่อนไขทั้งหมดจากใบเสนอราคา {quotation?.number} ไปเป็นร่างใบเสนอราคาใบใหม่
-            (เลขที่ใหม่) ที่แก้ไขได้อย่างอิสระ — <strong>ใบเสนอราคาเดิมยังคงสถานะอนุมัติแล้วเช่นเดิม ไม่ถูกยกเลิกหรือแทนที่</strong>
+            (เลขที่ใหม่) ที่แก้ไขได้อย่างอิสระ — <strong>ดีลนี้มีใบเสนอราคาที่อนุมัติแล้วได้เพียงใบเดียวในเวลาเดียวกัน
+            ใบเสนอราคาเดิมจะยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในดีลนี้ (รวมถึงใบใหม่นี้) จะได้รับอนุมัติ
+            ซึ่งจะเข้ามาแทนที่ใบที่อนุมัติอยู่ในปัจจุบันทันที</strong>
           </p>
         </Modal>
       ) : null}

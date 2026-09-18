@@ -6020,11 +6020,18 @@ function buildDealQuotationDto(row) {
     // same row -- an ordinary create/revision sets parentQuotationId (and this stays null, even
     // when revising a row that was itself a clone -- see mintDealQuotationRevision's own comment),
     // a reorder clone sets THIS instead (and parentQuotationId stays null). Mirrors
-    // DealQuotationDto#derivedFromQuotationId/#derivedFromQuotationNumber; the number is looked up
-    // FRESH (never frozen), same device as printedByDisplayId/salesRepDisplayId above.
+    // DealQuotationDto#derivedFromQuotationId/#derivedFromQuotationNumber/
+    // #derivedFromQuotationStatus; the number AND status are both looked up FRESH (never
+    // frozen), same device as printedByDisplayId/salesRepDisplayId above. Owner ruling
+    // 2026-09-19: the status is NOT frozen at clone time -- the source can be superseded by
+    // ANY approval on this ticket after the clone exists, so the UI reads this live rather
+    // than assuming "APPROVED" just because that was true when the clone was minted.
     derivedFromQuotationId: row.derivedFromQuotationId ?? null,
     derivedFromQuotationNumber: row.derivedFromQuotationId != null
       ? (mockDealQuotations.find((q) => q.id === row.derivedFromQuotationId)?.number ?? null)
+      : null,
+    derivedFromQuotationStatus: row.derivedFromQuotationId != null
+      ? (mockDealQuotations.find((q) => q.id === row.derivedFromQuotationId)?.docStatus ?? null)
       : null,
     createdById: row.createdById,
     createdByName: row.createdByName,
@@ -13889,12 +13896,38 @@ export const api = {
         ? row.validityUntil
         : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
       row.updatedAt = now;
+      // Owner ruling 2026-09-19: a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+      // time. Mirrors DealQuotationService#approve's same-ticket sweep (via
+      // DealQuotationRepository#supersedeOtherApprovedOnTicket). Runs BEFORE the ancestor walk
+      // below (Opus review item 4 -- mirrors the Java side's own reordering, same reasoning: the
+      // walk's own no-op-on-already-superseded check means running the sweep FIRST is what lets
+      // the MOST COMMON case -- an ordinary revision whose immediate parent is still APPROVED --
+      // get exactly one DEAL_QUOTATION_SUPERSEDED event, from the sweep, instead of being
+      // superseded silently by the walk with none). A SEPARATE rule from the ancestor walk: this
+      // catches every OTHER currently-APPROVED sibling on the ticket regardless of lineage (two
+      // independent first-issue quotations, or a GLA-74 reorder clone, which links to its source
+      // only via derivedFromQuotationId -- invisible to the ancestor walk by construction).
+      const supersededSiblings = mockDealQuotations.filter((q) => q.id !== row.id
+        && q.ticketId === row.ticketId && q.docStatus === 'APPROVED');
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      for (const sibling of supersededSiblings) {
+        sibling.docStatus = 'SUPERSEDED';
+        sibling.updatedAt = now;
+        if (ticket) {
+          pushEvent(ticket, user, 'DEAL_QUOTATION_SUPERSEDED', null, null,
+            `ใบ ${sibling.number} ถูกแทนที่ด้วย ${row.number}`);
+        }
+      }
       // "when the child is APPROVED the parent becomes SUPERSEDED (not before)" -- the customer's
-      // last approved document stays valid until replaced. Opus review nit (2026-09-15): walks
-      // the WHOLE ancestry chain, not just the immediate parent -- mirrors
-      // DealQuotationService#approve's own ancestor walk (see that method's Javadoc for the
-      // multi-cycle-chain bug a single hop left open: every ancestor above the immediate parent
-      // stranded forever in a 2+ reject/resubmit chain).
+      // last approved document stays valid until replaced. Runs AFTER the sweep above (see that
+      // block's own comment) and stays SILENT -- no ticket event -- exactly as it always has: a
+      // DRAFT ancestor from a reject/resubmit chain is invisible to the sweep's own `docStatus ===
+      // 'APPROVED'` filter, so this walk is the only thing that ever supersedes one, and nothing
+      // currently asks for that to be logged. Opus review nit (2026-09-15): walks the WHOLE
+      // ancestry chain, not just the immediate parent -- mirrors DealQuotationService#approve's
+      // own ancestor walk (see that method's Javadoc for the multi-cycle-chain bug a single hop
+      // left open: every ancestor above the immediate parent stranded forever in a 2+
+      // reject/resubmit chain).
       let ancestorId = row.parentQuotationId;
       while (ancestorId) {
         const ancestor = mockDealQuotations.find((q) => q.id === ancestorId);
@@ -13951,9 +13984,13 @@ export const api = {
 
     // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
     // INDEPENDENT DRAFT. Same authz gate as createRevision above (mirrors
-    // DealQuotationService#createReorder's own reuse of requireEditAccessForQuotation); the SOURCE
-    // stays APPROVED -- unlike createRevision, no hasOpenDealQuotationRevision guard, since
-    // multiple clones of the same source are explicitly allowed.
+    // DealQuotationService#createReorder's own reuse of requireEditAccessForQuotation); no
+    // hasOpenDealQuotationRevision guard, since multiple clones of the same source are explicitly
+    // allowed. CLONE CREATION ITSELF still leaves the SOURCE APPROVED, untouched -- owner ruling
+    // 2026-09-19: that stops being true once the CLONE is itself approved, at which point the
+    // approve() sweep above supersedes the source (a deal may hold only ONE APPROVED DEAL_DIRECT
+    // quotation). Cloning an already-SUPERSEDED source is refused below the same way a DRAFT/
+    // PENDING one is.
     async createReorder(id, payload = {}) {
       void payload;
       const user = requireSession();

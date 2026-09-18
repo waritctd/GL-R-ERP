@@ -451,6 +451,15 @@ public class DealQuotationService {
     //         a DRAFT parent instead of an APPROVED one (see DealQuotationRepository#supersede).
     // One sentence: ตีกลับ = แก้ใบเดิม เลขไม่เปลี่ยน (until resubmitted); resubmitting ที่ถูกตีกลับ
     // = ออกใบใหม่ เลขเปลี่ยน, the same way a revision of an approved document always has.
+    //
+    // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+    // time. #approve therefore ALSO supersedes every OTHER currently-APPROVED DEAL_DIRECT
+    // quotation on the same ticket, regardless of lineage -- see its own same-ticket sweep,
+    // ADDITIONAL to (not a replacement for) the ancestor-chain walk above. This is what makes
+    // GLA-74's "สร้างจากใบเดิม" clone actually replace its source: cloning itself still leaves the
+    // source APPROVED (see #createReorder), but the CLONE's own later approval now does supersede
+    // it, through this same sweep -- exactly like approving a revision, or approving a second,
+    // wholly independent first-issue quotation on the same deal.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
@@ -650,6 +659,17 @@ public class DealQuotationService {
     public DealQuotationDto approve(long id, ApproveRequest request, UserPrincipal actor) {
         requireApproveAccess(actor);
         DealQuotationDto quotation = requireQuotation(id);
+        // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+        // time -- approve() now ALSO sweeps every other currently-APPROVED sibling on this ticket
+        // (see below). Locks the ticket BEFORE the compare-and-set below (not merely before the
+        // sweep), so two concurrent approve() calls on the SAME ticket -- even against two
+        // DIFFERENT PENDING_APPROVAL rows -- fully serialise: the second caller only proceeds once
+        // the first's UPDATE + sweep + commit is visible, so the two can never both land APPROVED
+        // together. Same advisory lock, same key (ticketId), and the SAME "lock the ticket first"
+        // ordering #createRevision/#createReorder already use (via #requireNoOpenRevision /
+        // directly) -- a transaction here never holds a second ticket's lock at the same time, so
+        // this cannot deadlock against either of them.
+        quotations.lockTicket(quotation.ticketId());
         LocalDate approvalDate = LocalDate.now(BANGKOK);
         // V178: a DATE-mode document WITH special pricing names its OWN validity_date (the rep's
         // ภายในวันที่, verbatim — approval never recomputes it); every other case (DAYS mode, or a
@@ -671,9 +691,40 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
         }
         DealQuotationDto approved = requireQuotation(id);
+        // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+        // time. This SWEEP runs BEFORE the ancestor walk below (Opus review, item 4 -- it used to
+        // run after) precisely because the walk's own compare-and-set (DealQuotationRepository
+        // #supersede) is a no-op on a row this sweep already flipped, so running the sweep FIRST
+        // is what lets the MOST COMMON case -- an ordinary revision whose immediate parent is
+        // still APPROVED -- get exactly one DEAL_QUOTATION_SUPERSEDED event, from the sweep,
+        // instead of being superseded silently by the walk with no event at all (the walk itself
+        // stays silent, as it always has, when it touches a DRAFT ancestor from a reject/resubmit
+        // chain -- see that loop's own comment below for why that half is deliberately unchanged).
+        //
+        // UNLIKE the ancestor walk (which only ever climbs THIS row's own parentQuotationId
+        // lineage), this sweeps EVERY other currently-APPROVED DEAL_DIRECT quotation on the SAME
+        // ticket regardless of lineage -- the case the ancestor walk cannot reach on its own: two
+        // wholly independent first-issue quotations, or a GLA-74 reorder clone (which links to its
+        // source only via derivedFromQuotationId, never parentQuotationId, and so is invisible to
+        // the walk by construction -- see #createReorder). Existing data is NOT rewritten -- this
+        // only ever runs going forward, from THIS approval onward; a ticket that already holds
+        // two-or-more APPROVED rows from before this ruling stays exactly as it is until its next
+        // approval.
+        List<DealQuotationRepository.SupersededSibling> supersededSiblings =
+            quotations.supersedeOtherApprovedOnTicket(approved.ticketId(), approved.id());
+        for (DealQuotationRepository.SupersededSibling sibling : supersededSiblings) {
+            tickets.addEvent(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_SUPERSEDED,
+                null, null, "ใบ " + sibling.number() + " ถูกแทนที่ด้วย " + approved.number());
+        }
         // The customer's last approved document stays valid until a REVISION actually reaches
         // APPROVED — see the class Javadoc's status-machine note. Only fires for a revision (a
-        // first-ever quotation has no parent).
+        // first-ever quotation has no parent). Runs AFTER the sweep above (see that block's own
+        // comment for why) and stays SILENT -- no ticket event -- exactly as it always has: a
+        // DRAFT ancestor from a reject/resubmit chain is invisible to the sweep's own
+        // {@code doc_status = 'APPROVED'} predicate, so this walk is the ONLY thing that ever
+        // supersedes one, and nothing currently asks for that to be logged. (If a DRAFT→SUPERSEDED
+        // flip in this specific chain should also produce a ticket event, that is a separate,
+        // not-yet-requested change -- left as-is here.)
         //
         // Opus review (2026-09-15): walks the WHOLE ancestry chain, not just the immediate
         // parent. The single-hop version only ever superseded approved.parentQuotationId()
@@ -691,9 +742,10 @@ public class DealQuotationService {
         // contradicting the owner's own constraint that a rejected row's eventual fate is
         // SUPERSEDED. Each hop is its own compare-and-set (supersede()'s WHERE already guards
         // against a non-APPROVED/DRAFT row), so walking past an already-terminal ancestor
-        // (already SUPERSEDED from a sibling branch, or CANCELLED) is a safe no-op -- and the
-        // loop terminates at the first-ever quotation in the chain, whose parentQuotationId is
-        // null by construction.
+        // (already SUPERSEDED from a sibling branch, or CANCELLED, or -- new since the sweep now
+        // runs first -- by THIS approval's own sweep) is a safe no-op -- and the loop terminates
+        // at the first-ever quotation in the chain, whose parentQuotationId is null by
+        // construction.
         Long ancestorId = approved.parentQuotationId();
         while (ancestorId != null) {
             DealQuotationDto ancestor = requireQuotation(ancestorId);
@@ -782,11 +834,19 @@ public class DealQuotationService {
     public DealQuotationDto createRevision(long id, UserPrincipal actor) {
         DealQuotationDto source = requireQuotation(id);
         requireEditAccessForQuotation(actor, source);
-        if (!QuotationStatus.APPROVED.equals(source.docStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น (ปัจจุบัน: " + source.docStatus() + ")");
-        }
-        requireNoOpenRevision(source);
+        requireApprovedForClone(source, "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
+        requireNoOpenRevision(source); // locks the ticket
+        // Opus review (2026-09-19): RE-CHECK the status AFTER the lock, not just before it. The
+        // check above and the lock this line takes are two separate moments -- a concurrent
+        // approve() elsewhere (which now supersedes siblings via the one-approved-per-deal sweep)
+        // could have superseded THIS source in between, and the lock alone does not roll that
+        // back into view: it only guarantees this call now sees whatever committed before it, not
+        // that nothing changed since the FIRST read above. Re-fetching after the lock is what
+        // actually closes the window; without it, a caller could mint a revision of a row that is
+        // no longer the deal's live APPROVED document. Same message as the check above -- this is
+        // the same rule, just re-asserted at the moment that actually matters.
+        source = requireApprovedForClone(requireQuotation(id),
+            "สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
         long newId = insertRevisionCopyOf(source, actor);
         DealQuotationDto revision = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,
@@ -797,28 +857,34 @@ public class DealQuotationService {
     /**
      * GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม): clone an APPROVED direct-deal quotation into
      * a new, INDEPENDENT DRAFT — same deal, next number in the SAME shared numbering family a
-     * revision would use (see {@link #insertCopyOf}), everything copied verbatim. The core
-     * invariant, unlike {@link #createRevision}: {@code source} stays APPROVED forever. This never
-     * links through {@code parentQuotationId} (only {@code derivedFromQuotationId}, audit-only —
-     * see {@link DealQuotationDtos.DealQuotationDto#derivedFromQuotationId}'s own Javadoc for every
-     * mechanism that intentionally never reads it), so {@link #approve}'s ancestor-supersede walk,
-     * {@link DealQuotationRepository#hasOpenRevision} and the "แก้" bucket predicate can never
-     * reach {@code source} through it — neither when this clone is created nor later, when it is
-     * itself submitted and approved.
+     * revision would use (see {@link #insertCopyOf}), everything copied verbatim.
+     *
+     * <p>⚠️ Owner ruling 2026-09-19 (UPDATES the invariant this Javadoc originally described): a
+     * deal may hold only ONE APPROVED {@code DEAL_DIRECT} quotation at a time. Cloning ITSELF
+     * still leaves {@code source} exactly as it was — {@code source} stays APPROVED while the
+     * clone is only DRAFT/PENDING_APPROVAL, and this method never links through
+     * {@code parentQuotationId} (only {@code derivedFromQuotationId}, audit-only — see
+     * {@link DealQuotationDtos.DealQuotationDto#derivedFromQuotationId}'s own Javadoc), so the
+     * pre-existing ancestor-supersede walk, {@link DealQuotationRepository#hasOpenRevision} and the
+     * "แก้" bucket predicate can never reach {@code source} through it. But once the CLONE itself
+     * is submitted and approved, {@link #approve}'s same-ticket sweep (a SEPARATE mechanism from
+     * the ancestor walk — see that method's own comment) supersedes {@code source} then, exactly
+     * as approving a revision or a second independent first-issue quotation would. So: clone
+     * creation never supersedes anything; the clone's OWN later approval does.
      *
      * <p>Multiple clones of the same source are allowed (unlike a revision, there is no
      * {@link #requireNoOpenRevision}-style single-open-child guard) — only the ticket-wide advisory
      * lock is taken, so concurrent clones/revisions of the same family still serialise on the
-     * shared {base}-{n} counter and can never collide on the UNIQUE {@code number}.
+     * shared {base}-{n} counter and can never collide on the UNIQUE {@code number}. Cloning a
+     * SUPERSEDED source is refused (409) the same way a non-APPROVED one is — see the status check
+     * below — so a clone can only ever be created off a source that is CURRENTLY the deal's one
+     * live APPROVED document.
      */
     @Transactional
     public DealQuotationDto createReorder(long id, UserPrincipal actor) {
         DealQuotationDto source = requireQuotation(id);
         requireEditAccessForQuotation(actor, source);
-        if (!QuotationStatus.APPROVED.equals(source.docStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น (ปัจจุบัน: " + source.docStatus() + ")");
-        }
+        requireApprovedForClone(source, "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
         // No requireNoOpenRevision here (deliberately) — multiple clones of the same APPROVED
         // source are allowed, and a clone never contends with an in-progress revision for anything.
         // Still locks the ticket, same advisory lock #requireNoOpenRevision/#createRevision use, so
@@ -826,6 +892,13 @@ public class DealQuotationService {
         // #insertCopyOf computes the next {base}-{n} suffix — without it, two callers could both
         // read the same MAX(quotation_revision_no) and race into the number's UNIQUE constraint.
         quotations.lockTicket(source.ticketId());
+        // Opus review (2026-09-19): RE-CHECK the status AFTER the lock -- see
+        // #createRevision's own comment on this exact pattern for the full reasoning. A concurrent
+        // approve() elsewhere (one-approved-per-deal sweep) could have superseded this source
+        // between the check above and the lock actually being acquired here; without re-fetching,
+        // this would happily clone an already-SUPERSEDED source. Same message as the check above.
+        source = requireApprovedForClone(requireQuotation(id),
+            "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น");
         long newId = insertReorderCopyOf(source, actor);
         DealQuotationDto reorder = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_REORDERED,
@@ -841,9 +914,11 @@ public class DealQuotationService {
         return insertCopyOf(source, actor, source.id(), null);
     }
 
-    /** {@link #createReorder}'s copy step — a new DRAFT carrying NO {@code parentQuotationId}
-     * (so {@code source} is never superseded, by construction), only the audit-only
-     * {@code derivedFromQuotationId}. Thin wrapper over the shared {@link #insertCopyOf}. */
+    /** {@link #createReorder}'s copy step — a new DRAFT carrying NO {@code parentQuotationId} (so
+     * clone CREATION never supersedes {@code source} — the clone's own later approval is what
+     * does, through {@link #approve}'s separate same-ticket sweep, owner ruling 2026-09-19), only
+     * the audit-only {@code derivedFromQuotationId}. Thin wrapper over the shared
+     * {@link #insertCopyOf}. */
     private long insertReorderCopyOf(DealQuotationDto source, UserPrincipal actor) {
         return insertCopyOf(source, actor, null, source.id());
     }
@@ -921,6 +996,21 @@ public class DealQuotationService {
         // Shared by revisions and reorder clones alike.
         quotations.copyPictureLinks(source.id(), newId);
         return newId;
+    }
+
+    /**
+     * The APPROVED-only precondition {@link #createRevision} and {@link #createReorder} both
+     * check -- BEFORE taking the ticket lock (an early, cheap rejection) AND AGAIN right after
+     * (the check that actually matters, per each caller's own comment on why a lock alone does
+     * not re-validate a fact read before it was acquired). One method so the message can never
+     * drift between the two call sites, or between a caller's own pre-lock and post-lock checks.
+     */
+    private DealQuotationDto requireApprovedForClone(DealQuotationDto quotation, String actionMessage) {
+        if (!QuotationStatus.APPROVED.equals(quotation.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                actionMessage + " (ปัจจุบัน: " + quotation.docStatus() + ")");
+        }
+        return quotation;
     }
 
     /**

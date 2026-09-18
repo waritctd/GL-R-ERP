@@ -591,11 +591,11 @@ describe('QuotationEditorPage reorder / สร้างจากใบเดิ�
         quotation: Number(id) === 5
           ? baseQuotation({ docStatus: 'APPROVED', number: 'QT-2026-0005-1' })
           : baseQuotation({ id: 42, docStatus: 'DRAFT', number: 'QT-2026-0005-2', derivedFromQuotationId: 5,
-            derivedFromQuotationNumber: 'QT-2026-0005-1' }),
+            derivedFromQuotationNumber: 'QT-2026-0005-1', derivedFromQuotationStatus: 'APPROVED' }),
       }));
       api.dealQuotations.createReorder.mockResolvedValue({
         quotation: baseQuotation({ id: 42, docStatus: 'DRAFT', number: 'QT-2026-0005-2', derivedFromQuotationId: 5,
-          derivedFromQuotationNumber: 'QT-2026-0005-1' }),
+          derivedFromQuotationNumber: 'QT-2026-0005-1', derivedFromQuotationStatus: 'APPROVED' }),
       });
       renderEditor('/quotations/5');
       await screen.findByRole('button', { name: /สร้างจากใบเดิม/ });
@@ -603,17 +603,60 @@ describe('QuotationEditorPage reorder / สร้างจากใบเดิ�
       fireEvent.click(screen.getByRole('button', { name: /สร้างจากใบเดิม/ }));
       expect(api.dealQuotations.createReorder).not.toHaveBeenCalled();
       const dialog = within(screen.getByRole('dialog'));
-      // Explains up front that the original stays approved (the core invariant a rep must
-      // understand before confirming).
-      expect(dialog.getByText(/ใบเสนอราคาเดิมยังคงสถานะอนุมัติแล้ว/)).not.toBeNull();
+      // Owner ruling 2026-09-19: the original stays approved only until SOME quotation in the
+      // deal is approved next (not only this one) -- since a deal may hold only one APPROVED
+      // DEAL_DIRECT quotation at a time.
+      expect(dialog.getByText(/ใบเสนอราคาที่อนุมัติแล้วได้เพียงใบเดียว/)).not.toBeNull();
+      expect(dialog.getByText(/ใบเสนอราคาเดิมจะยังคงสถานะอนุมัติแล้ว/)).not.toBeNull();
+      expect(dialog.getByText(/เข้ามาแทนที่ใบที่อนุมัติอยู่ในปัจจุบันทันที/)).not.toBeNull();
 
       fireEvent.click(screen.getByRole('button', { name: 'ยืนยันสร้าง' }));
       await waitFor(() => expect(api.dealQuotations.createReorder).toHaveBeenCalledWith('5', {}));
 
       // Navigated to the newly-created clone -- proven by the page re-rendering with ITS
-      // number and provenance note, not the source's.
+      // number and provenance note, not the source's. The clone is still DRAFT and the source
+      // still reads APPROVED here, so the note reads "stays approved until approved", not
+      // "already replaced".
       expect(await screen.findByText(/QT-2026-0005-2/)).not.toBeNull();
       expect(screen.getByText(/สั่งเหมือนเดิมจากใบเสนอราคา/)).not.toBeNull();
+      expect(screen.getByText(/ใบเดิมยังคงสถานะอนุมัติแล้ว จนกว่าใบเสนอราคาใบใดใบหนึ่งในดีลนี้/)).not.toBeNull();
+    });
+
+    // Opus review (2026-09-19): the note must NOT claim "stays approved" when the source has
+    // ALREADY been superseded by something else (a sibling's approval, not necessarily this
+    // clone's) -- at minimum, neutral wording only.
+    it('a DRAFT clone whose source was already superseded by a sibling shows neutral wording, not "stays approved"',
+      async () => {
+        api.dealQuotations.get.mockResolvedValue({
+          quotation: baseQuotation({
+            id: 43, docStatus: 'DRAFT', number: 'QT-2026-0005-3',
+            derivedFromQuotationId: 5, derivedFromQuotationNumber: 'QT-2026-0005-1',
+            derivedFromQuotationStatus: 'SUPERSEDED',
+          }),
+        });
+        renderEditor('/quotations/43');
+
+        expect(await screen.findByText(/สั่งเหมือนเดิมจากใบเสนอราคา/)).not.toBeNull();
+        expect(screen.queryByText(/ยังคงสถานะอนุมัติแล้ว/)).toBeNull();
+        expect(screen.queryByText(/เข้ามาแทนที่ใบเดิมแล้ว/)).toBeNull();
+      });
+
+  // Owner ruling 2026-09-19: once the CLONE itself is APPROVED, the backend's one-APPROVED-per-
+  // deal sweep has already superseded the source -- the provenance note must say so instead of
+  // repeating the now-false "the original stays approved" claim.
+  it('once the clone itself is APPROVED, the provenance note says it replaced the original (not "stays approved")',
+    async () => {
+      api.dealQuotations.get.mockResolvedValue({
+        quotation: baseQuotation({
+          id: 42, docStatus: 'APPROVED', number: 'QT-2026-0005-2',
+          derivedFromQuotationId: 5, derivedFromQuotationNumber: 'QT-2026-0005-1',
+        }),
+      });
+      renderEditor('/quotations/42');
+
+      expect(await screen.findByText(/สั่งเหมือนเดิมจากใบเสนอราคา/)).not.toBeNull();
+      expect(screen.getByText(/เข้ามาแทนที่ใบเดิมแล้ว/)).not.toBeNull();
+      expect(screen.queryByText(/ยังคงสถานะอนุมัติแล้วจนกว่า/)).toBeNull();
     });
 });
 
