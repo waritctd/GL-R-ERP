@@ -10750,6 +10750,22 @@ export const api = {
       if (!PRICING_REQUEST_RECIPIENT_VALUES.includes(payload.recipientType)) {
         fail(`ไม่รองรับประเภทผู้รับ '${payload.recipientType}'`, 400);
       }
+      // GLA-102 part 2: mirrors PricingRequestService.updateDraft's requireUnchangedRecipientType
+      // guard. createCustomerChangeRevision refuses a revision child a different recipientType
+      // than its parent's at CREATION time, but that guard alone was reachable sideways — nothing
+      // stopped a plain update() on an already-created child from repointing recipientType
+      // afterward, and (until this change) this mock accepted it same as the real backend used to.
+      // A revision child is identified the same way the Java guard does: parentPricingRequestId
+      // non-null. A ROOT pricing request (parentPricingRequestId null) stays exempt — see the Java
+      // guard's own comment for why a DRAFT root can never yet own a downstream quotation.
+      if (pr.parentPricingRequestId != null && payload.recipientType !== pr.recipientType) {
+        fail(
+          'ไม่สามารถเปลี่ยนผู้รับคำขอราคาผ่านการแก้ไข revision ได้ '
+            + 'คำขอราคานี้เป็นของผู้รับเดิม หากต้องการเสนอราคาให้ผู้รับรายอื่น '
+            + 'กรุณาสร้างคำขอราคาใหม่แทนการสร้าง revision',
+          409,
+        );
+      }
       if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
         fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
       }
@@ -12219,6 +12235,23 @@ export const api = {
       }
       if (!payload.revisionReason?.trim()) fail('revisionReason ต้องไม่เว้นว่าง', 400);
       if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
+      // GLA-102: mirrors PricingRequestService.createCustomerChangeRevision's
+      // requireUnchangedRecipientType guard — a customer-change revision must not redirect the
+      // pricing request to a different recipient (createDraft is the tool for quoting an
+      // additional recipient; a revision only ever changes the SAME recipient's terms). The real
+      // backend also runs validateRecipient(payload.recipientType) first, a separate 400 for a
+      // blank/unknown value that this mock does not implement elsewhere either — out of scope for
+      // this guard, and a missing/mismatched value still lands on this 409 rather than silently
+      // passing, so the mock is never MORE permissive than production for the case GLA-102 is
+      // about.
+      if (payload.recipientType !== parent.recipientType) {
+        fail(
+          'ไม่สามารถเปลี่ยนผู้รับคำขอราคาผ่านการแก้ไข revision ได้ '
+            + 'คำขอราคานี้เป็นของผู้รับเดิม หากต้องการเสนอราคาให้ผู้รับรายอื่น '
+            + 'กรุณาสร้างคำขอราคาใหม่แทนการสร้าง revision',
+          409,
+        );
+      }
       if (!payload.items?.length) fail('ต้องมีรายการอย่างน้อย 1 รายการ', 400);
       requirePricingRequestItemFieldsValid(payload.items ?? []);
       const parentStatus = parent.status;

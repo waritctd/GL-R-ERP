@@ -208,6 +208,29 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "recipientType ต้องไม่เว้นว่าง");
         }
         validateRecipient(request.recipientType());
+        // GLA-102 (part 2): createCustomerChangeRevision refuses a revision child whose
+        // recipientType differs from its parent's — but that guard alone was reachable sideways,
+        // because THIS method could still repoint an already-created child's recipientType after
+        // the fact via a plain PUT, with nothing here comparing it to anything. A revision child
+        // is identified by parentPricingRequestId being non-null (set exactly once, at creation,
+        // by PricingRequestRepository.createCustomerChangeRevision, and never cleared or
+        // reassigned afterward). The comparison is against the ROW'S OWN persisted recipientType
+        // rather than a fresh parent lookup: the creation-time guard already establishes "child's
+        // recipientType == parent's recipientType" as an invariant, and this guard's own job is to
+        // keep that invariant true going forward, so the row's current value already stands in for
+        // "the parent's value" without an extra query.
+        //
+        // A ROOT pricing request (parentPricingRequestId == null) is deliberately EXEMPT: fixing a
+        // mistaken recipient before the request has ever been submitted is legitimate, and it is
+        // also provably safe here specifically, because updateDraft only ever reaches a row whose
+        // status is still DRAFT (checked above), and PricingRequestStatus.ALLOWED does not admit a
+        // DRAFT -> SUPERSEDED edge (DRAFT's only outgoing edges are SUBMITTED/CANCELLED) — so a
+        // root cannot have spawned a customer-change-revision child, and therefore cannot own any
+        // downstream quotation, while it is still in DRAFT. There is nothing yet for a recipient
+        // change to orphan.
+        if (summary.parentPricingRequestId() != null) {
+            requireUnchangedRecipientType(request.recipientType(), summary.recipientType());
+        }
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
@@ -567,6 +590,21 @@ public class PricingRequestService {
             return detail(existing.id());
         }
         validateRecipient(request.recipientType());
+        // GLA-102: a customer-change revision must not be able to change WHO the pricing request
+        // is for. request.recipientType() is @NotBlank on the DTO and already rejected as invalid
+        // by validateRecipient() above if null/unknown, so by this point it is always one of
+        // PricingRequestRecipient's real values — never "absent" in a way that could mean
+        // "unchanged". The only remaining question is whether it EQUALS the parent's own
+        // recipientType, and if it does not, this is not a revision at all: it is an attempt to
+        // redirect the pricing request to a different recipient while reusing the SUPERSEDED
+        // cascade below (supersedeForCustomerRevision) and, later,
+        // CustomerQuotationService#issue's supersedeSupersededChainQuotations — which retires
+        // EVERY other ISSUED quotation sharing this chain's root_pricing_request_id, including a
+        // different recipient's already-issued, already-delivered quotation. Quoting an
+        // additional recipient is createDraft's job (a new, independent PricingRequest that never
+        // supersedes anything) — a revision changes the SAME recipient's terms, never the
+        // recipient itself.
+        requireUnchangedRecipientType(request.recipientType(), parent.recipientType());
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
@@ -956,6 +994,26 @@ public class PricingRequestService {
     private void validateRecipient(String recipientType) {
         if (!PricingRequestRecipient.isValid(recipientType)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทผู้รับ '" + recipientType + "'");
+        }
+    }
+
+    /**
+     * GLA-102 shared guard: a revision child's recipientType must never end up different from the
+     * reference it descends from. Shared by the two routes that can write recipient_type onto an
+     * existing revision child — {@link #createCustomerChangeRevision} (reference: the immediate
+     * parent's recipientType) and {@link #updateDraft} (reference: the child row's own persisted
+     * recipientType, which the invariant this guard maintains keeps equal to the parent's) — so the
+     * two call sites can never drift apart and quietly reopen one of them. Both callers already
+     * establish {@code requestedRecipientType} is non-null and a valid {@link
+     * PricingRequestRecipient} value before reaching here (validateRecipient), so this is purely
+     * the equality check, not a re-validation.
+     */
+    private void requireUnchangedRecipientType(String requestedRecipientType, String referenceRecipientType) {
+        if (!requestedRecipientType.equals(referenceRecipientType)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ไม่สามารถเปลี่ยนผู้รับคำขอราคาผ่านการแก้ไข revision ได้ "
+                    + "คำขอราคานี้เป็นของผู้รับเดิม หากต้องการเสนอราคาให้ผู้รับรายอื่น "
+                    + "กรุณาสร้างคำขอราคาใหม่แทนการสร้าง revision");
         }
     }
 
