@@ -3162,4 +3162,47 @@ describe('TicketDetailPage', () => {
       expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
     });
   });
+
+  // ── Remaining-invoice download gate (stock-delivered deals) ─────────────────────────────────
+  //
+  // The gate used to be `fulfillmentStatus === 'GOODS_RECEIVED'`, a value only the import axis
+  // writes — so a from-stock deal (FROM_STOCK → …_DELIVERED) never got the button, and an import
+  // deal lost it at its first recorded delivery. Rule now lives in remainingInvoiceReadiness.js.
+  // UI readiness only: DepositNoticeService#getRemainingInvoiceXlsx gates on ticket status alone.
+  describe('remaining-invoice download gate', () => {
+    const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
+
+    it.each(['FROM_STOCK', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'GOODS_RECEIVED'])(
+      'offers the download to the sales owner once fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('button', { name: INVOICE_BUTTON })).not.toBeNull();
+      },
+    );
+
+    // Wrong-way-round: widening must not make the button unconditional.
+    it.each([null, 'IR_ISSUED', 'IR_SENT', 'SHIPPING'])(
+      'withholds the download while fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+        expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+      },
+    );
+
+    it('withholds the download from a non-sales role even on a delivered stock deal', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', createdById: 1 } }),
+      });
+      renderTicketDetailPage(accountUser);
+      expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+    });
+  });
 });
