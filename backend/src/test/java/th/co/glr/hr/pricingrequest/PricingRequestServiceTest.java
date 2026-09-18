@@ -36,6 +36,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CancelPricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
+import th.co.glr.hr.pricingrequest.PricingRequestRequests.CustomerChangeRevisionRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAttachmentRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
@@ -674,6 +675,66 @@ class PricingRequestServiceTest {
             eq(PricingRequestStatus.DRAFT), eq(null), eq(null));
     }
 
+    // ── updateDraft (GLA-102 part 2: recipient guard closed on the OTHER route) ────────────
+    //
+    // createCustomerChangeRevision refuses a revision child whose recipientType differs from its
+    // parent's, but that guard alone was reachable sideways: nothing stopped a plain PUT
+    // (updateDraft) on an already-created child from repointing recipient_type afterward, and
+    // PricingRequestRepository.updateDraft writes it unconditionally on any DRAFT row. Submit ->
+    // CEO approve -> issue would then take the recipient from the mismatched value, and
+    // CustomerQuotationService's supersedeSupersededChainQuotations — keyed only on
+    // root_pricing_request_id, never recipient_type — would retire the OTHER recipient's already-
+    // issued, already-delivered quotation. Same GLA-102 bug, reached through the other door.
+
+    @Test
+    void updateDraft_rejectsDifferentRecipientTypeOnRevisionChildAndMutatesNothing() {
+        stubPricingRequestRevisionChild(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER, 20L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
+            PricingRequestRecipient.OWNER, null, null, null, null, null, null, null);
+
+        assertConflict(() -> service.updateDraft(21L, request, salesActor));
+
+        // The guard must fire BEFORE either mutating repository call in this method — enumerated
+        // from PricingRequestService#updateDraft itself, not guessed: the row write and its event.
+        verify(requestRepo, never()).updateDraft(anyLong(), any());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void updateDraft_allowsSameRecipientTypeOnRevisionChild_unchangedBehaviour() {
+        stubPricingRequestRevisionChild(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER, 20L);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — matches the stub
+        when(requestRepo.updateDraft(21L, request)).thenReturn(true);
+
+        service.updateDraft(21L, request, salesActor);
+
+        verify(requestRepo).updateDraft(21L, request);
+    }
+
+    @Test
+    void updateDraft_allowsRecipientTypeChangeOnRootPricingRequest_scopeBoundaryPinned() {
+        // Deliberate scope boundary: a ROOT pricing request (parentPricingRequestId == null) may
+        // still have its recipientType changed via updateDraft — fixing a mistake before
+        // submission is legitimate, and it is provably safe HERE specifically because updateDraft
+        // only ever reaches a row still in DRAFT, and DRAFT has no outgoing SUPERSEDED edge
+        // (PricingRequestStatus.ALLOWED), so a root in DRAFT cannot yet have spawned any
+        // customer-change-revision child — there is nothing downstream for a recipient change to
+        // orphan. This pins that reasoning against a future regression that widens the guard to
+        // roots without re-deriving it.
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT); // recipientType BUYER, parentPricingRequestId null
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — DIFFERENT from BUYER
+        when(requestRepo.updateDraft(20L, request)).thenReturn(true);
+
+        service.updateDraft(20L, request, salesActor);
+
+        verify(requestRepo).updateDraft(20L, request);
+    }
+
     @Test
     void submit_rejectsContactBelongingToAnotherCustomer() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
@@ -837,6 +898,75 @@ class PricingRequestServiceTest {
 
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L);
         verify(ticketRepo, never()).findById(anyLong());
+    }
+
+    // ── createCustomerChangeRevision (GLA-102 recipient guard) ─────────────
+    //
+    // Bug: createCustomerChangeRevision let the caller pass a DIFFERENT recipientType than the
+    // parent's own, with nothing checking they matched. The parent got marked SUPERSEDED anyway,
+    // and later, when the child's quotation was issued, CustomerQuotationService#issue's
+    // supersedeSupersededChainQuotations retires every OTHER issued quotation sharing the same
+    // root_pricing_request_id — including a different recipient's already-delivered quotation.
+    // Quoting a second recipient is createDraft's job (an independent PricingRequest that never
+    // supersedes anything); a revision must only ever change the SAME recipient's terms.
+
+    @Test
+    void createCustomerChangeRevision_rejectsDifferentRecipientTypeAndMutatesNothing() {
+        // Mirrors the bug's own narrative: an ISSUED quotation to the DESIGNER, "revised" into a
+        // request addressed to the OWNER instead.
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+
+        assertConflict(() -> service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(PricingRequestRecipient.OWNER), salesActor));
+
+        // The guard must fire BEFORE any state change: nothing about the parent or a new row may
+        // be touched once the recipientType mismatch is detected.
+        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
+        verify(requestRepo, never()).cancelOpenStep2Children(anyLong(), any(), anyLong());
+        verify(requestRepo, never()).supersedeOpenPricingDecision(anyLong());
+        verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createCustomerChangeRevision_allowsSameRecipientType_unchangedBehaviour() {
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.createCustomerChangeRevision(any(), any(), anyLong())).thenReturn(21L);
+        when(requestRepo.supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L))
+            .thenReturn(1);
+        stubPricingRequestWithRecipient(21L, 10L, 1L, PricingRequestStatus.DRAFT,
+            PricingRequestRecipient.DESIGNER);
+
+        var result = service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(PricingRequestRecipient.DESIGNER), salesActor);
+
+        assertThat(result.summary().id()).isEqualTo(21L);
+        verify(requestRepo).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo).supersedeForCustomerRevision(20L, PricingRequestStatus.QUOTATION_ISSUED, 21L);
+    }
+
+    @Test
+    void createCustomerChangeRevision_nullRecipientType_stillRejectedAsBadRequestNotByTheNewGuard() {
+        // request.recipientType() is @NotBlank on the wire (CustomerChangeRevisionRequest,
+        // enforced by @Valid at the controller), so a real caller can never reach this method with
+        // recipientType == null — it is not an "unchanged" signal, it is invalid input. A direct
+        // service call (as a test, or any future caller that skips bean validation) with null
+        // must keep failing the way it always did — validateRecipient()'s existing 400 — and NOT
+        // be reclassified as this new guard's 409, which would be reachable only for a non-null,
+        // differing value.
+        stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
+            PricingRequestRecipient.DESIGNER);
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+
+        assertBadRequest(() -> service.createCustomerChangeRevision(
+            20L, customerChangeRevisionRequest(null), salesActor));
+
+        verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
+        verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
     }
 
     // ── read scoping ─────────────────────────────────────────────────────
@@ -1415,6 +1545,40 @@ class PricingRequestServiceTest {
             1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
         when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
         return summary;
+    }
+
+    /** Variant for GLA-102: caller controls recipientType directly instead of the hardcoded BUYER default. */
+    private PricingRequestSummaryDto stubPricingRequestWithRecipient(long id, long ticketId, long ticketCreatedById,
+                                                                      String status, String recipientType) {
+        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
+            id, "PCR-2026-0001", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
+            ticketCreatedById, recipientType, 1L, null,
+            status, ticketCreatedById, "Sales User", null, null, null, null, null, null,
+            1, 1, null, null, null, null, Instant.now(), Instant.now(), null);
+        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
+        return summary;
+    }
+
+    /**
+     * Variant for GLA-102 part 2: a revision CHILD — parentPricingRequestId is non-null, exactly
+     * the signal PricingRequestService#updateDraft's new guard keys on.
+     */
+    private PricingRequestSummaryDto stubPricingRequestRevisionChild(long id, long ticketId, long ticketCreatedById,
+                                                                      String status, String recipientType,
+                                                                      long parentPricingRequestId) {
+        PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
+            id, "PCR-2026-0002", ticketId, "PR-2026-0001", "Test Project", "Test Customer",
+            ticketCreatedById, recipientType, 1L, "Designer Co.",
+            status, ticketCreatedById, "Sales User", null, null, null, null, null, null,
+            1, 2, parentPricingRequestId, null, null, null, Instant.now(), Instant.now(), null);
+        when(requestRepo.findSummary(id)).thenReturn(java.util.Optional.of(summary));
+        return summary;
+    }
+
+    private static CustomerChangeRevisionRequest customerChangeRevisionRequest(String recipientType) {
+        return new CustomerChangeRevisionRequest(
+            "ลูกค้าเปลี่ยนใจ", clientRequestId(), recipientType, 1L, "Recipient Co.", null, null, null, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
     }
 
     /**

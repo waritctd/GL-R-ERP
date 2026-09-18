@@ -12,7 +12,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
-import { formatThaiDate } from '../../utils/format.js';
+import { depositNoticeStatusLabel, formatThaiDate } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 
 const DEPOSIT_OPTIONS = [
@@ -540,8 +540,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               {doc.docNumber && (
                 <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs">{doc.docNumber}</code>
               )}
-              <StatusBadge tone={isIssued ? 'success' : 'neutral'}>
-                {isIssued ? 'ออกแล้ว' : 'Draft'}
+              {/* GLA-117: `doc` here is always the ticket's DRAFT or latest ISSUED notice (see
+                  the draft ?? latestIssued memo above) — this editor never opens on a SUPERSEDED
+                  row — but the badge now goes through the shared label map (which also fixes the
+                  untranslated English "Draft" this badge used to show) instead of a local
+                  ISSUED-only ternary, so this page can't independently regress the same way. */}
+              <StatusBadge tone={depositNoticeStatusLabel(doc.status).tone}>
+                {depositNoticeStatusLabel(doc.status).label}
               </StatusBadge>
             </div>
           )}

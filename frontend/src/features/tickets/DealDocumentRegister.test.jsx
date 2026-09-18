@@ -156,6 +156,56 @@ describe('DealDocumentRegister', () => {
     expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
   });
 
+  // GLA-117: DealDocumentRegister lists EVERY deposit notice for the ticket (unlike
+  // DealDepositPanel/DepositNoticePage, which only ever surface the current DRAFT or latest
+  // ISSUED row via a draft ?? latestIssued memo), so a revised deal's original, superseded
+  // notice is the one place this bug was actually user-visible: the old inline
+  // `doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary rendered SUPERSEDED as "ฉบับร่าง"
+  // (draft), making an already-issued document look untouched and still editable. The old
+  // ternary ALSO gated download actions to ISSUED-only, so a SUPERSEDED notice lost its PDF/Excel
+  // buttons entirely — the ticket's acceptance criterion is that both stay downloadable.
+  it('a SUPERSEDED deposit notice renders ถูกแทนที่ (not ฉบับร่าง) and both it and the ISSUED notice stay downloadable', async () => {
+    api.depositNotices.listByTicket.mockResolvedValue({
+      depositNotices: [
+        { id: 11, status: 'SUPERSEDED', docNumber: 'DN-2026-0001', depositPercent: 0.5, version: 1 },
+        { id: 12, status: 'ISSUED', docNumber: 'DN-2026-0001-R2', depositPercent: 0.5, version: 2 },
+      ],
+    });
+    api.depositNotices.downloadPdf.mockResolvedValue(new Blob(['pdf']));
+    api.depositNotices.downloadXlsx.mockResolvedValue(new Blob(['xlsx']));
+
+    renderRegister({
+      user: { id: 5, role: 'account' },
+      sections: ACCOUNT_SECTIONS,
+      canViewPricingRequests: false,
+      canViewDocumentsTab: true,
+    });
+
+    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+
+    // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the
+    // deposit-notice rows themselves (the section testid mounts immediately in its loading
+    // skeleton, before the listByTicket query resolves).
+    expect(await section.findByText('ถูกแทนที่')).not.toBeNull();
+    expect(section.getByText('ออกแล้ว')).not.toBeNull();
+    expect(section.queryByText('ฉบับร่าง')).toBeNull();
+
+    // The acceptance criterion: both remain downloadable, not gated to ISSUED-only.
+    const pdfButtons = section.getAllByRole('button', { name: 'PDF' });
+    const xlsxButtons = section.getAllByRole('button', { name: 'Excel' });
+    expect(pdfButtons).toHaveLength(2);
+    expect(xlsxButtons).toHaveLength(2);
+
+    fireEvent.click(pdfButtons[0]);
+    await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(11));
+    fireEvent.click(pdfButtons[1]);
+    await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(12));
+    fireEvent.click(xlsxButtons[0]);
+    await waitFor(() => expect(api.depositNotices.downloadXlsx).toHaveBeenCalledWith(11));
+    fireEvent.click(xlsxButtons[1]);
+    await waitFor(() => expect(api.depositNotices.downloadXlsx).toHaveBeenCalledWith(12));
+  });
+
   it('shows the remaining-invoice row as ready only once quotation_issued + GOODS_RECEIVED, still under the deposit/invoice gate', async () => {
     const { rerender } = renderRegister({
       user: { id: 5, role: 'account' },

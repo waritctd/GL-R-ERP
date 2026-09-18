@@ -7,7 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { depositPolicyLabel } from '../../utils/format.js';
+import { depositNoticeStatusLabel, depositPolicyLabel } from '../../utils/format.js';
 import { downloadBlob } from '../../utils/download.js';
 import { canCreateDepositNoticeFromQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
@@ -240,8 +240,13 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
               <StepRoleTag owners={['sales']} viewerRole={role} />
             </div>
             {doc ? (
-              <StatusBadge tone={doc.status === 'ISSUED' ? 'success' : 'neutral'}>
-                {doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'}
+              // GLA-117: `doc` here is always the ticket's DRAFT or latest ISSUED notice (see the
+              // draft ?? latestIssued memo above) — a SUPERSEDED row is never selected into `doc`
+              // on this panel — but this still goes through the shared label map rather than a
+              // local ISSUED-only ternary, so this panel can't independently regress the same way
+              // DealDocumentRegister.jsx did.
+              <StatusBadge tone={depositNoticeStatusLabel(doc.status).tone}>
+                {depositNoticeStatusLabel(doc.status).label}
               </StatusBadge>
             ) : null}
           </div>

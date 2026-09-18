@@ -3,6 +3,7 @@ import {
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
+  depositNoticeStatusLabel,
   factoryQuoteStatusLabel,
   formatAddress,
   formatMoney,
@@ -111,6 +112,30 @@ describe('pricing workflow status labels', () => {
     // was also the file's ONLY call of pricingCostingStatusLabel, so the still-true base mapping
     // would have gone uncovered with it.
     expect(pricingCostingStatusLabel('CALCULATED')).toMatchObject({ label: 'คำนวณแล้ว', tone: 'warning' });
+  });
+});
+
+// GLA-117: sales.deposit_notice.status only ever holds DRAFT (default) / ISSUED (#issue) /
+// SUPERSEDED (#supersede) — see format.js's own comment on depositNoticeStatusLabel for the
+// backend verification. The bug being regression-tested here is the old inline
+// `status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary, which rendered SUPERSEDED (and anything
+// else) as if it were an untouched draft.
+describe('depositNoticeStatusLabel', () => {
+  it('maps DRAFT to the neutral ฉบับร่าง label', () => {
+    expect(depositNoticeStatusLabel('DRAFT')).toMatchObject({ label: 'ฉบับร่าง', tone: 'neutral' });
+  });
+
+  it('maps ISSUED to the success ออกแล้ว label', () => {
+    expect(depositNoticeStatusLabel('ISSUED')).toMatchObject({ label: 'ออกแล้ว', tone: 'success' });
+  });
+
+  it('maps SUPERSEDED to ถูกแทนที่, distinct from DRAFT — this is the bug GLA-117 fixes', () => {
+    expect(depositNoticeStatusLabel('SUPERSEDED')).toMatchObject({ label: 'ถูกแทนที่', tone: 'neutral' });
+  });
+
+  it('falls through to the raw status code for an unmapped value, never silently to ฉบับร่าง', () => {
+    expect(depositNoticeStatusLabel('CANCELLED')).toMatchObject({ label: 'CANCELLED', tone: 'neutral' });
+    expect(depositNoticeStatusLabel('SOME_FUTURE_STATUS')).toMatchObject({ label: 'SOME_FUTURE_STATUS', tone: 'neutral' });
   });
 });
 
