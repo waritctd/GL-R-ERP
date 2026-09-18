@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -8,6 +8,7 @@ import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
 import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { canPickupPricingRequest, pricingRequestRecipientLabel } from './pricingRequestMeta.js';
@@ -53,74 +54,130 @@ function statusFilterLabel(filter) {
   return filter.label ?? pricingRequestStatusLabel(filter.statuses[0]).label;
 }
 
-const COLUMNS = [
-  {
-    key: 'requestCode',
-    header: 'เลขที่คำขอราคา',
-    sortable: true,
-    searchAccessor: (row) => row.requestCode,
-    // A Link (not the whole-row `onRowClick` DataTable optionally offers) so
-    // this table can carry a pickup <button> per row without nesting one
-    // interactive element inside another — `onRowClick`'s own
-    // interactive-target guard would let the button work fine, but this page
-    // still opts out of it: with a per-row link *and* a per-row pickup
-    // button already doing double duty, adding a third, whole-row target
-    // would just be a redundant way to reach the same place.
-    render: (row) => <Link to={`/pricing-requests/${row.id}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
-  },
-  {
-    key: 'deal',
-    header: 'ดีล / ลูกค้า',
-    searchAccessor: (row) => `${row.ticketCode ?? ''} ${row.customerName ?? ''} ${row.projectName ?? ''}`,
-    render: (row) => (
-      <div className="flex flex-col">
-        <span className="font-bold">{row.customerName ?? '-'}</span>
-        <span className="text-2xs text-text-muted">{row.ticketCode}{row.projectName ? ` · ${row.projectName}` : ''}</span>
-      </div>
-    ),
-  },
-  {
-    key: 'recipient',
-    header: 'ผู้รับ',
-    render: (row) => (
-      <span>
-        {pricingRequestRecipientLabel(row.recipientType)}
-        {row.recipientLabel ? ` · ${row.recipientLabel}` : ''}
-      </span>
-    ),
-  },
-  {
-    key: 'status',
-    header: 'สถานะ',
-    sortable: true,
-    searchAccessor: (row) => row.status,
-    render: (row) => {
-      const status = pricingRequestStatusLabel(row.status);
-      return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
-    },
-  },
-  {
-    key: 'itemCount',
-    header: 'จำนวนรายการ',
-    align: 'right',
-    sortable: true,
-    render: (row) => row.itemCount,
-  },
-  {
-    key: 'requiredDate',
-    header: 'ต้องการภายใน',
-    sortable: true,
-    render: (row) => formatThaiDate(row.requiredDate),
-  },
-  {
-    key: 'assignedImportName',
-    header: 'ผู้รับเรื่อง',
-    render: (row) => row.assignedImportName ?? '-',
-  },
-];
+// Task tabs (GLA-110): a role-aware "what should I work on" view that sits above the
+// existing status chips. This is pure client-side scoping over the SAME shared,
+// unscoped /api/pricing-requests queue endpoint — everyone still sees every request
+// under ทั้งหมด, so this is NOT an authz change (nothing here touches who the
+// backend lets read what). Only import and ceo get task tabs: they are the two
+// roles this queue is actually a worklist for (import triages/works requests,
+// ceo approves them); sales_manager keeps browsing the plain chip list it always
+// has (status quo), since it has no personal "my work" subset of this queue.
+//
+// Each role's first tab doubles as its count badge and its default landing tab
+// (Owner ruling: import starts on its own claimed work, ceo starts on what is
+// waiting on it — neither should have to click past the shared SUBMITTED/ALL
+// view to find their own queue).
+const IMPORT_MY_WORK_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
+const CEO_MY_REVIEW_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
 
-function QueueCard({ row, onPickup, canPickup, pickingUp }) {
+const TASK_TABS_BY_ROLE = {
+  import: [
+    { key: 'MY_WORK', label: 'งานของฉัน', hasBadge: true, emptyTitle: 'ไม่มีงานที่คุณรับเรื่องค้างอยู่' },
+    { key: 'UNCLAIMED', label: 'รอรับเรื่อง', emptyTitle: 'ไม่มีคำขอที่รอรับเรื่อง' },
+    { key: 'ALL', label: 'ทั้งหมด', emptyTitle: 'ไม่มีคำขอราคาในเงื่อนไขนี้' },
+  ],
+  ceo: [
+    { key: 'MY_REVIEW', label: 'รอฉันพิจารณา', hasBadge: true, emptyTitle: 'ไม่มีคำขอราคาที่รอคุณพิจารณา' },
+    { key: 'ALL', label: 'ทั้งหมด', emptyTitle: 'ไม่มีคำขอราคาในเงื่อนไขนี้' },
+  ],
+};
+
+const DEFAULT_EMPTY_TITLE = 'ไม่มีคำขอราคาในเงื่อนไขนี้';
+// Shown instead of a tab's own "nothing here" copy when its query actually failed — a fetch error
+// read as confident "you have no work" is worse than no message at all (review finding, GLA-110).
+const ERROR_EMPTY_TITLE = 'โหลดคิวขอราคาไม่สำเร็จ';
+
+/**
+ * GLA-110: the ผู้รับเรื่อง cell reads "คุณ" for the viewer's own claimed rows instead of their own
+ * name — shared between the desktop column and the mobile QueueCard so the two can never drift.
+ * Returns `null` (not '-') when there is no assignee at all, so a caller that wants to omit the
+ * whole line (QueueCard) can tell "nobody yet" apart from "somebody, unnamed".
+ */
+function assigneeName(row, user) {
+  if (row.assignedImportId != null && Number(row.assignedImportId) === Number(user?.id)) return 'คุณ';
+  return row.assignedImportName ?? null;
+}
+
+function buildColumns(user) {
+  return [
+    {
+      key: 'requestCode',
+      header: 'เลขที่คำขอราคา',
+      sortable: true,
+      searchAccessor: (row) => row.requestCode,
+      // A Link (not the whole-row `onRowClick` DataTable optionally offers) so
+      // this table can carry a pickup <button> per row without nesting one
+      // interactive element inside another — `onRowClick`'s own
+      // interactive-target guard would let the button work fine, but this page
+      // still opts out of it: with a per-row link *and* a per-row pickup
+      // button already doing double duty, adding a third, whole-row target
+      // would just be a redundant way to reach the same place.
+      render: (row) => <Link to={`/pricing-requests/${row.id}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
+    },
+    {
+      key: 'deal',
+      header: 'ดีล / ลูกค้า',
+      searchAccessor: (row) => `${row.ticketCode ?? ''} ${row.customerName ?? ''} ${row.projectName ?? ''}`,
+      render: (row) => (
+        <div className="flex flex-col">
+          <span className="font-bold">{row.customerName ?? '-'}</span>
+          <span className="text-2xs text-text-muted">{row.ticketCode}{row.projectName ? ` · ${row.projectName}` : ''}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'recipient',
+      header: 'ผู้รับ',
+      render: (row) => (
+        <span>
+          {pricingRequestRecipientLabel(row.recipientType)}
+          {row.recipientLabel ? ` · ${row.recipientLabel}` : ''}
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'สถานะ',
+      sortable: true,
+      searchAccessor: (row) => row.status,
+      render: (row) => {
+        const status = pricingRequestStatusLabel(row.status);
+        return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+      },
+    },
+    {
+      key: 'itemCount',
+      header: 'จำนวนรายการ',
+      align: 'right',
+      sortable: true,
+      render: (row) => row.itemCount,
+    },
+    {
+      key: 'requiredDate',
+      header: 'ต้องการภายใน',
+      sortable: true,
+      render: (row) => formatThaiDate(row.requiredDate),
+    },
+    {
+      key: 'assignedImportName',
+      header: 'ผู้รับเรื่อง',
+      // GLA-110: "คุณ" for the viewer's own claimed rows — see assigneeName's own doc.
+      // Most useful on งานของฉัน, where every row is this exact comparison, but left
+      // on for every tab so a request picked up by "me" reads the same way from
+      // ทั้งหมด too.
+      render: (row) => assigneeName(row, user) ?? '-',
+    },
+  ];
+}
+
+function QueueCard({ row, user, onPickup, canPickup, pickingUp }) {
   const status = pricingRequestStatusLabel(row.status);
+  // GLA-110 (review fix): this card never showed ผู้รับเรื่อง at all, so "คุณ" — the
+  // whole point of assigneeName — never appeared on mobile. Omit the line entirely
+  // rather than falling back to '-' the way the desktop column does: a card is
+  // already dense, and "no assignee yet" is exactly what SUBMITTED rows in รอรับเรื่อง
+  // look like, so the line would be near-permanent noise there.
+  const assignee = assigneeName(row, user);
   return (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -141,6 +198,9 @@ function QueueCard({ row, onPickup, canPickup, pickingUp }) {
       {row.requiredDate ? (
         <span className="text-xs text-text-muted">ต้องการภายใน {formatThaiDate(row.requiredDate)}</span>
       ) : null}
+      {assignee ? (
+        <span className="text-xs text-text-muted">ผู้รับเรื่อง: {assignee}</span>
+      ) : null}
       {canPickup ? (
         <Button
           type="button"
@@ -160,26 +220,155 @@ function QueueCard({ row, onPickup, canPickup, pickingUp }) {
  * Import's cross-deal PricingRequest queue (commit 6). Route-guarded by
  * ROLE_PERMISSIONS.canViewPricingRequestQueue (import/ceo/sales_manager) —
  * see app/permissions.js PATH_GUARDS for '/pricing-requests'.
+ *
+ * GLA-110: import and ceo additionally get a row of task tabs above the status
+ * chips (TASK_TABS_BY_ROLE), each scoping the SAME shared queue endpoint down
+ * to "what should I work on" — the queue stays global and unscoped (everyone
+ * still sees everything under ทั้งหมด), this only changes what each role sees
+ * by default:
+ *   - import: งานของฉัน (its own claimed, still-open requests — IMPORT_REVIEWING /
+ *     AWAITING_FACTORY_RESPONSE / legacy COSTING_IN_PROGRESS, see STATUS_FILTERS'
+ *     comment on why that legacy value stays), รอรับเรื่อง (SUBMITTED, unclaimed),
+ *     ทั้งหมด (today's chip list).
+ *   - ceo: รอฉันพิจารณา (READY_FOR_CEO_REVIEW + CEO_REVIEWING — both are waiting on
+ *     the CEO, the second because the CEO opened the review but hasn't decided
+ *     yet), ทั้งหมด.
+ *   - every other role that can reach this page (sales_manager): no tabs, exactly
+ *     today's behaviour (chips only, defaulting to the SUBMITTED chip).
+ * The first tab of each role doubles as its badge count, fetched via its own
+ * `enabled: hasTaskTabs` query so the count still shows while a different tab is
+ * active. Status chips render only inside the ทั้งหมด tab (or always, for roles
+ * with no tabs) — every task tab is already status-scoped, so chips there would
+ * just intersect down to nothing.
  */
 export function PricingRequestQueuePage({ user, showToast }) {
   const queryClient = useQueryClient();
-  const [filterKey, setFilterKey] = useState('SUBMITTED');
+  const taskTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
+  const hasTaskTabs = !!taskTabs;
+  const [activeTab, setActiveTab] = useState(taskTabs ? taskTabs[0].key : null);
+  // Task-tab roles land the ทั้งหมด tab on its own ทั้งหมด chip (owner ruling);
+  // every other role keeps today's SUBMITTED default (status quo).
+  const [filterKey, setFilterKey] = useState(hasTaskTabs ? 'ALL' : 'SUBMITTED');
+
+  // GLA-110 (review fix): this page is never remounted on a role change (AppShell keeps one
+  // instance across a session), so without this, a stale `activeTab` from a previous role could
+  // point at a tab key the new role's TASK_TABS_BY_ROLE entry does not have at all (e.g. import's
+  // 'UNCLAIMED' surviving into a ceo session) — every branch below falls through to the ทั้งหมด
+  // behaviour in that case rather than crashing, but it would silently show the wrong default
+  // instead of that role's own first tab. Re-derive both pieces of state the instant the role
+  // changes, from the same defaults the initial useState above already encodes.
+  useEffect(() => {
+    const nextTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
+    setActiveTab(nextTabs ? nextTabs[0].key : null);
+    setFilterKey(nextTabs ? 'ALL' : 'SUBMITTED');
+  }, [user.role]);
+
   const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
 
   // One status -> the API filters it server-side. Zero (ทั้งหมด) or two
   // (เจรจาราคากับโรงงาน) -> fetch everything and narrow below; see STATUS_FILTERS
   // for why the two-status chip cannot be pushed down to the query.
   const queryStatus = filter.statuses.length === 1 ? filter.statuses[0] : undefined;
+  const allTabActive = !hasTaskTabs || activeTab === 'ALL';
 
-  const queueQuery = useQuery({
+  const allQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({ status: queryStatus, activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ status: queryStatus, activeOnly: true }).then((r) => r.items ?? []),
+    enabled: allTabActive,
   });
-  const rows = useMemo(() => {
-    const items = queueQuery.data ?? [];
-    if (filter.statuses.length < 2) return items;
-    return items.filter((row) => filter.statuses.includes(row.status));
-  }, [queueQuery.data, filter]);
+
+  // Import's งานของฉัน: the endpoint only takes one `status`, so this fetches
+  // everything assigned to the current user and narrows to the three
+  // still-open Import statuses client-side. `enabled: hasTaskTabs` (not
+  // `activeTab === 'MY_WORK'`) is what keeps the badge counting while another
+  // tab is active. The assignedImportId check is re-asserted client-side too
+  // (cheap, and defence-in-depth against a mock/backend that returned more
+  // than this exact filter asked for — CLAUDE.md's "mock more permissive than
+  // production" is the direction that only ever surfaces in prod).
+  const myWorkQuery = useQuery({
+    queryKey: queryKeys.pricingRequestQueue({ assignedImportId: user.id, activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ assignedImportId: user.id, activeOnly: true }).then((r) => r.items ?? []),
+    enabled: hasTaskTabs && user.role === 'import',
+  });
+  const myWorkRows = useMemo(
+    () => (myWorkQuery.data ?? []).filter((row) => IMPORT_MY_WORK_STATUSES.includes(row.status)
+      && row.assignedImportId != null && Number(row.assignedImportId) === Number(user.id)),
+    [myWorkQuery.data, user.id],
+  );
+
+  // ceo's รอฉันพิจารณา: fetches everything (same params CeoOverview's own
+  // price-approval card uses — queryKeys.pricingRequestQueue({ activeOnly: true })
+  // — so the two share one cache entry) and narrows to the two "waiting on the
+  // CEO" statuses client-side.
+  const myReviewQuery = useQuery({
+    queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r.items ?? []),
+    enabled: hasTaskTabs && user.role === 'ceo',
+  });
+  const myReviewRows = useMemo(
+    () => (myReviewQuery.data ?? []).filter((row) => CEO_MY_REVIEW_STATUSES.includes(row.status)),
+    [myReviewQuery.data],
+  );
+
+  // รอรับเรื่อง (import only): unclaimed work, pushed server-side as a plain
+  // SUBMITTED filter. No badge on this tab, so it only fetches while active.
+  const unclaimedQuery = useQuery({
+    queryKey: queryKeys.pricingRequestQueue({ status: 'SUBMITTED', activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ status: 'SUBMITTED', activeOnly: true }).then((r) => r.items ?? []),
+    enabled: hasTaskTabs && user.role === 'import' && activeTab === 'UNCLAIMED',
+  });
+
+  const badgeRows = user.role === 'import' ? myWorkRows : myReviewRows;
+  // The query backing whichever tab currently doubles as the badge (myWorkQuery for import,
+  // myReviewQuery for ceo) — used both for the badge's own loading/success gating below and,
+  // when that tab is the active one, for isLoading/isError in the branch further down.
+  const badgeQuery = user.role === 'import' ? myWorkQuery : myReviewQuery;
+  const activeTabMeta = taskTabs?.find((t) => t.key === activeTab);
+
+  let rows;
+  let isLoading;
+  let isError;
+  let emptyTitle = DEFAULT_EMPTY_TITLE;
+  if (hasTaskTabs && (activeTab === 'MY_WORK' || activeTab === 'MY_REVIEW')) {
+    rows = badgeRows;
+    isLoading = badgeQuery.isLoading;
+    isError = badgeQuery.isError;
+    emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
+  } else if (hasTaskTabs && activeTab === 'UNCLAIMED') {
+    rows = unclaimedQuery.data ?? [];
+    isLoading = unclaimedQuery.isLoading;
+    isError = unclaimedQuery.isError;
+    emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
+  } else {
+    // ทั้งหมด tab, or a role with no task tabs at all — today's chip behaviour.
+    const items = allQuery.data ?? [];
+    rows = filter.statuses.length < 2 ? items : items.filter((row) => filter.statuses.includes(row.status));
+    isLoading = allQuery.isLoading;
+    isError = allQuery.isError;
+    emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
+  }
+  // A failed fetch reading as confident "nothing is yours"/"ทั้งหมด is empty" is worse than no
+  // rows at all (review finding) — override the tab's own empty copy and icon, and never show
+  // stale/partial rows underneath an error banner.
+  if (isError) {
+    rows = [];
+    emptyTitle = ERROR_EMPTY_TITLE;
+  }
+
+  // GLA-110 (review fix): the badge must read as unknown — not a confident "0" — while its query
+  // is loading, disabled, or errored. `isSuccess` is the one react-query flag that is only ever
+  // true once real data has actually landed, so gate on that rather than on `data` (which this
+  // page defaults to `[]` before the first response, making an unloaded badge indistinguishable
+  // from a genuinely-empty one).
+  const badgeCount = hasTaskTabs && badgeQuery.isSuccess ? badgeRows.length : null;
+  const tabItems = taskTabs?.map((tab) => ({
+    id: tab.key,
+    label: tab.label,
+    badge: tab.hasBadge ? badgeCount : undefined,
+    // Read as "<label> N รายการ" instead of the ambiguous "<label>N" a bare number would produce
+    // — see Tabs.jsx's own badgeLabel doc.
+    badgeLabel: tab.hasBadge && badgeCount != null ? `${badgeCount} รายการ` : undefined,
+  })) ?? [];
 
   const pickupMutation = useMutation({
     mutationFn: (id) => api.pricingRequests.pickup(id),
@@ -191,7 +380,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
   });
 
   const columns = [
-    ...COLUMNS,
+    ...buildColumns(user),
     {
       key: 'pickup',
       header: '',
@@ -210,6 +399,52 @@ export function PricingRequestQueuePage({ user, showToast }) {
       ),
     },
   ];
+
+  const chipsAndTable = (
+    <>
+      {allTabActive ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+          <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
+          {STATUS_FILTERS.map((option) => {
+            const active = filterKey === option.key;
+            const label = statusFilterLabel(option);
+            return (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={active}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+                }`}
+                onClick={() => setFilterKey(option.key)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        getRowKey={(row) => row.id}
+        gridClassName="pricing-request-queue-table"
+        mobileCard={(row) => (
+          <QueueCard
+            row={row}
+            user={user}
+            canPickup={canPickupPricingRequest(user, row)}
+            pickingUp={pickupMutation.isPending}
+            onPickup={(id) => pickupMutation.mutate(id)}
+          />
+        )}
+        searchable
+        loading={isLoading}
+        emptyState={{ icon: isError ? 'triangleAlert' : 'fileText', title: emptyTitle }}
+      />
+    </>
+  );
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
@@ -230,44 +465,20 @@ export function PricingRequestQueuePage({ user, showToast }) {
         )}
       />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
-        <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
-        {STATUS_FILTERS.map((option) => {
-          const active = filterKey === option.key;
-          const label = statusFilterLabel(option);
-          return (
-            <button
-              key={option.key}
-              type="button"
-              aria-pressed={active}
-              className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-              }`}
-              onClick={() => setFilterKey(option.key)}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
-      <DataTable
-        columns={columns}
-        rows={rows}
-        getRowKey={(row) => row.id}
-        gridClassName="pricing-request-queue-table"
-        mobileCard={(row) => (
-          <QueueCard
-            row={row}
-            canPickup={canPickupPricingRequest(user, row)}
-            pickingUp={pickupMutation.isPending}
-            onPickup={(id) => pickupMutation.mutate(id)}
+      {taskTabs ? (
+        <>
+          <Tabs
+            items={tabItems}
+            value={activeTab}
+            onChange={setActiveTab}
+            ariaLabel="งานที่ต้องทำ"
+            idPrefix="pcr-queue-tasks"
           />
-        )}
-        searchable
-        loading={queueQuery.isLoading}
-        emptyState={{ icon: 'fileText', title: 'ไม่มีคำขอราคาในเงื่อนไขนี้' }}
-      />
+          <TabPanel id={activeTab} idPrefix="pcr-queue-tasks" active>
+            {chipsAndTable}
+          </TabPanel>
+        </>
+      ) : chipsAndTable}
     </div>
   );
 }
