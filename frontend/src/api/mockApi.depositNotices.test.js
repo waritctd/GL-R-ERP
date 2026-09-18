@@ -200,3 +200,51 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
     expect(relisted.hasXlsx).toBe(true);
   });
 });
+
+// GLA-32 (2026-09-19): mirrors DepositNoticeService.issue's account-role notification (backend
+// backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java) — issuing a deposit
+// notice notifies the account role, in-app, so account picks up the deal here rather than
+// nowhere.
+describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
+  it('notifies the seeded account user with the ticket code, customer name and doc number', async () => {
+    const { ticketId, customer } = await driveTicketToAcceptedQuotation();
+
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, {
+      notes: [],
+      depositPercent: 0.5,
+    });
+    await api.tickets.confirmCustomer(ticketId);
+    const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
+
+    await api.auth.login({ role: 'account' });
+    const { notifications } = await api.notifications.list();
+    const own = notifications.find((n) => n.type === 'DEPOSIT_NOTICE_ISSUED' && n.ticketId === ticketId);
+
+    expect(own).toBeTruthy();
+    expect(own.message).toContain(issued.docNumber);
+    expect(own.message).toContain(customer.name);
+    // Opus review (2026-09-19): account matches this against a bank transfer, which is the
+    // deposit PLUS VAT (totalPayable) — the message must show both, not depositAmount alone.
+    expect(issued.totalPayable).not.toBe(issued.depositAmount);
+    expect(own.message).toContain(String(Math.round(issued.totalPayable)));
+  });
+
+  it('falls back to "ไม่ระบุลูกค้า" when the deposit notice has no customer name', async () => {
+    const { ticketId } = await driveTicketToAcceptedQuotation();
+
+    const { depositNotice: draft } = await api.depositNotices.createDraft(ticketId, {
+      notes: [],
+      depositPercent: 0.5,
+      customerName: '',
+    });
+    await api.tickets.confirmCustomer(ticketId);
+    await api.depositNotices.issue(draft.id);
+
+    await api.auth.login({ role: 'account' });
+    const { notifications } = await api.notifications.list();
+    const own = notifications.find((n) => n.type === 'DEPOSIT_NOTICE_ISSUED' && n.ticketId === ticketId);
+
+    expect(own).toBeTruthy();
+    expect(own.message).toContain('ไม่ระบุลูกค้า');
+  });
+});

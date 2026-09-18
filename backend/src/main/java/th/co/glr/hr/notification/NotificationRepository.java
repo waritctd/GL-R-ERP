@@ -168,6 +168,11 @@ public class NotificationRepository {
         // Step 6: Deposit, Payment, and Order Confirmation.
         Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
         Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
+        // GLA-32 (2026-09-19): DepositNoticeService.issue notifies the account role — this is the
+        // first notify* call to use TicketEventKind.DEPOSIT_NOTICE_ISSUED as a notification `type`
+        // (the constant already existed for the ticket-history event log entry the same method
+        // writes via tickets.addEvent, an unrelated table/concern that shares only the string).
+        Map.entry("DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งมัดจำแล้ว — รอยืนยันรับชำระ"),
         // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
         // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
         // routine pipeline noise; the whole point of this notification is that it is not.
@@ -246,11 +251,14 @@ public class NotificationRepository {
 
     /**
      * Notify all employees whose division maps to the given sales role ({@code import}/{@code
-     * sales}), or -- for {@code ceo} -- who match {@link CeoApproverRule#SQL_PREDICATE}, which is
-     * a POSITION test (กรรมการผู้จัดการ) and ignores division entirely, unlike the plain division
-     * mapping the other two roles use. It is deliberately NARROWER than the {@code ceo} role and
-     * is <b>not</b> a mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule}
-     * for the owner ruling and the empty-set consequence.
+     * hr}/{@code account}/{@code sales}/{@code sales_manager}), or -- for {@code ceo} -- who
+     * match {@link CeoApproverRule#SQL_PREDICATE}, which is a POSITION test (กรรมการผู้จัดการ)
+     * and ignores division entirely, unlike the plain division mapping the other roles use.
+     * {@code ceo} here is deliberately NARROWER than the {@code ceo} role and is <b>not</b> a
+     * mirror of {@code DivisionAccessPolicy#roleFor} -- see {@link CeoApproverRule} for the owner
+     * ruling and the empty-set consequence. {@code hr} and {@code account} DO mirror {@code
+     * DivisionAccessPolicy#roleFor}'s exact-match division semantics (see each case's own comment
+     * below for why, and why that differs from {@code import}/{@code sales}'s prefix match).
      *
      * <p>{@code sales_manager} is different again: it resolves to the ฝ่ายขาย members whose
      * position marks them a ผู้จัดการ, so it is a strict subset of {@code sales} and the two are
@@ -312,6 +320,20 @@ public class NotificationRepository {
                 AND regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') NOT LIKE '%กรรมการ%'
                 """;
             case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
+            // GLA-32 (2026-09-19): notifyByRole("account", ...) was previously a NO-OP in both
+            // channels -- this switch had no "account" arm at all, so the early `return` below
+            // fired before the INSERT or salesMailer.emailForRole were ever reached (see
+            // SalesNotificationMailRoutingIntegrationTest#anAccountRoleFanOutIsANoOpInBothChannelsToday,
+            // now updated to pin the fixed behaviour instead). Added to give DepositNoticeService.issue
+            // a real "account" recipient. Mirrors DivisionAccessPolicy#roleFor's account branch
+            // ("ac".equals(divisionCode(employee))) exactly, same shape as the "hr" case just above:
+            // an EXACT match against source_code (falling back to the name_th prefix), not a naive
+            // `ILIKE 'AC%'`, plus the same NOT LIKE '%กรรมการ%' guard so an AC-division employee who
+            // is also an executive resolves to "ceo" in Java and is not double-notified here.
+            case "account" -> """
+                LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(COALESCE(d.name_th, ''), '-', 1)))) = 'ac'
+                AND regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') NOT LIKE '%กรรมการ%'
+                """;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
             // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who
