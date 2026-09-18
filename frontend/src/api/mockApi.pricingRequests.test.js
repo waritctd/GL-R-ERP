@@ -191,3 +191,63 @@ describe('mockApi.pricingRequests targetCurrency normalisation', () => {
     expect(pricingRequest.summary.targetCurrency).toBe('THB');
   });
 });
+
+// GLA-102: mirrors PricingRequestService's requireUnchangedRecipientType guard, on BOTH routes
+// that can write recipient_type onto an existing pricing request. Before this pass the mock
+// accepted what production refuses on both — the dangerous "mock more permissive than production"
+// direction CLAUDE.md warns about (issue #199's own failure mode): a mock-driven click-through or
+// mock-mode test would show success on a request the real Java service 409s.
+describe('mockApi.pricingRequests recipient guard (GLA-102)', () => {
+  async function submittedParent() {
+    const ticket = await ownedActiveTicketWithItems();
+    const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    const parentId = created.pricingRequest.summary.id;
+    await api.pricingRequests.submit(parentId); // must be past DRAFT before a revision is allowed
+    return { ticket, parentId };
+  }
+
+  function revisionPayload(ticket, recipientType) {
+    return { ...validPayload(ticket.items[0]), recipientType, revisionReason: 'ลูกค้าเปลี่ยนใจ' };
+  }
+
+  it('createCustomerChangeRevision rejects a recipientType different from the parent\'s', async () => {
+    const { ticket, parentId } = await submittedParent(); // parent's recipientType is DESIGNER
+    // toMatchObject({ status: 409 }), not a bare toThrow(): a bare assertion would stay green if this
+    // path later started failing for an unrelated reason (a 400 on payload shape, say), and the test
+    // would silently stop pinning the guard it exists for. Same convention as mockApi.customers.test.js.
+    await expect(api.pricingRequests.createCustomerChangeRevision(parentId, revisionPayload(ticket, 'OWNER')))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
+  it('createCustomerChangeRevision accepts the SAME recipientType as the parent (unchanged behaviour)', async () => {
+    const { ticket, parentId } = await submittedParent();
+    const { pricingRequest } = await api.pricingRequests.createCustomerChangeRevision(
+      parentId, revisionPayload(ticket, 'DESIGNER'));
+    expect(pricingRequest.summary.recipientType).toBe('DESIGNER');
+    expect(pricingRequest.summary.parentPricingRequestId).toBe(parentId);
+  });
+
+  it('update() rejects changing recipientType on a revision child — the sideways route the backend guard closed', async () => {
+    const { ticket, parentId } = await submittedParent();
+    const revised = await api.pricingRequests.createCustomerChangeRevision(
+      parentId, revisionPayload(ticket, 'DESIGNER'));
+    const childId = revised.pricingRequest.summary.id;
+
+    const badUpdate = { ...validPayload(ticket.items[0]), recipientType: 'OWNER' };
+    await expect(api.pricingRequests.update(childId, badUpdate)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('update() still allows changing recipientType on the ROOT pricing request (deliberate scope boundary)', async () => {
+    // A root has no parentPricingRequestId and, while still DRAFT (the only status update()
+    // reaches), can never yet own a customer-change-revision child — so there is nothing
+    // downstream for a recipient change to orphan. Mirrors the same scope decision made in
+    // PricingRequestService#updateDraft.
+    const ticket = await ownedActiveTicketWithItems();
+    const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
+    const rootId = created.pricingRequest.summary.id;
+
+    const changedRecipient = { ...validPayload(ticket.items[0]), recipientType: 'OWNER' };
+    const { pricingRequest } = await api.pricingRequests.update(rootId, changedRecipient);
+    expect(pricingRequest.summary.recipientType).toBe('OWNER');
+  });
+});
