@@ -6,349 +6,195 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { FilterBar, PageStack, Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
-import {
-  FULFILMENT_WORKSPACE_CODES, IMPORT_ACTION_LABELS, nextFulfilmentActionCode,
-} from '../tickets/importActions.js';
-import { PAYMENT_SUBSTEPS } from '../tickets/stageMeta.js';
+import { formatThaiDate } from '../../utils/format.js';
+import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
+import { IMPORT_STEPS } from '../importProgress/importSteps.js';
 
 /**
- * งานนำเข้า — Import's stream-2 workspace: the cross-deal fulfilment worklist
- * that ACTS IN PLACE, rather than launching into one deal at a time.
- * See .design/import-fulfilment/INFORMATION_ARCHITECTURE.md.
+ * งานนำเข้า — Import's cross-deal fulfilment worklist, REDESIGNED for per-factory
+ * tracking (revision 2026-09-19, see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §11).
  *
- * This is deliberately NOT a revival of the deleted /procurement page (commit
- * ebaf6888). That page's fulfilment half was a verbatim duplicate of the
- * ImportOverview worklist — same helper, same rows, same labels, same
- * `navigate('/tickets/' + id)` destination — and was correctly removed because
- * deleting it lost no capability. The difference here is the only one that
- * matters: this page performs the four transitions itself. Delete it and Import
- * loses the ability to advance N deals without opening N deal pages.
+ * The original page (2026-08-17) bucketed each DEAL into one of four deal-level
+ * `fulfillment_status` transitions and performed them in place. Per-factory import
+ * tracking (S12–S17, sales.factory_import_progress — the no-PO model) broke that
+ * premise: a deal is no longer at ONE import status, it has N factories each at
+ * their own step. On the old page a tracked deal sat mislabelled in "ออกคำขอนำเข้า"
+ * (its deal-level status stays null in the no-PO flow) and then VANISHED the moment
+ * the all-received rollup set GOODS_RECEIVED. Both were reported as bugs.
  *
- * SCOPE — stage 12 (DealStage.PROCUREMENT) ONLY. The four statuses on
- * sales.ticket.fulfillment_status that Import owns:
+ * The core principle is unchanged — this is "the room", not "a door": Import advances
+ * work here without opening N deal pages. Only the UNIT changed, from a deal at one of
+ * four statuses to a FACTORY SHIPMENT at one of six steps. Each shipment renders as the
+ * same {@link FactoryProgressBar} used at the bottom of the deal page, so the two
+ * surfaces read identically; import/ceo advance a step (and generate the order email)
+ * in place. The old four deal-level transitions are gone from this page — they are the
+ * abandoned pre-per-factory mechanism, hidden on the deal page too.
  *
- *     (null) --ออกคำขอนำเข้า--> IR_ISSUED --ส่งแล้ว--> IR_SENT
- *            --ออกเดินทาง--> SHIPPING --รับเข้าคลัง--> GOODS_RECEIVED
+ * A deal stays here while ANY factory is < RECEIVED. When every factory is received the
+ * deal rolls up to GOODS_RECEIVED (server-side) and drops into a collapsed
+ * "รับครบแล้ว · รอส่งมอบ" group at the foot rather than disappearing — so the handoff to
+ * Sales's delivery step reads as a handoff, never as a lost row.
  *
- * Delivery (PARTIALLY_DELIVERED / FULLY_DELIVERED, stages 13-14) is EXCLUDED —
- * owner ruling: it is being reassigned to Sales. `recordDelivery` rows are
- * filtered out below and there is no delivery control anywhere on this page.
- *
- * Note the consequence, which is load-bearing for the UI: a deal LEAVES this
- * workspace the moment goods are received, because nextFulfilmentActionCode
- * returns `recordDelivery` for GOODS_RECEIVED and that code is out of scope.
- * The ยืนยันรับเข้าคลัง toast says so, or the disappearing row reads as a bug.
+ * Delivery itself is still NOT here (owner ruling): it is Sales's, on the deal's
+ * จัดซื้อ-ส่งมอบ tab. See the footer note.
  */
 
-// The fulfilment-chain action codes this workspace owns, in chain order —
-// IMPORTED from importActions.js, never redeclared, so the list this page
-// FILTERS on and the list nextImportAction ROUTES to /fulfilment on are provably
-// the same four. Anything not in it (i.e. `recordDelivery`, or null) is dropped
-// from the worklist entirely.
-//
-// Chip and button copy likewise comes from IMPORT_ACTION_LABELS rather than
-// being retyped, so a chip can never drift from the button it filters to — the
-// same trick PricingRequestQueuePage plays with pricingRequestStatusLabel.
-const FULFILMENT_ACTION_CODES = FULFILMENT_WORKSPACE_CODES;
-
-// The one place a code maps to the api.tickets method that performs it. All four
-// already exist in hrApi.js (and are mirrored in mockApi.js); this branch adds no
-// API method and changes no endpoint.
-const ACTION_MUTATIONS = {
-  issueImportRequest: (id) => api.tickets.issueImportRequest(id),
-  markIrSent: (id) => api.tickets.markIrSent(id),
-  markShipping: (id) => api.tickets.markShipping(id),
-  markGoodsReceived: (id) => api.tickets.markGoodsReceived(id),
-};
-
-// Success copy per transition. ยืนยันรับเข้าคลัง names the HANDOFF, not just the
-// write, because confirming it is what removes the row from this page (see the
-// header) — "done, and it has left your workspace" is the honest message.
-const ACTION_SUCCESS_TOAST = {
-  issueImportRequest: 'ออกคำขอนำเข้าแล้ว',
-  markIrSent: 'ส่งคำขอนำเข้าแล้ว',
-  markShipping: 'บันทึกว่าสินค้าออกเดินทางแล้ว',
-  markGoodsReceived: 'รับเข้าคลังแล้ว — ดีลนี้ส่งต่อไปยังขั้นตอนส่งมอบ',
-};
-
-// What the deal's fulfillmentStatus becomes once the action succeeds. Shown in
-// the confirmation strip so the operator reads the actual state change, not just
-// a verb. Presentation only — the SERVER decides whether the move is legal.
-const ACTION_RESULT_STATUS = {
-  issueImportRequest: 'IR_ISSUED',
-  markIrSent: 'IR_SENT',
-  markShipping: 'SHIPPING',
-  markGoodsReceived: 'GOODS_RECEIVED',
-};
-
-const PAYMENT_LABELS = Object.fromEntries(PAYMENT_SUBSTEPS.map((s) => [s.code, s.label]));
-
-function fulfilmentStageText(status) {
-  return status == null ? 'ยังไม่ออกคำขอนำเข้า' : fulfilmentStatusLabel(status).label;
+// The rollup chip counts factories that reached the warehouse (S17 RECEIVED) — the
+// step that actually completes the deal and hands it to Sales.
+function receivedCount(rows) {
+  return rows.filter((r) => r.importStep === 'RECEIVED').length;
 }
 
-/**
- * One worklist row. Two states:
- *   idle  — deal facts + a single action button
- *   armed — the button is replaced by a confirmation strip (§4.2 of the IA)
- *
- * Why a confirmation at all: all four transitions are irreversible and monotonic
- * server-side (re-issuing an IR 409s — TicketService.issueImportRequest: "Never
- * restart an in-flight fulfillment track"). A bare one-click button on a list row
- * is a misfire waiting to happen, and there is nothing to undo afterwards.
- *
- * Why not a modal: one modal per click is disproportionate for a page whose whole
- * purpose is advancing several deals in a row — it would give back the context
- * switch this page exists to remove.
- *
- * The strip renders BELOW the row content rather than in the button's own place,
- * so the confirm control never lands on the pixels the trigger just occupied. A
- * double-tap or double-click cannot reach it.
- */
-function FulfilmentRow({ ticket, code, armed, pending, onArm, onDisarm, onConfirm }) {
-  const stage = fulfilmentStatusLabel(ticket.fulfillmentStatus);
-  const resultStage = fulfilmentStatusLabel(ACTION_RESULT_STATUS[code]);
-  const label = IMPORT_ACTION_LABELS[code];
-  const stripId = `fulfilment-confirm-${ticket.id}`;
-  // Escape lives on the two buttons, not on the strip that wraps them: a
-  // role="group" is non-interactive, and hanging key handlers off one is both a
-  // lint error (jsx-a11y/no-noninteractive-element-interactions) and a real a11y
-  // problem — the listener would only ever fire for a pointer user who happened
-  // to focus a descendant anyway. Focus is inside the strip whenever it is open
-  // (it opens onto ยกเลิก), so this covers every keyboard path that can reach it.
-  const dismissOnEscape = (event) => { if (event.key === 'Escape') onDisarm(); };
-
-  return (
-    <div
-      className={cn(
-        'flex flex-col gap-2 border-t border-border-subtle px-4 py-3 first:border-t-0',
-        armed && 'bg-warning-bg-soft',
-      )}
-      data-testid="fulfilment-row"
-      data-ticket-id={ticket.id}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3 mobile:flex-col mobile:items-stretch">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-              {ticket.customerName || ticket.title}
-            </strong>
-            {ticket.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
-          </div>
-          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-text-muted">
-            {/* The escape hatch. Everything this page deliberately cannot do —
-                stock reservation, delivery, item weights, documents, the event
-                history — still lives on the deal, and import holds
-                canViewTickets, so /tickets/:id is reachable for them. */}
-            <Link to={`/tickets/${ticket.id}`} className="text-info underline">
-              <code>{ticket.code}</code>
-            </Link>
-            {ticket.projectName ? <span className="truncate">{ticket.projectName}</span> : null}
-            {ticket.dueDate ? <span>กำหนด {formatThaiDate(ticket.dueDate)}</span> : null}
-          </span>
-        </div>
-
-        <StatusBadge tone={ticket.fulfillmentStatus ? stage.tone : 'neutral'}>
-          {fulfilmentStageText(ticket.fulfillmentStatus)}
-        </StatusBadge>
-
-        {armed ? (
-          // Holds the trigger's slot while armed so the row does not reflow
-          // sideways underneath the pointer as the strip opens.
-          <span className="text-xs font-bold text-warning-dark mobile:text-center" aria-hidden="true">
-            รอยืนยัน…
-          </span>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="primary"
-            className="shrink-0 mobile:w-full"
-            aria-expanded={false}
-            aria-controls={stripId}
-            disabled={pending}
-            onClick={() => onArm(ticket.id)}
-            data-testid="fulfilment-action"
-          >
-            {label}
-          </Button>
-        )}
-      </div>
-
-      {armed ? (
-        <div
-          id={stripId}
-          role="group"
-          aria-label={`ยืนยัน${label} — ${ticket.customerName || ticket.title}`}
-          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning-border bg-surface px-3 py-2.5 mobile:flex-col mobile:items-stretch"
-          data-testid="fulfilment-confirm"
-        >
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="flex flex-wrap items-center gap-1.5 text-xs font-bold text-text">
-              <Icon name="triangleAlert" size={14} className="text-warning" />
-              ยืนยัน{label}?
-              <span className="font-normal text-text-muted">
-                {fulfilmentStageText(ticket.fulfillmentStatus)} → {resultStage.label}
-              </span>
-            </span>
-            <span className="text-2xs text-text-muted">
-              ขั้นตอนนี้ย้อนกลับไม่ได้
-              {/* The deal's own payment state, shown because the backend's
-                  issueImportRequest ALSO requires deposit readiness and this page
-                  cannot see availableActions on a list row. Displayed as a fact,
-                  never re-derived as a rule — see the page footer note. */}
-              {ticket.paymentStatus
-                ? ` · สถานะการเงิน: ${PAYMENT_LABELS[ticket.paymentStatus] ?? ticket.paymentStatus}`
-                : ''}
-            </span>
-          </span>
-
-          {/* ยกเลิก first in the DOM so it takes focus and the first Tab stop:
-              the safe option is the default for an irreversible action. */}
-          <span className="flex shrink-0 gap-2 mobile:flex-col">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={onDisarm}
-              onKeyDown={dismissOnEscape}
-              ref={(node) => node?.focus()}
-              data-testid="fulfilment-cancel"
-            >
-              ยกเลิก
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="primary"
-              disabled={pending}
-              onClick={() => onConfirm(ticket.id, code)}
-              onKeyDown={dismissOnEscape}
-              data-testid="fulfilment-confirm-submit"
-            >
-              ยืนยัน
-            </Button>
-          </span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-export function ImportFulfilmentPage({ showToast }) {
+export function ImportFulfilmentPage({ user, showToast }) {
   const queryClient = useQueryClient();
-  const [filterKey, setFilterKey] = useState('ALL');
-  const [armedId, setArmedId] = useState(null);
+  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one
+  // ever reach it) still gets the bars, just without the controls.
+  const editable = user?.role === 'import' || user?.role === 'ceo';
+  const [stepFilter, setStepFilter] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [orderEmail, setOrderEmail] = useState(null); // { factoryName, subject, body } | null
 
-  // Same call and the SAME query key ImportOverview uses, so the dashboard and
-  // this page share one cache entry and can never show different rows. The list
-  // is already role-scoped server-side (TicketRepository.appendRoleScope), so
-  // every row here is one this viewer is allowed to see.
+  // The per-factory rows across every deal Import owns — the SAME cross-deal source
+  // (importProgress.listAll) the dashboard's กำลังขนส่ง awareness reads, so the two
+  // never diverge. Rows are already role-scoped server-side.
+  const rowsQuery = useQuery({
+    queryKey: queryKeys.importProgressAll(),
+    queryFn: () => api.importProgress.listAll().then((r) => r?.items ?? []),
+  });
+  // Joined only for the deal facts a progress row does not carry — customer, project,
+  // due date, overdue. Same call + key the dashboard/ImportOverview use, one cache entry.
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
   });
 
-  /**
-   * The SAME invalidation set DealFulfilmentPanel.invalidateAfterFulfilmentChange
-   * fires. Copied deliberately and kept in lockstep: the two surfaces write the
-   * same column through the same endpoints, so if this page invalidated a
-   * narrower set, a deal advanced here would still render its old stage on
-   * /tickets/:id (and vice versa) until a hard reload.
-   */
-  const invalidateAfterFulfilmentChange = useCallback((ticketId) => {
+  // The SAME invalidation set DealFulfilmentPanel/FactoryImportProgressPanel fire, plus
+  // the cross-deal list this page reads: a deal advanced here must not render its old
+  // step on /tickets/:id (or vice versa) until a reload, and the all-received rollup
+  // moves the deal between this page's active/done groups only once the list refetches.
+  const invalidateAfterAdvance = useCallback((ticketId) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.importProgressAll() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.importProgressForTicket(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-    queryClient.invalidateQueries({ queryKey: queryKeys.ticketDeliveries(ticketId) });
     queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   }, [queryClient]);
 
-  // One mutation for all four transitions, mirroring PricingRequestQueuePage's
-  // pickupMutation shape (mutate from the row, invalidate on success, surface the
-  // server's own message on error).
-  //
-  // That error path is not a formality. This page's button is an AFFORDANCE, not
-  // an authorization: nextFulfilmentActionCode matches on status/fulfillmentStatus
-  // only, while the backend additionally requires deposit readiness for
-  // issueImportRequest and refuses markShipping/markGoodsReceived on a PO-tracked
-  // deal. api.tickets.list rows carry no `availableActions` (importActions.js says
-  // so in its header, which is why DealFulfilmentPanel keeps hasAction() local),
-  // and re-deriving those rules here would be a second copy of a backend rule that
-  // can drift. So the server stays the authority and its Thai 409 message is what
-  // the operator sees.
-  const advanceMutation = useMutation({
-    mutationFn: ({ id, code }) => ACTION_MUTATIONS[code](id),
-    onSuccess: (_data, { id, code }) => {
-      setArmedId(null);
-      showToast?.('success', ACTION_SUCCESS_TOAST[code]);
-      invalidateAfterFulfilmentChange(id);
+  const advance = useMutation({
+    mutationFn: ({ rowId, targetStep }) => api.importProgress.advanceStep(rowId, { targetStep }),
+    onSuccess: (_data, { ticketId, completesDeal }) => {
+      invalidateAfterAdvance(ticketId);
+      // Name the handoff when this advance is the one that finishes the deal — the row
+      // is about to leave the active list, and "done, and it moved on" beats a silent jump.
+      showToast?.('success', completesDeal
+        ? 'รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ'
+        : 'อัปเดตสถานะรายโรงงานแล้ว');
     },
-    onError: (error) => {
-      setArmedId(null);
-      showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ');
-    },
+    onError: (e) => showToast?.('error', e?.message ?? 'อัปเดตไม่สำเร็จ'),
   });
 
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
+  const generateEmail = useMutation({
+    mutationFn: (row) => api.importProgress.generateOrderEmail(row.pricingRequestId, { factoryName: row.factoryName }),
+    onSuccess: (res) => setOrderEmail(res?.template ?? null),
+    onError: (e) => showToast?.('error', e?.message ?? 'สร้างอีเมลไม่สำเร็จ'),
+  });
 
-  // One row per deal sitting on the import axis. The stage decision is
-  // nextFulfilmentActionCode's alone — never re-implemented here — and rows whose
-  // code is not one of this workspace's four (i.e. `recordDelivery`, or null) are
-  // dropped.
-  const rows = useMemo(() => {
-    const stageOrder = (code) => FULFILMENT_ACTION_CODES.indexOf(code);
-    return tickets
-      .map((ticket) => ({ ticket, code: nextFulfilmentActionCode(ticket) }))
-      .filter((row) => FULFILMENT_ACTION_CODES.includes(row.code))
-      .sort((a, b) => {
-        if (Boolean(a.ticket.overdue) !== Boolean(b.ticket.overdue)) return a.ticket.overdue ? -1 : 1;
-        const stageDiff = stageOrder(a.code) - stageOrder(b.code);
-        if (stageDiff !== 0) return stageDiff;
-        return new Date(a.ticket.updatedAt || 0) - new Date(b.ticket.updatedAt || 0);
-      });
-  }, [tickets]);
+  const copyBody = async () => {
+    try {
+      await navigator.clipboard.writeText(orderEmail?.body ?? '');
+      showToast?.('success', 'คัดลอกข้อความอีเมลแล้ว');
+    } catch {
+      showToast?.('error', 'คัดลอกไม่สำเร็จ — เลือกข้อความแล้วคัดลอกเอง');
+    }
+  };
 
-  const counts = useMemo(() => {
-    const next = { ALL: rows.length };
-    FULFILMENT_ACTION_CODES.forEach((code) => { next[code] = 0; });
-    rows.forEach(({ code }) => { next[code] += 1; });
-    return next;
-  }, [rows]);
+  const ticketsById = useMemo(() => {
+    const map = new Map();
+    (ticketsQuery.data ?? []).forEach((t) => map.set(t.id, t));
+    return map;
+  }, [ticketsQuery.data]);
 
-  const visibleRows = useMemo(() => {
+  // Group the flat rows into one entry per deal, joining the deal facts.
+  const deals = useMemo(() => {
+    const byTicket = new Map();
+    (rowsQuery.data ?? []).forEach((row) => {
+      if (!byTicket.has(row.ticketId)) byTicket.set(row.ticketId, []);
+      byTicket.get(row.ticketId).push(row);
+    });
+    return [...byTicket.entries()].map(([ticketId, factoryRows]) => {
+      const ticket = ticketsById.get(ticketId);
+      const rows = [...factoryRows].sort((a, b) => a.factoryName.localeCompare(b.factoryName, 'th'));
+      const received = receivedCount(rows);
+      return {
+        ticketId,
+        ticketCode: factoryRows[0].ticketCode,
+        customerName: ticket?.customerName ?? null,
+        projectName: ticket?.projectName ?? null,
+        title: ticket?.title ?? null,
+        dueDate: ticket?.dueDate ?? null,
+        overdue: Boolean(ticket?.overdue),
+        rows,
+        received,
+        total: rows.length,
+        allReceived: rows.length > 0 && received === rows.length,
+      };
+    });
+  }, [rowsQuery.data, ticketsById]);
+
+  const activeDeals = useMemo(() => deals.filter((d) => !d.allReceived), [deals]);
+  const doneDeals = useMemo(() => deals.filter((d) => d.allReceived), [deals]);
+
+  // Chip counts are a readout of SHIPMENTS (factory rows) per step across active deals —
+  // "5 โรงงานกำลังเดินทาง" answered without a click. ALL is the active shipment total.
+  const stepCounts = useMemo(() => {
+    const counts = { ALL: 0 };
+    IMPORT_STEPS.forEach((s) => { counts[s.code] = 0; });
+    activeDeals.forEach((deal) => deal.rows.forEach((row) => {
+      counts.ALL += 1;
+      if (counts[row.importStep] != null) counts[row.importStep] += 1;
+    }));
+    return counts;
+  }, [activeDeals]);
+
+  const visibleActive = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return rows
-      .filter(({ code }) => filterKey === 'ALL' || code === filterKey)
-      .filter(({ ticket }) => !term || [ticket.customerName, ticket.code, ticket.title, ticket.projectName]
-        .some((field) => (field ?? '').toLowerCase().includes(term)));
-  }, [rows, filterKey, search]);
+    return activeDeals
+      .filter((d) => !term || [d.customerName, d.ticketCode, d.projectName, d.title]
+        .some((f) => (f ?? '').toLowerCase().includes(term)))
+      .filter((d) => stepFilter === 'ALL' || d.rows.some((r) => r.importStep === stepFilter))
+      .sort((a, b) => {
+        if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+        return (a.customerName ?? a.ticketCode ?? '').localeCompare(b.customerName ?? b.ticketCode ?? '', 'th');
+      });
+  }, [activeDeals, stepFilter, search]);
 
-  function selectFilter(key) {
-    setFilterKey(key);
-    // A row armed under one filter must not stay armed into another: the
-    // confirmation names a deal that may no longer be on screen.
-    setArmedId(null);
-  }
+  const isLoading = rowsQuery.isLoading || ticketsQuery.isLoading;
+  const nothingAtAll = !isLoading && deals.length === 0;
+
+  const filterOptions = [{ key: 'ALL', label: 'ทั้งหมด' },
+    ...IMPORT_STEPS.map((s) => ({ key: s.code, label: s.label }))];
 
   return (
     <PageStack>
       <PageHeader
         title="งานนำเข้า"
-        subtitle="เดินงานนำเข้าทีละขั้นได้จากหน้านี้ — ออกคำขอนำเข้า → ส่งคำขอ → ออกเดินทาง → รับเข้าคลัง"
+        subtitle="ติดตามและเลื่อนสถานะนำเข้ารายโรงงาน — สั่งซื้อ → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย → ถึงโกดัง"
         actions={(
           <Button
             type="button"
             variant="icon"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] })}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: queryKeys.importProgressAll() });
+              queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
+            }}
             title="รีเฟรช"
             aria-label="รีเฟรช"
           >
@@ -359,26 +205,25 @@ export function ImportFulfilmentPage({ showToast }) {
 
       <FilterBar>
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ขั้นตอน</span>
-        {[{ key: 'ALL', label: 'ทั้งหมด' },
-          ...FULFILMENT_ACTION_CODES.map((code) => ({ key: code, label: IMPORT_ACTION_LABELS[code] }))]
-          .map((option) => {
-            const active = filterKey === option.key;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                aria-pressed={active}
-                className={cn(
-                  'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold',
-                  active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover',
-                )}
-                onClick={() => selectFilter(option.key)}
-              >
-                {option.label}
-                <span className="tabular-nums opacity-70">{counts[option.key] ?? 0}</span>
-              </button>
-            );
-          })}
+        {filterOptions.map((option) => {
+          const active = stepFilter === option.key;
+          return (
+            <button
+              key={option.key}
+              type="button"
+              aria-pressed={active}
+              className={cn(
+                'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-bold',
+                active ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover',
+              )}
+              onClick={() => setStepFilter(option.key)}
+              data-testid={`step-chip-${option.key}`}
+            >
+              {option.label}
+              <span className="tabular-nums opacity-70">{stepCounts[option.key] ?? 0}</span>
+            </button>
+          );
+        })}
         <label className="ml-auto flex items-center gap-2 mobile:ml-0 mobile:w-full">
           <span className="sr-only">ค้นหาดีล</span>
           <input
@@ -392,38 +237,147 @@ export function ImportFulfilmentPage({ showToast }) {
         </label>
       </FilterBar>
 
-      {ticketsQuery.isLoading ? (
+      {isLoading ? (
         <Panel aria-busy="true" aria-label="กำลังโหลดงานนำเข้า">
           <SkeletonText lines={6} />
         </Panel>
-      ) : visibleRows.length === 0 ? (
+      ) : nothingAtAll ? (
+        <EmptyState
+          icon="check"
+          title="ยังไม่มีงานนำเข้ารายโรงงาน"
+          description="เมื่อฝ่ายนำเข้าเปิดการติดตามนำเข้าของดีล แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
+        />
+      ) : visibleActive.length === 0 && doneDeals.length === 0 ? (
         <EmptyState
           icon="check"
           title="ไม่มีงานนำเข้าในขั้นตอนนี้"
-          description={filterKey === 'ALL' && !search.trim()
-            ? 'งานนำเข้าทั้งหมดดำเนินการครบแล้ว'
-            : 'ลองล้างคำค้นหรือเลือกขั้นตอน "ทั้งหมด"'}
+          description={'ลองล้างคำค้นหรือเลือกขั้นตอน "ทั้งหมด"'}
         />
       ) : (
-        <Panel flush>
-          {visibleRows.map(({ ticket, code }) => (
-            <FulfilmentRow
-              key={ticket.id}
-              ticket={ticket}
-              code={code}
-              armed={armedId === ticket.id}
-              pending={advanceMutation.isPending}
-              onArm={setArmedId}
-              onDisarm={() => setArmedId(null)}
-              onConfirm={(id, actionCode) => advanceMutation.mutate({ id, code: actionCode })}
-            />
+        <div className="flex flex-col gap-3">
+          {visibleActive.map((deal) => (
+            <section
+              key={deal.ticketId}
+              className="rounded-xl border border-border bg-surface-subtle p-3"
+              data-testid="fulfilment-deal"
+              data-ticket-id={deal.ticketId}
+            >
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="min-w-0 truncate text-sm font-extrabold text-text">
+                      {deal.customerName || deal.title || deal.ticketCode}
+                    </strong>
+                    {deal.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
+                  </div>
+                  <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-text-muted">
+                    <Link to={`/tickets/${deal.ticketId}`} className="text-info underline">
+                      <code>{deal.ticketCode}</code>
+                    </Link>
+                    {deal.projectName ? <span className="truncate">{deal.projectName}</span> : null}
+                    {deal.dueDate ? <span>กำหนด {formatThaiDate(deal.dueDate)}</span> : null}
+                  </span>
+                </div>
+                <span className="shrink-0 rounded-full bg-info-bg px-2.5 py-0.5 text-2xs font-bold text-info">
+                  ถึงโกดัง {deal.received}/{deal.total} โรงงาน
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                {deal.rows.map((row) => {
+                  const dim = stepFilter !== 'ALL' && row.importStep !== stepFilter;
+                  return (
+                    <div key={row.id} className={cn('transition-opacity', dim && 'opacity-40')}>
+                      <FactoryProgressBar
+                        row={row}
+                        editable={editable}
+                        advancing={advance.isPending}
+                        onAdvance={(r, targetStep) => advance.mutate({
+                          rowId: r.id,
+                          targetStep,
+                          ticketId: deal.ticketId,
+                          // The completing move: every OTHER factory is already received.
+                          completesDeal: targetStep === 'RECEIVED'
+                            && deal.rows.every((x) => x.id === r.id || x.importStep === 'RECEIVED'),
+                        })}
+                        onGenerateEmail={editable ? (r) => generateEmail.mutate(r) : undefined}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           ))}
-        </Panel>
+
+          {visibleActive.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
+              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูดีลที่รับครบแล้วด้านล่าง
+            </p>
+          ) : null}
+
+          {doneDeals.length > 0 ? (
+            <details className="rounded-xl border border-border bg-surface" data-testid="fulfilment-done">
+              <summary className="cursor-pointer list-none px-4 py-3 text-xs font-bold text-text-muted marker:hidden">
+                <span className="inline-flex items-center gap-2">
+                  <Icon name="check" size={14} className="text-success" />
+                  รับครบแล้ว · รอฝ่ายขายส่งมอบ ({doneDeals.length})
+                </span>
+              </summary>
+              <div className="border-t border-border-subtle">
+                {doneDeals.map((deal) => (
+                  <div
+                    key={deal.ticketId}
+                    className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle px-4 py-2.5 first:border-t-0"
+                  >
+                    <span className="flex flex-wrap items-center gap-x-2 text-xs">
+                      <strong className="text-text">{deal.customerName || deal.title || deal.ticketCode}</strong>
+                      <Link to={`/tickets/${deal.ticketId}`} className="text-info underline">
+                        <code>{deal.ticketCode}</code>
+                      </Link>
+                    </span>
+                    <span className="text-2xs font-bold text-success-dark">
+                      ครบทุกโรงงาน ({deal.total}) → ส่งต่อส่งมอบ
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
+        </div>
       )}
 
       <p className="text-2xs text-text-muted">
         การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของดีลนั้น
       </p>
+
+      {orderEmail ? (
+        <Modal
+          title="อีเมลสั่งซื้อ (ร่าง)"
+          subtitle={orderEmail.factoryName}
+          onClose={() => setOrderEmail(null)}
+          testId="order-email-modal"
+          footer={(
+            <>
+              <Button type="button" variant="secondary" onClick={() => setOrderEmail(null)}>ปิด</Button>
+              <Button type="button" variant="primary" onClick={copyBody}>คัดลอกข้อความ</Button>
+            </>
+          )}
+        >
+          <div className="grid gap-2">
+            <ol className="m-0 list-decimal pl-5 text-xs text-text-muted">
+              <li>คัดลอกข้อความด้านล่าง</li>
+              <li>วางในอีเมล/ช่องทางที่ใช้ส่งโรงงานเอง แล้วส่ง</li>
+              <li>กลับมากดเลื่อนสถานะรายโรงงาน</li>
+            </ol>
+            <div className="text-xs font-bold text-text-muted">หัวข้อ: {orderEmail.subject}</div>
+            <textarea
+              className="form-input min-h-64 font-mono text-xs"
+              readOnly
+              value={orderEmail.body}
+            />
+          </div>
+        </Modal>
+      ) : null}
     </PageStack>
   );
 }

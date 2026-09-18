@@ -286,3 +286,69 @@ service is what proves a role gate, and none was written because no role gate ch
 *stricter* than production here (the safe direction, but still a divergence), so mock-mode clicking
 as `ceo` will fail on all four actions while production would allow them. Not fixed on this branch:
 it is a mockApi authz change, outside a frontend-UI task's scope.
+
+---
+
+## 11. Revision 2026-09-19 — per-factory redesign
+
+**Status:** implemented — branch `feat/per-factory-import-tracking`.
+**What changed:** the whole page. §§2–10 above describe the original DEAL-level workspace; this
+section supersedes §4.2 and §6 for the row model, and leaves the nav/route/audience (§3, §9, §10)
+unchanged.
+
+### Why the original broke
+
+Per-factory import tracking (S12–S17, `sales.factory_import_progress`, the no-PO model — Import
+generates an order-email template per factory and records progress, there is no purchase order)
+changed the premise §4.2 rested on: **a deal is no longer at one `fulfillment_status`.** It has N
+factories, each at its own step. Two concrete bugs followed, both reported:
+
+1. **Mislabelled.** The no-PO flow hides the deal-level ออกคำขอ/ส่งคำขอ buttons, so `fulfillment_status`
+   stays `null` through the whole import phase. `nextFulfilmentActionCode` maps `null` →
+   `issueImportRequest`, so a deal mid-import (some factories already ถึงไทย) sat in the
+   **ออกคำขอนำเข้า** chip as if nothing had started, and the six real per-factory steps had nowhere to show.
+2. **Vanished.** When the all-received rollup set `GOODS_RECEIVED`, `nextFulfilmentActionCode`
+   returned `recordDelivery`, which the workspace filters out — so the deal disappeared with no trace.
+
+### The one thing that changed: the unit
+
+The core principle (§0) holds — **this is "the room", not "a door"; Import advances work here
+without opening N deal pages.** Only the UNIT changed:
+
+| | Original (§4.2) | This revision |
+|---|---|---|
+| Unit of work | a DEAL at one of 4 `fulfillment_status` values | a FACTORY SHIPMENT at one of 6 `import_step` values |
+| Row control | one of 4 `api.tickets.*` deal-level transitions | `api.importProgress.advanceStep` on one factory |
+| Component | bespoke `FulfilmentRow` + confirm strip | `FactoryProgressBar` — the SAME bar shown at the foot of the deal page |
+| Data source | `api.tickets.list` (fulfillmentStatus) | `api.importProgress.listAll`, joined to `api.tickets.list` for customer/due-date only |
+| Grouping | flat rows, 4 status chips | one card per deal (its factory bars together), 6 step chips counting SHIPMENTS |
+| Leaving the page | vanish on GOODS_RECEIVED | drop into a collapsed **รับครบแล้ว · รอส่งมอบ** group, never vanish |
+
+The four deal-level transitions are gone from this page: they are the abandoned pre-per-factory
+mechanism, hidden on the deal page too.
+
+### Decisions (as built)
+
+- **Step filter dims, does not hide.** Selecting a step shows every deal card that has ≥1 factory at
+  that step and dims the non-matching bars, so a deal's context (all its factories) is never lost to
+  a filter. A step with no active shipment hides the active cards but the done group stays.
+- **Completed deals get a named handoff, not a disappearance.** All-received deals collapse into
+  รับครบแล้ว · รอส่งมอบ, and the advance that finishes a deal toasts "รับครบทุกโรงงาน — ส่งต่อฝ่ายขายเพื่อส่งมอบ"
+  — the §4.2 "the row left your workspace, on purpose" principle, applied to the new exit.
+- **Delivery is still not here** (unchanged, §6): Sales's, on the deal's จัดซื้อ-ส่งมอบ tab.
+
+### Alignment with the per-factory reconciliation (Ploy, 2026-09-18)
+
+Forward-compatible with the reconciliation that rebuilds the backend on V154 `import_request`
+per-factory: the unit is already the factory shipment; Import **advances** steps here (it does not
+issue the IR — that is Sales/CEO's, and no longer appears on this page); the six step labels map to
+the reconciliation's CONTACTED/ORDERED/PICKED_UP/IN_TRANSIT/AWAITING_CUSTOMS/RECEIVED. `FactoryProgressBar`
+and the step-list shape are the pieces the reconciliation keeps, so this page's UI carries into its UI PR.
+
+### Verification
+
+`ImportFulfilmentPage.test.jsx` rewritten for the per-factory model (grouping, shipment-count chips,
+in-place advance, done-group placement, step filter, search, empty state). Lint 0 errors, build ok.
+**No authz change on this page** — nav gate/audience (`canActOnFulfilment` = import/ceo) unchanged;
+the delivery-permission change lives in `TicketService.canWriteDelivery` and is unverified (needs a
+real-DB integration test in CI), tracked in the branch commit, not here.
