@@ -46,6 +46,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         editItems: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
+        downloadRemainingInvoice: vi.fn(),
+        remainingInvoiceOptions: vi.fn(),
         // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
         listActivities: vi.fn(),
         addActivity: vi.fn(),
@@ -3160,6 +3162,35 @@ describe('TicketDetailPage', () => {
       // separate histories any more.
       expect(await screen.findByText('สร้างดีล')).not.toBeNull();
       expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
+    });
+  });
+
+  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
+  // the two entry points — DealDocumentRegister.test.jsx pins the other.
+  describe('remaining invoice download entry point (docActions button)', () => {
+    it('clicking "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" opens the RemainingInvoiceDialog rather than downloading directly', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' },
+        }),
+      });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({
+        options: {
+          docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
+          referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
+          noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+          netAmount: 100, vatAmount: 7, totalPayable: 107,
+          quotationOptions: [], defaultQuotationId: null, blockingReason: null,
+        },
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+
+      const button = await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' });
+      fireEvent.click(button);
+
+      expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+      expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
     });
   });
 

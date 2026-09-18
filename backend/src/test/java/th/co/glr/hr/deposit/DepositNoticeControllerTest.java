@@ -2,12 +2,14 @@ package th.co.glr.hr.deposit;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -76,7 +78,9 @@ class DepositNoticeControllerTest {
         // Same BIFF8-template mismatch as above, but for RemainingInvoiceRenderer
         // (templates/remaining_invoice_template.xls) via
         // GET /api/tickets/{ticketId}/remaining-invoice/file.
-        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class))).thenReturn(OLE2_MAGIC_BYTES);
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class),
+                isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(OLE2_MAGIC_BYTES);
 
         mvc.perform(get("/api/tickets/10/remaining-invoice/file").session(session()))
             .andExpect(status().isOk())
@@ -90,6 +94,117 @@ class DepositNoticeControllerTest {
     void remainingInvoiceFileRequiresAuthentication() throws Exception {
         mvc.perform(get("/api/tickets/10/remaining-invoice/file"))
             .andExpect(status().isUnauthorized());
+    }
+
+    // ── finding 3: malformed query params return 400, never an unmapped-exception 500 ────────
+    // Finding 4 (Opus review): these used to assert status() alone, which a regression to a
+    // generic/English "คำขอไม่ถูกต้อง"-style or ApiExceptionHandler#handleBadRequest fallback
+    // message would not catch (still 400, wrong Thai text). Assert the controller's own literal
+    // message too, so that regression is actually caught.
+
+    @Test
+    void remainingInvoiceFileBadIssueDateReturnsBadRequest() throws Exception {
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?issueDate=not-a-date").session(session()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("รูปแบบวันที่ไม่ถูกต้อง (ต้องเป็น YYYY-MM-DD)"));
+    }
+
+    @Test
+    void remainingInvoiceFileBadNoteIdsReturnsBadRequest() throws Exception {
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?noteIds=1,abc,3").session(session()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("รูปแบบรายการหมายเหตุไม่ถูกต้อง"));
+    }
+
+    @Test
+    void remainingInvoiceFileTooLongReferenceReturnsBadRequest() throws Exception {
+        String tooLong = "x".repeat(101);
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?reference=" + tooLong).session(session()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("reference ยาวเกินไป (สูงสุด 100 ตัวอักษร)"));
+    }
+
+    @Test
+    void remainingInvoiceFileTooLongDepositReferenceReturnsBadRequest() throws Exception {
+        String tooLong = "x".repeat(101);
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?depositReference=" + tooLong).session(session()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.message").value("depositReference ยาวเกินไป (สูงสุด 100 ตัวอักษร)"));
+    }
+
+    // ── finding 3 (M8): "" reference means "leave blank" — must reach the service as "", never
+    // silently become null (which would mean "use the default" instead). ─────────────────────
+
+    @Test
+    void remainingInvoiceFileEmptyReferenceIsPassedAsBlankNotNull() throws Exception {
+        // Content-byte assertion (not just status()) is load-bearing: a plain Mockito mock (no
+        // MockitoExtension/strict-stubs here) silently returns null bytes for an UNMATCHED call —
+        // ResponseEntity.ok().body(null) still comes back 200 OK, so a status()-only assertion
+        // cannot tell "the controller called the service with eq(\"\") as stubbed" apart from "the
+        // controller called it with something else entirely and got null back". Asserting the
+        // actual OLE2_MAGIC_BYTES forces the real argument match.
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class),
+                eq(""), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(OLE2_MAGIC_BYTES);
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?reference=").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    }
+
+    @Test
+    void remainingInvoiceFileAbsentReferenceIsPassedAsNull() throws Exception {
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class),
+                isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(OLE2_MAGIC_BYTES);
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    }
+
+    // ── finding 3 (M7): "" noteIds means "no notes" (empty list) — must reach the service as
+    // List.of(), never silently become null (which would mean "use the default selection"). ────
+
+    @Test
+    void remainingInvoiceFileEmptyNoteIdsIsPassedAsEmptyListNotNull() throws Exception {
+        // See remainingInvoiceFileEmptyReferenceIsPassedAsBlankNotNull's own comment: the content
+        // assertion is what actually forces the eq(List.of()) argument match, not status() alone.
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class),
+                isNull(), isNull(), isNull(), eq(List.of()), isNull()))
+            .thenReturn(OLE2_MAGIC_BYTES);
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file?noteIds=").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    }
+
+    @Test
+    void remainingInvoiceFileAbsentNoteIdsIsPassedAsNull() throws Exception {
+        when(service.getRemainingInvoiceXlsx(eq(10L), any(UserPrincipal.class),
+                isNull(), isNull(), isNull(), isNull(), isNull()))
+            .thenReturn(OLE2_MAGIC_BYTES);
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/file").session(session()))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(OLE2_MAGIC_BYTES));
+    }
+
+    @Test
+    void remainingInvoiceOptionsPassesQuotationIdThrough() throws Exception {
+        when(service.getRemainingInvoiceOptions(eq(10L), eq(42L), any(UserPrincipal.class)))
+            .thenReturn(optionsDto());
+
+        mvc.perform(get("/api/tickets/10/remaining-invoice/options?quotationId=42").session(session()))
+            .andExpect(status().isOk());
+    }
+
+    private RemainingInvoiceOptionsDto optionsDto() {
+        return new RemainingInvoiceOptionsDto(
+            "GLRI69001", LocalDate.of(2026, 9, 1), null, List.of(), null, List.of(),
+            List.of(), 0, RemainingInvoiceRenderer.MAX_ITEM_ROWS,
+            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            List.of(), null, null);
     }
 
     @Test

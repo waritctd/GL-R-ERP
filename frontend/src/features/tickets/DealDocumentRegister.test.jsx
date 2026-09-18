@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { api } from '../../api/index.js';
@@ -16,6 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
         downloadRemainingInvoice: vi.fn(),
+        remainingInvoiceOptions: vi.fn(),
       },
       pricingRequests: {
         listCustomerQuotations: vi.fn(),
@@ -186,6 +187,33 @@ describe('DealDocumentRegister', () => {
     const readySection = within(await screen.findByTestId('register-deposit-and-invoice'));
     expect(readySection.getByText('พร้อมใช้งาน')).not.toBeNull();
     expect(readySection.getByRole('button', { name: 'Excel' })).not.toBeNull();
+  });
+
+  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
+  // the two entry points — TicketDetailPage.test.jsx pins the other.
+  it('clicking the Excel action opens the RemainingInvoiceDialog rather than downloading directly', async () => {
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({
+      options: {
+        docNumber: 'GLRI69001', defaultIssueDate: '2026-09-01', defaultReference: null,
+        referenceOptions: [], defaultDepositReference: null, depositReferenceOptions: [],
+        noteTemplates: [], itemCount: 1, maxItems: 22, itemsTotal: 100, depositAmount: 0,
+        netAmount: 100, vatAmount: 7, totalPayable: 107,
+        quotationOptions: [], defaultQuotationId: null, blockingReason: null,
+      },
+    });
+    renderRegister({
+      user: { id: 5, role: 'account' },
+      sections: ACCOUNT_SECTIONS,
+      canViewDocumentsTab: true,
+      summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' },
+    });
+
+    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    fireEvent.click(section.getByRole('button', { name: 'Excel' }));
+
+    expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    // The dialog itself calls the options endpoint — the register never downloads directly.
+    expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
   });
 
   // A from-stock deal never writes GOODS_RECEIVED (import-axis only), so the old gate left this row
