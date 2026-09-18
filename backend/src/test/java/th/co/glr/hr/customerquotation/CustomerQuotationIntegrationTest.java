@@ -483,6 +483,87 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
+    // Quotation numbering (owner ruling 2026-09-18): "{base}-{n}" from the very first document,
+    // matching the direct quotation flow (DealQuotationRepository#baseNumber/#revisionNumber,
+    // shared via QuotationNumbering). See that class's Javadoc for the full rule, including the
+    // legacy-bare-number fallback pinned by createRevision_ofLegacyBareNumberedQuotation_* below.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void create_firstQuotation_getsDashOneSuffix() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        // "QT-<year>-<4-digit seq>-1" -- the suffix from the very first document, not a bare
+        // number. Regex (not a literal seq value) because the sequence is shared, real-DB state.
+        assertThat(draft.number()).matches("QT-\\d{4}-\\d{4}-1");
+    }
+
+    @Test
+    void createRevision_bumpsSameBaseNumber_dash2ThenDash3() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        String base = issued.number().substring(0, issued.number().length() - "-1".length());
+        assertThat(issued.number()).isEqualTo(base + "-1");
+
+        CustomerQuotationDto rev2 = quotationService.createRevision(issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        assertThat(rev2.number()).isEqualTo(base + "-2");
+
+        CustomerQuotationDto rev2Issued = quotationService.issue(rev2.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev3 = quotationService.createRevision(rev2Issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        assertThat(rev3.number()).isEqualTo(base + "-3");
+    }
+
+    @Test
+    void createRevision_ofLegacyBareNumberedQuotation_getsDashTwo() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+
+        // Simulate a quotation issued BEFORE this change: a bare number, no "-1" suffix, at
+        // revisionNo == 1 -- exactly the shape a pre-2026-09-18 production row carries. Writing
+        // directly to sales.quotation (never renamed/migrated by app code per the owner ruling) is
+        // the only way to reproduce that legacy shape in a fresh test fixture.
+        String bareNumber = issued.number().substring(0, issued.number().length() - "-1".length());
+        jdbc.update("UPDATE sales.quotation SET number = :number WHERE quotation_id = :id",
+            Map.of("number", bareNumber, "id", issued.id()));
+
+        CustomerQuotationDto rev2 = quotationService.createRevision(issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        // {bare}-2 -- treating the bare original as version 1. NOT {bare}-1 (would collide
+        // conceptually with the original) and NOT a freshly-minted, unrelated code.
+        assertThat(rev2.number()).isEqualTo(bareNumber + "-2");
+    }
+
+    @Test
+    void quotationNumbers_areNeverReusedAcrossRevisions() {
+        long pricingRequestId = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pricingRequestId,
+            new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
+        CustomerQuotationDto rev1 = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev2 = quotationService.createRevision(rev1.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+        CustomerQuotationDto rev2Issued = quotationService.issue(rev2.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        CustomerQuotationDto rev3 = quotationService.createRevision(rev2Issued.id(),
+            new CreateRevisionRequest(null, UUID.randomUUID().toString()), salesActor);
+
+        List<String> numbers = List.of(rev1.number(), rev2.number(), rev3.number());
+        assertThat(numbers).doesNotHaveDuplicates();
+
+        // The UNIQUE constraint (V6 sales.quotation.number) is the real enforcement -- confirm the
+        // three rows actually persisted three distinct strings, not just three distinct DTOs.
+        Long distinctCount = jdbc.queryForObject(
+            "SELECT COUNT(DISTINCT number) FROM sales.quotation WHERE quotation_id IN (:ids)",
+            Map.of("ids", List.of(rev1.id(), rev2.id(), rev3.id())), Long.class);
+        assertThat(distinctCount).isEqualTo(3L);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
     // Immutability
     // ─────────────────────────────────────────────────────────────────────────────────────
 
