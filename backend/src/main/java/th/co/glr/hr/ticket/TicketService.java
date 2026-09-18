@@ -959,6 +959,52 @@ public class TicketService {
         }
     }
 
+    /**
+     * Rolls the price-free per-factory import tracker ({@code sales.factory_import_progress}, the
+     * no-PO replacement for the dormant factory_purchase_order path) up into {@code
+     * fulfillment_status}. Called by {@code ImportProgressService.advanceStep} once <em>every</em>
+     * factory row for a deal has reached {@code RECEIVED} (S17 — goods at the warehouse), so the
+     * deal-level flag — and thus the ส่งมอบสินค้า delivery gate and the DELIVERY_SCHEDULING (S18)
+     * stage — advance automatically without a separate deal-level click.
+     *
+     * <p><strong>Not a controller entry point.</strong> Same contract as {@link
+     * #applyPurchaseOrderRollup} above: no {@link #requireRole} here — authorisation already
+     * happened inside {@code ImportProgressService} ({@code WRITE_ROLES = {import, ceo}}), and this
+     * method is reachable only from that service. A future reader wiring a controller onto it must
+     * add its own authorisation check first.
+     *
+     * <p>Only ever advances toward GOODS_RECEIVED, and the delivery-axis firewall still holds: a
+     * delivery already started ({@code PARTIALLY_DELIVERED}/{@code FULLY_DELIVERED}), a stock deal
+     * ({@code FROM_STOCK}), or a deal already at GOODS_RECEIVED is left untouched, so a late tracker
+     * write can never clobber the deal back down off the delivery axis or re-fire the side-effects.
+     *
+     * <p><strong>Unlike {@link #applyPurchaseOrderRollup}, a {@code null} fulfillment_status is a
+     * valid pre-advance state here and DOES advance.</strong> The no-PO flow hides the deal-level
+     * ออกคำขอนำเข้า/ส่งคำขอ buttons (the only writers of IR_ISSUED/IR_SENT) whenever the per-factory
+     * tracker is in use, so a tracked deal normally sits at {@code null} on this axis right up to the
+     * moment all factories are received. Gating on {@code isImportAxis} (false for null) as the PO
+     * path does would therefore never open the delivery gate. The firewall is instead expressed as an
+     * explicit delivery-axis denylist so null and the import-axis-behind values (IR_ISSUED, IR_SENT,
+     * SHIPPING) all pass while the delivery-axis values do not.
+     */
+    @Transactional
+    public void applyImportProgressRollup(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        String cur = s.fulfillmentStatus();
+        // Firewall: never clobber a deal that has reached the delivery axis (a delivery started, or a
+        // stock deal), and never re-fire on a deal already at GOODS_RECEIVED. Everything else — null
+        // (the normal no-PO pre-advance state) and the import-axis values behind GOODS_RECEIVED —
+        // advances.
+        boolean deliveryAxisOrDone = FulfilmentStatus.FROM_STOCK.equals(cur)
+            || FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)
+            || FulfilmentStatus.FULLY_DELIVERED.equals(cur)
+            || FulfilmentStatus.GOODS_RECEIVED.equals(cur);
+        if (deliveryAxisOrDone) {
+            return;
+        }
+        applyGoodsReceived(s, actor);
+    }
+
     public List<DeliveryRecordDto> listDeliveries(long ticketId, UserPrincipal actor) {
         requireViewAccess(ticketId, actor);
         return tickets.findDeliveriesByTicket(ticketId);
@@ -2680,11 +2726,10 @@ public class TicketService {
      * Stages 13–14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, the counterpart to
      * stage 12 (PROCUREMENT) belonging to Import.
      *
-     * <p><strong>Additive, not a transfer.</strong> Import and the CEO KEEP delivery access; the
-     * owning rep gains it. Narrowing would have been the tidier reading of the ruling, but it would
-     * remove a live capability the moment it deployed, and no evidence was available that nobody in
-     * import records deliveries today. Widening cannot break anyone. Whether import should later
-     * lose it is a separate, deliberate decision — see this branch's PR body.
+     * <p><strong>A transfer to Sales (owner decision 2026-09).</strong> The owning rep and the CEO
+     * record deliveries; Import no longer does — it owns the import axis (per-factory PROCUREMENT),
+     * Sales owns delivery. This supersedes the earlier additive reading that kept import's access
+     * "until a deliberate decision"; that decision is now made.
      *
      * <p>The single source of truth for BOTH {@code recordPartialDelivery}/{@code completeDelivery}'s
      * gate AND whether {@link #actions} advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY, so the
@@ -2692,7 +2737,12 @@ public class TicketService {
      * {@link #canDeclareStockCoverage} already documents.
      */
     private boolean canWriteDelivery(TicketSummaryDto s, UserPrincipal actor) {
-        return isFulfilmentOrOwningRep(s, actor);
+        // ส่งมอบสินค้า is Sales's (the owning rep); CEO keeps oversight. Import NO LONGER records
+        // deliveries (owner decision 2026-09): import owns the import axis (per-factory PROCUREMENT),
+        // sales owns delivery. Deliberately NOT isFulfilmentOrOwningRep, which still admits import —
+        // that helper stays as-is for canDeclareStockCoverage, its other caller.
+        return "ceo".equals(actor.role())
+            || (SALES_ROLES.contains(actor.role()) && s.createdById() == actor.id());
     }
 
     private void requireDeliveryAccess(TicketSummaryDto s, UserPrincipal actor) {

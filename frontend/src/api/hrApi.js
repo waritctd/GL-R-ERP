@@ -1157,4 +1157,15 @@ export const api = {
       return res.blob();
     },
   },
+  // Mirrors ImportProgressController. Per-factory import progress (S12–S17), price-free: reads are
+  // open to sales/import/ceo, writes to import/ceo (enforced in ImportProgressService).
+  importProgress: {
+    listAll: () => apiRequest(API_ROUTES.importProgress.all),
+    listForPricingRequest: (pricingRequestId) => apiRequest(API_ROUTES.importProgress.forPricingRequest(pricingRequestId)),
+    seedForPricingRequest: (pricingRequestId) => apiRequest(API_ROUTES.importProgress.forPricingRequest(pricingRequestId), { method: 'POST' }),
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.importProgress.forTicket(ticketId)),
+    advanceStep: (id, payload) => apiRequest(API_ROUTES.importProgress.advance(id), { method: 'POST', body: payload }),
+    updateFactory: (id, payload) => apiRequest(API_ROUTES.importProgress.detail(id), { method: 'PATCH', body: payload }),
+    generateOrderEmail: (pricingRequestId, payload) => apiRequest(API_ROUTES.importProgress.orderEmail(pricingRequestId), { method: 'POST', body: payload }),
+  },
 };

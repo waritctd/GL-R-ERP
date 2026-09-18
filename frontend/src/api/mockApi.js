@@ -1974,6 +1974,93 @@ function hasRole(...roles) {
   return user;
 }
 
+// Per-factory import progress (S12–S17) for mock mode. Rows are seeded LAZILY from a deal's own
+// factory quotes (the same per-factory entity Import emails), so the tracker appears on any deal
+// that reached the price-request phase — no hard-coded ticket ids. Persisted in-session so
+// advancing a step sticks. Mirrors ImportProgressController's FactoryImportProgressDto shape.
+const IMPORT_STEP_SEQ = ['IR_SENT', 'ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'CUSTOMS_CLEARANCE', 'RECEIVED'];
+const mockImportProgress = [];
+let mockImportProgressSeq = 9001;
+
+function mockFactoriesForTicket(ticketId) {
+  // Derive from the deal's OWN product items (item.factory) so the tracker always matches the
+  // products shown in the ticket — the same source the deal page renders.
+  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+  const seen = new Set();
+  const out = [];
+  for (const item of ticket?.items ?? []) {
+    const name = item.factory;
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push({ factoryName: name, pricingRequestId: null });
+  }
+  return out;
+}
+
+function mockEnsureImportRows(ticketId) {
+  const tid = Number(ticketId);
+  const now = new Date().toISOString();
+  for (const f of mockFactoriesForTicket(tid)) {
+    if (!mockImportProgress.some((r) => r.ticketId === tid && r.factoryName === f.factoryName)) {
+      mockImportProgress.push({
+        id: mockImportProgressSeq++, pricingRequestId: f.pricingRequestId, pricingRequestCode: null,
+        ticketId: tid, ticketCode: null, factoryName: f.factoryName,
+        // Start at "สั่งซื้อผู้ผลิต" (S13): the IR (S12) reaches Import before tracking begins.
+        importStep: 'ORDERED', importStepAt: now, eta: null, note: null,
+        updatedBy: null, updatedByName: null, updatedAt: now,
+      });
+    }
+  }
+  return mockImportProgress.filter((r) => r.ticketId === tid);
+}
+
+// A dedicated, ready-to-import demo deal so the whole import flow is testable end to end without
+// walking the pricing→quotation chain by hand: it is already at status 'quotation_issued' with no
+// fulfilment yet (so it lands in งานนำเข้า under "ออกคำขอนำเข้า"), and its per-factory tracker is
+// pre-seeded (so the ticket's "ติดตามนำเข้ารายโรงงาน" panel shows factories at different steps).
+// Cloned from a well-formed seeded ticket so every field the deal page needs is present.
+(() => {
+  const DEMO_ID = 9101;
+  const base = db.tickets.find((t) => t.status === 'quotation_issued') ?? db.tickets[0];
+  if (!base || db.tickets.some((t) => t.id === DEMO_ID)) return;
+  // Its OWN product items, each with a factory — the import tracker below uses exactly these
+  // factories, so the panel always matches the deal's products.
+  const mkItem = (id, brand, model, color, texture, size, factory, qty, sortOrder) => ({
+    id, ticketId: DEMO_ID, brand, model, color, texture, size, factory, qty,
+    proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder,
+    qtyDelivered: 0, qtyFromStock: 0, stockNote: null,
+  });
+  const items = [
+    mkItem(9911, 'Cotto', 'Stone Series', 'เทาเข้ม', 'หยาบ', '60x60 ซม.', 'Cotto Industry', 400, 0),
+    mkItem(9912, 'Duragres', 'Granite Plus', 'เทากลาง', 'หยาบกึ่งมัน', '60x60 ซม.', 'Duragres Thailand', 300, 1),
+    mkItem(9913, 'Panaria', 'Trilogy', 'Ivory', 'Lappato', '60x120 cm', 'Panaria SpA', 120, 2),
+  ];
+  db.tickets.push({
+    ...base,
+    id: DEMO_ID,
+    code: 'PR-2026-9101',
+    title: 'ดีลทดสอบนำเข้า (Import demo)',
+    customerName: 'ลูกค้าทดสอบนำเข้า',
+    status: 'quotation_issued',
+    fulfillmentStatus: null,
+    events: [],
+    items,
+    createdAt: '2026-09-01T03:00:00Z',
+    updatedAt: '2026-09-18T03:00:00Z',
+  });
+  const now = new Date().toISOString();
+  [
+    { factoryName: 'Cotto Industry', importStep: 'ORDERED' },
+    { factoryName: 'Duragres Thailand', importStep: 'CUSTOMS_CLEARANCE' },
+    { factoryName: 'Panaria SpA', importStep: 'IN_TRANSIT' },
+  ].forEach((d) => mockImportProgress.push({
+    id: mockImportProgressSeq++, pricingRequestId: null, pricingRequestCode: null,
+    ticketId: DEMO_ID, ticketCode: 'PR-2026-9101', factoryName: d.factoryName,
+    importStep: d.importStep, importStepAt: now, eta: null, note: null,
+    updatedBy: null, updatedByName: 'ฝ่ายนำเข้า', updatedAt: now,
+  }));
+})();
+
 // Mirrors DealEntryAccess.canEnterDeal — who may enter a deal from scratch: create a ticket, or
 // create/read a customer/contact/project on the deal-entry flow (TicketCreateModal /
 // /quotations/new with no ?ticket=). Owner ruling 2026-09-10 widened this from the historical
@@ -6096,7 +6183,9 @@ export const api = {
         // `dealOwner`, which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales")
         // and sales_manager is read+comment oversight only, so widening here would make the mock
         // MORE permissive than production, the one direction CLAUDE.md calls dangerous.
-        if ((['import', 'ceo'].includes(user.role) || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+        // ส่งมอบสินค้า is Sales's (the owning rep) + CEO oversight — import no longer delivers
+        // (owner decision 2026-09). Mirrors TicketService.canWriteDelivery.
+        if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
           add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
           add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
         }
@@ -12766,6 +12855,73 @@ export const api = {
     async downloadXlsx(id) {
       const row = requireDealQuotationRowViewable(id);
       return mockDocPlaceholderBlob(mockDealQuotationDocLines(row));
+    },
+  },
+
+  // Mirrors ImportProgressController — per-factory import progress (S12–S17), price-free.
+  importProgress: {
+    async listAll() {
+      hasRole('import', 'ceo', 'sales', 'sales_manager');
+      return delay({ items: mockImportProgress.map((r) => ({ ...r })) });
+    },
+    async listForPricingRequest(pricingRequestId) {
+      hasRole('import', 'ceo', 'sales', 'sales_manager');
+      const pr = mockPricingRequests.find((p) => p.id === Number(pricingRequestId));
+      if (pr) mockEnsureImportRows(pr.ticketId);
+      return delay({ items: mockImportProgress.filter((r) => r.pricingRequestId === Number(pricingRequestId)).map((r) => ({ ...r })) });
+    },
+    async seedForPricingRequest(pricingRequestId) {
+      hasRole('import', 'ceo');
+      const pr = mockPricingRequests.find((p) => p.id === Number(pricingRequestId));
+      if (pr) mockEnsureImportRows(pr.ticketId);
+      return delay({ items: mockImportProgress.filter((r) => r.pricingRequestId === Number(pricingRequestId)).map((r) => ({ ...r })) });
+    },
+    async listForTicket(ticketId) {
+      hasRole('import', 'ceo', 'sales', 'sales_manager');
+      return delay({ items: mockEnsureImportRows(ticketId).map((r) => ({ ...r })) });
+    },
+    async advanceStep(id, payload) {
+      const user = hasRole('import', 'ceo');
+      const row = mockImportProgress.find((r) => r.id === Number(id));
+      if (!row) fail('ไม่พบสถานะการนำเข้าของโรงงานนี้', 404);
+      const target = payload?.targetStep;
+      const ti = IMPORT_STEP_SEQ.indexOf(target);
+      if (ti < 0) fail('ขั้นการนำเข้าไม่ถูกต้อง', 400);
+      if (ti <= IMPORT_STEP_SEQ.indexOf(row.importStep)) fail('เลื่อนขั้นการนำเข้าถอยหลังหรือซ้ำไม่ได้', 409);
+      row.importStep = target;
+      row.importStepAt = new Date().toISOString();
+      row.updatedAt = row.importStepAt;
+      row.updatedByName = user.name ?? 'Import';
+      // Roll the deal up: once EVERY factory reached the warehouse, the deal is goods-received —
+      // which is what unlocks ส่งมอบสินค้า, with no separate deal-level click.
+      if (target === 'RECEIVED') {
+        const siblings = mockImportProgress.filter((r) => r.ticketId === row.ticketId);
+        if (siblings.length > 0 && siblings.every((r) => r.importStep === 'RECEIVED')) {
+          const ticket = db.tickets.find((t) => t.id === row.ticketId);
+          if (ticket) {
+            ticket.fulfillmentStatus = 'GOODS_RECEIVED';
+            // Goods fully in the warehouse → advance the deal to นัดส่งสินค้า (DELIVERY_SCHEDULING),
+            // the stage after PROCUREMENT, so Sales picks it up for delivery.
+            autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
+          }
+        }
+      }
+      return delay({ row: { ...row } });
+    },
+    async updateFactory(id, payload) {
+      hasRole('import', 'ceo');
+      const row = mockImportProgress.find((r) => r.id === Number(id));
+      if (!row) fail('ไม่พบสถานะการนำเข้าของโรงงานนี้', 404);
+      if (payload && 'eta' in payload) row.eta = payload.eta ?? null;
+      if (payload && 'note' in payload) row.note = payload.note ?? null;
+      row.updatedAt = new Date().toISOString();
+      return delay({ row: { ...row } });
+    },
+    async generateOrderEmail(pricingRequestId, payload) {
+      hasRole('import', 'ceo');
+      const factoryName = payload?.factoryName ?? '(factory)';
+      const body = `Dear ${factoryName} Team,\n\nWe would like to place a purchase order for the following item(s):\n\nReference: (demo)\n\n1. Sample product  [Code: DEMO]\n   Size: 60x60\n   Qty: 100 sqm\n\nPlease confirm the order, unit price, currency and lead time. Thank you.\n`;
+      return delay({ template: { factoryName, subject: `Purchase order - ${factoryName}`, body } });
     },
   },
 };

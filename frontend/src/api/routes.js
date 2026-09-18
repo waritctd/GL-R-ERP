@@ -531,6 +531,15 @@ export const API_ROUTES = {
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
   },
+  // Mirrors ImportProgressController — per-factory import progress (S12–S17), price-free.
+  importProgress: {
+    all: '/api/import-progress',
+    forPricingRequest: (id) => `/api/pricing-requests/${id}/import-progress`,
+    forTicket: (id) => `/api/tickets/${id}/import-progress`,
+    advance: (id) => `/api/factory-import-progress/${id}/advance-step`,
+    detail: (id) => `/api/factory-import-progress/${id}`,
+    orderEmail: (id) => `/api/pricing-requests/${id}/import-order-email`,
+  },
 };
 
 export const ROLE_PERMISSIONS = {
@@ -609,6 +618,10 @@ export const ROLE_PERMISSIONS = {
   canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
+  // ติดตามนำเข้า (/import-tracking) — per-factory import progress (S12–S17), price-free, so sales
+  // may READ it too. Mirrors ImportProgressService.READ_ROLES; WRITE (advancing a step) is
+  // import/ceo, enforced in the service, not by this route gate.
+  canViewImportProgress: ['import', 'ceo', 'sales', 'sales_manager'],
   // งานนำเข้า (/fulfilment) — Import's cross-deal fulfilment workspace, which
   // advances the four stage-12 transitions in place. Mirrors
   // TicketService.FULFILMENT_ROLES = Set.of("import", "ceo") exactly — the gate

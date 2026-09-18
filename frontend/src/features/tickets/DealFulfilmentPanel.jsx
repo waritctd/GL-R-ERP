@@ -8,7 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { nextFulfilmentActionCode } from './importActions.js';
-import { procurementPath } from './stageMeta.js';
+import { FactoryImportProgressPanel } from '../importProgress/FactoryImportProgressPanel.jsx';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
 
@@ -40,37 +40,8 @@ function StepNumber({ no }) {
 // this rendering (read-only, inside its "inner journey" chip strip) per the
 // same precedent Slice S3 set for the deposit-policy chip; this is the
 // action-bearing version.
-function SubstepChips({ currentCode, fromStock = null }) {
-  // Issue #730: this used to walk the flat PROCUREMENT_SUBSTEPS list and mark everything before
-  // the current code "done". That list is a lookup table, not a path — FROM_STOCK sits at index 4,
-  // so a from-stock deal rendered IR-issued / ordered / shipping / goods-received in green, four
-  // milestones it never performed and, per issueImportRequest's own guard, never could have.
-  // procurementPath() returns the journey this deal is actually on, so index-as-progress is true
-  // again. Same defect PR #715 fixed for PICKED_UP/CUSTOMS_CLEARANCE — but FROM_STOCK is written
-  // by reserveStock, so this instance was live, and PR #706 made it more common.
-  const steps = procurementPath(currentCode, fromStock);
-  const currentIdx = steps.findIndex((s) => s.code === currentCode);
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {steps.map((step, i) => {
-        const done = currentIdx >= 0 && i < currentIdx;
-        const current = i === currentIdx;
-        return (
-          <span
-            key={step.code}
-            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold ${
-              done ? 'bg-success-bg text-success-dark'
-                : current ? 'bg-info-bg text-info'
-                  : 'bg-surface-subtle text-text-muted'
-            }`}
-          >
-            {step.label}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
+// (The deal-level SubstepChips progress strip was removed — per-factory import progress
+// (FactoryImportProgressPanel) is now the single source of truth for import status.)
 
 /**
  * "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
@@ -111,6 +82,10 @@ export function DealFulfilmentPanel({
 
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
+  // Reported up by the embedded per-factory tracker. When the deal has factories being tracked, the
+  // deal-level import buttons below are hidden (per-factory advance replaces them); the deal's
+  // GOODS_RECEIVED (which unlocks ส่งมอบสินค้า) rolls up from all factories reaching the warehouse.
+  const [importSummary, setImportSummary] = useState({ hasRows: false, allReceived: false });
   const [stockOpen, setStockOpen] = useState(false);
   const [stockDraft, setStockDraft] = useState({ note: '', lines: {} });
   // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from
@@ -125,14 +100,7 @@ export function DealFulfilmentPanel({
 
   const totalOrdered = items.reduce((sum, item) => sum + Number(item.qty || 0), 0);
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
-  const totalFromStock = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
-  // Which journey this deal walked, for SubstepChips (issue #730). Once the deal reaches a
-  // DELIVERY state its fulfillmentStatus no longer says, but the declaration itself survives on
-  // the lines: reserveStock writes qtyFromStock, and only FULL coverage sets FROM_STOCK. So full
-  // coverage => the from-stock branch; anything less => the import sequence really did run for
-  // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
-  const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
 
   // ── ใบขอซื้อ (F-SM-001) ───────────────────────────────────────────────────────────────────
   // One form per BRAND on the deal (owner ruling), generated on demand — nothing is stored, so the
@@ -365,10 +333,17 @@ export function DealFulfilmentPanel({
             {fs ? <StatusBadge tone={fsLabel.tone}>{fsLabel.label}</StatusBadge> : null}
           </div>
 
-          <SubstepChips currentCode={fs} fromStock={fromStock} />
+          {/* Per-factory import progress (S12–S17) replaces the old deal-level substep chips —
+              one source of truth for "where is each factory". Delivery (step 2) stays below. */}
+          <FactoryImportProgressPanel ticketId={ticketId} user={user} showToast={showToast} embedded onSummary={setImportSummary} />
+          {importSummary.hasRows && !importSummary.allReceived ? (
+            <p className="text-2xs text-text-muted">เลื่อนทุกโรงงานให้ถึงโกดังก่อน จึงจะเปิดให้ส่งมอบสินค้าได้</p>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
-            {can.issueImportRequest ? (
+            {/* Deal-level import buttons are the fallback for a deal with NO per-factory tracking;
+                once factories are tracked, advancing each factory replaces them. */}
+            {!importSummary.hasRows && (can.issueImportRequest ? (
               <Button type="button" variant="primary" disabled={issueIrMutation.isPending}
                 onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
                 ออกคำขอนำเข้า (IR)
@@ -390,7 +365,7 @@ export function DealFulfilmentPanel({
               </Button>
             ) : fs == null ? (
               <p className="text-xs text-text-muted">ยังไม่ออกคำขอนำเข้า</p>
-            ) : null}
+            ) : null)}
             {can.reserveStock ? (
               <Button type="button" variant="secondary" disabled={reserveStockMutation.isPending}
                 onClick={openStockModal} data-testid="deal-fulfilment-reserve-stock">
@@ -482,7 +457,7 @@ export function DealFulfilmentPanel({
                 what actually gates the controls below -- a rep arriving here from the new
                 RECORD_DELIVERY CTA must not find the step badged as someone else's work.
                 sales_manager is absent on purpose: read+comment oversight only. */}
-            <StepRoleTag owners={['sales', 'import', 'ceo']} viewerRole={role} />
+            <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
