@@ -1447,7 +1447,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
  * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
  * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
  * create and carries forward each line's discount for a revision. */
-function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts) {
+function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts, number) {
   const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
   const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
   const id = mockCustomerQuotationSeq++;
@@ -1479,7 +1479,7 @@ function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, pa
     });
   const quotation = {
     id,
-    number: `QT-2026-${String(id).padStart(4, '0')}`,
+    number,
     ticketId: pr.ticketId,
     pricingRequestId: pr.id,
     pricingDecisionId: decision.id,
@@ -4862,24 +4862,48 @@ function nextMockDealQuotationNumber() {
   return `QT-${new Date().getFullYear()}-${String(mockDealQuotationNumberSeq++).padStart(4, '0')}`;
 }
 
+// The pricing-request-chain (customerquotation/) flow's own number-space counter -- kept SEPARATE
+// from mockCustomerQuotationSeq (the id sequence) for the same reason mockDealQuotationNumberSeq
+// is kept separate from mockDealQuotationSeq above: a `number` and an `id` are different concerns
+// even though the real backend's sales.quotation_code_seq happens to be a global sequence shared
+// by BOTH flows' numbers (a fidelity gap this mock already had before today, pre-existing and out
+// of scope here -- the two flows' *own* number counters were already independent of one another).
+// Seeded from mockCustomerQuotationSeq's OWN already-final value (the state-matrix seed block
+// above, top-level code that has already run by the time this line executes, set it to one past
+// every demoSales.js-seeded row's id) -- every seeded row's bare number is literally
+// `QT-2026-{id}` (see demoSales.js#makeQuotation), so starting from the same point can never
+// collide with one of them. Mirrors `mockDealQuotationNumberSeq = 3` right after its own two-row
+// literal seed, just computed instead of hardcoded since this flow's seed count varies with
+// demoSales.js rather than being two fixed literal rows.
+let mockCustomerQuotationNumberSeq = mockCustomerQuotationSeq;
+function nextMockCustomerQuotationNumber() {
+  return `QT-${new Date().getFullYear()}-${String(mockCustomerQuotationNumberSeq++).padStart(4, '0')}`;
+}
+
 // A revision child's number is `{base}-{revisionNo}` -- INCLUDING revision 1 (owner feedback
-// 2026-09-11: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1") -- mirrors
-// DealQuotationRepository.baseNumber/.revisionNumber exactly. `dealQuotationBaseNumber` strips a
-// source number's own `-{sourceRevisionNo}` suffix to recover the ORIGINAL base number regardless
-// of how many times the chain has already been revised, without walking parentQuotationId to the
-// root.
+// 2026-09-11 on the direct-quotation flow: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น
+// QT-2026-0014-1"; re-confirmed 2026-09-18 for the pricing-request-chain/customer-quotation flow)
+// -- mirrors the real backend's shared `th.co.glr.hr.ticket.QuotationNumbering` exactly (both
+// DealQuotationRepository and CustomerQuotationService call that one class; this pair of functions
+// is this mock's equivalent single shared implementation, used by BOTH mockDealQuotations'
+// mintDealQuotationRevision/nextMockDealQuotationNumber below AND createCustomerQuotation/
+// createCustomerQuotationRevision further down this file -- not duplicated per flow).
+// `quotationBaseNumber` strips a source number's own `-{sourceRevisionNo}` suffix to recover the
+// ORIGINAL base number regardless of how many times the chain has already been revised, without
+// walking parentQuotationId to the root.
 //
-// Legacy rows: the two seed fixtures below (id 1/2) intentionally keep BARE numbers
+// Legacy rows: the two mockDealQuotations seed fixtures (id 1/2) intentionally keep BARE numbers
 // ('QT-2026-0001'/'QT-2026-0002', no '-1') to stand in for quotations issued before this change --
-// see DealQuotationRepository#baseNumber's Javadoc for why one `endsWith` check (no special-case
-// for sourceRevisionNo === 1) handles both eras: a bare seed number simply never ends with '-1',
-// so it falls through unchanged.
-function dealQuotationBaseNumber(sourceNumber, sourceRevisionNo) {
+// see the real QuotationNumbering#baseNumber's Javadoc for why one `endsWith` check (no
+// special-case for sourceRevisionNo === 1) handles both eras: a bare seed number simply never ends
+// with '-1', so it falls through unchanged. The demoSales.js-seeded mockCustomerQuotations rows
+// are bare for the identical reason (they predate this rule too).
+function quotationBaseNumber(sourceNumber, sourceRevisionNo) {
   const suffix = `-${sourceRevisionNo}`;
   return sourceNumber.endsWith(suffix) ? sourceNumber.slice(0, -suffix.length) : sourceNumber;
 }
 
-function dealQuotationRevisionNumber(baseNumber, revisionNo) {
+function quotationRevisionNumber(baseNumber, revisionNo) {
   return `${baseNumber}-${revisionNo}`;
 }
 
@@ -4918,14 +4942,30 @@ function nextMockDealQuotationRevisionNo(ticketId, base) {
   return max + 1;
 }
 
+// The pricing-request-chain (customerquotation/) flow's own equivalent of
+// nextMockDealQuotationRevisionNo above -- mirrors CustomerQuotationRepository#nextRevisionNo
+// (added alongside the real backend's {base}-{n} numbering change, 2026-09-18) for the same
+// reason: createCustomerQuotationRevision reads `source` before this flow's own advisory-lock
+// equivalent would apply, so `source.quotationRevisionNo + 1` is only correct while `source` is
+// genuinely the highest revision minted off this base. Scoped to pricingRequestId, NOT ticketId
+// (V74's migration comment: quotation_revision_no is "a NEW counter, scoped to the
+// pricing_request" -- unlike the direct-quotation flow's own ticket-scoped counter), matching
+// the real repository method's own WHERE clause exactly.
+function nextMockCustomerQuotationRevisionNo(pricingRequestId, base) {
+  const max = mockCustomerQuotations
+    .filter((q) => q.pricingRequestId === pricingRequestId && (q.number === base || q.number.startsWith(`${base}-`)))
+    .reduce((m, q) => Math.max(m, q.quotationRevisionNo ?? 0), 0);
+  return max + 1;
+}
+
 function mintDealQuotationRevision(parent, user) {
   const now = new Date().toISOString();
-  const base = dealQuotationBaseNumber(parent.number, parent.revisionNo);
+  const base = quotationBaseNumber(parent.number, parent.revisionNo);
   const revisionNo = nextMockDealQuotationRevisionNo(parent.ticketId, base);
   return {
     ...structuredClone(parent),
     id: mockDealQuotationSeq++,
-    number: dealQuotationRevisionNumber(base, revisionNo),
+    number: quotationRevisionNumber(base, revisionNo),
     docStatus: 'DRAFT',
     revisionNo,
     parentQuotationId: parent.id,
@@ -11748,7 +11788,11 @@ export const api = {
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
-      const quotation = buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, null, 1, {});
+      // Owner ruling 2026-09-18: the FIRST quotation on this chain is "QT-<year>-<seq>-1", the
+      // suffix starting at 1 from the very first document -- same format as the direct quotation
+      // flow, via the SAME shared quotationRevisionNumber/quotationBaseNumber helpers above.
+      const number = quotationRevisionNumber(nextMockCustomerQuotationNumber(), 1);
+      const quotation = buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, null, 1, {}, number);
       mockCustomerQuotations.push(quotation);
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status, 'สร้างร่างใบเสนอราคาลูกค้า');
       return delay({ quotation });
@@ -11908,11 +11952,17 @@ export const api = {
       // Preserve each prior line's discount by pricingRequestItemId, same as the real service.
       const priorDiscounts = {};
       source.items.forEach((item) => { priorDiscounts[item.pricingRequestItemId] = item.salesDiscount; });
+      // Owner ruling 2026-09-18: a revision keeps the SAME base number and bumps the "-n" suffix
+      // (quotationBaseNumber handles the legacy-bare-number fallback -- a pre-ruling seed row with
+      // no "-1" suffix at revisionNo 1 revises to "{bare}-2", not "{bare}-1" or a fresh code).
+      const base = quotationBaseNumber(source.number, source.quotationRevisionNo);
+      const newRevisionNo = nextMockCustomerQuotationRevisionNo(pr.id, base);
+      const number = quotationRevisionNumber(base, newRevisionNo);
       const revision = buildMockCustomerQuotationDraft(pr, decision, ticket, user, {
         paymentTerms: source.paymentTerms, leadTime: source.leadTime, deliveryTerms: source.deliveryTerms,
         validityDate: source.validityDate, customerNotes: source.customerNotes,
         clientRequestId: payload.clientRequestId,
-      }, source.id, source.quotationRevisionNo + 1, priorDiscounts);
+      }, source.id, newRevisionNo, priorDiscounts, number);
       mockCustomerQuotations.push(revision);
       source.docStatus = 'SUPERSEDED';
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_REVISED', null, null,
@@ -12461,8 +12511,8 @@ export const api = {
         id: mockDealQuotationSeq++,
         // Owner feedback 2026-09-11: the FIRST issued document now carries the revision suffix
         // too -- "QT-2026-0014-1", not a bare "QT-2026-0014". Mirrors
-        // DealQuotationService#create's own dealQuotationRevisionNumber(nextQuotationCode(), 1).
-        number: dealQuotationRevisionNumber(nextMockDealQuotationNumber(), 1),
+        // DealQuotationService#create's own quotationRevisionNumber(nextQuotationCode(), 1).
+        number: quotationRevisionNumber(nextMockDealQuotationNumber(), 1),
         ticketId: ticket.id,
         docStatus: 'DRAFT',
         revisionNo: 1,

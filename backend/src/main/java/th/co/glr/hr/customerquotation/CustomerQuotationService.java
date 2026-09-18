@@ -38,6 +38,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.ticket.DealLifecycle;
+import th.co.glr.hr.ticket.QuotationNumbering;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RelatedDocumentType;
@@ -153,8 +154,13 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
+        // Owner ruling 2026-09-18: the FIRST quotation on this chain is numbered exactly like the
+        // direct quotation flow already is — "QT-<year>-<seq>-1", the suffix starting at 1 from
+        // the very first document, not a bare number. QuotationNumbering is shared with
+        // DealQuotationRepository so the two flows can never drift on this format.
+        String number = QuotationNumbering.revisionNumber(quotations.nextQuotationCode(), 1);
         long id = quotations.insertDraft(new InsertDraftParams(
-            summary.ticketId(), pricingRequestId, salesView.pricingDecisionId(), summary.recipientType(),
+            summary.ticketId(), number, pricingRequestId, salesView.pricingDecisionId(), summary.recipientType(),
             summary.recipientLabel(), actor.id(), clientRequestId, blankToNull(request.paymentTerms()),
             blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate(),
             blankToNull(request.customerNotes()), null, 1, subtotal, salesView.currency(),
@@ -467,11 +473,28 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
+        // Owner ruling 2026-09-18: a revision is versioning, not a new document — it keeps the
+        // SAME base number and bumps the "-n" suffix, exactly like the direct quotation flow
+        // (DealQuotationRepository#baseNumber/#revisionNumber, shared here via
+        // QuotationNumbering). This used to call quotations.nextQuotationCode() and mint an
+        // entirely unrelated number for every revision.
+        //
+        // baseNumber() also carries the legacy-bare-number fallback: a quotation issued BEFORE
+        // this change has no "-1" suffix at revisionNo == 1 (those rows are never rewritten — see
+        // QuotationNumbering's Javadoc), so revising one produces "{bare}-2", not "{bare}-1" and
+        // not a fresh code.
+        // nextRevisionNo (not source.quotationRevisionNo() + 1) — see that repository method's own
+        // Javadoc: source is read before lockPricingRequest's advisory lock, so a concurrent second
+        // caller against the same still-ISSUED quotation must not recompute the SAME revision
+        // number a winning racer already committed.
+        String baseNumber = QuotationNumbering.baseNumber(source.number(), source.quotationRevisionNo());
+        int newRevisionNo = quotations.nextRevisionNo(summary.id(), baseNumber);
+        String number = QuotationNumbering.revisionNumber(baseNumber, newRevisionNo);
         long newId = quotations.insertDraft(new InsertDraftParams(
-            summary.ticketId(), summary.id(), salesView.pricingDecisionId(), summary.recipientType(),
+            summary.ticketId(), number, summary.id(), salesView.pricingDecisionId(), summary.recipientType(),
             summary.recipientLabel(), actor.id(), clientRequestId, source.paymentTerms(), source.leadTime(),
             source.deliveryTerms(), source.validityDate(), source.customerNotes(), source.id(),
-            source.quotationRevisionNo() + 1, subtotal, salesView.currency(), ticket.customerName(),
+            newRevisionNo, subtotal, salesView.currency(), ticket.customerName(),
             customer != null ? customer.address() : null, customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null, ticket.projectName(), items));
 
@@ -480,7 +503,7 @@ public class CustomerQuotationService {
         quotations.supersede(source.id());
 
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_REVISED,
-            "สร้างใบเสนอราคาลูกค้า revision " + (source.quotationRevisionNo() + 1)
+            "สร้างใบเสนอราคาลูกค้า revision " + newRevisionNo
                 + (request.reason() != null && !request.reason().isBlank() ? " — " + request.reason().trim() : ""));
         CustomerQuotationDto created = requireQuotation(newId);
         // Currently inert here too (see create()'s identical comment) — every item on a revision

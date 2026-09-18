@@ -50,6 +50,39 @@ public class CustomerQuotationRepository {
         jdbc.query("SELECT pg_advisory_xact_lock(:id)", Map.of("id", pricingRequestId), (rs, rowNum) -> 0);
     }
 
+    /**
+     * The next unused revision number for the chain {@code baseNumber} belongs to, scoped to this
+     * pricing request (V74's migration comment: {@code quotation_revision_no} is "a NEW counter,
+     * scoped to the pricing_request") — MAX across every row that has EVER existed under this base
+     * (exact match, or the {@code {base}-N} suffix pattern {@link
+     * th.co.glr.hr.ticket.QuotationNumbering#revisionNumber} produces) plus one.
+     *
+     * <p>Added alongside the {@code {base}-{n}} numbering change (owner ruling 2026-09-18), for
+     * the same reason {@code DealQuotationRepository#nextRevisionNo} exists on the direct-quotation
+     * side: {@code source.quotationRevisionNo() + 1} is only correct while {@code source} is
+     * genuinely the highest revision minted off this base. {@link CustomerQuotationService
+     * #createRevision} reads {@code source} BEFORE taking {@link #lockPricingRequest}'s advisory
+     * lock, so two concurrent calls against the same still-ISSUED quotation can both compute the
+     * SAME stale {@code revisionNo + 1} — before this method, that raced two inserts onto the
+     * SAME {@code {base}-N} string, a real UNIQUE-constraint (V6) duplicate-key crash for the
+     * second caller. Called under the same lock hold {@code createRevision} already takes, so by
+     * the time this query runs, any transaction that won the race has already committed and is
+     * visible — the loser's query legitimately returns one higher, not a collision.
+     */
+    public int nextRevisionNo(long pricingRequestId, String baseNumber) {
+        Integer max = jdbc.queryForObject("""
+            SELECT COALESCE(MAX(quotation_revision_no), 0) FROM sales.quotation
+             WHERE pricing_request_id = :pricingRequestId
+               AND (number = :baseNumber OR number LIKE :basePrefix)
+            """,
+            new MapSqlParameterSource()
+                .addValue("pricingRequestId", pricingRequestId)
+                .addValue("baseNumber", baseNumber)
+                .addValue("basePrefix", baseNumber + "-%"),
+            Integer.class);
+        return (max == null ? 0 : max) + 1;
+    }
+
     public Optional<Long> findIdByClientRequestId(long issuedBy, String clientRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
@@ -104,8 +137,16 @@ public class CustomerQuotationRepository {
         // having nothing to append after "กระเบื้อง" — restoring all five.
         String brand, String model, String color, String texture, String size, String rawUnit) {}
 
+    /**
+     * {@code number} (added 2026-09-18): the CALLER now computes the full {@code {base}-{n}}
+     * string via {@link th.co.glr.hr.ticket.QuotationNumbering} — this repository no longer mints
+     * it internally (it used to call {@link #nextQuotationCode} unconditionally here, which is
+     * exactly why a revision used to get a brand-new code instead of a suffix bump on its base).
+     * Mirrors {@code DealQuotationRepository.InsertDraftParams}'s own {@code number} field/same
+     * division of responsibility: the repository persists, the service decides the number.
+     */
     public record InsertDraftParams(
-        long ticketId, long pricingRequestId, long pricingDecisionId, String recipientType,
+        long ticketId, String number, long pricingRequestId, long pricingDecisionId, String recipientType,
         String recipientLabel, long actorId, String clientRequestId, String paymentTerms,
         String leadTime, String deliveryTerms, LocalDate validityDate, String customerNotes,
         Long parentQuotationId, int quotationRevisionNo, BigDecimal subtotal, String currency,
@@ -127,7 +168,6 @@ public class CustomerQuotationRepository {
             """, new MapSqlParameterSource().addValue("ticketId", p.ticketId())
                 .addValue("recipientType", p.recipientType()), Integer.class);
         int nextVersion = (maxVersion == null ? 0 : maxVersion) + 1;
-        String number = nextQuotationCode();
 
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
@@ -146,7 +186,7 @@ public class CustomerQuotationRepository {
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
-                .addValue("number", number)
+                .addValue("number", p.number())
                 .addValue("issuedBy", p.actorId())
                 .addValue("totalAmount", p.subtotal())
                 .addValue("currency", p.currency())
