@@ -33,6 +33,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
@@ -457,10 +458,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("1");
 
         // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService's resolveItems persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
@@ -535,10 +543,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService's resolveItems persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอตัดรายการ B ออก", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",
@@ -602,14 +617,24 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketItemAId = created.items().get(0).id();
         long ticketItemBId = created.items().get(1).id();
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=qty keeps the derived requestedQty byte-identical to `qtyA`/`qtyB`.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A", null, null,
-            "60x60", FACTORY, qtyA, qtyA, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qtyA.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.PricingRequestItemRequest itemB = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemBId, catalogProductIdB, null, "SCG", "Tile B", "SCG Tile B", null, null,
-            "60x60", FACTORY, qtyB, qtyB, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemBId, catalogProductIdB, null, "SCG", "Tile B", "SCG Tile B",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qtyB.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "step 8 two-item walk", UUID.randomUUID().toString(),
@@ -716,10 +741,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
-            "60x60", FACTORY, quantity, quantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemId, catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, quantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "step 8 acceptance walk", UUID.randomUUID().toString(), List.of(item));
@@ -743,10 +775,17 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * fixture in one direction and the subject under test in the other.
      */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item resolveItems persists — requestedQty/
+        // requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=newQuantity keeps the derived requestedQty byte-identical to `newQuantity`.
         PricingRequestRequests.PricingRequestItemRequest revisedItem = new PricingRequestRequests.PricingRequestItemRequest(
-            deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory", null, null,
-            "60x60", FACTORY, newQuantity, newQuantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
+            "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, newQuantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         CustomerChangeRevisionRequest revisionRequest = new CustomerChangeRevisionRequest(
             "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
             "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB",

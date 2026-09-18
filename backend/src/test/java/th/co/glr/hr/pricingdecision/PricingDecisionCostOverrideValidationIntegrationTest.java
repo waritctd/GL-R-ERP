@@ -27,6 +27,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -53,7 +54,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -456,14 +456,20 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
             UUID.randomUUID().toString());
     }
 
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+    // quantity are now required on every item PricingRequestService#createDraft persists —
+    // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.CreatePricingRequestRequest oneItemPricingRequest() {
         return new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "cost override validation request", UUID.randomUUID().toString(),
             List.of(new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null,
-                "SCG", "Tile OV", "SCG Tile OV", null, null, "60x60", "Factory OverrideValidation",
-                new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-                QuantityType.CONFIRMED, null, null, null)));
+                "SCG", "Tile OV", "SCG Tile OV", "White", "Matte", "60x60", "Factory OverrideValidation",
+                null, null, null, null,
+                QuantityType.CONFIRMED, null, null, null,
+                null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+                null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+                false, "ไทย-สต็อก", 3, 7, null, null, null)));
     }
 
     private TicketItemRequest ticketItem() {

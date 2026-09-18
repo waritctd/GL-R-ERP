@@ -56,9 +56,23 @@ async function driveTicketToAcceptedQuotation() {
       brand: 'SCG',
       model: 'Tile Mock',
       factory: 'Panaria SpA',
-      requestedQty: 10,
-      requestedUnit: 'แผ่น',
-      requestedUnitBasis: 'PER_PIECE',
+      // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+      // required on every item create() persists. PIECES mode + roundToFullBox:false keeps the
+      // derived requestedQty an exact 10, matching what this fixture always meant.
+      color: 'ขาว',
+      texture: 'ด้าน',
+      size: '60x60',
+      thicknessMm: 10,
+      sqmPerPiece: 0.36,
+      quantityMode: 'PIECES',
+      piecesInput: 10,
+      wastageMode: 'NONE',
+      piecesPerBox: 4,
+      roundToFullBox: false,
+      // GLA-125: required on this form too.
+      originCountry: 'ไทย-สต็อก',
+      leadTimeMinDays: 3,
+      leadTimeMaxDays: 7,
       quantityType: 'ESTIMATE',
     }],
   });

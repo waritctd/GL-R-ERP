@@ -7,9 +7,11 @@ import { api } from '../../api/index.js';
 globalThis.React = React;
 
 // The component fetches Pricing Request attachments (V69) whenever a persisted id is available
-// (createdId after save, or initialSummary.id in edit mode) and searches the catalog picker on
-// typing — neither is under test here, so both are stubbed to resolve emptily rather than
-// hitting the network and polluting assertions that expect exactly one alert.
+// (createdId after save, or initialSummary.id in edit mode), QuotationItemRow's own รุ่น
+// typeahead searches the catalog on typing, and (GLA-125) the header-terms section fetches the
+// same eligible-display-name list the direct-deal quotation editor uses — none of these are
+// under test in most cases here, so all three are stubbed to resolve emptily rather than hitting
+// the network and polluting assertions.
 vi.mock('../../api/index.js', () => ({
   api: {
     catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) },
@@ -18,6 +20,15 @@ vi.mock('../../api/index.js', () => ({
       uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
       deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
     },
+    dealQuotations: {
+      displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+    },
+    // GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker) fetches this whenever a customerId
+    // is present -- most tests here never set one (deal defaults to null), so it stays unmocked
+    // for those; the tests that DO set customerId configure this themselves per-test.
+    customers: {
+      contacts: vi.fn().mockResolvedValue({ contacts: [] }),
+    },
   },
 }));
 
@@ -25,7 +36,6 @@ function ticketItem(overrides = {}) {
   return {
     id: 501,
     brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
-    factory: 'SCG Ceramics',
     unitBasis: 'PIECE',
     qty: 400,
     qtySqm: null,
@@ -51,89 +61,155 @@ function renderModal(overrides = {}) {
   return { createFn, submitFn, onClose, onCreated };
 }
 
+// A row that satisfies every V185 required field (owner ruling: the PCR item form is the
+// direct-deal quotation's TILE row minus price/discount) — used to fill in the gaps
+// emptyItemFromTicketItem's seed leaves blank (thicknessMm has no ticket_item source at all,
+// piecesPerBox likewise), so a "happy path" test can reach createFn/updateFn/createRevisionFn.
+function fillRequiredFields() {
+  // Fills every V185-required field a fixture might still be missing — safe to call whether the
+  // row seeded from a ticket item (color/texture/size already present) or started fully blank.
+  if (!screen.getByLabelText(/^สี/).value) fireEvent.change(screen.getByLabelText(/^สี/), { target: { value: 'ขาว' } });
+  if (!screen.getByLabelText(/^ผิว/).value) fireEvent.change(screen.getByLabelText(/^ผิว/), { target: { value: 'ด้าน' } });
+  if (!screen.getByLabelText(/^ขนาด \(ซม\.\)/).value) {
+    fireEvent.change(screen.getByLabelText(/^ขนาด \(ซม\.\)/), { target: { value: '60x60' } });
+  }
+  fireEvent.change(screen.getByLabelText(/^ความหนา \(มม\.\)/), { target: { value: '10' } });
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
+  fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '4' } });
+  // GLA-125: ประเทศต้นทาง is now required too -- picking a fixed-list country (not อื่นๆ)
+  // auto-fills leadTimeMinDays/leadTimeMaxDays via QuotationItemRow's own onOriginChange, so
+  // that satisfies the ระยะเวลานำเข้า requirement as a side effect, exactly as it does for a rep
+  // clicking through the real form.
+  if (!screen.getByLabelText(/^ประเทศต้นทาง/).value) {
+    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
+  }
+}
+
 describe('PricingRequestCreateModal', () => {
-  it('seeds the item row unit from the deal item\'s unitBasis (PIECE -> แผ่น) and its qty', () => {
+  it('seeds the item row quantity mode/value from the deal item\'s unitBasis (PIECE -> PIECES) and its qty', () => {
     renderModal();
-    // "หน่วย *" input — pre-filled, not left blank, unlike the pre-fix behaviour.
-    expect(screen.getByDisplayValue('แผ่น')).not.toBeNull();
+    // "จำนวน" combined toggle+input — PIECES mode selected, value 400.
+    expect(screen.getByRole('button', { name: 'แผ่น', pressed: true })).not.toBeNull();
     expect(screen.getByDisplayValue('400')).not.toBeNull();
   });
 
-  it('seeds ตร.ม. and the sqm quantity for an SQM-basis deal item', () => {
+  it('seeds AREA mode and the sqm quantity for an SQM-basis deal item', () => {
     renderModal({ ticketItems: [ticketItem({ unitBasis: 'SQM', qty: 400, qtySqm: 144 })] });
-    expect(screen.getByDisplayValue('ตร.ม.')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'ตร.ม.', pressed: true })).not.toBeNull();
     expect(screen.getByDisplayValue('144')).not.toBeNull();
   });
 
-  it('blocks submission client-side when a unit is cleared, instead of sending a blank unit', async () => {
+  it('seeds sqmPerPiece from the ticket item when the deal line carries one', () => {
+    renderModal({ ticketItems: [ticketItem({ sqmPerPiece: 0.36 })] });
+    // แผ่น/ตร.ม. shows the RECIPROCAL (piecesPerSqm), same convention as the direct-deal row.
+    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).not.toBe('');
+  });
+
+  // Owner ruling 2026-09-18 (reversed from an earlier ยี่ห้อ ruling): the OLD free-text factory
+  // input is gone, but the field that replaces it (QuotationItemRow's brand field, via
+  // `brandLabel="โรงงาน"`) is deliberately LABELLED โรงงาน on this form — see
+  // PricingRequestCreateModal.jsx's own module Javadoc. There is exactly one โรงงาน-labelled
+  // input, and it holds `brand`, not a separate factory field.
+  it('labels the brand field โรงงาน (owner ruling), and renders no unit-basis select or a dedicated รายละเอียดสินค้า box', () => {
+    renderModal();
+    expect(screen.getAllByLabelText(/^โรงงาน/)).toHaveLength(1);
+    expect(screen.queryByLabelText('รายละเอียดสินค้า')).toBeNull();
+    expect(screen.queryByText('-- เลือกหน่วย --')).toBeNull();
+  });
+
+  it('renders no price/discount input anywhere on the item row (CEO pricing is a later phase)', () => {
+    renderModal();
+    // Scoped to the per-ITEM price labels specifically -- "ราคาเป้าหมายของลูกค้า" is a top-level
+    // form field (the customer's OWN target price, unrelated to the item row's own price/unit).
+    expect(screen.queryByLabelText(/^ราคา\/หน่วย/)).toBeNull();
+    expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
+  });
+
+  it('blocks submission with a per-row error when a required field (ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง) is left blank', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    const unitInput = screen.getByDisplayValue('แผ่น');
-    fireEvent.change(unitInput, { target: { value: '' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain('กรุณากรอกหน่วยของทุกรายการ');
+    expect(await screen.findByText('กรุณาระบุความหนา (มม.)')).not.toBeNull();
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  it('blocks submission client-side when quantity is zero', async () => {
+  it('shows a client-side hint when an AREA-mode quantity derives to 0 pieces (Opus review #2 -- mirrors the server\'s own zero-piece rejection)', async () => {
     const { createFn } = renderModal();
-    const qtyInput = screen.getByDisplayValue('400');
-    fireEvent.change(qtyInput, { target: { value: '0' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    // Switch to AREA mode and set a tiny area against a small piece-per-sqm figure -- 0.3 m² at
+    // แผ่น/ตร.ม. 1.39 (sqmPerPiece ≈ 0.72) rounds DOWN to 0 pieces, the same fixture
+    // mockApi.pricingRequests.test.js's own zero-piece test uses.
+    fireEvent.click(screen.getByRole('button', { name: 'ตร.ม.' }));
+    fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '0.3' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain('กรุณากรอกจำนวนของทุกรายการให้ถูกต้อง');
+    expect(await screen.findByText(/0 ชิ้น/)).not.toBeNull();
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  // Mirrors PricingRequestService.validateItems: a line with no
-  // sourceTicketItemId/productId/model/productDescription
-  // does not identify a product. Unlike the two tests above, this is reported
-  // per-row (attached to the specific item), not as a single form banner.
-  it('blocks an item with no identity field and shows the error on that specific row', async () => {
+  it('clears the row error once the required fields are filled in, and allows submission', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    await screen.findByText('กรุณาระบุความหนา (มม.)');
+
+    fillRequiredFields();
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('กรุณาระบุความหนา (มม.)')).toBeNull();
+  });
+
+  it('sends the derived payload shape — no requestedQty/requestedUnit/requestedUnitBasis, notes carried as productDescription', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText('หมายเหตุรายการ'), { target: { value: 'ต้องการด่วน' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    const payload = createFn.mock.calls[0][0];
+    expect(payload.items).toHaveLength(1);
+    const item = payload.items[0];
+    expect(item).toMatchObject({
+      brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+      thicknessMm: 10, piecesPerBox: 4, quantityMode: 'PIECES', piecesInput: 400,
+      productDescription: 'ต้องการด่วน',
+    });
+    expect(item.requestedQty).toBeUndefined();
+    expect(item.requestedUnit).toBeUndefined();
+    expect(item.requestedUnitBasis).toBeUndefined();
+    // The fixture's ticketItem() has no `factory` -- confirms the field IS sent (not omitted, as
+    // an earlier version of this form did) but is null when the source ticket item carries none.
+    expect(item.factory).toBeNull();
+  });
+
+  it('carries a factory already on the ticket item through to the create payload (Opus review #1: Import\'s SetItemFactoryRequest must survive a sales save)', async () => {
+    const { createFn } = renderModal({ ticketItems: [ticketItem({ factory: 'โรงงาน A' })] });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    const item = createFn.mock.calls[0][0].items[0];
+    expect(item.factory).toBe('โรงงาน A');
+  });
+
+  it('blocks an item with no model — the identity/completeness gate reuses รุ่น, not a dedicated identity field', async () => {
     const { createFn } = renderModal({ ticketItems: [] }); // no deal items to seed from -> one blank row
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
-    const rowError = await screen.findByRole('alert');
-    expect(rowError.textContent).toContain('ต้องระบุสินค้าที่ต้องการเสนอราคา');
+    expect(await screen.findByText('กรุณาระบุรุ่น')).not.toBeNull();
     expect(createFn).not.toHaveBeenCalled();
-  });
-
-  // The four per-item fields ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ, and the
-  // manual "ค้นหา Catalog" picker, were removed from this form on 2026-08-11 (owner request).
-  // The old "keeps specialRequirement separate from product identity" case lived here and drove
-  // ข้อกำหนดพิเศษ; with no such input it could no longer distinguish anything, and the rule it
-  // covered (brand/free text alone is not a product identity) is still pinned by the
-  // "blocks an item with no identity field" case just above.
-  it('no longer renders the four removed per-item fields, or the catalog search box', () => {
-    renderModal({ ticketItems: [ticketItem()] });
-    expect(screen.queryByLabelText('ข้อกำหนดพิเศษ')).toBeNull();
-    expect(screen.queryByLabelText('สถานที่ส่งมอบ')).toBeNull();
-    expect(screen.queryByLabelText('วันที่ต้องการส่งมอบ')).toBeNull();
-    expect(screen.queryByLabelText(/ลักษณะจำนวน/)).toBeNull();
-    expect(screen.queryByPlaceholderText('รหัสสินค้า / Collection / โรงงาน')).toBeNull();
-  });
-
-  it('clears the row error once productDescription is filled in, and allows submission', async () => {
-    const { createFn } = renderModal({ ticketItems: [] });
-    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-    await screen.findByRole('alert');
-
-    fireEvent.change(screen.getByLabelText('รายละเอียดสินค้า'), { target: { value: 'กระเบื้องพอร์ซเลน 60x60 สีขาว' } });
-    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
-
-    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
-    expect(createFn).toHaveBeenCalledWith(expect.objectContaining({
-      clientRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
-      items: [expect.objectContaining({ productDescription: 'กระเบื้องพอร์ซเลน 60x60 สีขาว' })],
-    }));
-    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('reuses the same clientRequestId when a lost create response is retried', async () => {
@@ -141,6 +217,7 @@ describe('PricingRequestCreateModal', () => {
     renderModal({ createFn });
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await screen.findByRole('alert');
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
@@ -162,6 +239,7 @@ describe('PricingRequestCreateModal', () => {
     renderModal({ createFn, submitFn, updateFn });
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
@@ -183,12 +261,144 @@ describe('PricingRequestCreateModal', () => {
     renderModal({ createFn, submitFn, updateFn });
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
     await screen.findByRole('alert');
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     expect(await screen.findByRole('status')).not.toBeNull();
+  });
+
+  // ── GLA-125 items 1-3 ────────────────────────────────────────────────────────────────────
+  it('picking a fixed-list ประเทศต้นทาง auto-fills ระยะเวลานำเข้า, exactly as the direct-deal form does', () => {
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'จีน' } });
+
+    expect(screen.getByDisplayValue('30')).not.toBeNull();
+    expect(screen.getByDisplayValue('45')).not.toBeNull();
+  });
+
+  it('picking อื่นๆ reveals a required typed-name box, and blocks submission until it is filled', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+    // fillRequiredFields already picked a fixed-list country -- switch to อื่นๆ instead, which
+    // carries no default lead time (ORIGIN_COUNTRY_OPTIONS' own "อื่นๆ" entry), so ระยะเวลานำเข้า
+    // needs typing in by hand too.
+    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อื่นๆ' } });
+    expect(screen.getByLabelText(/^ระบุประเทศต้นทาง/)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+    expect(await screen.findByText('กรุณาระบุชื่อประเทศต้นทาง')).not.toBeNull();
+    expect(createFn).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^ระบุประเทศต้นทาง/), { target: { value: 'เวียดนาม' } });
+    fireEvent.change(screen.getByLabelText(/^ระยะเวลานำเข้า/), { target: { value: '20' } });
+    fireEvent.change(screen.getByLabelText(/^ถึง \(วัน\)/), { target: { value: '25' } });
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    const item = createFn.mock.calls[0][0].items[0];
+    expect(item.originCountry).toBe('อื่นๆ');
+    expect(item.originCountryOther).toBe('เวียดนาม');
+  });
+
+  // ── GLA-125 item 4 (header terms) ───────────────────────────────────────────────────────
+  it('sends the header-terms section (payment term, validity, dept/unit code, omit-honorific) in the create payload', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByLabelText('เครดิต'));
+    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText('ยืนราคา (วัน)'), { target: { value: '15' } });
+    fireEvent.change(screen.getByLabelText('ฝ่าย'), { target: { value: 'ขาย' } });
+    fireEvent.change(screen.getByLabelText('หน่วยงาน / รหัสผู้ออกแบบ'), { target: { value: 'D01' } });
+    // GLA-125 follow-up: this checkbox now lives on the reused QuotationContactPicker (its own
+    // typographic-quote copy, "ไม่เติม “คุณ”..."), not a standalone PCR-only control.
+    fireEvent.click(screen.getByLabelText(/ไม่เติม/));
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0]).toMatchObject({
+      paymentTermMode: 'CREDIT',
+      creditDays: 30,
+      validityDays: 15,
+      deptCode: 'ขาย',
+      unitCode: 'D01',
+      omitContactHonorific: true,
+    });
+  });
+
+  it('never sends creditDays when paymentTermMode is ON_DELIVERY, even if a stale value is still in the field', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+
+    fireEvent.click(screen.getByLabelText('เครดิต'));
+    fireEvent.change(screen.getByLabelText('ระยะเวลาเครดิต (วัน)'), { target: { value: '30' } });
+    fireEvent.click(screen.getByLabelText('ชำระเมื่อส่งมอบ'));
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0]).toMatchObject({ paymentTermMode: 'ON_DELIVERY', creditDays: null });
+  });
+
+  // ── GLA-125 follow-up: ผู้สั่งซื้อ (QuotationContactPicker reuse) ──────────────────────────
+  it('scopes ผู้สั่งซื้อ to the deal\'s customer, and sends the picked contact\'s id as recipientContactId', async () => {
+    api.customers.contacts.mockResolvedValueOnce({
+      contacts: [{ id: 77, firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '0812345678', email: 'somchai@example.com' }],
+    });
+    const { createFn } = renderModal({ deal: { customerId: 501, customerName: 'บริษัท ทดสอบ จำกัด' } });
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+
+    await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(501));
+    fireEvent.change(screen.getByLabelText(/^ผู้สั่งซื้อ/), { target: { value: '77' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0]).toMatchObject({ recipientContactId: 77 });
+  });
+
+  it('leaves ผู้สั่งซื้อ disabled with no customer to scope to, and sends recipientContactId: null', async () => {
+    const { createFn } = renderModal();
+    fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
+    fillRequiredFields();
+
+    expect(screen.getByLabelText(/^ผู้สั่งซื้อ/).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
+
+    await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
+    expect(createFn.mock.calls[0][0]).toMatchObject({ recipientContactId: null });
+  });
+
+  it('a catalogue pick autofills the โรงงาน-labelled brand field from the catalog factory name', async () => {
+    // Keyed on the query text, not mockResolvedValueOnce -- an earlier test's own debounced
+    // (280ms) typeahead call can still be in flight when this test starts (see
+    // QuotationItemRow.test.jsx's identical note on its own catalog-pick test).
+    api.catalog.prices.mockImplementation(async (q) => (
+      (q ?? '').includes('B2')
+        ? { items: [{
+          priceId: 901, productCode: 'PC-901', factoryName: 'SCG Ceramics',
+          collection: 'B2', sizeRaw: '30x30', color: 'ขาว', surface: 'ด้าน',
+          price: 120, currency: 'THB', priceUnit: 'per_piece',
+        }] }
+        : { items: [] }
+    ));
+    renderModal({ ticketItems: [] });
+
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'B2' } });
+    const option = await waitFor(() => screen.getByRole('option', { name: /B2/ }), { timeout: 1000 });
+    fireEvent.mouseDown(option);
+
+    expect(screen.getByDisplayValue('SCG Ceramics')).not.toBeNull();
   });
 });
 
@@ -206,15 +416,18 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       },
       items: [{
         id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
-        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics',
-        requestedQty: 20, requestedUnit: 'แผ่น',
+        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60',
+        thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+        wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+        // GLA-125: required on this form.
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
     };
   }
 
-  it('seeds every field from initialValue and calls updateFn with the full payload on save', async () => {
+  it('seeds every field from initialValue (including หมายเหตุรายการ from productDescription) and calls updateFn with the full payload on save', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
     const onCreated = vi.fn();
     render(
@@ -243,6 +456,150 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
+  it('seeds ผู้สั่งซื้อ from the persisted request\'s recipientContactId/customerId (GLA-125 follow-up), and preserves it on save', async () => {
+    api.customers.contacts.mockResolvedValueOnce({
+      contacts: [{ id: 42, firstName: 'วิภา', lastName: 'ทดสอบ', phone: '0898765432', email: 'wipa@example.com' }],
+    });
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          summary: {
+            ...editInitialValue().summary,
+            recipientContactId: 42,
+            customerId: 501,
+            customerName: 'บริษัท ทดสอบ จำกัด',
+          },
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    // Seeded immediately as the "stand-in" ({ id, firstName: recipientLabel }) even before the
+    // real contact list resolves -- see the `contact` state's own comment.
+    expect(screen.getByLabelText(/^ผู้สั่งซื้อ/).value).toBe('42');
+    await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(501));
+    // Once resolved, the SELECT shows the real contact's name, not the stand-in recipientLabel.
+    await waitFor(() => expect(screen.getByDisplayValue('วิภา ทดสอบ')).not.toBeNull());
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledWith(77, expect.objectContaining({ recipientContactId: 42 })));
+  });
+
+  it('preserves a persisted factory/variantId through an edit save (Opus review #1: this modal has no โรงงาน/variant input, so it must round-trip whatever Import/the catalog snapshot already set instead of nulling it)', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          items: [{
+            ...editInitialValue().items[0],
+            factory: 'โรงงาน A (Import-assigned)',
+            variantId: 909,
+          }],
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={updateFn}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(updateFn).toHaveBeenCalledWith(77, expect.objectContaining({
+      items: [expect.objectContaining({ factory: 'โรงงาน A (Import-assigned)', variantId: 909 })],
+    })));
+  });
+
+  it('seeds a legacy PER_SQM line (no quantityMode at all -- pre-V185 shape) into AREA mode with its stored quantity (Opus review #3)', () => {
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          items: [{
+            id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
+            productDescription: 'กระเบื้องพื้น SCG A1 (เดิม)', texture: 'ด้าน', size: '60x60',
+            // Deliberately NO quantityMode/areaSqm/piecesInput/thicknessMm/sqmPerPiece/piecesPerBox
+            // at all -- exactly the shape a row saved by the OLD (pre-V185) form has. Only the
+            // legacy wire fields survive.
+            requestedUnitBasis: 'PER_SQM', requestedQty: 144, requestedQtySqm: 144,
+            requestedUnit: 'ตร.ม.',
+            wastageMode: null, roundToFullBox: true,
+            quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+          }],
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+
+    // AREA mode selected (not the blank-default's own AREA-with-no-value -- this asserts the
+    // VALUE too), and the จำนวน field shows the legacy quantity, not empty.
+    expect(screen.getByRole('button', { name: 'ตร.ม.', pressed: true })).not.toBeNull();
+    expect(screen.getByDisplayValue('144')).not.toBeNull();
+    // Second-pass review finding N1: a PER_SQM row's requestedQtySqm/requestedQty pair is NOT
+    // pieces × sqmPerPiece (it's the same area counted twice, often exactly equal, as this
+    // fixture's own 144/144 shows) -- deriving "sqmPerPiece" from it would give a fake ~1.0
+    // ตร.ม./แผ่น and have the server order 144 pieces instead of the ~400 a real ~0.36 ตร.ม./แผ่น
+    // tile needs. แผ่น/ตร.ม. must stay BLANK for the rep to fill in, never silently populated.
+    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('');
+  });
+
+  it('DOES derive แผ่น/ตร.ม. for a legacy PER_PIECE line, where requestedQtySqm really was pieces × sqmPerPiece (N1 counterpart)', () => {
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          items: [{
+            id: 10, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
+            productDescription: 'กระเบื้องพื้น SCG A1 (เดิม)', texture: 'ด้าน', size: '60x60',
+            // 400 pieces at a real sqmPerPiece of 0.36 -> requestedQtySqm = 144 (400 * 0.36).
+            // Dividing back out (144 / 400 = 0.36) recovers the REAL figure here, unlike PER_SQM.
+            requestedUnitBasis: 'PER_PIECE', requestedQty: 400, requestedQtySqm: 144,
+            requestedUnit: 'แผ่น',
+            wastageMode: null, roundToFullBox: true,
+            quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+          }],
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'แผ่น', pressed: true })).not.toBeNull();
+    expect(screen.getByDisplayValue('400')).not.toBeNull();
+    // แผ่น/ตร.ม. displays the RECIPROCAL of sqmPerPiece (piecesPerSqm convention) — 1/0.36 ≈ 2.78.
+    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('2.78');
+  });
+
+  it('shows a read-only note (not a blank field) for a legacy PER_BOX line, whose quantity has no AREA/PIECES equivalent', () => {
+    render(
+      <PricingRequestCreateModal
+        mode="edit"
+        initialValue={editInitialValue({
+          items: [{
+            id: 10, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
+            productDescription: null, texture: 'ด้าน', size: '60x60',
+            requestedUnitBasis: 'PER_BOX', requestedQty: 30, requestedUnit: 'กล่อง',
+            wastageMode: null, roundToFullBox: true,
+            quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+          }],
+        })}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+        updateFn={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/30 กล่อง/)).not.toBeNull();
+  });
+
   it('has no "ส่งให้ฝ่ายนำเข้า"/"บันทึกร่าง" buttons — editing a draft never submits or re-creates it', () => {
     render(
       <PricingRequestCreateModal
@@ -262,7 +619,7 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
 // current request verbatim (PricingRequestDetailPage's now-deleted revisionPayload()) and only
 // collect a revision reason, so a customer changing product/quantity/recipient/date could never
 // express it — the new DRAFT was always commercially identical to its parent. Revision mode
-// reuses this same modal (seeding, catalog picker, unit select, attachment uploader) instead.
+// reuses this same modal (seeding, item rows, attachment uploader) instead.
 describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () => {
   function revisionInitialValue(overrides = {}) {
     return {
@@ -277,8 +634,11 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
       },
       items: [{
         id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
-        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60', factory: 'SCG Ceramics',
-        requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
+        productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60',
+        thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+        wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
+        // GLA-125: required on this form.
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
       ...overrides,
@@ -330,7 +690,7 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     expect(submit.disabled).toBe(false);
   });
 
-  it('edits to quantity, recipient, and product description actually reach the payload sent to createRevisionFn', async () => {
+  it('edits to quantity, recipient, and product notes actually reach the payload sent to createRevisionFn', async () => {
     const { createRevisionFn } = renderRevisionModal();
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), {
@@ -347,7 +707,7 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
       revisionReason: 'ลูกค้าเปลี่ยนจำนวนและผู้รับ',
       recipientLabel: 'เจ้าของโครงการ ค. (เปลี่ยนใหม่)',
       items: [expect.objectContaining({
-        requestedQty: 35,
+        piecesInput: 35,
         productDescription: 'กระเบื้องพื้น SCG A1 รุ่นใหม่',
       })],
     }));
@@ -379,13 +739,8 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
 });
 
 // V110 fix ("ทุกอย่างควร autofill ตามข้อมูลขั้นตอนนั้น" / "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก
-// catalog ซ้ำ"): this modal now seeds its catalog link, ผู้รับ label, note, and each row's
-// delivery location from the deal it was opened from — CREATE MODE ONLY. Placed at the end of
-// this file (not interleaved with the suites above) since these tests drive the real (mocked)
-// api.catalog.prices call the fuzzy-fallback effect fires on every create-mode render, and there
-// is no global beforeEach/afterEach resetting that shared vi.fn() between tests in this file —
-// appending here means any queued mockResolvedValueOnce below can only ever affect tests that
-// run after it, never the (already-passed) suites above.
+// catalog ซ้ำ"): this modal seeds its catalog link, ผู้รับ label, and note from the deal it was
+// opened from — CREATE MODE ONLY.
 describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
   function dealFixture(overrides = {}) {
     return {
@@ -402,10 +757,9 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
 
   it('prefills the catalog link and code from the ticket item — no re-search needed', () => {
     renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777' })] });
-
-    // The catalog CODE used to be shown in the (now removed) search box; the seeded link itself
-    // is still surfaced read-only, which is the part V110 exists to prove.
-    expect(screen.getByText('Catalog #777')).not.toBeNull();
+    // QuotationItemRow's own provenance badge ("จาก catalog · <code>"), not a bespoke one.
+    expect(screen.getByText(/จาก catalog/)).not.toBeNull();
+    expect(screen.getByText(/PC-777/)).not.toBeNull();
   });
 
   it("autofills ผู้รับ's label per recipient type, from the deal", () => {
@@ -434,19 +788,10 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
     expect(screen.getByDisplayValue('ผู้ติดต่อ ค.')).not.toBeNull();
   });
 
-  // Was "seeds note from deal.note and each row's deliveryLocation from deal.projectName". The
-  // deliveryLocation half went with the สถานที่ส่งมอบ input on 2026-08-11: with no field to review
-  // or correct it, seeding deal.projectName would have written an unreviewed guess straight into
-  // the request, so a row now starts blank there. The note seed is unaffected and still asserted.
-  it('seeds note from deal.note, and no longer seeds any row from deal.projectName', () => {
+  it('seeds note from deal.note', () => {
     renderModal({ deal: dealFixture() });
-
     expect(screen.getByLabelText(/หมายเหตุถึงฝ่ายนำเข้า/).value).toBe('โน้ตจากขั้นตอนสร้างดีล');
-    expect(screen.queryByLabelText('สถานที่ส่งมอบ')).toBeNull();
-    // Wrong-way-round: the project name must not have leaked into ANY surviving input.
-    expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    // Wrong-way-round: the project name must not have leaked into any surviving input.
     expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
   });
 
@@ -468,8 +813,9 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
           },
           items: [{
             id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
-            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
-            requestedQty: 20, requestedUnit: 'แผ่น', quantityType: 'CONFIRMED',
+            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            piecesPerBox: 4, quantityType: 'CONFIRMED',
             targetDeliveryDate: null, deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: null,
           }],
         }}
@@ -487,48 +833,13 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
     expect(screen.queryByDisplayValue('โน้ตจากขั้นตอนสร้างดีล')).toBeNull();
     expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
   });
-
-  it('revision mode ignores a passed `deal` entirely — every field still seeds from the current request', () => {
-    const createRevisionFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
-    render(
-      <PricingRequestCreateModal
-        mode="revision"
-        initialValue={{
-          summary: {
-            id: 88, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ ข.',
-            requiredDate: null, customerTargetPrice: null, targetCurrency: 'THB',
-            note: 'โน้ตเดิม',
-          },
-          items: [{
-            id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
-            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
-            requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
-            quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: 'ที่ส่งมอบเดิม',
-            specialRequirement: null,
-          }],
-        }}
-        deal={dealFixture()}
-        onClose={vi.fn()}
-        onCreated={vi.fn()}
-        createRevisionFn={createRevisionFn}
-        createFn={vi.fn()}
-        submitFn={vi.fn()}
-        updateFn={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByDisplayValue('เจ้าของโครงการ ข.')).not.toBeNull();
-    expect(screen.getByDisplayValue('โน้ตเดิม')).not.toBeNull();
-    expect(screen.queryByDisplayValue('บริษัท เจ้าของ จำกัด')).toBeNull();
-  });
 });
 
 // Removing the four inputs on 2026-08-11 created a data-loss trap that no other test covers:
 // buildPayload writes the FULL item representation, so if the modal had simply stopped tracking
 // those fields, opening any draft created BEFORE the removal and pressing บันทึกการแก้ไข would
 // have silently nulled four persisted columns. The fields are therefore still seeded from the
-// persisted request and echoed straight back. This is the test that would go red if someone
-// "tidied up" by dropping them from itemFromExisting or hardcoding nulls in buildPayload.
+// persisted request and echoed straight back.
 describe('PricingRequestCreateModal preserves the removed per-item fields through an edit', () => {
   it('echoes back a persisted quantityType/targetDeliveryDate/deliveryLocation/specialRequirement instead of nulling them', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
@@ -542,10 +853,12 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
           },
           items: [{
             id: 5, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
-            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60', factory: null,
-            requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
-            quantityType: 'CONFIRMED', targetDeliveryDate: '2026-09-30',
+            color: 'ขาว', productDescription: '', texture: 'ด้าน', size: '60x60',
+            thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
+            piecesPerBox: 4, quantityType: 'CONFIRMED', targetDeliveryDate: '2026-09-30',
             deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: 'ส่งด่วน',
+            // GLA-125: required on this form.
+            originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
           }],
         }}
         onClose={vi.fn()}
@@ -568,7 +881,11 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
   it('sends the ESTIMATE default and three nulls for a brand-new create-mode row', async () => {
     const { createFn } = renderModal({ ticketItems: [] });
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
-    fireEvent.change(screen.getAllByLabelText('รายละเอียดสินค้า')[0], { target: { value: 'สินค้าใหม่ยังไม่มีใน catalog' } });
+    fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'สินค้าใหม่ยังไม่มีใน catalog' } });
+    fillRequiredFields();
+    // "จำนวน"'s FormField htmlFor points straight at the numeric input (id `qty-0`) — PIECES
+    // mode by default on a blank row, same as ticketItem()'s own PIECE default.
+    fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '10' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
@@ -579,194 +896,5 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
       deliveryLocation: null,
       specialRequirement: null,
     });
-  });
-});
-
-describe('PricingRequestCreateModal fuzzy catalog fallback (V110 follow-up)', () => {
-  it('auto-applies when the search returns exactly one normalized match, and badges the row as unconfirmed', async () => {
-    api.catalog.prices.mockResolvedValueOnce({
-      items: [{
-        priceId: 901, productCode: 'PC-901', factoryName: 'SCG Ceramics',
-        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: 'ขาว', surface: 'ด้าน',
-        price: 120, currency: 'THB', priceUnit: 'per_piece',
-      }],
-    });
-    // Legacy line: no catalogPriceId (pre-V110 deal), so productId seeds null and the fallback
-    // effect gets a chance to run — model/size deliberately match the mocked candidate above.
-    renderModal({ ticketItems: [ticketItem({ model: 'A1', size: '60x60' })] });
-
-    await screen.findByText(/จับคู่สินค้าจาก Catalog/);
-    expect(screen.getByText(/Catalog #901/)).not.toBeNull();
-  });
-
-  it('does NOT auto-apply when the search returns more than one normalized match — leaves the row blank for manual search', async () => {
-    api.catalog.prices.mockResolvedValueOnce({
-      items: [
-        { priceId: 901, productCode: 'PC-901', collection: 'A1', sizeRaw: '60x60' },
-        { priceId: 902, productCode: 'PC-902', collection: 'A1', sizeRaw: '60x60' },
-      ],
-    });
-    renderModal({ ticketItems: [ticketItem({ model: 'A1', size: '60x60' })] });
-
-    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
-    // Give the (already-resolved) ambiguous response a tick to flow through the effect and
-    // confirm it deliberately does nothing, rather than asserting absence before it had a
-    // chance to (wrongly) apply.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
-    expect(screen.queryByText('Catalog #901')).toBeNull();
-    expect(screen.queryByText('Catalog #902')).toBeNull();
-  });
-
-  it('does NOT auto-apply when the row already has a productId (never overwrites a real link)', () => {
-    api.catalog.prices.mockClear();
-    renderModal({ ticketItems: [ticketItem({ catalogPriceId: 777, catalogProductCode: 'PC-777', model: 'A1', size: '60x60' })] });
-
-    // The row already has a link — the fallback must skip it entirely, never even searching.
-    expect(api.catalog.prices).not.toHaveBeenCalled();
-  });
-
-  // Review finding F1. GET /catalog/prices is `ORDER BY f.name, ... LIMIT :limit` — alphabetical
-  // by FACTORY, not relevance-ranked. So a candidate agreeing on model+size can still be the
-  // wrong product, and deriveItemFromCatalogProduct would then overwrite the row's factory/
-  // color/texture from it. The predicate must therefore use every descriptive field the row has.
-  it('does NOT auto-apply a model+size match that disagrees with the row on factory', async () => {
-    api.catalog.prices.mockClear();
-    api.catalog.prices.mockResolvedValueOnce({
-      items: [{
-        priceId: 903, productCode: 'PC-903', factoryName: 'Aaa Ceramics',
-        grade: 'Aaa', collection: 'A1', sizeRaw: '60x60', color: 'ขาว', surface: 'ด้าน',
-        price: 99, currency: 'THB', priceUnit: 'per_piece',
-      }],
-    });
-    // The deal line names a DIFFERENT factory. Matching on model+size alone would have applied
-    // this candidate and silently rewritten the row's factory to "Aaa Ceramics".
-    renderModal({
-      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: 'Zzz Ceramica' })],
-    });
-
-    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
-    expect(screen.queryByText(/Catalog #903/)).toBeNull();
-    expect(screen.getByDisplayValue('Zzz Ceramica')).not.toBeNull();
-  });
-
-  // Review finding F1, second half: a FULL page back from the server means the result set was
-  // truncated, so anything past the cut is invisible. "Exactly one match" is then an artifact of
-  // truncation, not evidence of uniqueness — ambiguity is UNKNOWN, so decline to guess.
-  it('declines to auto-apply when the result set is a full page (truncation hides ambiguity)', async () => {
-    api.catalog.prices.mockClear();
-    // 50 rows = FUZZY_MATCH_LIMIT. Exactly one agrees with the row, but the page is full — so
-    // the ONLY thing that can reject it is the full-page guard. The row blanks factory/color/
-    // texture so the field predicate has no opinion and cannot mask what is under test.
-    const filler = Array.from({ length: 49 }, (_, n) => ({
-      priceId: 1000 + n, productCode: `F-${n}`, factoryName: `Factory ${n}`,
-      collection: 'A1', sizeRaw: 'other-size', color: '', surface: '',
-    }));
-    api.catalog.prices.mockResolvedValueOnce({
-      items: [...filler, {
-        priceId: 904, productCode: 'PC-904', factoryName: 'SCG Ceramics',
-        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: '', surface: '',
-        price: 120, currency: 'THB',
-      }],
-    });
-    renderModal({
-      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: '', color: '', texture: '' })],
-    });
-
-    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
-    expect(screen.queryByText(/Catalog #904/)).toBeNull();
-  });
-
-  // Review finding F2. The match is computed from the row as it looked when the search STARTED.
-  // If the user retypes the row while it is in flight, applying the old match would destroy what
-  // they just typed — and productId is already null on exactly these rows, so the productId
-  // guard cannot catch it.
-  it('drops the match when the user has retyped the row while the search was in flight', async () => {
-    api.catalog.prices.mockClear();
-    let release;
-    const held = new Promise((resolve) => { release = resolve; });
-    api.catalog.prices.mockImplementationOnce(() => held);
-
-    // Row blanks factory/color/texture so the field predicate has no opinion — the returned
-    // candidate is a genuine match for the row AS SEARCHED, leaving the staleness re-check as
-    // the only thing that can reject it.
-    renderModal({
-      ticketItems: [ticketItem({ model: 'A1', size: '60x60', factory: '', color: '', texture: '' })],
-    });
-    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalled());
-
-    // User corrects the model by hand while the search for "A1" is still open.
-    const modelInputs = screen.getAllByDisplayValue('A1');
-    fireEvent.change(modelInputs[modelInputs.length - 1], { target: { value: 'B9' } });
-
-    release({
-      items: [{
-        priceId: 905, productCode: 'PC-905', factoryName: 'SCG Ceramics',
-        grade: 'SCG', collection: 'A1', sizeRaw: '60x60', color: '', surface: '',
-        price: 120, currency: 'THB',
-      }],
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    // What the user typed survives; the stale match is discarded.
-    expect(screen.getByDisplayValue('B9')).not.toBeNull();
-    expect(screen.queryByText(/Catalog #905/)).toBeNull();
-    expect(screen.queryByText(/จับคู่สินค้าจาก Catalog/)).toBeNull();
-  });
-
-  // Regression guard: these searches run SEQUENTIALLY, so the in-flight window across a
-  // many-line deal is seconds long. Deleting a row during it re-indexes every row after the
-  // deleted one. An apply keyed on array index would land row 2's match on row 3 — silently
-  // overwriting a DIFFERENT product's fields and badging the wrong row as auto-matched, which
-  // is exactly the wrong-product-into-costing outcome the badge exists to prevent. The apply is
-  // therefore keyed on sourceTicketItemId.
-  it('applies a match to the row it searched for, even when an earlier row is deleted mid-flight', async () => {
-    api.catalog.prices.mockClear();
-    // Row 1 (id 601, model B2) resolves only after we delete row 0, so by apply time every
-    // surviving row has shifted down one index.
-    let releaseSecondSearch;
-    const secondSearch = new Promise((resolve) => { releaseSecondSearch = resolve; });
-    api.catalog.prices
-      .mockResolvedValueOnce({ items: [] })          // row 0 (id 600) — no match, moves on
-      .mockImplementationOnce(() => secondSearch);   // row 1 (id 601) — held open
-
-    renderModal({
-      ticketItems: [
-        ticketItem({ id: 600, model: 'A1', size: '60x60' }),
-        ticketItem({ id: 601, model: 'B2', size: '30x30' }),
-        ticketItem({ id: 602, model: 'C3', size: '80x80' }),
-      ],
-    });
-
-    await waitFor(() => expect(api.catalog.prices).toHaveBeenCalledTimes(2));
-
-    // Delete row 0 while row 1's search is still open — row 601 is now at index 0, 602 at 1.
-    fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
-
-    // The candidate must agree with the row on every descriptive field the row has (F1's
-    // predicate), so colour/surface/factory mirror ticketItem()'s defaults here — otherwise the
-    // match is correctly rejected and this test would be asserting the wrong thing.
-    releaseSecondSearch({
-      items: [{
-        priceId: 902, productCode: 'PC-902', factoryName: 'SCG Ceramics',
-        grade: 'SCG', collection: 'B2', sizeRaw: '30x30', color: 'ขาว', surface: 'ด้าน',
-        price: 250, currency: 'THB', priceUnit: 'per_piece',
-      }],
-    });
-
-    await screen.findByText(/Catalog #902/);
-
-    // Exactly one row auto-matched, and it is the B2 row the search was actually for — not the
-    // C3 row that shifted into B2's old index.
-    expect(screen.getAllByText(/จับคู่สินค้าจาก Catalog/)).toHaveLength(1);
-    expect(screen.getByDisplayValue('B2')).not.toBeNull();
-    expect(screen.getByDisplayValue('C3')).not.toBeNull();
   });
 });

@@ -226,7 +226,17 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             List.of(
                 pricingItemPerPiece(FACTORY_A, catalogProductIdFactoryA, "SCG", "Tile Chain A", new BigDecimal("10")),
                 pricingItemPerBox(FACTORY_B, catalogProductIdFactoryB, "Cotto", "Tile Chain B", new BigDecimal("5"))));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, createRequest, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+        // every item's requestedUnitBasis to PER_PIECE, which would make it impossible to construct
+        // the PER_BOX requestedUnitBasis this "mixed unit basis" test exists to exercise (see the
+        // requestedUnitBasis assertions below). PricingRequestRepository.create performs the exact
+        // same DB write createDraft would (persistence only, per that class's own header Javadoc) --
+        // but createDraft ALSO records the PRICING_REQUEST_CREATED event itself (not the
+        // repository's create()), so this fixture replays that one extra call to keep
+        // assertEventCount(..., PRICING_REQUEST_CREATED, 1) below accurate.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), createRequest, salesRepId);
+        pricingRequests.addEvent(pricingRequestId, ticketId, salesRepId, salesActor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
         pricingRequestService.submit(pricingRequestId, salesActor);
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUBMITTED);
@@ -548,7 +558,12 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             List.of(
                 pricingItemPerPiece(FACTORY_A, catalogProductIdFactoryA, "SCG", "Tile Chain A", new BigDecimal("10")),
                 pricingItemPerBox(FACTORY_B, catalogProductIdFactoryB, "Cotto", "Tile Chain B", new BigDecimal("5"))));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, createRequest, salesActor).summary().id();
+        // V185: see the identical comment in fullPricingChain_stepOneThroughStepFour_composesWithoutShortcuts
+        // above -- bypasses createDraft so item B keeps its real PER_BOX requestedUnitBasis, and
+        // replays createDraft's own PRICING_REQUEST_CREATED event write for parity.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), createRequest, salesRepId);
+        pricingRequests.addEvent(pricingRequestId, ticketId, salesRepId, salesActor.name(),
+            PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
 

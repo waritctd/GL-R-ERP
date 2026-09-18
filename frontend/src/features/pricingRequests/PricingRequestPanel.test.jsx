@@ -24,6 +24,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // modal from request detail" test exercises.
         listAttachments: vi.fn().mockResolvedValue({ items: [] }),
       },
+      // GLA-125: the header-terms section fetches the same eligible-display-name list the
+      // direct-deal quotation editor uses (not under test here).
+      dealQuotations: {
+        displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+      },
     },
   };
 });
@@ -140,7 +145,16 @@ describe('PricingRequestPanel', () => {
     api.pricingRequests.get.mockResolvedValue({
       pricingRequest: {
         summary: summary(),
-        items: [{ id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', requestedQty: 10, requestedUnit: 'แผ่น', quantityType: 'ESTIMATE' }],
+        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestCreateModal can save — see that component's own
+        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        items: [{
+          id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+          thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
+          piecesPerBox: 4, quantityType: 'ESTIMATE',
+          // GLA-125: required on this form.
+          originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        }],
         events: [{ id: 21, eventKind: 'PRICING_REQUEST_CREATED', actorName: 'พนักงานขาย', createdAt: '2026-07-01T09:00:00.000Z' }],
       },
     });
@@ -240,7 +254,16 @@ describe('PricingRequestPanel', () => {
     api.pricingRequests.get.mockResolvedValue({
       pricingRequest: {
         summary: summary({ status: 'DRAFT', recipientLabel: 'ผู้ออกแบบ ก.' }),
-        items: [{ id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60', requestedQty: 10, requestedUnit: 'แผ่น', quantityType: 'ESTIMATE' }],
+        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestCreateModal can save — see that component's own
+        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        items: [{
+          id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
+          thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
+          piecesPerBox: 4, quantityType: 'ESTIMATE',
+          // GLA-125: required on this form.
+          originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
+        }],
         events: [],
       },
     });

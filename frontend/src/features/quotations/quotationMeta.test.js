@@ -437,6 +437,37 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
   });
+
+  // Second review pass, finding N6 (2026-09-19): min <= max used to be checked UNCONDITIONALLY
+  // on every caller, including direct-deal's own itemErrorsByRow (no options at all) and
+  // submitItemErrorsByRow ({ requireLeadTime: true } only, still no requireOriginCountry) --
+  // silently blocking an EXISTING direct-deal draft whose lead-time range happened to be
+  // min > max, and surfacing the wrong sentence ("please fill this in") on the submit banner
+  // because QuotationEditorPage's missingLeadTimeSeqs treats any truthy errors.leadTimeMinDays as
+  // "missing". Gated to requireOriginCountry, the PCR-only flag, so direct-deal is byte-for-byte
+  // unchanged and only the PCR form (which always passes requireOriginCountry: true) enforces it.
+  describe('lead-time min <= max (GLA-125, gated to requireOriginCountry -- second review pass N6)', () => {
+    it('direct-deal (no requireOriginCountry) does NOT flag min > max, even though both values are present', () => {
+      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30 });
+      expect(validateQuotationItem(item)).toEqual({});
+    });
+
+    it('direct-deal SUBMIT (requireLeadTime, still no requireOriginCountry) does NOT flag min > max either', () => {
+      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30 });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
+    });
+
+    it('the PCR form (requireOriginCountry: true) DOES flag min > max, with its own distinct message', () => {
+      const item = completeItem({ leadTimeMinDays: 45, leadTimeMaxDays: 30, originCountry: 'จีน' });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireOriginCountry: true }))
+        .toEqual({ leadTimeMinDays: 'ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด' });
+    });
+
+    it('the PCR form still accepts a valid min <= max range', () => {
+      const item = completeItem({ leadTimeMinDays: 30, leadTimeMaxDays: 45, originCountry: 'จีน' });
+      expect(validateQuotationItem(item, 'NET', 'TH', { requireOriginCountry: true })).toEqual({});
+    });
+  });
 });
 
 // Owner feedback 2026-09-12: the editor shows/accepts แผ่น/ตร.ม. (pieces per sqm) while the wire

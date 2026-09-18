@@ -18,6 +18,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -29,7 +30,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -181,11 +181,16 @@ class FactoryQuoteSupersedeGuardIntegrationTest extends AbstractPostgresIntegrat
     private PricingRequestRequests.CreatePricingRequestRequest pricingRequest() {
         // Free-text item: no catalog product needed since these tests never call submit() (the
         // catalog-completeness gate lives on submit(), not createDraft()) — see
-        // PricingFactoryQuoteCostingIntegrationTest#freeTextPricingItem's own comment.
+        // PricingFactoryQuoteCostingIntegrationTest#freeTextPricingItem's own comment. V185: model
+        // is now unconditionally required by createDraft's own resolveItems, so this passes the
+        // description itself as model (same fix, same reasoning, as freeTextPricingItem).
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, null, null, null, null, "Free text item", null, null, "60x60", "Free Text Factory",
-            new BigDecimal("1"), new BigDecimal("1"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, null, null, null, "Free text item", "Free text item", "White", "Matte", "60x60",
+            "Free Text Factory", null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         return new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "supersede guard request", UUID.randomUUID().toString(),
