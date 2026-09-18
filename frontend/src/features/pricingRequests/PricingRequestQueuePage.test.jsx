@@ -59,6 +59,10 @@ function row(overrides = {}) {
     requiredDate: null,
     assignedImportId: null,
     assignedImportName: null,
+    // PricingRequestDtos.java's actual FIFO fields (~36-39) — default null so byOldestFirst's
+    // `?? 0` fallback is exercised unless a test explicitly cares about ordering.
+    submittedAt: null,
+    createdAt: null,
     ...overrides,
   };
 }
@@ -102,6 +106,15 @@ async function goToAllTab() {
   // The ทั้งหมด tab is what renders the chip bar; wait for it before touching
   // a chip so a click never lands before the tab switch has rendered it.
   await waitFor(() => expect(screen.getByRole('button', { name: 'ทั้งหมด' })).not.toBeNull());
+}
+
+// The desktop table's own row order, in DOM order (header row excluded) — used to assert
+// byOldestFirst's re-sort in task tabs and its ABSENCE in ทั้งหมด.
+function visibleRequestCodes() {
+  return screen.getAllByRole('row')
+    .slice(1)
+    .map((r) => r.textContent.match(/PCR-2026-\d{4}/)?.[0])
+    .filter(Boolean);
 }
 
 describe('PricingRequestQueuePage', () => {
@@ -262,8 +275,16 @@ describe('PricingRequestQueuePage', () => {
     // Review finding: the badge must never show a confident "0" before its own query has
     // actually succeeded — a query that is still loading or has failed is "unknown", not "zero".
     it('shows no badge count while the งานของฉัน query is loading', async () => {
-      let resolveQueue;
-      api.pricingRequests.queue.mockImplementation(() => new Promise((resolve) => { resolveQueue = resolve; }));
+      // Isolate the assignedImportId-scoped call (myWorkQuery, the badge's own query):
+      // unclaimedQuery now also fires unconditionally for import (2026-09-19), so a single
+      // shared unresolved promise for every call would starve myWorkQuery of ITS OWN resolver
+      // whenever unclaimedQuery happened to be the last one to call the mock. Let everything
+      // else resolve immediately; only the badge's own query hangs.
+      let resolveMyWork;
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.assignedImportId === 5) return new Promise((resolve) => { resolveMyWork = resolve; });
+        return Promise.resolve({ items: [] });
+      });
       renderQueuePage(importUser);
 
       // The tab itself renders immediately; the badge must not, because nothing has
@@ -273,7 +294,7 @@ describe('PricingRequestQueuePage', () => {
       expect(within(tab).queryByText('0')).toBeNull();
       expect(within(tab).queryByText(/รายการ/)).toBeNull();
 
-      resolveQueue({ items: [] });
+      resolveMyWork({ items: [] });
       // Now it has succeeded, genuinely with zero rows — THAT 0 is allowed to show.
       await waitFor(() => expect(within(tabByName('งานของฉัน')).getByText('0')).not.toBeNull());
     });
@@ -380,16 +401,231 @@ describe('PricingRequestQueuePage', () => {
     });
   });
 
-  describe('sales_manager role — status quo, no task tabs', () => {
-    it('renders no tablist and defaults to the SUBMITTED chip, exactly as before', async () => {
+  describe('task tabs are oldest-first (GLA-110 follow-up, 2026-09-19)', () => {
+    it('shows งานของฉัน oldest-first even though the mock returns newest-first', async () => {
+      api.pricingRequests.queue.mockResolvedValue({
+        items: [
+          row({ id: 11, requestCode: 'PCR-2026-0011', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-18T10:00:00Z' }),
+          row({ id: 12, requestCode: 'PCR-2026-0012', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-16T10:00:00Z' }),
+          row({ id: 13, requestCode: 'PCR-2026-0013', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-17T10:00:00Z' }),
+        ],
+      });
+      renderQueuePage(importUser);
+      await screen.findByText('PCR-2026-0011');
+
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0012', 'PCR-2026-0013', 'PCR-2026-0011']);
+    });
+
+    it('shows รอรับเรื่อง oldest-first', async () => {
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.status === 'SUBMITTED') {
+          return Promise.resolve({
+            items: [
+              row({ id: 21, requestCode: 'PCR-2026-0021', status: 'SUBMITTED', submittedAt: '2026-09-18T09:00:00Z' }),
+              row({ id: 22, requestCode: 'PCR-2026-0022', status: 'SUBMITTED', submittedAt: '2026-09-15T09:00:00Z' }),
+            ],
+          });
+        }
+        return Promise.resolve({ items: [] });
+      });
+      renderQueuePage(importUser);
+      fireEvent.click(tabByName('รอรับเรื่อง'));
+      await screen.findByText('PCR-2026-0021');
+
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0022', 'PCR-2026-0021']);
+    });
+
+    it('shows รอฉันพิจารณา oldest-first', async () => {
+      api.pricingRequests.queue.mockResolvedValue({
+        items: [
+          row({ id: 31, requestCode: 'PCR-2026-0031', status: 'READY_FOR_CEO_REVIEW', submittedAt: '2026-09-18T08:00:00Z' }),
+          row({ id: 32, requestCode: 'PCR-2026-0032', status: 'CEO_REVIEWING', submittedAt: '2026-09-14T08:00:00Z' }),
+        ],
+      });
+      renderQueuePage(ceoUser);
+      await screen.findByText('PCR-2026-0031');
+
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0032', 'PCR-2026-0031']);
+    });
+
+    it('leaves ทั้งหมด in the API\'s own order — no FIFO re-sort there', async () => {
+      api.pricingRequests.queue.mockResolvedValue({
+        items: [
+          // Newest first, deliberately the OPPOSITE of oldest-first — if ทั้งหมด applied
+          // byOldestFirst too, this would render reversed.
+          row({ id: 42, requestCode: 'PCR-2026-0042', status: 'IMPORT_REVIEWING', submittedAt: '2026-09-18T08:00:00Z' }),
+          row({ id: 41, requestCode: 'PCR-2026-0041', status: 'IMPORT_REVIEWING', submittedAt: '2026-09-10T08:00:00Z' }),
+        ],
+      });
+      renderQueuePage(importUser);
+      await goToAllTab();
+      await screen.findByText('PCR-2026-0042');
+
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0042', 'PCR-2026-0041']);
+    });
+
+    it('prefers submittedAt over createdAt per-row, and ties break by id ascending', async () => {
+      api.pricingRequests.queue.mockResolvedValue({
+        items: [
+          // Only createdAt (no submittedAt) — 2026-09-01, earlier than 62/63's submittedAt below.
+          row({ id: 61, requestCode: 'PCR-2026-0061', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: null, createdAt: '2026-09-01T00:00:00Z' }),
+          // 62 and 63 share the EXACT same submittedAt — only id can break the tie. Listed here
+          // with 63 first so a naive "keep API order on ties" implementation would fail.
+          row({ id: 63, requestCode: 'PCR-2026-0063', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-05T00:00:00Z', createdAt: '2026-08-01T00:00:00Z' }),
+          row({ id: 62, requestCode: 'PCR-2026-0062', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-05T00:00:00Z', createdAt: '2026-08-20T00:00:00Z' }),
+        ],
+      });
+      renderQueuePage(importUser);
+      await screen.findByText('PCR-2026-0061');
+
+      // 61's createdAt fallback (Sep 1) sorts before 62/63's real submittedAt (Sep 5) — a row
+      // WITH submittedAt is never pushed behind one using the createdAt fallback just because
+      // the fallback happens to be a "lesser" field. Then 62 before 63 by id, since their
+      // submittedAt ties exactly.
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0061', 'PCR-2026-0062', 'PCR-2026-0063']);
+    });
+
+    // Mutation-checked: removing `key={activeTab ?? 'no-tabs'}` from the <DataTable> below turns
+    // this red (confirmed by hand — commenting out the `key` prop made the manual sort survive
+    // the tab switch — then restored; `git diff` shows no residual change from that check).
+    it('does not carry a manual column-header sort from one tab into another', async () => {
+      api.pricingRequests.queue.mockResolvedValue({
+        items: [
+          row({ id: 71, requestCode: 'PCR-2026-0071', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-10T00:00:00Z' }),
+          row({ id: 72, requestCode: 'PCR-2026-0072', status: 'IMPORT_REVIEWING', assignedImportId: 5, submittedAt: '2026-09-05T00:00:00Z' }),
+        ],
+      });
+      renderQueuePage(importUser);
+      await screen.findByText('PCR-2026-0071');
+      // Default byOldestFirst order: 0072 (older) then 0071 (newer).
+      expect(visibleRequestCodes()).toEqual(['PCR-2026-0072', 'PCR-2026-0071']);
+
+      // Manually sort by เลขที่คำขอราคา ascending — flips the order to alphabetical (0071, 0072).
+      fireEvent.click(screen.getByRole('button', { name: /เลขที่คำขอราคา/ }));
+      await waitFor(() => expect(visibleRequestCodes()).toEqual(['PCR-2026-0071', 'PCR-2026-0072']));
+
+      // Leave the tab and come back — the manual sort must NOT have survived; the tab's own
+      // default (byOldestFirst) must be showing again, not the alphabetical order above.
+      await goToAllTab();
+      fireEvent.click(tabByName('งานของฉัน'));
+      await waitFor(() => expect(visibleRequestCodes()).toEqual(['PCR-2026-0072', 'PCR-2026-0071']));
+    });
+  });
+
+  describe('รอรับเรื่อง freshness on entry (GLA-110 review fix, 2026-09-19)', () => {
+    it('refetches รอรับเรื่อง when entering the tab and the cached copy is stale', async () => {
+      // The test QueryClient (renderQueuePage) sets no staleTime, so react-query's own default
+      // of 0 applies — the mount-time fetch is stale the instant it settles. That is exactly the
+      // scenario the fix targets: unclaimedQuery is `enabled` for the whole import session now,
+      // so switching INTO this tab no longer gets a free "became enabled" refetch from
+      // react-query itself — goToUnclaimed must force one when the cache has gone stale.
+      let submittedCallCount = 0;
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.status === 'SUBMITTED') {
+          submittedCallCount += 1;
+          return Promise.resolve({ items: [row({ status: 'SUBMITTED' })] });
+        }
+        return Promise.resolve({ items: [] });
+      });
+      renderQueuePage(importUser);
+      // unclaimedQuery already fired once on mount (enabled the whole session, not tab-gated).
+      await waitFor(() => expect(submittedCallCount).toBeGreaterThanOrEqual(1));
+      const callsBeforeEntry = submittedCallCount;
+
+      fireEvent.click(tabByName('รอรับเรื่อง'));
+
+      await waitFor(() => expect(submittedCallCount).toBeGreaterThan(callsBeforeEntry));
+    });
+
+    it('invalidates the queue when a pickup fails, so a stale (already-claimed) row is dropped', async () => {
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.status === 'SUBMITTED') return Promise.resolve({ items: [row({ status: 'SUBMITTED' })] });
+        return Promise.resolve({ items: [] });
+      });
+      // Mirrors PricingRequestService.pickup's compare-and-set-miss 409: someone else already
+      // claimed this row between requireViewable's read and this call.
+      api.pricingRequests.pickup.mockRejectedValue(new Error('คำขอราคานี้ถูกรับเรื่องไปแล้วโดยผู้ใช้อื่น'));
+      renderQueuePage(importUser);
+
+      fireEvent.click(tabByName('รอรับเรื่อง'));
+      const pickupButton = await screen.findByTestId('pcr-queue-pickup');
+      const callsBeforePickup = api.pricingRequests.queue.mock.calls.length;
+      fireEvent.click(pickupButton);
+
+      await waitFor(() => expect(api.pricingRequests.pickup).toHaveBeenCalled());
+      // onError invalidates the same ['pricingRequests'] key onSuccess does — both active
+      // queries (myWorkQuery + unclaimedQuery, both enabled for the whole import session) are
+      // refetched as a result, which is what actually drops the now-stale row from view.
+      await waitFor(() => expect(api.pricingRequests.queue.mock.calls.length).toBeGreaterThan(callsBeforePickup));
+    });
+  });
+
+  describe('empty งานของฉัน points to the next job (GLA-110 follow-up, 2026-09-19)', () => {
+    it('shows an announced ไม่มีงานค้าง with the unclaimed count, and its button switches to + focuses รอรับเรื่อง', async () => {
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.assignedImportId === 5) return Promise.resolve({ items: [] });
+        if (params?.status === 'SUBMITTED') {
+          return Promise.resolve({
+            items: [
+              row({ id: 51, requestCode: 'PCR-2026-0051', status: 'SUBMITTED' }),
+              row({ id: 52, requestCode: 'PCR-2026-0052', status: 'SUBMITTED' }),
+              row({ id: 53, requestCode: 'PCR-2026-0053', status: 'SUBMITTED' }),
+            ],
+          });
+        }
+        return Promise.resolve({ items: [] });
+      });
+      renderQueuePage(importUser);
+
+      // role="status" (implicit aria-live="polite") is what makes this announced rather than
+      // silent — assert the copy lives INSIDE that region, not just somewhere on the page.
+      const status = await screen.findByRole('status');
+      expect(status.textContent).toContain('ไม่มีงานค้าง');
+      expect(status.textContent).toContain('มี 3 คำขอรอรับเรื่อง');
+
+      fireEvent.click(within(status).getByRole('button', { name: 'ดูคำขอที่รอรับเรื่อง' }));
+
+      expect(tabByName('รอรับเรื่อง').getAttribute('aria-selected')).toBe('true');
+      expect(await screen.findByText('PCR-2026-0051')).not.toBeNull();
+      // Review fix: this navigation did not originate from clicking the tab itself (the click
+      // target was a button inside a different panel), so focus would otherwise land nowhere in
+      // particular — it must end up ON the รอรับเรื่อง tab.
+      await waitFor(() => expect(document.activeElement).toBe(tabByName('รอรับเรื่อง')));
+    });
+
+    it('does not show ไม่มีงานค้าง when รอรับเรื่อง is also empty — the plain empty state stays', async () => {
+      api.pricingRequests.queue.mockResolvedValue({ items: [] });
+      renderQueuePage(importUser);
+
+      await waitFor(() => expect(screen.getAllByText('ไม่มีงานที่คุณรับเรื่องค้างอยู่').length).toBeGreaterThan(0));
+      expect(screen.queryByText('ไม่มีงานค้าง')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ดูคำขอที่รอรับเรื่อง' })).toBeNull();
+    });
+
+    it('shows the error empty-state, not ไม่มีงานค้าง, when งานของฉัน fails even though รอรับเรื่อง has requests', async () => {
+      api.pricingRequests.queue.mockImplementation((params) => {
+        if (params?.assignedImportId === 5) return Promise.reject(new Error('เครือข่ายขัดข้อง'));
+        if (params?.status === 'SUBMITTED') return Promise.resolve({ items: [row({ status: 'SUBMITTED' })] });
+        return Promise.resolve({ items: [] });
+      });
+      renderQueuePage(importUser);
+
+      await waitFor(() => expect(screen.getAllByText('โหลดคิวขอราคาไม่สำเร็จ').length).toBeGreaterThan(0));
+      expect(screen.queryByText('ไม่มีงานค้าง')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ดูคำขอที่รอรับเรื่อง' })).toBeNull();
+    });
+  });
+
+  describe('sales_manager role — no task tabs, defaults to ทั้งหมด (owner ruling, 2026-09-19)', () => {
+    it('renders no tablist and defaults to the ทั้งหมด chip (owner ruling, 2026-09-19)', async () => {
       renderQueuePage(salesManagerUser);
 
       expect(await screen.findByText('PCR-2026-0001')).not.toBeNull();
       expect(screen.queryByRole('tablist')).toBeNull();
       expect(screen.queryByRole('tab')).toBeNull();
-      // Chips render unconditionally for a role with no task tabs.
-      expect(screen.getByRole('button', { name: 'ทั้งหมด' })).not.toBeNull();
-      await waitFor(() => expect(api.pricingRequests.queue).toHaveBeenCalledWith({ status: 'SUBMITTED', activeOnly: true }));
+      // Chips render unconditionally for a role with no task tabs, ทั้งหมด already selected.
+      expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
+      await waitFor(() => expect(api.pricingRequests.queue).toHaveBeenCalledWith({ status: undefined, activeOnly: true }));
       // No task-tab queries (งานของฉัน/รอรับเรื่อง/รอฉันพิจารณา all `enabled: false` for this
       // role) — only the one chip-driven fetch a sales_manager has ever made.
       expect(api.pricingRequests.queue).toHaveBeenCalledTimes(1);
@@ -399,9 +635,11 @@ describe('PricingRequestQueuePage', () => {
       renderQueuePage(salesManagerUser);
       await screen.findByText('PCR-2026-0001');
 
-      fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
+      // ทั้งหมด is already the default (owner ruling, 2026-09-19), so this clicks a DIFFERENT
+      // chip — the SUBMITTED one, labelled รอฝ่ายนำเข้ารับเรื่อง — to prove clicking still refetches.
+      fireEvent.click(screen.getByRole('button', { name: 'รอฝ่ายนำเข้ารับเรื่อง' }));
 
-      await waitFor(() => expect(api.pricingRequests.queue).toHaveBeenCalledWith({ status: undefined, activeOnly: true }));
+      await waitFor(() => expect(api.pricingRequests.queue).toHaveBeenCalledWith({ status: 'SUBMITTED', activeOnly: true }));
     });
 
     it('offers only the three Import stages plus ทั้งหมด/รอฝ่ายนำเข้ารับเรื่อง/ยกเลิกแล้ว as chips', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -61,14 +61,29 @@ function statusFilterLabel(filter) {
 // backend lets read what). Only import and ceo get task tabs: they are the two
 // roles this queue is actually a worklist for (import triages/works requests,
 // ceo approves them); sales_manager keeps browsing the plain chip list it always
-// has (status quo), since it has no personal "my work" subset of this queue.
+// has, since it has no personal "my work" subset of this queue — it oversees the
+// whole pipeline, so it lands on ทั้งหมด (owner ruling, 2026-09-19) rather than
+// import's own SUBMITTED inbox.
 //
 // Each role's first tab doubles as its count badge and its default landing tab
 // (Owner ruling: import starts on its own claimed work, ceo starts on what is
-// waiting on it — neither should have to click past the shared SUBMITTED/ALL
-// view to find their own queue).
+// waiting on it — neither should have to click past ทั้งหมด to find their own
+// queue).
 const IMPORT_MY_WORK_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
 const CEO_MY_REVIEW_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
+
+// 2026-09-19 owner ruling: a task tab (งานของฉัน / รอรับเรื่อง / รอฉันพิจารณา) is a worklist,
+// not a browse view — the request that has been waiting longest belongs on top, so it doesn't
+// get buried by newer arrivals. ทั้งหมด (and any role with no task tabs, e.g. sales_manager) is
+// deliberately left in the API's own order, unaffected. `submittedAt` is when the request
+// actually entered this queue; `createdAt` covers the rare DRAFT-era row without one yet, and
+// `id` is the final, always-present tie-break (PricingRequestDtos.java ~36-39; mirrored in
+// mockApi.js ~1686).
+function byOldestFirst(a, b) {
+  const aTime = new Date(a.submittedAt ?? a.createdAt ?? 0).getTime();
+  const bTime = new Date(b.submittedAt ?? b.createdAt ?? 0).getTime();
+  return aTime - bTime || a.id - b.id;
+}
 
 const TASK_TABS_BY_ROLE = {
   import: [
@@ -233,22 +248,44 @@ function QueueCard({ row, user, onPickup, canPickup, pickingUp }) {
  *   - ceo: รอฉันพิจารณา (READY_FOR_CEO_REVIEW + CEO_REVIEWING — both are waiting on
  *     the CEO, the second because the CEO opened the review but hasn't decided
  *     yet), ทั้งหมด.
- *   - every other role that can reach this page (sales_manager): no tabs, exactly
- *     today's behaviour (chips only, defaulting to the SUBMITTED chip).
+ *   - every other role that can reach this page (sales_manager): no tabs — chips
+ *     only, defaulting to the ทั้งหมด chip (owner ruling, 2026-09-19: this role
+ *     oversees the whole pipeline rather than owning a personal "my work" slice
+ *     of it, so it should not land on import's own SUBMITTED inbox).
  * The first tab of each role doubles as its badge count, fetched via its own
  * `enabled: hasTaskTabs` query so the count still shows while a different tab is
  * active. Status chips render only inside the ทั้งหมด tab (or always, for roles
  * with no tabs) — every task tab is already status-scoped, so chips there would
  * just intersect down to nothing.
+ *
+ * 2026-09-19 additions:
+ *   - Task-tab rows are re-sorted oldest-first (byOldestFirst) — a worklist, not a
+ *     browse view. ทั้งหมด is untouched. `<DataTable key={activeTab}>` remounts on
+ *     every tab switch (also resetting its search text and page, deliberately — a
+ *     fresh worklist view per tab) so a manual column-header sort from a previous
+ *     tab can never leak into the next one and fight this default.
+ *   - An empty งานของฉัน that still has unclaimed work waiting (รอรับเรื่อง count > 0)
+ *     shows a "ไม่มีงานค้าง" prompt (`role="status"`, so it's announced) with a button
+ *     straight to รอรับเรื่อง, instead of a bare empty state — see `showEmptyWorkPrompt`
+ *     below. This is why unclaimedQuery now runs whenever the role is import, not
+ *     only while its own tab is active.
+ *   - Review fix, same date: landing on รอรับเรื่อง (by tab click OR the prompt's
+ *     button — `goToUnclaimed`) force-refetches it when stale, since it no longer
+ *     gets react-query's own becomes-enabled refetch now that it's always enabled;
+ *     the button additionally moves focus to the รอรับเรื่อง tab (Tabs.jsx's own DOM
+ *     id convention), and a failed pickup now invalidates the same broad key a
+ *     successful one does, so a 409 (someone else claimed it) drops the stale row.
  */
 export function PricingRequestQueuePage({ user, showToast }) {
   const queryClient = useQueryClient();
   const taskTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
   const hasTaskTabs = !!taskTabs;
   const [activeTab, setActiveTab] = useState(taskTabs ? taskTabs[0].key : null);
-  // Task-tab roles land the ทั้งหมด tab on its own ทั้งหมด chip (owner ruling);
-  // every other role keeps today's SUBMITTED default (status quo).
-  const [filterKey, setFilterKey] = useState(hasTaskTabs ? 'ALL' : 'SUBMITTED');
+  // Every role lands the ทั้งหมด tab/chip-only view on its own ทั้งหมด chip (owner ruling,
+  // 2026-09-19) — task-tab roles because it is already status-scoped chrome on top of their own
+  // default tab, and no-tab roles (sales_manager) because it oversees the whole pipeline rather
+  // than owning a personal slice of it, so SUBMITTED — import's own inbox — is the wrong default.
+  const [filterKey, setFilterKey] = useState('ALL');
 
   // GLA-110 (review fix): this page is never remounted on a role change (AppShell keeps one
   // instance across a session), so without this, a stale `activeTab` from a previous role could
@@ -260,7 +297,7 @@ export function PricingRequestQueuePage({ user, showToast }) {
   useEffect(() => {
     const nextTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
     setActiveTab(nextTabs ? nextTabs[0].key : null);
-    setFilterKey(nextTabs ? 'ALL' : 'SUBMITTED');
+    setFilterKey('ALL');
   }, [user.role]);
 
   const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
@@ -310,13 +347,52 @@ export function PricingRequestQueuePage({ user, showToast }) {
     [myReviewQuery.data],
   );
 
-  // รอรับเรื่อง (import only): unclaimed work, pushed server-side as a plain
-  // SUBMITTED filter. No badge on this tab, so it only fetches while active.
+  // รอรับเรื่อง (import only): unclaimed work, pushed server-side as a plain SUBMITTED
+  // filter. `enabled` is role-only, not tab-only, as of 2026-09-19 — an empty งานของฉัน
+  // needs to know THIS count too (to offer "ไม่มีงานค้าง … ดูคำขอที่รอรับเรื่อง" instead of a
+  // bare empty state, see showEmptyWorkPrompt below), so it must be known before its own
+  // tab is ever opened, and import now always fetches this list once on load rather than
+  // only after opening the tab. No badge is added here on purpose (still exactly one badge
+  // on this page) — this is the SAME query/cache key as the (now-retired-as-a-default)
+  // SUBMITTED chip, so nothing is fetched here that this page didn't already sometimes fetch
+  // before.
+  //
+  // ⚠️ Freshness trade-off (review finding, 2026-09-19): because `enabled` no longer flips
+  // false->true when this tab is opened, react-query's own "refetch on a query becoming
+  // enabled" trigger no longer fires here — so without `goToUnclaimed` below explicitly
+  // forcing a refetch, this is the single most-contended list on the page (several import
+  // users racing to claim the same SUBMITTED rows) yet could sit on a stale cache entry for
+  // up to `queryClient.js`'s 30s staleTime after switching in. `goToUnclaimed` closes that gap
+  // by refetching on entry — but only `{ stale: true }`, i.e. only when the cached copy has
+  // actually aged out, so a user bouncing between tabs inside the 30s window still gets the
+  // cheap cache hit the rest of this page relies on.
+  const unclaimedQueryKey = queryKeys.pricingRequestQueue({ status: 'SUBMITTED', activeOnly: true });
   const unclaimedQuery = useQuery({
-    queryKey: queryKeys.pricingRequestQueue({ status: 'SUBMITTED', activeOnly: true }),
+    queryKey: unclaimedQueryKey,
     queryFn: () => api.pricingRequests.queue({ status: 'SUBMITTED', activeOnly: true }).then((r) => r.items ?? []),
-    enabled: hasTaskTabs && user.role === 'import' && activeTab === 'UNCLAIMED',
+    enabled: hasTaskTabs && user.role === 'import',
   });
+
+  // Only the prompt button (below) sets this — a real tab click already keeps/receives focus
+  // via the browser's own click handling, so this effect only needs to act on the ONE
+  // navigation path that does not originate from clicking the tab itself.
+  const focusUnclaimedTabRef = useRef(false);
+  useEffect(() => {
+    if (activeTab !== 'UNCLAIMED' || !focusUnclaimedTabRef.current) return;
+    focusUnclaimedTabRef.current = false;
+    // Tabs.jsx builds each tab's DOM id as `${idPrefix}-tab-${item.id}` — see its own render.
+    document.getElementById('pcr-queue-tasks-tab-UNCLAIMED')?.focus();
+  }, [activeTab]);
+
+  // Shared by the Tabs onChange handler and the ไม่มีงานค้าง prompt's button — both are ways
+  // to LAND on รอรับเรื่อง, so both need the same staleness fix above. `focus: true` is only
+  // passed by the prompt button, whose click target (a button inside a DIFFERENT panel) is not
+  // itself the รอรับเรื่อง tab, unlike a real tab click.
+  function goToUnclaimed({ focus = false } = {}) {
+    setActiveTab('UNCLAIMED');
+    queryClient.refetchQueries({ queryKey: unclaimedQueryKey, stale: true });
+    if (focus) focusUnclaimedTabRef.current = true;
+  }
 
   const badgeRows = user.role === 'import' ? myWorkRows : myReviewRows;
   // The query backing whichever tab currently doubles as the badge (myWorkQuery for import,
@@ -330,17 +406,18 @@ export function PricingRequestQueuePage({ user, showToast }) {
   let isError;
   let emptyTitle = DEFAULT_EMPTY_TITLE;
   if (hasTaskTabs && (activeTab === 'MY_WORK' || activeTab === 'MY_REVIEW')) {
-    rows = badgeRows;
+    rows = [...badgeRows].sort(byOldestFirst);
     isLoading = badgeQuery.isLoading;
     isError = badgeQuery.isError;
     emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
   } else if (hasTaskTabs && activeTab === 'UNCLAIMED') {
-    rows = unclaimedQuery.data ?? [];
+    rows = [...(unclaimedQuery.data ?? [])].sort(byOldestFirst);
     isLoading = unclaimedQuery.isLoading;
     isError = unclaimedQuery.isError;
     emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
   } else {
-    // ทั้งหมด tab, or a role with no task tabs at all — today's chip behaviour.
+    // ทั้งหมด tab, or a role with no task tabs at all — today's chip behaviour, API order
+    // preserved (no byOldestFirst here — this is a browse view, not a worklist).
     const items = allQuery.data ?? [];
     rows = filter.statuses.length < 2 ? items : items.filter((row) => filter.statuses.includes(row.status));
     isLoading = allQuery.isLoading;
@@ -354,6 +431,16 @@ export function PricingRequestQueuePage({ user, showToast }) {
     rows = [];
     emptyTitle = ERROR_EMPTY_TITLE;
   }
+
+  // 2026-09-19: an import user who has genuinely cleared งานของฉัน (loaded, zero rows, no
+  // error) but still has unclaimed work sitting in รอรับเรื่อง should be pointed at it rather
+  // than shown a bare "nothing here". `unclaimedQuery.isSuccess` (not just `.data`) is the gate
+  // for the SAME reason the badge gates on it — "not yet loaded" and "genuinely zero" must
+  // read differently, and the error branch above already wins over this regardless.
+  const unclaimedCount = unclaimedQuery.isSuccess ? (unclaimedQuery.data?.length ?? 0) : null;
+  const showEmptyWorkPrompt = user.role === 'import' && activeTab === 'MY_WORK'
+    && !isLoading && !isError && rows.length === 0
+    && unclaimedCount != null && unclaimedCount > 0;
 
   // GLA-110 (review fix): the badge must read as unknown — not a confident "0" — while its query
   // is loading, disabled, or errored. `isSuccess` is the one react-query flag that is only ever
@@ -376,7 +463,15 @@ export function PricingRequestQueuePage({ user, showToast }) {
       showToast('success', 'รับเรื่องแล้ว');
       queryClient.invalidateQueries({ queryKey: ['pricingRequests'] });
     },
-    onError: (error) => showToast('error', error.message || 'รับเรื่องไม่สำเร็จ'),
+    onError: (error) => {
+      showToast('error', error.message || 'รับเรื่องไม่สำเร็จ');
+      // 2026-09-19 review: the usual failure here is someone else already picked this row up
+      // (a 409 compare-and-set miss, PricingRequestService.pickup) — the row this button was on
+      // is already stale, so invalidate the same broad key onSuccess uses to drop it from
+      // รอรับเรื่อง/งานของฉัน's badge on the next render instead of leaving a dead รับเรื่อง
+      // button pointed at a request that already belongs to someone else.
+      queryClient.invalidateQueries({ queryKey: ['pricingRequests'] });
+    },
   });
 
   const columns = [
@@ -425,24 +520,49 @@ export function PricingRequestQueuePage({ user, showToast }) {
         </div>
       ) : null}
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        getRowKey={(row) => row.id}
-        gridClassName="pricing-request-queue-table"
-        mobileCard={(row) => (
-          <QueueCard
-            row={row}
-            user={user}
-            canPickup={canPickupPricingRequest(user, row)}
-            pickingUp={pickupMutation.isPending}
-            onPickup={(id) => pickupMutation.mutate(id)}
-          />
-        )}
-        searchable
-        loading={isLoading}
-        emptyState={{ icon: isError ? 'triangleAlert' : 'fileText', title: emptyTitle }}
-      />
+      {showEmptyWorkPrompt ? (
+        // Not DataTable's own emptyState (EmptyState.jsx has no action/button slot, and this is
+        // one specific page's prompt, not a case for widening a shared component) — a small local
+        // block reusing the same visual rhythm (icon + heading + sub-line) instead.
+        // `role="status"` (implicit aria-live="polite") announces it — a screen-reader user who
+        // just cleared their last claimed request should hear "ไม่มีงานค้าง · มี N คำขอรอรับเรื่อง"
+        // instead of silence.
+        <div role="status" className="grid min-h-[220px] place-items-center content-center gap-2 rounded-md border border-border bg-surface p-6 text-center">
+          <Icon name="badgeCheck" size={34} className="text-text-faint" />
+          <strong className="text-text">ไม่มีงานค้าง</strong>
+          <span className="text-text-muted">มี {unclaimedCount} คำขอรอรับเรื่อง</span>
+          <Button type="button" variant="primary" className="mt-1" onClick={() => goToUnclaimed({ focus: true })}>
+            ดูคำขอที่รอรับเรื่อง
+          </Button>
+        </div>
+      ) : (
+        <DataTable
+          // Remounts on every tab switch (stable across chip clicks within one tab, since
+          // `activeTab` itself doesn't change for those): a manual column-header sort from a
+          // previous tab is uncontrolled internal DataTable state, and without this key it would
+          // silently carry over and fight byOldestFirst's default ordering on the next tab. This
+          // also resets DataTable's own search text and pagination page on every tab switch —
+          // deliberate, not a side effect to work around: each tab is its own fresh worklist
+          // view, not a continuation of whatever was typed/paged into a different one.
+          key={activeTab ?? 'no-tabs'}
+          columns={columns}
+          rows={rows}
+          getRowKey={(row) => row.id}
+          gridClassName="pricing-request-queue-table"
+          mobileCard={(row) => (
+            <QueueCard
+              row={row}
+              user={user}
+              canPickup={canPickupPricingRequest(user, row)}
+              pickingUp={pickupMutation.isPending}
+              onPickup={(id) => pickupMutation.mutate(id)}
+            />
+          )}
+          searchable
+          loading={isLoading}
+          emptyState={{ icon: isError ? 'triangleAlert' : 'fileText', title: emptyTitle }}
+        />
+      )}
     </>
   );
 
@@ -470,7 +590,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
           <Tabs
             items={tabItems}
             value={activeTab}
-            onChange={setActiveTab}
+            // A plain tab click still needs the same on-entry refetch-if-stale as the prompt's
+            // button — both are ways to land on รอรับเรื่อง — so only that one id is special-cased.
+            onChange={(tabId) => (tabId === 'UNCLAIMED' ? goToUnclaimed() : setActiveTab(tabId))}
             ariaLabel="งานที่ต้องทำ"
             idPrefix="pcr-queue-tasks"
           />
