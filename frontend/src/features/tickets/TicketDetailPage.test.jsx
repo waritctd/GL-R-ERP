@@ -1064,6 +1064,257 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
   });
 
+  // V183 (stock-sourced deal-line pricing, owner ruling): this is the post-creation edit
+  // screen — TicketCreateModal.jsx only covers deal-creation time, and the product owner asked
+  // for the same "จากสต็อก" flag + price to be settable here too, since TicketDetailPage is the
+  // only route into editItems/mergeEditedItemsPreservingPricing after a deal already exists.
+  it('edit-items: flagging a row "จากสต็อก" without a price blocks save, then submits with the price once filled', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+
+    // Checking the box reveals the required price input, empty by default.
+    const priceInput = document.getElementById('edit-item-stock-sale-price-0');
+    expect(priceInput).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
+    expect(priceInput.getAttribute('aria-invalid')).toBe('true');
+    expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+    fireEvent.change(priceInput, { target: { value: '420.50' } });
+    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
+      sourcedFromStock: true,
+      stockSalePrice: 420.5,
+    });
+  });
+
+  it('edit-items: unchecking "จากสต็อก" on a previously stock-sourced row sends sourcedFromStock:false and a null price', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: true, stockSalePrice: 500 },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkbox.checked).toBe(true);
+    expect(document.getElementById('edit-item-stock-sale-price-0').value).toBe('500');
+
+    fireEvent.click(checkbox);
+    expect(document.getElementById('edit-item-stock-sale-price-0')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
+      sourcedFromStock: false,
+      stockSalePrice: null,
+    });
+  });
+
+  // Review follow-up (V183): deleting a row must re-key a later row's stockSalePrice error the
+  // same way every other per-row field error is already re-keyed (the reindex regex in
+  // TicketDetailPage.jsx is generic — `/^editItems\.([a-zA-Z]+)\.(\d+)$/` — so no code change was
+  // needed for this field specifically, but the branch had no test at all covering it before this).
+  // Without it a stockSalePrice error would survive a delete under its OLD index and end up
+  // pinned to a row the user never flagged (or to no row at all, silently swallowing a real
+  // validation failure).
+  it('edit-items: deleting a row re-pins a later row\'s "จากสต็อก" price error to its new index', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    await openTab(/สินค้าและราคา/);
+    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
+
+    // Flag the SECOND row only, leaving its required price blank.
+    const checkboxes = await screen.findAllByRole('checkbox', { name: 'จากสต็อก' });
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[1]);
+
+    // Save pins the error to row index 1 (both rows' qty is valid, so this is the only error).
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
+    expect(document.getElementById('edit-item-stock-sale-price-1').getAttribute('aria-invalid')).toBe('true');
+    expect(api.tickets.editItems).not.toHaveBeenCalled();
+
+    // Delete the FIRST row — the flagged row shifts from index 1 to index 0, and its error must
+    // travel with it rather than staying pinned to the vacated index.
+    fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
+
+    const movedInput = document.getElementById('edit-item-stock-sale-price-0');
+    expect(movedInput).toBeTruthy();
+    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBe('true'));
+    // Exactly one error, on the one surviving row — not duplicated, not orphaned.
+    expect(screen.getAllByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toHaveLength(1);
+    expect(document.getElementById('edit-item-stock-sale-price-1')).toBeNull();
+
+    // And the row still saves correctly once the price is supplied at its new index.
+    fireEvent.change(movedInput, { target: { value: '420.50' } });
+    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+
+    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
+    const sent = api.tickets.editItems.mock.calls[0][1].items;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ model: 'B2', sourcedFromStock: true, stockSalePrice: 420.5 });
+  });
+
+  // Gap B (task): the read-only items table showed no indication of a saved จากสต็อก line at
+  // all — no badge, and the approved-price cell just read "-" whenever a stock-sourced line
+  // happened to have no approvedPrice of its own (nothing downstream sets one yet — the flag is
+  // capture-only today, see ticketItemFields.jsx's own comment — but a flagged line can equally
+  // still go through the ordinary PricingRequest chain and end up with a real approvedPrice; the
+  // "approvedPrice set too" case is covered separately below).
+  it('read mode: a จากสต็อก line shows the orange badge and its stock price; a normal line shows neither', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: true, stockSalePrice: 420.5 },
+          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 300, sourcedFromStock: false, stockSalePrice: null },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    expect(await screen.findByText('จากสต็อก')).toBeTruthy();
+    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
+    // formatMoney's ฿-prefixed, 2-decimal shape.
+    expect(screen.getByText('฿420.50')).toBeTruthy();
+    // The non-stock row's own approved price still renders normally, with no "ราคาสต็อก" line.
+    expect(screen.getByText('฿300.00')).toBeTruthy();
+    expect(screen.queryByText(/ราคาสต็อก:/)).toBeNull();
+  });
+
+  // Gap B, review follow-up: a จากสต็อก flag does not stop a line from ALSO going through the
+  // ordinary PricingRequest chain and picking up a real approvedPrice (the flag is capture-only
+  // today — nothing downstream reads it, see ticketItemFields.jsx). StockAwarePriceCell must not
+  // replace an existing price with the stock one; it only adds the stock price as a secondary
+  // line underneath.
+  it('read mode: a จากสต็อก line with approvedPrice already set shows BOTH — approvedPrice as usual, plus a secondary ราคาสต็อก line', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: 999, sourcedFromStock: true, stockSalePrice: 420.5 },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    expect(await screen.findByText('จากสต็อก')).toBeTruthy();
+    // approvedPrice still renders as the primary figure, unchanged...
+    expect(screen.getByText('฿999.00')).toBeTruthy();
+    // ...with the stock price added as a labelled secondary line, never replacing it.
+    expect(screen.getByText('ราคาสต็อก: ฿420.50')).toBeTruthy();
+  });
+
+  // Gap B, review follow-up: the calc-breakdown variant (CEO view, at least one item on the
+  // ticket has calcedCost set) renders a DIFFERENT ราคาขาย (THB/ชิ้น) cell than the plain
+  // ราคาที่อนุมัติ column the tests above exercise — StockAwarePriceCell is wired into both, and
+  // this pins the calc-breakdown one specifically (a stock line with no calced/manual price of
+  // its own yet, same "fills the placeholder" case as the very first test above, but through the
+  // other cell).
+  it('read mode: calc-breakdown variant (CEO, calcedCost set) also fills the ราคาขาย cell for a stock line with no calced price yet', async () => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({
+        summary: { status: 'submitted', createdById: 1 },
+        items: [
+          {
+            id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0,
+            approvedPrice: null, calcedCost: 100, calcedPrice: null, manualPrice: null,
+            sourcedFromStock: true, stockSalePrice: 420.5,
+          },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValueOnce({
+      currentState: {
+        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
+      },
+      availableActions: [],
+    });
+
+    renderTicketDetailPage(ceoUser);
+    await openTab(/สินค้าและราคา/);
+
+    // Calc-breakdown headers confirm the CEO variant rendered, not the plain ราคาที่อนุมัติ one.
+    expect(await screen.findByText('ต้นทุน (THB/ชิ้น)')).toBeTruthy();
+    expect(screen.getByText('ราคาขาย (THB/ชิ้น)')).toBeTruthy();
+    expect(screen.getByText('จากสต็อก')).toBeTruthy();
+    // No calced/manual price yet — the stock price fills the placeholder, with its own label.
+    expect(screen.getByText('฿420.50')).toBeTruthy();
+    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
+  });
+
   // fix/ticket-edit-items-required-markers: the UAT report this branch fixes — "เวลาเรียกดีลมาแก้
   // ดาวแดงหายไป ไม่เหมือนเดิม" — reopening a deal to edit its items showed none of the create
   // modal's required-field asterisks/validation, and a blank ยี่ห้อ/รุ่น/ขนาด only failed with a
@@ -2940,6 +3191,49 @@ describe('TicketDetailPage', () => {
 
       expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
       expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Remaining-invoice download gate (stock-delivered deals) ─────────────────────────────────
+  //
+  // The gate used to be `fulfillmentStatus === 'GOODS_RECEIVED'`, a value only the import axis
+  // writes — so a from-stock deal (FROM_STOCK → …_DELIVERED) never got the button, and an import
+  // deal lost it at its first recorded delivery. Rule now lives in remainingInvoiceReadiness.js.
+  // UI readiness only: DepositNoticeService#getRemainingInvoiceXlsx gates on ticket status alone.
+  describe('remaining-invoice download gate', () => {
+    const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
+
+    it.each(['FROM_STOCK', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'GOODS_RECEIVED'])(
+      'offers the download to the sales owner once fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('button', { name: INVOICE_BUTTON })).not.toBeNull();
+      },
+    );
+
+    // Wrong-way-round: widening must not make the button unconditional.
+    it.each([null, 'IR_ISSUED', 'IR_SENT', 'SHIPPING'])(
+      'withholds the download while fulfilment is %s',
+      async (fulfillmentStatus) => {
+        api.tickets.get.mockResolvedValueOnce({
+          ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus, createdById: 1 } }),
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+        expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
+      },
+    );
+
+    it('withholds the download from a non-sales role even on a delivered stock deal', async () => {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED', createdById: 1 } }),
+      });
+      renderTicketDetailPage(accountUser);
+      expect(await screen.findByRole('heading', { level: 1 })).not.toBeNull();
+      expect(screen.queryByRole('button', { name: INVOICE_BUTTON })).toBeNull();
     });
   });
 });

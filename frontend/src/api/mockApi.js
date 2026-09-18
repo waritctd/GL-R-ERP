@@ -70,6 +70,20 @@ import {
 
 const db = createDemoDatabase();
 
+// V183 (stock-sourced deal-line pricing): mirrors TicketService.isStorablePositivePrice exactly.
+// sales.ticket_item.stock_sale_price is numeric(14,2), and Postgres rounds HALF_UP to that scale
+// BEFORE chk_ticket_item_stock_sale_price sees the value -- 0.004 stores as 0.00 (the real CHECK
+// rejects it), 0.005 stores as 0.01 (accepted). A plain `Number(price) > 0` would let 0.004 pass
+// here and then have the real backend 400/500 it -- see ticketItemFields.jsx's
+// isStockSalePriceMissing, which this duplicates rather than imports (mockApi.js does not import
+// frontend feature modules).
+function isMockStockSalePriceMissing(sourcedFromStock, stockSalePrice) {
+  if (!sourcedFromStock) return false;
+  if (stockSalePrice === '' || stockSalePrice == null) return true;
+  const n = Number(stockSalePrice);
+  return !(Number.isFinite(n) && Math.round(n * 100) > 0);
+}
+
 function normalizeQuotation(q, ticket, index = 0) {
   return {
     ...q,
@@ -137,6 +151,11 @@ for (const t of db.tickets) {
     // own DEFAULT 1 -- every mock item gets the same "no weighting" default a brand-new real row
     // gets, regardless of which code path created it.
     weightMultiplier: item.weightMultiplier ?? 1,
+    // V183 (stock-sourced deal-line pricing): mirrors sales.ticket_item's own
+    // sourced_from_stock/stock_sale_price DEFAULT false/NULL pair for every mock item,
+    // regardless of which code path created it.
+    sourcedFromStock: item.sourcedFromStock ?? false,
+    stockSalePrice: item.stockSalePrice ?? null,
   }));
 }
 db.paymentReceipts = db.paymentReceipts || [
@@ -6145,6 +6164,13 @@ export const api = {
       const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
       if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
+      // Mirrors TicketService.create's V183 item-validation loop: a stock-sourced line must
+      // carry a real, positive selling price, checked before any write.
+      for (const item of payload.items || []) {
+        if (isMockStockSalePriceMissing(item.sourcedFromStock, item.stockSalePrice)) {
+          fail('ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก', 400);
+        }
+      }
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
@@ -6193,6 +6219,9 @@ export const api = {
           // emptyItemFromTicketItem can seed productId/catalogProductCode without re-searching.
           catalogPriceId: item.catalogPriceId ?? null,
           catalogProductCode: item.catalogProductCode ?? null,
+          // Stock-sourced pricing (V183) — see this method's own validation above.
+          sourcedFromStock: Boolean(item.sourcedFromStock),
+          stockSalePrice: item.sourcedFromStock ? (item.stockSalePrice ?? null) : null,
         })),
         events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'CREATED', fromStatus: null, toStatus: 'draft', message: null, createdAt: now }],
         quotation: null,
@@ -6219,15 +6248,39 @@ export const api = {
       // items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
+      // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real
+      // TicketService.editItems only ever checks `SALES_ROLES.contains(actor.role()) && isOwner`
+      // — there is no import branch at all — so role 'import' gets a real 403 here, regardless of
+      // status. This mock's importCanEdit has no equivalent in the Java service. Do not read a
+      // green mock-driven "import can edit items" test as evidence about the backend.
       const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
+      // V183 (stock-sourced deal-line pricing): unlike the pricing fields below (guarded to the
+      // prior row) and unlike catalogPriceId/catalogProductCode (request wins outright, even when
+      // omitted), sourcedFromStock/stockSalePrice get a NULL-SAFE FALLBACK to the prior row —
+      // mirrors TicketService.mergeEditedItemsPreservingPricing exactly: a request that omits the
+      // field (undefined/null) inherits the prior row's value instead of resetting the flag.
+      (payload.items || []).forEach((item, i) => {
+        const resolvedSourcedFromStock = item.sourcedFromStock ?? ticket.items[i]?.sourcedFromStock ?? false;
+        const resolvedStockSalePrice = resolvedSourcedFromStock
+          ? (item.sourcedFromStock != null ? item.stockSalePrice : ticket.items[i]?.stockSalePrice) ?? null
+          : null;
+        if (isMockStockSalePriceMissing(resolvedSourcedFromStock, resolvedStockSalePrice)) {
+          fail('ต้องระบุราคาขายเมื่อเลือกสินค้าจากสต็อก', 400);
+        }
+      });
       // Mirrors TicketService.editItems: sales/import editing descriptive fields must
       // never silently overwrite import's proposed price or CEO's approved/manual price —
       // pricing fields always come from the existing item at this position, never the
       // request (2026-07-16 pricing-integrity audit, finding #4). Only proposePrice is
       // allowed to replace proposedPrice wholesale.
-      ticket.items = (payload.items || []).map((item, i) => ({
+      ticket.items = (payload.items || []).map((item, i) => {
+        const resolvedSourcedFromStock = item.sourcedFromStock ?? ticket.items[i]?.sourcedFromStock ?? false;
+        const resolvedStockSalePrice = resolvedSourcedFromStock
+          ? (item.sourcedFromStock != null ? item.stockSalePrice : ticket.items[i]?.stockSalePrice) ?? null
+          : null;
+        return {
         ...ticket.items[i],
         brand: item.brand, model: item.model,
         color: item.color, texture: item.texture, size: item.size,
@@ -6248,7 +6301,11 @@ export const api = {
         // because you only discover it in prod.
         catalogPriceId: item.catalogPriceId ?? null,
         catalogProductCode: item.catalogProductCode ?? null,
-      }));
+        // Stock-sourced pricing (V183) — see this method's own validation above.
+        sourcedFromStock: resolvedSourcedFromStock,
+        stockSalePrice: resolvedStockSalePrice,
+        };
+      });
       ticket.hasEdits = true;
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'EDITED', st, st, payload.note || null);

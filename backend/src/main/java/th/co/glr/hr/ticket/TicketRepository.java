@@ -440,7 +440,15 @@ public class TicketRepository {
                 // carries item.weightMultiplier() forward from the prior row -- this repository
                 // method just persists whatever it was handed, exactly like every other
                 // pricing-adjacent field above (approvedPrice/calcedCost/manualPrice/...).
-                .addValue("weightMultiplier", item.weightMultiplier());
+                .addValue("weightMultiplier", item.weightMultiplier())
+                // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock/
+                // stockSalePrice are sales-writable -- TicketService.mergeEditedItemsPreservingPricing
+                // resolves them from the incoming request with a null-safe fallback to the prior
+                // row (so an edit that says nothing about them does not silently clear a flag set
+                // on a previous save), and validates the pairing before this method ever sees the
+                // TicketItemDto. This method just persists whatever it was handed.
+                .addValue("sourcedFromStock", item.sourcedFromStock())
+                .addValue("stockSalePrice", item.stockSalePrice());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -449,13 +457,15 @@ public class TicketRepository {
                  proposed_price, approved_price, currency, sort_order,
                  calced_cost, calced_price, calc_config_version,
                  manual_price, manual_override_reason, qty_delivered, qty_from_stock, stock_note,
-                 catalog_price_id, catalog_product_code, weight_multiplier)
+                 catalog_price_id, catalog_product_code, weight_multiplier,
+                 sourced_from_stock, stock_sale_price)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
                     :proposedPrice, :approvedPrice, :currency, :sortOrder,
                     :calcedCost, :calcedPrice, :calcConfigVersion,
                     :manualPrice, :manualOverrideReason, :qtyDelivered, :qtyFromStock, :stockNote,
-                    :catalogPriceId, :catalogProductCode, :weightMultiplier)
+                    :catalogPriceId, :catalogProductCode, :weightMultiplier,
+                    :sourcedFromStock, :stockSalePrice)
             """, batch);
     }
 
@@ -729,6 +739,7 @@ public class TicketRepository {
                    ti.manual_price, ti.manual_override_reason,
                    ti.qty_delivered, ti.qty_from_stock, ti.stock_note,
                    ti.catalog_price_id, ti.catalog_product_code, ti.weight_multiplier,
+                   ti.sourced_from_stock, ti.stock_sale_price,
                    pp.price AS catalog_price, pp.currency AS catalog_currency,
                    pp.price_unit AS catalog_price_unit, pp.sqm_per_piece AS catalog_sqm_per_piece
               FROM sales.ticket_item ti
@@ -776,7 +787,9 @@ public class TicketRepository {
                     rs.getString("catalog_currency"),
                     rs.getString("catalog_price_unit"),
                     rs.getBigDecimal("catalog_sqm_per_piece"),
-                    rs.getInt("weight_multiplier")
+                    rs.getInt("weight_multiplier"),
+                    rs.getBoolean("sourced_from_stock"),
+                    rs.getBigDecimal("stock_sale_price")
                 );
             });
     }
@@ -915,16 +928,37 @@ public class TicketRepository {
                 .addValue("currency", currency)
                 .addValue("sortOrder", i)
                 .addValue("catalogPriceId", item.catalogPriceId())
-                .addValue("catalogProductCode", item.catalogProductCode());
+                .addValue("catalogProductCode", item.catalogProductCode())
+                // V183: sourcedFromStock is a Boolean (nullable) on the request record -- a
+                // request that never mentions it (every call site before this feature) means
+                // "not from stock", same as an explicit false. This method persists what it is
+                // given without validating the sourcedFromStock/stockSalePrice pairing -- that
+                // invariant is enforced in TicketService.create before any DB write is attempted
+                // (see its item-validation loop) and backstopped by chk_ticket_item_stock_sale_price.
+                .addValue("sourcedFromStock", Boolean.TRUE.equals(item.sourcedFromStock()))
+                // Force-null when the flag is false, exactly as
+                // TicketService.mergeEditedItemsPreservingPricing does on the edit path (and as
+                // mockApi.js and TicketCreateModal's submit() already do client-side): never let a
+                // stray price ride along on a line that is not flagged stock-sourced.
+                // TicketService.create validates "flag true => positive price", but it deliberately
+                // does NOT reject the inverse, so without this a malformed request carrying
+                // {sourcedFromStock:false, stockSalePrice:500} reached chk_ticket_item_stock_sale_price
+                // and came back as a 500 (DataIntegrityViolationException -> handleDataAccess) with the
+                // raw driver message, instead of being silently normalised the way every other layer
+                // already normalises it.
+                .addValue("stockSalePrice",
+                    Boolean.TRUE.equals(item.sourcedFromStock()) ? item.stockSalePrice() : null);
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
                 (ticket_id, brand, model, color, texture, size, factory,
                  qty, qty_sqm, unit_basis, raw_price, raw_currency, raw_unit,
-                 proposed_price, currency, sort_order, catalog_price_id, catalog_product_code)
+                 proposed_price, currency, sort_order, catalog_price_id, catalog_product_code,
+                 sourced_from_stock, stock_sale_price)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory,
                     :qty, :qtySqm, :unitBasis, :rawPrice, :rawCurrency, :rawUnit,
-                    :proposedPrice, :currency, :sortOrder, :catalogPriceId, :catalogProductCode)
+                    :proposedPrice, :currency, :sortOrder, :catalogPriceId, :catalogProductCode,
+                    :sourcedFromStock, :stockSalePrice)
             """, batch);
     }
 

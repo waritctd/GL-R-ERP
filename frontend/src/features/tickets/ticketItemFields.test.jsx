@@ -6,12 +6,15 @@ import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
   isRequiredItemField,
+  isStockSalePriceMissing,
   ITEM_FIELD_META,
   missingQtyMessage,
+  missingStockSalePriceMessage,
   REQUIRED_ITEM_FIELD_LABELS,
   requiredItemFieldErrors,
   requiredQtyField,
   searchCatalog,
+  stockSalePriceError,
 } from './ticketItemFields.jsx';
 
 // fix/ticket-edit-items-required-markers: TicketCreateModal.jsx and TicketDetailPage.jsx both used
@@ -82,6 +85,52 @@ describe('requiredQtyField / missingQtyMessage — PIECE vs SQM basis', () => {
   it('missingQtyMessage names the right field and row number', () => {
     expect(missingQtyMessage('PIECE', 2)).toBe('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2');
     expect(missingQtyMessage('SQM', 2)).toBe('กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ 2');
+  });
+});
+
+// V183 (stock-sourced deal-line pricing, owner ruling): sales may flag a deal line "จากสต็อก"
+// and type in its own selling price. CAPTURE-ONLY today — nothing downstream reads this pair
+// yet, so a flagged line can still be attached to an ordinary PricingRequest exactly as before.
+// Shared by TicketCreateModal.jsx (create-time) and TicketDetailPage.jsx (edit-items mode).
+describe('isStockSalePriceMissing / stockSalePriceError / missingStockSalePriceMessage', () => {
+  it('not missing when the item is not flagged, regardless of price', () => {
+    expect(isStockSalePriceMissing({ sourcedFromStock: false, stockSalePrice: null })).toBe(false);
+    expect(isStockSalePriceMissing({ sourcedFromStock: false, stockSalePrice: '' })).toBe(false);
+    expect(isStockSalePriceMissing({})).toBe(false);
+  });
+
+  it('missing when flagged and the price is empty/null/zero/negative', () => {
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '' })).toBe(true);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: null })).toBe(true);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0 })).toBe(true);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '-5' })).toBe(true);
+  });
+
+  it('not missing when flagged and a positive price is set (string or number)', () => {
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '420.50' })).toBe(false);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 420.5 })).toBe(false);
+  });
+
+  // Matches TicketService.isStorablePositivePrice exactly: stock_sale_price is numeric(14,2), and
+  // Postgres rounds HALF_UP to that scale BEFORE chk_ticket_item_stock_sale_price sees the value —
+  // 0.004 stores as 0.00 (rejected by the CHECK), 0.005 stores as 0.01 (accepted). A plain
+  // `Number(price) > 0` would accept 0.004 here and then have the server 400/500 it.
+  it('sub-cent boundary matches Postgres numeric(14,2) HALF_UP rounding (0.004 missing, 0.005 not)', () => {
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '0.004' })).toBe(true);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0.004 })).toBe(true);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '0.005' })).toBe(false);
+    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0.005 })).toBe(false);
+  });
+
+  it('missingStockSalePriceMessage names the row (create modal convention)', () => {
+    expect(missingStockSalePriceMessage(3)).toBe('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 3');
+  });
+
+  it('stockSalePriceError has no row-number suffix (edit-page inline convention, matches requiredItemFieldErrors)', () => {
+    expect(stockSalePriceError({ sourcedFromStock: true, stockSalePrice: '' }))
+      .toBe('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก');
+    expect(stockSalePriceError({ sourcedFromStock: true, stockSalePrice: 100 })).toBeNull();
+    expect(stockSalePriceError({ sourcedFromStock: false, stockSalePrice: null })).toBeNull();
   });
 });
 

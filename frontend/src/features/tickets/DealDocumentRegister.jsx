@@ -12,6 +12,7 @@ import { downloadBlob } from '../../utils/download.js';
 import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation } from '../quotations/quotationMeta.js';
+import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
@@ -157,7 +158,7 @@ export function DealDocumentRegister({
   });
   const depositNotices = depositNoticesQuery.data ?? [];
 
-  const remainingInvoiceReady = summary?.status === 'quotation_issued' && summary?.fulfillmentStatus === 'GOODS_RECEIVED';
+  const remainingInvoiceReady = isRemainingInvoiceReady(summary);
 
   async function handleDownload(key, run) {
     setBusyKey(key);
@@ -297,7 +298,7 @@ export function DealDocumentRegister({
             <DocumentRow
               icon="fileText"
               title="ใบแจ้งหนี้ส่วนที่เหลือ"
-              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและรับสินค้าครบก่อน)'}
+              meta={remainingInvoiceReady ? 'พร้อมดาวน์โหลด' : 'ยังไม่ถึงขั้นตอน (ต้องออกใบเสนอราคาและสินค้าพร้อมส่งมอบก่อน)'}
               status={{ label: remainingInvoiceReady ? 'พร้อมใช้งาน' : 'รอขั้นตอน', tone: remainingInvoiceReady ? 'success' : 'neutral' }}
               actions={remainingInvoiceReady ? [
                 { label: 'Excel', busy: false, onClick: openRemainingInvoiceDialog },

@@ -215,4 +215,30 @@ describe('DealDocumentRegister', () => {
     // The dialog itself calls the options endpoint — the register never downloads directly.
     expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
   });
+
+  // A from-stock deal never writes GOODS_RECEIVED (import-axis only), so the old gate left this row
+  // at รอขั้นตอน for its whole life. Ready states and the wrong-way-round transit states both pinned.
+  it.each([
+    ['FROM_STOCK', true],
+    ['PARTIALLY_DELIVERED', true],
+    ['FULLY_DELIVERED', true],
+    ['SHIPPING', false],
+    ['IR_SENT', false],
+    [null, false],
+  ])('remaining-invoice row with fulfilment %s → ready=%s', async (fulfillmentStatus, ready) => {
+    renderRegister({
+      user: { id: 5, role: 'account' },
+      sections: ACCOUNT_SECTIONS,
+      canViewDocumentsTab: true,
+      summary: { status: 'quotation_issued', fulfillmentStatus },
+    });
+    const section = within(await screen.findByTestId('register-deposit-and-invoice'));
+    if (ready) {
+      expect(section.getByText('พร้อมใช้งาน')).not.toBeNull();
+      expect(section.getByRole('button', { name: 'Excel' })).not.toBeNull();
+    } else {
+      expect(section.getByText('รอขั้นตอน')).not.toBeNull();
+      expect(section.queryByRole('button', { name: 'Excel' })).toBeNull();
+    }
+  });
 });

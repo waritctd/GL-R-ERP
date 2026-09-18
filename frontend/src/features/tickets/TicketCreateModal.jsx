@@ -16,10 +16,12 @@ import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
   CatalogAutocompleteField,
+  isStockSalePriceMissing,
   ITEM_FIELD_META,
   ItemField,
   isRequiredItemField,
   missingQtyMessage,
+  missingStockSalePriceMessage,
   REQUIRED_ITEM_FIELD_LABELS,
   requiredItemFieldErrors,
   requiredQtyField,
@@ -60,6 +62,13 @@ const emptyItem = () => ({
   // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
   // hand-edits a descriptive field the link no longer accurately describes.
   catalogPriceId: null, catalogProductCode: '',
+  // Stock-sourced pricing (owner ruling, V183): sales may flag this line "from warehouse" and
+  // type in its own selling price. CAPTURE-ONLY today — nothing downstream (PricingRequest,
+  // quotation, commission) reads this pair yet, so a flagged line can still be attached to a
+  // PricingRequest exactly as before; wiring it into that chain is a later follow-up.
+  // stockSalePrice is a string (matching every other numeric text input on this form, e.g.
+  // qty/qtySqm) — see submit()'s items map below for the Number(...) coercion.
+  sourcedFromStock: false, stockSalePrice: '',
 });
 
 // ── client-side drafts (no server draft entity — see handoff 107) ──────────
@@ -125,6 +134,8 @@ function makeItemSchema(rowNumber) {
     unitBasis: z.string().optional(),
     qty: z.union([z.string(), z.number()]).nullable().optional(),
     qtySqm: z.union([z.string(), z.number()]).nullable().optional(),
+    sourcedFromStock: z.boolean().optional(),
+    stockSalePrice: z.union([z.string(), z.number()]).nullable().optional(),
   }).superRefine((item, ctx) => {
     const fieldErrors = requiredItemFieldErrors(item);
     for (const [field, message] of Object.entries(fieldErrors)) {
@@ -133,6 +144,12 @@ function makeItemSchema(rowNumber) {
     const qtyField = requiredQtyField(item.unitBasis);
     if (!item[qtyField] || Number(item[qtyField]) <= 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: [qtyField], message: missingQtyMessage(item.unitBasis, rowNumber) });
+    }
+    // Mirrors TicketService.create's own validation (V183): a stock-sourced line must carry a
+    // real, positive selling price — same invariant chk_ticket_item_stock_sale_price enforces
+    // at the DB layer.
+    if (isStockSalePriceMissing(item)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['stockSalePrice'], message: missingStockSalePriceMessage(rowNumber) });
     }
   });
 }
@@ -839,12 +856,22 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       clearFieldError(`items.${index}.qty`);
       clearFieldError(`items.${index}.qtySqm`);
     }
+    // Unchecking "จากสต็อก" clears the price along with it — never leave a stray value riding
+    // along that a re-check would silently resurrect, and never send one the backend would
+    // reject (chk_ticket_item_stock_sale_price requires sourcedFromStock=false to pair with a
+    // NULL price).
+    if (field === 'sourcedFromStock' && !value) {
+      clearFieldError(`items.${index}.stockSalePrice`);
+    }
     setItems((cur) => cur.map((item, i) => {
       if (i !== index) return item;
       // Descriptive-field assignment, brand→factory lockstep and catalog-link clearing all live in
       // the shared helper now (ticketItemFields.jsx) — non-descriptive fields (qty/qtySqm/unitBasis)
       // pass through it as a plain assign, same as before.
       let updated = applyDescriptiveFieldEdit(item, field, value);
+      if (field === 'sourcedFromStock' && !value) {
+        updated = { ...updated, stockSalePrice: '' };
+      }
       if (field === 'qty' && item.sqmPerPiece) {
         updated = { ...updated, qtySqm: value ? (Number(value) * item.sqmPerPiece).toFixed(3) : '' };
       }
@@ -889,6 +916,31 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
   function onBrandInput(index, value) { onCatalogInput(index, 'brand', value); }
   function onModelInput(index, value) { onCatalogInput(index, 'model', value); }
+
+  // The item editor has TWO ways to close: the footer's "บันทึกรายการ" button, and the
+  // "กลับไปรายการสินค้า" BackLink at the top of renderItemEditor. Both used to just close with no
+  // validation of their own — a line flagged จากสต็อก with an empty price was accepted through
+  // either exit and only ever caught (if at all) by the final สร้างดีล submit's zod schema. Both
+  // now route through this one function, so a rep cannot dodge the check by using the back link
+  // instead of the button. This does NOT extend to the row's other required fields (ยี่ห้อ/รุ่น/
+  // ขนาด) — #994's edit-items rewrite left both exits with no required-field validation either,
+  // and widening that is out of scope here; only the V183 stock-price rule is checked. A rep can
+  // still close the editor with a blank ยี่ห้อ and only discover it at final submit, exactly as
+  // before.
+  function closeItemEditor(index) {
+    const item = items[index];
+    if (item && isStockSalePriceMissing(item)) {
+      const key = `items.${index}.stockSalePrice`;
+      setFieldErrors((prev) => ({ ...prev, [key]: missingStockSalePriceMessage(index + 1) }));
+      const node = fieldRefs.current[key];
+      if (node) {
+        if (typeof node.scrollIntoView === 'function') node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        node.focus();
+      }
+      return;
+    }
+    setEditingItemIndex(null);
+  }
 
   function addItem() {
     setItems((cur) => [...cur, emptyItem()]);
@@ -1018,6 +1070,13 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           // without a re-search — see emptyItem()'s comment.
           catalogPriceId: item.catalogPriceId ?? null,
           catalogProductCode: item.catalogProductCode?.trim() || null,
+          // Stock-sourced pricing (V183) — see emptyItem()'s comment. stockSalePrice is sent
+          // only when the flag is on; TicketService forces it back to null server-side too if a
+          // stray value ever rode along, but this mirrors that intent client-side rather than
+          // sending a number the backend would just discard.
+          sourcedFromStock: Boolean(item.sourcedFromStock),
+          stockSalePrice: item.sourcedFromStock && item.stockSalePrice !== ''
+            ? Number(item.stockSalePrice) : null,
         })),
       });
       // Server accepted the deal — the client-only draft has served its purpose and would
@@ -1470,7 +1529,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
     return (
       <div className="flex flex-col gap-4">
-        <BackLink onClick={() => setEditingItemIndex(null)} label="กลับไปรายการสินค้า" />
+        <BackLink onClick={() => closeItemEditor(index)} label="กลับไปรายการสินค้า" />
 
         {item.source === 'catalog' ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-accent/10 px-3 py-2 text-xs font-bold text-accent-dark">
@@ -1624,6 +1683,48 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
           </ItemField>
         </div>
 
+        {/* Stock-sourced pricing (owner ruling, V183): sales may flag this line "from warehouse"
+            and type in its own selling price — the CEO's own answer described a manual weekly
+            clearance/promo process run entirely outside the ERP today; this is the first ERP-side
+            slice of it. CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation,
+            commission) reads this pair yet, so a flagged line can still be attached to, and
+            priced through, an ordinary PricingRequest exactly as before — wiring it into that
+            chain is a later follow-up. */}
+        <div className="flex flex-col gap-1.5 rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
+          <label className="m-0 flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 cursor-pointer accent-info-dot"
+              checked={Boolean(item.sourcedFromStock)}
+              onChange={(e) => updateItem(index, 'sourcedFromStock', e.target.checked)}
+            />
+            <strong>จากสต็อก</strong>
+          </label>
+          <p className="m-0 pl-6 text-2xs font-semibold text-text-muted">
+            สินค้าที่มีอยู่ในคลัง — ฝ่ายขายระบุราคาขายเอง
+          </p>
+          {item.sourcedFromStock ? (
+            <ItemField
+              id={`item-${index}-stockSalePrice`}
+              label="ราคาขาย (สต็อก)"
+              required
+              error={fieldErrors[`items.${index}.stockSalePrice`]}
+            >
+              <input
+                type="number" min="0" step="0.01"
+                id={`item-${index}-stockSalePrice`}
+                ref={(el) => { fieldRefs.current[`items.${index}.stockSalePrice`] = el; }}
+                value={item.stockSalePrice ?? ''}
+                onChange={(e) => updateItem(index, 'stockSalePrice', e.target.value)}
+                placeholder="เช่น 350.00"
+                aria-required="true"
+                aria-invalid={fieldErrors[`items.${index}.stockSalePrice`] ? true : undefined}
+                aria-describedby={fieldErrors[`items.${index}.stockSalePrice`] ? fieldErrorId(`item-${index}-stockSalePrice`) : undefined}
+              />
+            </ItemField>
+          ) : null}
+        </div>
+
         {/* Catalog price: the factory's own figure in the currency it is quoted in, with a baht
             conversion underneath. Replaces the ราคาตั้ง (ประมาณการ) block — see
             catalogPriceDisplay.js for why a marked-up figure is no longer shown here. */}
@@ -1685,6 +1786,9 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                     ) : (
                       <StatusBadge tone="indigo">custom</StatusBadge>
                     )}
+                    {item.sourcedFromStock ? (
+                      <StatusBadge tone="warning">จากสต็อก</StatusBadge>
+                    ) : null}
                   </div>
                 </div>
                 <div className="shrink-0 text-right text-xs font-extrabold text-text">
@@ -1704,6 +1808,17 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
                       </div>
                     );
                   })() : null}
+                  {/* Sales-entered stock price (V183) — deliberately separate from the catalog
+                      price above, which is the factory's purchase figure, not a selling price.
+                      Hardcodes "บาท" the same way the original implementation did: this modal's
+                      item state never tracks a per-item `currency` (only TicketDetailPage's
+                      edit-items rows do, fetched from the backend) — see the read-mode display
+                      in TicketDetailPage.jsx for the currency-aware version. */}
+                  {item.sourcedFromStock && item.stockSalePrice ? (
+                    <div data-testid={`item-stock-sale-price-${index}`} className="mt-0.5 font-semibold text-2xs text-text-muted">
+                      {Number(item.stockSalePrice).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
                   <Button variant="icon" aria-label={`แก้ไขรายการที่ ${index + 1}`} onClick={() => setEditingItemIndex(index)}>
@@ -1854,7 +1969,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
       return (
         <>
           <Button variant="secondary" className="text-danger" onClick={() => removeItem(editingItemIndex)}>ลบ</Button>
-          <Button variant="primary" onClick={() => setEditingItemIndex(null)}>
+          <Button variant="primary" onClick={() => closeItemEditor(editingItemIndex)}>
             <Icon name="check" size={14} /> บันทึกรายการ
           </Button>
         </>
