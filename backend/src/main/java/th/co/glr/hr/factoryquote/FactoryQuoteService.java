@@ -1,5 +1,6 @@
 package th.co.glr.hr.factoryquote;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -762,13 +763,28 @@ public class FactoryQuoteService {
 
     /**
      * English RFQ draft body (manual-RFQ redesign, P2). Contains what the owner approved for this
-     * template: a greeting identifying GL&R as the requester, the item table (brand/model/size/
-     * quantity/unit), the sales note if any, and a sign-off naming the requesting user and their
-     * email. Deliberately NO commercial-terms block and NO reply-by-date block — the owner
-     * declined both explicitly. This is a human-reviewed DRAFT the requester edits and sends from
-     * their own mail client (factory RFQ email is manual-only — see {@link #send}), not a
-     * machine-sent message, so it reads as ordinary business correspondence rather than a system
-     * dump of field names.
+     * template: a greeting identifying GL&R as the requester, one numbered block per item (brand/
+     * model/catalog code, colour/surface/size, quantity, special requirement), the sales note if
+     * any, and a sign-off naming the requesting user and their email. Deliberately NO
+     * commercial-terms block and NO reply-by-date block — the owner declined both explicitly. This
+     * is a human-reviewed DRAFT the requester edits and sends from their own mail client (factory
+     * RFQ email is manual-only — see {@link #send}), not a machine-sent message, so it reads as
+     * ordinary business correspondence rather than a system dump of field names.
+     *
+     * <p><b>Numbered blocks, not a fixed-width table (2026-09).</b> The previous {@code
+     * String.format} table only listed brand/model/size/quantity/unit, and a fixed-width table
+     * falls apart in real mail clients (proportional fonts). This also left out colour, surface
+     * (texture), the catalog product code, and the line's special requirement — details a factory
+     * needs to quote the right product. Each optional field is skipped outright when blank; this
+     * NEVER prints a "null" or "-" placeholder for a missing field. Quantities are formatted via
+     * {@link BigDecimal#stripTrailingZeros()} so "120.000" reads as "120". Thickness, pieces-per-
+     * box, and a sales-typed product code deliberately stay OUT of this block — they arrive via
+     * another session's unmerged V185, which will extend this template later.
+     *
+     * <p><b>Packing-details ask (2026-09).</b> The factory's reply is where GL&R actually learns
+     * the packing (pieces per box, m² per box, box weight) — the catalog frequently lacks box
+     * counts — so the request sentence now asks for pricing, lead time, AND packing details, not
+     * pricing and lead time alone.
      *
      * <p><b>Attachment list (review remediation, HIGH 4) — a DEVIATION from the owner's approved
      * template above, flagged rather than assumed.</b> {@code include_in_factory_email} has had no
@@ -786,16 +802,15 @@ public class FactoryQuoteService {
         StringBuilder body = new StringBuilder();
         body.append("Dear ").append(factoryName).append(" team,\n\n");
         body.append("We are GL&R, a tile and ceramics importer based in Bangkok, Thailand. ")
-            .append("We would like to request your best pricing and lead time for the following item(s), ")
+            .append("We would like to request your best pricing, lead time, and packing details ")
+            .append("(pieces per box, m² per box, box weight) for the following item(s), ")
             .append("referencing our internal pricing request ").append(summary.requestCode()).append(":\n\n");
-        body.append(String.format("%-20s %-25s %-15s %10s  %s%n", "Brand", "Model", "Size", "Quantity", "Unit"));
-        for (PricingRequestItemDto item : items) {
-            body.append(String.format("%-20s %-25s %-15s %10s  %s%n",
-                safe(item.brand(), "-"),
-                safe(item.model(), item.productDescription()),
-                safe(item.size(), "-"),
-                String.valueOf(item.requestedQty()),
-                item.requestedUnit()));
+        int lineNo = 1;
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) {
+                body.append("\n");
+            }
+            appendItemBlock(body, lineNo++, items.get(i));
         }
         if (summary.note() != null && !summary.note().isBlank()) {
             body.append("\nAdditional note from our sales team: ").append(summary.note()).append("\n");
@@ -816,6 +831,75 @@ public class FactoryQuoteService {
         }
         body.append("\nGL&R\n");
         return body.toString();
+    }
+
+    /**
+     * Renders one numbered item block for {@link #emailBody}. Every optional field (catalog code,
+     * colour, surface/texture, size, unit, special requirement) is skipped outright when blank —
+     * this never prints "null" or a "-" placeholder. Model falls back to productDescription, same
+     * as the rest of this codebase's factory-facing text.
+     */
+    private void appendItemBlock(StringBuilder body, int lineNo, PricingRequestItemDto item) {
+        String brand = firstText(item.brand(), null);
+        String model = firstText(item.model(), item.productDescription());
+        List<String> headerParts = new ArrayList<>();
+        if (brand != null) {
+            headerParts.add(brand);
+        }
+        if (model != null) {
+            headerParts.add(model);
+        }
+        String catalogCode = firstText(item.catalogProductCode(), null);
+        if (catalogCode != null) {
+            headerParts.add(headerParts.isEmpty() ? "Code: " + catalogCode : "  (Code: " + catalogCode + ")");
+        }
+        // A line can be identified only by a ticket/catalog link (PricingRequestService accepts it), so
+        // the header may have nothing printable -- say "Item" rather than leave a dangling "1. ".
+        body.append(lineNo).append(". ")
+            .append(headerParts.isEmpty() ? "Item" : String.join(" ", headerParts))
+            .append("\n");
+
+        List<String> details = new ArrayList<>();
+        String color = firstText(item.color(), null);
+        if (color != null) {
+            details.add("Colour: " + color);
+        }
+        String texture = firstText(item.texture(), null);
+        if (texture != null) {
+            details.add("Surface: " + texture);
+        }
+        String size = firstText(item.size(), null);
+        if (size != null) {
+            details.add("Size: " + size);
+        }
+        if (!details.isEmpty()) {
+            body.append("   ").append(String.join(" | ", details)).append("\n");
+        }
+
+        if (item.requestedQty() != null) {
+            body.append("   Quantity: ").append(formatQty(item.requestedQty()));
+            String unit = firstText(item.requestedUnit(), null);
+            if (unit != null) {
+                body.append(" ").append(unit);
+            }
+            body.append("\n");
+        }
+
+        String specialRequirement = firstText(item.specialRequirement(), null);
+        if (specialRequirement != null) {
+            // Free text may span lines; indent the continuation so it stays inside this item's block.
+            body.append("   Special requirement: ")
+                .append(specialRequirement.replace("\r\n", "\n").replace('\r', '\n').replace("\n", "\n   "))
+                .append("\n");
+        }
+    }
+
+    /**
+     * Quantity formatting for the factory email — no trailing zeros, e.g. "120" rather than
+     * "120.000".
+     */
+    private String formatQty(BigDecimal qty) {
+        return qty.stripTrailingZeros().toPlainString();
     }
 
     private String safe(String first, String fallback) {

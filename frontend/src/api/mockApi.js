@@ -10968,7 +10968,38 @@ export const api = {
           status: 'DRAFT',
           emailTo: factoryConfig?.email ?? null,
           emailSubject: `Pricing request ${pr.requestCode}`,
-          emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
+          // Mirrors FactoryQuoteService.emailBody's item-block loop (appendItemBlock, 2026-09):
+          // one numbered block per item — brand/model, catalog code, colour/surface/size,
+          // quantity (no trailing zeros), special requirement — skipping any blank field
+          // outright rather than printing "null" or "-". This mock never reproduces the
+          // surrounding greeting/sign-off text (it never claimed to), only the item-block shape.
+          emailBody: items
+            .map((item, index) => {
+              // firstText(): blank counts as missing, exactly like the Java helper.
+              const text = (v) => (v == null ? '' : String(v).trim());
+              const brand = text(item.brand);
+              const model = text(item.model) || text(item.productDescription);
+              const code = text(item.catalogProductCode);
+              const headerParts = [brand, model].filter(Boolean);
+              if (code) headerParts.push(headerParts.length ? `  (Code: ${code})` : `Code: ${code}`);
+              const lines = [`${index + 1}. ${headerParts.length ? headerParts.join(' ') : 'Item'}`];
+              const details = [
+                text(item.color) ? `Colour: ${text(item.color)}` : null,
+                text(item.texture) ? `Surface: ${text(item.texture)}` : null,
+                text(item.size) ? `Size: ${text(item.size)}` : null,
+              ].filter(Boolean);
+              if (details.length) lines.push(`   ${details.join(' | ')}`);
+              if (item.requestedQty != null && Number.isFinite(Number(item.requestedQty))) {
+                const unit = text(item.requestedUnit);
+                lines.push(`   Quantity: ${Number(item.requestedQty).toString()}${unit ? ` ${unit}` : ''}`);
+              }
+              const special = text(item.specialRequirement);
+              if (special) {
+                lines.push(`   Special requirement: ${special.replace(/\r\n?/g, '\n').replace(/\n/g, '\n   ')}`);
+              }
+              return lines.join('\n');
+            })
+            .join('\n\n'),
           emailSentAt: null,
           sentBy: null,
           supplierQuoteRef: null,
