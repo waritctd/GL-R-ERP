@@ -93,5 +93,13 @@ public final class TicketEventKind {
     // use exactly this name; do not invent another.
     public static final String IMPORT_REQUEST_EMAIL_SENT = "IMPORT_REQUEST_EMAIL_SENT";
 
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186): a REAL sales.ticket_event.kind value
+    // (unlike the three DEAL_QUOTATION_* notification-only kinds above) -- chk_event_kind was
+    // widened for it in V186. Written once, by DealQuotationService#createReorder, when an
+    // APPROVED direct-deal quotation is cloned into a new independent DRAFT. Deliberately NOT a
+    // reuse of REVISION_REQUESTED: a reorder never revises, rejects, or supersedes its source, so
+    // sharing that kind would misdescribe it in DealHistoryPanel.jsx's EVENT_KIND_LABEL ("ขอแก้ไข").
+    public static final String DEAL_QUOTATION_REORDERED = "DEAL_QUOTATION_REORDERED";
+
     private TicketEventKind() {}
 }

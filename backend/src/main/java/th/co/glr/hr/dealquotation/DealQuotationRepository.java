@@ -235,6 +235,11 @@ public class DealQuotationRepository {
         // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
         boolean omitContactHonorific, String fullPaymentTerm,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
+        // GLA-74 part 1 (V186) — see DealQuotationDtos#derivedFromQuotationId's own Javadoc.
+        // Mutually exclusive with parentQuotationId in practice (a row is either an ordinary
+        // create/revision, which sets parentQuotationId, or a reorder clone, which sets THIS
+        // instead) — DealQuotationService#insertCopyOf is the one place that decides which.
+        Long derivedFromQuotationId,
         List<NewItem> items) {}
 
     @Transactional
@@ -255,7 +260,7 @@ public class DealQuotationRepository {
                  validity_days, validity_mode, validity_until, customer_notes, price_mode, document_language,
                  printed_by_display_id, sales_rep_display_id,
                  omit_contact_honorific, full_payment_term,
-                 parent_quotation_id, updated_at)
+                 parent_quotation_id, derived_from_quotation_id, updated_at)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', 'UNSPECIFIED', :revisionNo, 'DEAL_DIRECT', :createdById, :salesRepId,
@@ -265,7 +270,7 @@ public class DealQuotationRepository {
                  :validityDays, :validityMode, :validityUntil, :customerNotes, :priceMode, :documentLanguage,
                  :printedByDisplayId, :salesRepDisplayId,
                  :omitContactHonorific, :fullPaymentTerm,
-                 :parentQuotationId, now())
+                 :parentQuotationId, :derivedFromQuotationId, now())
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -304,7 +309,8 @@ public class DealQuotationRepository {
                 .addValue("salesRepDisplayId", p.salesRepDisplayId())
                 .addValue("omitContactHonorific", p.omitContactHonorific())
                 .addValue("fullPaymentTerm", p.fullPaymentTerm())
-                .addValue("parentQuotationId", p.parentQuotationId()),
+                .addValue("parentQuotationId", p.parentQuotationId())
+                .addValue("derivedFromQuotationId", p.derivedFromQuotationId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
         insertItems(quotationId, p.items());
@@ -1051,7 +1057,12 @@ public class DealQuotationRepository {
                    q.sales_rep_display_id,
                    NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_th, srd.last_name_th)), '') AS sales_rep_display_name,
                    NULLIF(TRIM(CONCAT_WS(' ', srd.first_name_en, srd.last_name_en)), '') AS sales_rep_display_name_en,
-                   srd.phone AS sales_rep_display_phone
+                   srd.phone AS sales_rep_display_phone,
+                   -- GLA-74 part 1 (V186) — the reorder-clone provenance link. A plain join on the
+                   -- SOURCE's live number (never frozen), purely for the UI's "สั่งเหมือนเดิมจาก..."
+                   -- note; see DealQuotationDtos#derivedFromQuotationNumber's own Javadoc.
+                   q.derived_from_quotation_id,
+                   src.number AS derived_from_quotation_number
               FROM sales.quotation q
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
@@ -1059,6 +1070,7 @@ public class DealQuotationRepository {
               LEFT JOIN sales.quotation_approver_snapshot aps ON aps.quotation_id = q.quotation_id
               LEFT JOIN hr.employee pbd ON pbd.employee_id = q.printed_by_display_id
               LEFT JOIN hr.employee srd ON srd.employee_id = q.sales_rep_display_id
+              LEFT JOIN sales.quotation src ON src.quotation_id = q.derived_from_quotation_id
             """;
     }
 
@@ -1153,6 +1165,9 @@ public class DealQuotationRepository {
             // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
             rs.getBoolean("omit_contact_honorific"),
             rs.getString("full_payment_term"),
+            // GLA-74 part 1 (V186) — see DealQuotationDtos#derivedFromQuotationId's own Javadoc.
+            nullableLong(rs, "derived_from_quotation_id"),
+            rs.getString("derived_from_quotation_number"),
             items,
             createdAt,
             instant(rs, "updated_at")

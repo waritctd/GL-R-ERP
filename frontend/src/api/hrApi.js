@@ -1189,6 +1189,9 @@ export const api = {
     approve: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload) => apiRequest(API_ROUTES.dealQuotations.reject(id), { method: 'POST', body: payload }),
     createRevision: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.revisions(id), { method: 'POST', body: payload }),
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
+    // independent DRAFT. The source stays APPROVED; see DealQuotationService#createReorder.
+    createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.dealQuotations.file(id, 'pdf'), { credentials: 'include' });

@@ -546,6 +546,10 @@ export const API_ROUTES = {
     approve: (id) => `/api/deal-quotations/${id}/approve`,
     reject: (id) => `/api/deal-quotations/${id}/reject`,
     revisions: (id) => `/api/deal-quotations/${id}/revisions`,
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
+    // independent DRAFT. Mirrors DealQuotationController#createReorder. Plural, sibling to
+    // `revisions` above, for the same reason: one source may be cloned any number of times.
+    reorders: (id) => `/api/deal-quotations/${id}/reorders`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
   },

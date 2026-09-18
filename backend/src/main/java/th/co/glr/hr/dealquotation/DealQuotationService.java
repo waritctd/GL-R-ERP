@@ -209,7 +209,9 @@ public class DealQuotationService {
             priceMode, documentLanguage, currency,
             printedByDisplayId, salesRepDisplayId,
             resolveOmitContactHonorific(request.omitContactHonorific()), fullPaymentTerm,
-            subtotal, null, 1, items));
+            // A brand-new document is neither a revision (parentQuotationId) nor a reorder clone
+            // (derivedFromQuotationId) — both null.
+            subtotal, null, 1, null, items));
         return requireQuotation(id);
     }
 
@@ -793,17 +795,78 @@ public class DealQuotationService {
     }
 
     /**
-     * The revision-copy step {@link #createRevision} and {@link #submit}'s owner-feedback
-     * (2026-09-15) "resubmit after a ตีกลับ mints a new number" path both need: a new DRAFT child
-     * of {@code source}, every header field copied VERBATIM (see each parameter's own comment
-     * below — unchanged from {@code createRevision}'s original body), its items and item pictures
-     * copied, at the next revision number. Callers are responsible for their OWN precondition (the
-     * two paths gate on different source statuses) and for locking the ticket + checking
-     * {@link DealQuotationRepository#hasOpenRevision} BEFORE calling this — both already-serialised
-     * requirements this method assumes rather than re-does, so it stays a plain insert with no
-     * lock/guard duplicated between the two callers.
+     * GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม): clone an APPROVED direct-deal quotation into
+     * a new, INDEPENDENT DRAFT — same deal, next number in the SAME shared numbering family a
+     * revision would use (see {@link #insertCopyOf}), everything copied verbatim. The core
+     * invariant, unlike {@link #createRevision}: {@code source} stays APPROVED forever. This never
+     * links through {@code parentQuotationId} (only {@code derivedFromQuotationId}, audit-only —
+     * see {@link DealQuotationDtos.DealQuotationDto#derivedFromQuotationId}'s own Javadoc for every
+     * mechanism that intentionally never reads it), so {@link #approve}'s ancestor-supersede walk,
+     * {@link DealQuotationRepository#hasOpenRevision} and the "แก้" bucket predicate can never
+     * reach {@code source} through it — neither when this clone is created nor later, when it is
+     * itself submitted and approved.
+     *
+     * <p>Multiple clones of the same source are allowed (unlike a revision, there is no
+     * {@link #requireNoOpenRevision}-style single-open-child guard) — only the ticket-wide advisory
+     * lock is taken, so concurrent clones/revisions of the same family still serialise on the
+     * shared {base}-{n} counter and can never collide on the UNIQUE {@code number}.
      */
+    @Transactional
+    public DealQuotationDto createReorder(long id, UserPrincipal actor) {
+        DealQuotationDto source = requireQuotation(id);
+        requireEditAccessForQuotation(actor, source);
+        if (!QuotationStatus.APPROVED.equals(source.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "สร้างจากใบเดิมได้จากใบเสนอราคาที่ได้รับอนุมัติแล้วเท่านั้น (ปัจจุบัน: " + source.docStatus() + ")");
+        }
+        // No requireNoOpenRevision here (deliberately) — multiple clones of the same APPROVED
+        // source are allowed, and a clone never contends with an in-progress revision for anything.
+        // Still locks the ticket, same advisory lock #requireNoOpenRevision/#createRevision use, so
+        // this serialises against a CONCURRENT revision or reorder of the same family before
+        // #insertCopyOf computes the next {base}-{n} suffix — without it, two callers could both
+        // read the same MAX(quotation_revision_no) and race into the number's UNIQUE constraint.
+        quotations.lockTicket(source.ticketId());
+        long newId = insertReorderCopyOf(source, actor);
+        DealQuotationDto reorder = requireQuotation(newId);
+        tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.DEAL_QUOTATION_REORDERED,
+            null, null,
+            "สร้างใบเสนอราคา " + reorder.number() + " จากใบเดิม " + source.number() + " (สั่งเหมือนเดิม)");
+        return reorder;
+    }
+
+    /** {@link #createRevision}'s copy step — a new DRAFT LINKED to {@code source} as its revision
+     * ({@code parentQuotationId}), which is what makes {@code source} eventually SUPERSEDED once
+     * this child reaches APPROVED. Thin wrapper over the shared {@link #insertCopyOf}. */
     private long insertRevisionCopyOf(DealQuotationDto source, UserPrincipal actor) {
+        return insertCopyOf(source, actor, source.id(), null);
+    }
+
+    /** {@link #createReorder}'s copy step — a new DRAFT carrying NO {@code parentQuotationId}
+     * (so {@code source} is never superseded, by construction), only the audit-only
+     * {@code derivedFromQuotationId}. Thin wrapper over the shared {@link #insertCopyOf}. */
+    private long insertReorderCopyOf(DealQuotationDto source, UserPrincipal actor) {
+        return insertCopyOf(source, actor, null, source.id());
+    }
+
+    /**
+     * The copy step {@link #createRevision}, {@link #submit}'s owner-feedback (2026-09-15)
+     * "resubmit after a ตีกลับ mints a new number" path, AND {@link #createReorder} all need: a new
+     * DRAFT row, every header field copied VERBATIM (see each parameter's own comment below —
+     * unchanged from {@code createRevision}'s original body), its items and item pictures copied,
+     * at the next number in the shared {base}-{n} family. Callers are responsible for their OWN
+     * precondition (the three paths gate on different source statuses/rules) and for locking the
+     * ticket + checking whatever open-revision guard applies BEFORE calling this — all
+     * already-serialised requirements this method assumes rather than re-does, so it stays a plain
+     * insert with no lock/guard duplicated between callers.
+     *
+     * <p>{@code parentQuotationId}/{@code derivedFromQuotationId} are the ONE thing that
+     * distinguishes a revision from a reorder clone — exactly one of the two is non-null, decided
+     * by the caller (see {@link #insertRevisionCopyOf}/{@link #insertReorderCopyOf}). Every other
+     * field is copied identically regardless, which is what keeps revision behaviour byte-for-byte
+     * unchanged by this refactor.
+     */
+    private long insertCopyOf(DealQuotationDto source, UserPrincipal actor,
+                              Long parentQuotationId, Long derivedFromQuotationId) {
         // Works unchanged for BOTH a post-2026-09-11 parent ("QT-2026-0014-1", revisionNo 1 -> base
         // "QT-2026-0014") and a legacy pre-change parent ("QT-2026-0014" bare, revisionNo 1 -> base
         // itself unchanged) -- see DealQuotationRepository#baseNumber's own Javadoc for why one
@@ -811,7 +874,10 @@ public class DealQuotationService {
         String baseNumber = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
         // M3 (found while testing the fix above): NOT source.revisionNo() + 1 -- see
         // DealQuotationRepository#nextRevisionNo's own Javadoc for the duplicate-key crash that
-        // naive formula still has once a prior revision attempt was cancelled.
+        // naive formula still has once a prior revision attempt was cancelled. Shared by revisions
+        // AND reorder clones -- GLA-74 part 1 deliberately reuses this SAME ticket-scoped counter
+        // (the task's own instruction: "do not re-implement numbering"), so a clone and a revision
+        // of the same family can never mint the same suffix.
         int nextRevisionNo = quotations.nextRevisionNo(source.ticketId(), baseNumber);
         String newNumber = DealQuotationRepository.revisionNumber(baseNumber, nextRevisionNo);
         BigDecimal sourceVatRate = WastageCalculator.vatRateFor(source.documentLanguage());
@@ -820,38 +886,39 @@ public class DealQuotationService {
         long newId = quotations.insertDraft(new InsertDraftParams(
             source.ticketId(), newNumber, actor.id(), source.salesRepId(),
             source.customerName(), source.customerAddress(), source.customerTaxId(), source.customerPhone(),
-            // The parent's frozen snapshot, verbatim -- the rep re-chooses (or the ticket's
-            // contact re-defaults) only on the revision's own next save through #update.
+            // The source's frozen snapshot, verbatim -- the rep re-chooses (or the ticket's
+            // contact re-defaults) only on the copy's own next save through #update.
             new ContactSnapshot(source.contactId(), source.contactName(), source.contactPhone(), source.contactEmail()),
             source.projectName(), source.deptCode(), source.unitCode(), source.offerDate(),
             source.depositPercent(), source.remainderMode(), source.creditDays(), source.validityDays(),
-            // V178: a revision inherits its parent's validity MODE AND DATE verbatim — a DATE-mode
-            // parent's own "ภายในวันที่" deadline is a fact about the customer's order, not
-            // something that should silently reset to a day count (or a stale date) on revise.
+            // V178: the copy inherits the source's validity MODE AND DATE verbatim — a DATE-mode
+            // source's own "ภายในวันที่" deadline is a fact about the customer's order, not
+            // something that should silently reset to a day count (or a stale date) on copy.
             // source.validityMode() is never null (the repository normalises a stored NULL to
             // DAYS), so resolveValidityMode is not needed on this path — same reasoning as
             // documentLanguage below.
             source.validityMode(), source.validityUntil(),
-            // v3b: a revision inherits the parent's ภาษาเอกสาร and currency verbatim, like every
-            // other header field here — revising an English quotation must not silently reissue it
+            // v3b: the copy inherits the source's ภาษาเอกสาร and currency verbatim, like every
+            // other header field here — copying an English quotation must not silently reissue it
             // in Thai. source.documentLanguage() is never null (the repository normalises a stored
             // NULL to TH), so resolveDocumentLanguage is not needed on this path.
             source.customerNotes(), source.priceMode(), source.documentLanguage(),
             WastageCalculator.defaultCurrencyFor(source.documentLanguage()),
-            // V179 — a revision copies its parent's print-name override VERBATIM, same as every
-            // other header field here; no re-validation (an id valid at the parent's last save
-            // stays whatever it was — this mirrors how the parent's own contact/rep snapshot is
+            // V179 — the copy carries the source's print-name override VERBATIM, same as every
+            // other header field here; no re-validation (an id valid at the source's last save
+            // stays whatever it was — this mirrors how the source's own contact/rep snapshot is
             // copied without re-checking against a live table).
             source.printedByDisplayId(), source.salesRepDisplayId(),
-            // V180/V181 (items 2/4) — a revision inherits its parent's honorific flag and
+            // V180/V181 (items 2/4) — the copy inherits the source's honorific flag and
             // full-payment term VERBATIM, the same "copy every header field" rule as everything
-            // else in this call — a revise must not silently re-add "คุณ" or drop a chosen
-            // zero-deposit term the rep already picked on the document being revised.
+            // else in this call — copying must not silently re-add "คุณ" or drop a chosen
+            // zero-deposit term the rep already picked on the source document.
             source.omitContactHonorific(), source.fullPaymentTerm(),
-            source.subtotalAmount(), source.id(),
-            nextRevisionNo, items));
-        // GLA-75: "a revision copies its parent's items verbatim" includes their pictures — the
-        // child's rows point at the parent's (immutable, shared) picture rows, matched by seq.
+            source.subtotalAmount(), parentQuotationId,
+            nextRevisionNo, derivedFromQuotationId, items));
+        // GLA-75: "the copy carries the source's items verbatim" includes their pictures — the new
+        // row's items point at the source's (immutable, shared) picture rows, matched by seq.
+        // Shared by revisions and reorder clones alike.
         quotations.copyPictureLinks(source.id(), newId);
         return newId;
     }

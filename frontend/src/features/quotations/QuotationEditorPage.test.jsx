@@ -23,7 +23,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         submit: vi.fn(),
         approve: vi.fn(),
         reject: vi.fn(),
-        createRevision: vi.fn(),
+        createRevision: vi.fn(), createReorder: vi.fn(),
         cancel: vi.fn(),
         downloadPdf: vi.fn(),
         downloadXlsx: vi.fn(),
@@ -566,6 +566,55 @@ describe('QuotationEditorPage approval flow (#M5, #M8)', () => {
     }
     expect(api.dealQuotations.get).toHaveBeenCalledTimes(1); // no refetch-on-focus for a non-approver
   });
+});
+
+// GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม): the "สร้างจากใบเดิม" action, shown ONLY on an
+// APPROVED quotation (same gate as "สร้างฉบับแก้ไข" -- canReviseDealQuotation), behind a confirm
+// dialog, navigating to the newly-created clone on confirm.
+describe('QuotationEditorPage reorder / สร้างจากใบเดิม (GLA-74 part 1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('is shown only on an APPROVED quotation, not on a DRAFT one', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: baseQuotation({ docStatus: 'DRAFT', number: 'QT-2026-0005' }),
+    });
+    renderEditor('/quotations/5');
+    await screen.findByText(/QT-2026-0005/);
+    expect(screen.queryByRole('button', { name: /สร้างจากใบเดิม/ })).toBeNull();
+  });
+
+  it('opens a confirm dialog before calling createReorder, and navigates to the clone on confirm',
+    async () => {
+      api.dealQuotations.get.mockImplementation((id) => Promise.resolve({
+        quotation: Number(id) === 5
+          ? baseQuotation({ docStatus: 'APPROVED', number: 'QT-2026-0005-1' })
+          : baseQuotation({ id: 42, docStatus: 'DRAFT', number: 'QT-2026-0005-2', derivedFromQuotationId: 5,
+            derivedFromQuotationNumber: 'QT-2026-0005-1' }),
+      }));
+      api.dealQuotations.createReorder.mockResolvedValue({
+        quotation: baseQuotation({ id: 42, docStatus: 'DRAFT', number: 'QT-2026-0005-2', derivedFromQuotationId: 5,
+          derivedFromQuotationNumber: 'QT-2026-0005-1' }),
+      });
+      renderEditor('/quotations/5');
+      await screen.findByRole('button', { name: /สร้างจากใบเดิม/ });
+
+      fireEvent.click(screen.getByRole('button', { name: /สร้างจากใบเดิม/ }));
+      expect(api.dealQuotations.createReorder).not.toHaveBeenCalled();
+      const dialog = within(screen.getByRole('dialog'));
+      // Explains up front that the original stays approved (the core invariant a rep must
+      // understand before confirming).
+      expect(dialog.getByText(/ใบเสนอราคาเดิมยังคงสถานะอนุมัติแล้ว/)).not.toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'ยืนยันสร้าง' }));
+      await waitFor(() => expect(api.dealQuotations.createReorder).toHaveBeenCalledWith('5', {}));
+
+      // Navigated to the newly-created clone -- proven by the page re-rendering with ITS
+      // number and provenance note, not the source's.
+      expect(await screen.findByText(/QT-2026-0005-2/)).not.toBeNull();
+      expect(screen.getByText(/สั่งเหมือนเดิมจากใบเสนอราคา/)).not.toBeNull();
+    });
 });
 
 describe('QuotationEditorPage live provisional totals (#M6)', () => {

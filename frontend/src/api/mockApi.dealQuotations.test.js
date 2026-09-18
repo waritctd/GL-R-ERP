@@ -262,6 +262,88 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
   });
 });
 
+// GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- mirrors DealQuotationService#createReorder.
+// The core invariant: the SOURCE stays APPROVED forever, unlike a revision's parent.
+describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('clones an APPROVED quotation into a new DRAFT, same numbering family, no parent link, source stays APPROVED', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    const rootNumber = created.quotation.number;
+    const baseNumber = rootNumber.slice(0, -'-1'.length);
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approved = await api.dealQuotations.approve(created.quotation.id, {});
+
+    await api.auth.login(salesUser);
+    const { quotation: reorder } = await api.dealQuotations.createReorder(approved.quotation.id, {});
+
+    expect(reorder.docStatus).toBe('DRAFT');
+    expect(reorder.number).toBe(`${baseNumber}-2`);
+    expect(reorder.derivedFromQuotationId).toBe(approved.quotation.id);
+    expect(reorder.parentQuotationId).toBeNull();
+    expect(reorder.items).toHaveLength(approved.quotation.items.length);
+
+    // The moment of truth: submit + approve the CLONE and confirm the source is untouched.
+    await api.dealQuotations.submit(reorder.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(reorder.id, {});
+    const reloadedSource = await api.dealQuotations.get(approved.quotation.id);
+    expect(reloadedSource.quotation.docStatus).toBe('APPROVED');
+  });
+
+  it('refuses (409) to clone a non-APPROVED source', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await expect(api.dealQuotations.createReorder(created.quotation.id, {}))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
+  it('allows multiple clones of the same APPROVED source (unlike createRevision, no open-child guard)', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approved = await api.dealQuotations.approve(created.quotation.id, {});
+
+    await api.auth.login(salesUser);
+    const first = await api.dealQuotations.createReorder(approved.quotation.id, {});
+    const second = await api.dealQuotations.createReorder(approved.quotation.id, {});
+    expect(first.quotation.number).not.toBe(second.quotation.number);
+    expect(first.quotation.derivedFromQuotationId).toBe(approved.quotation.id);
+    expect(second.quotation.derivedFromQuotationId).toBe(approved.quotation.id);
+  });
+
+  // Regression (Opus review): mintDealQuotationRevision used to spread `...parent` and never
+  // clear derivedFromQuotationId, so a REVISION of a reorder CLONE kept the clone's own
+  // derivedFromQuotationId -- both ids set on the same row, contradicting the mutual-exclusivity
+  // buildDealQuotationDto's own comment asserts. Mirrors DealQuotationService#insertRevisionCopyOf
+  // -> #insertCopyOf(source, actor, source.id(), null): a revision NEVER carries derivedFrom,
+  // even when its own source is itself a clone.
+  it('a revision of an APPROVED reorder clone links via parentQuotationId only, never derivedFromQuotationId', async () => {
+    await api.auth.login(salesUser);
+    const created = await api.dealQuotations.create(18, { items: [ONE_ITEM] });
+    await api.dealQuotations.submit(created.quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approved = await api.dealQuotations.approve(created.quotation.id, {});
+
+    await api.auth.login(salesUser);
+    const { quotation: clone } = await api.dealQuotations.createReorder(approved.quotation.id, {});
+    await api.dealQuotations.submit(clone.id);
+    await api.auth.login({ role: 'sales_manager' });
+    const approvedClone = await api.dealQuotations.approve(clone.id, {});
+
+    await api.auth.login(salesUser);
+    const { quotation: revisionOfClone } = await api.dealQuotations.createRevision(approvedClone.quotation.id, {});
+
+    expect(revisionOfClone.parentQuotationId).toBe(approvedClone.quotation.id);
+    expect(revisionOfClone.derivedFromQuotationId).toBeNull();
+  });
+});
+
 describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
   // employee@glr.co.th (id 4, demoData.js) carries canCreateQuotation: true on a plain
   // `employee` role -- not sales/sales_manager, and not in DEAL_QUOTATION_VIEWER_ROLES at all.

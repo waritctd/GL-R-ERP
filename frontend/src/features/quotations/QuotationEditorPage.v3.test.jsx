@@ -26,7 +26,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { get: vi.fn(), create: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
-        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), cancel: vi.fn(),
+        approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },

@@ -80,6 +80,15 @@ export function DealDirectQuotationPanel({ ticketId, deal, user, showToast }) {
                   <span className="text-2xs text-text-muted">
                     {q.approvedByName ? `อนุมัติโดย ${q.approvedByName} · ${formatThaiDate(q.approvedAt)}` : `สร้างเมื่อ ${formatThaiDate(q.createdAt)}`}
                   </span>
+                  {/* GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- this family already sorts
+                      together by number (a clone shares its source's base), but carries no
+                      parentQuotationId, so without this note it would be indistinguishable from an
+                      ordinary first-issue document at a glance. */}
+                  {q.derivedFromQuotationId ? (
+                    <span className="text-2xs text-text-muted">
+                      สั่งเหมือนเดิมจาก {q.derivedFromQuotationNumber ?? `#${q.derivedFromQuotationId}`}
+                    </span>
+                  ) : null}
                 </div>
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                 <div className="flex gap-2">

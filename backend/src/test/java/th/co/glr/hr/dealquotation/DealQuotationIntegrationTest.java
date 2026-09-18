@@ -54,6 +54,7 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
+import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
@@ -423,6 +424,330 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // own "{base}-1" (a different base entirely, since nextQuotationCode() never repeats).
         assertThat(revision.number()).isEqualTo(bareLegacyNumber + "-2");
         assertThat(revision.revisionNo()).isEqualTo(2);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — clone an APPROVED quotation into a new,
+    // INDEPENDENT draft. The core invariant under test throughout: the SOURCE stays APPROVED,
+    // never superseded, neither on clone creation nor once the clone itself is submitted and
+    // approved -- unlike a revision (parentQuotationId), which this feature deliberately never
+    // sets.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void createReorder_clonesApprovedIntoNewDraft_withDerivedFromSet_noParentLink_itemsAndPictureCopied()
+            throws Exception {
+        // Picture must be attached while the row is still DRAFT (uploadItemPicture is DRAFT-only)
+        // -- attach it BEFORE submit/approve, unlike createSubmittedApproved's shorthand.
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        long sourceItemId = draft.items().get(0).id();
+        quotationService.uploadItemPicture(draft.id(), sourceItemId, pngFile(), "BELOW", salesActor);
+        quotationService.submit(draft.id(), salesActor);
+        DealQuotationDto source = quotationService.approve(draft.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto reorder = quotationService.createReorder(source.id(), salesActor);
+
+        assertThat(reorder.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(reorder.ticketId()).isEqualTo(source.ticketId());
+        // The core distinguishing fact: derivedFromQuotationId is set, parentQuotationId is NOT --
+        // this is what keeps the source out of reach of supersede()/hasOpenRevision()/the "แก้"
+        // bucket predicate, all of which key on parentQuotationId only.
+        assertThat(reorder.derivedFromQuotationId()).isEqualTo(source.id());
+        assertThat(reorder.parentQuotationId()).isNull();
+        // Same shared {base}-{n} numbering family a revision would use.
+        String base = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
+        assertThat(reorder.number()).isEqualTo(base + "-2");
+        // Items copied verbatim, at NEW item ids (a fresh clone, not a shared row).
+        assertThat(reorder.items()).hasSameSizeAs(source.items());
+        assertThat(reorder.items().get(0).id()).isNotEqualTo(sourceItemId);
+        assertThat(reorder.items().get(0).netUnitPrice()).isEqualByComparingTo(source.items().get(0).netUnitPrice());
+        // GLA-75: the picture link is copied too (matched by seq), same as a revision's own copy.
+        assertThat(reorder.items().get(0).hasPicture()).isTrue();
+
+        // The source itself: untouched, still APPROVED.
+        DealQuotationDto reloadedSource = quotationService.get(source.id(), salesActor);
+        assertThat(reloadedSource.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /**
+     * THE key test (per the task brief): the source must stay APPROVED even after the clone is
+     * itself submitted and approved — this is the entire point of {@code derivedFromQuotationId}
+     * existing as a SEPARATE column from {@code parentQuotationId}. Mutation-checked: temporarily
+     * make {@link DealQuotationService#createReorder} link through {@code parentQuotationId}
+     * instead (as if it were a revision) and confirm this exact test goes red, then revert.
+     */
+    @Test
+    void createReorder_sourceStaysApproved_evenAfterCloneIsSubmittedAndApproved() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+
+        DealQuotationDto reorder = quotationService.createReorder(source.id(), salesActor);
+        quotationService.submit(reorder.id(), salesActor);
+        DealQuotationDto approvedReorder =
+            quotationService.approve(reorder.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(approvedReorder.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        // The moment of truth: approving the CLONE must never retire the SOURCE. A revision's
+        // parent would be SUPERSEDED at exactly this point (see
+        // #approve_supersedesParentOnlyWhenRevisionItselfReachesApproved above) -- a reorder's
+        // source must not be.
+        DealQuotationDto reloadedSource = quotationService.get(source.id(), salesActor);
+        assertThat(reloadedSource.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        // Both quotations are now independently APPROVED on the same ticket -- the deliberate
+        // difference from a revision chain, where only one branch may ever reach APPROVED live.
+        assertThat(quotationRepository.findByTicket(source.ticketId()))
+            .filteredOn(q -> q.docStatus().equals(QuotationStatus.APPROVED))
+            .hasSize(2);
+    }
+
+    /** Numbering interleaves correctly with revisions in the same family: clone, then revise the
+     * clone, then clone the ORIGINAL source again -- all three share ONE counter (the task's own
+     * instruction: reuse {@code nextRevisionNo}, do not re-implement numbering), so no duplicate
+     * key is ever hit and the suffixes are dense (-2, -3, -4). */
+    @Test
+    void createReorder_numbering_interleavesWithRevisions_noDuplicateKey() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        String base = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
+
+        DealQuotationDto reorder1 = quotationService.createReorder(source.id(), salesActor);
+        assertThat(reorder1.number()).isEqualTo(base + "-2");
+
+        quotationService.submit(reorder1.id(), salesActor);
+        DealQuotationDto approvedReorder1 =
+            quotationService.approve(reorder1.id(), new ApproveRequest(null), salesManagerActor);
+        DealQuotationDto revisionOfReorder1 = quotationService.createRevision(approvedReorder1.id(), salesActor);
+        assertThat(revisionOfReorder1.number()).isEqualTo(base + "-3");
+        // Its parentQuotationId points at reorder1 (an ordinary revision link) -- unrelated to
+        // reorder1's OWN derivedFromQuotationId (which still points at the original source).
+        assertThat(revisionOfReorder1.parentQuotationId()).isEqualTo(approvedReorder1.id());
+
+        DealQuotationDto reorder2 = quotationService.createReorder(source.id(), salesActor);
+        assertThat(reorder2.number()).isEqualTo(base + "-4");
+        assertThat(reorder2.derivedFromQuotationId()).isEqualTo(source.id());
+
+        // The source is STILL approved after all of this -- a revision chain three deep off ITS
+        // OWN reorder clone, plus a second independent clone, neither of which ever touches it.
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    @Test
+    void createReorder_nonApprovedSource_isConflict() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.createReorder(draft.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+
+        DealQuotationDto submitted = quotationService.submit(draft.id(), salesActor);
+        assertThatThrownBy(() -> quotationService.createReorder(submitted.id(), salesActor))
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+    }
+
+    /** Unlike {@link #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash},
+     * a SECOND (and third) reorder of the same source succeeds -- multiple clones are explicitly
+     * allowed (the task's own instruction), never gated by an open-child check. */
+    @Test
+    void createReorder_multipleClonesOfTheSameSource_areAllAllowed() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+
+        DealQuotationDto first = quotationService.createReorder(source.id(), salesActor);
+        DealQuotationDto second = quotationService.createReorder(source.id(), salesActor);
+
+        assertThat(first.number()).isNotEqualTo(second.number());
+        assertThat(first.derivedFromQuotationId()).isEqualTo(source.id());
+        assertThat(second.derivedFromQuotationId()).isEqualTo(source.id());
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /**
+     * Authz, WRONG-WAY-ROUND (CLAUDE.md "Permission changes must ship evidence"): the SAME gate
+     * {@link #createRevision} uses ({@code requireEditAccessForQuotation}) -- a plain {@code sales}
+     * rep who does not own this deal must be refused, and the refusal must be provable by reading
+     * the database back, not merely by catching the exception (a 403 thrown after the row had
+     * already landed would otherwise still pass a test that only checks for the throw).
+     */
+    @Test
+    void createReorder_byActorWithoutEditAccess_isForbidden_andNoRowInserted() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        long countBefore = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
+            java.util.Map.of("id", source.ticketId()), Long.class);
+
+        assertForbidden(() -> quotationService.createReorder(source.id(), otherSalesActor));
+
+        long countAfter = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
+            java.util.Map.of("id", source.ticketId()), Long.class);
+        assertThat(countAfter).isEqualTo(countBefore);
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /** Same wrong-way-round style as the {@code sales} case above, for the two OTHER roles that
+     * hold neither an {@code EDIT_ROLES} membership nor the {@code canCreateQuotation} grant in
+     * this fixture: {@code ceo} and {@code import}. Both must be refused, and refused with no row
+     * landed either. */
+    @Test
+    void createReorder_ceoAndImport_areForbidden_andNoRowInserted() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        long countBefore = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
+            java.util.Map.of("id", source.ticketId()), Long.class);
+
+        assertForbidden(() -> quotationService.createReorder(source.id(), ceoActor));
+        assertForbidden(() -> quotationService.createReorder(source.id(), importActor));
+
+        long countAfter = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
+            java.util.Map.of("id", source.ticketId()), Long.class);
+        assertThat(countAfter).isEqualTo(countBefore);
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /**
+     * Opus review pin (independently verified correct against real Postgres): resubmitting a
+     * REJECTED clone mints a REVISION of the clone (the SAME owner-clarified "ตีกลับ then resubmit
+     * mints a new number" rule {@link #submit_afterRejection_mintsANewRevision_notTheSameRow}
+     * already pins) -- {@code createReorder} itself is untouched by this path, but the resulting
+     * chain (source -[derivedFrom]-> clone -[parentQuotationId]-> revision) must still leave the
+     * ORIGINAL source untouched when the revision is approved: {@code approve}'s ancestor walk
+     * starts from the revision's {@code parentQuotationId} (the clone) and stops there, because
+     * the clone's OWN {@code parentQuotationId} is null (it was never a revision itself -- only
+     * {@code derivedFromQuotationId} points back to the source, and the walk never reads that
+     * column). The clone becomes SUPERSEDED; the source stays APPROVED.
+     */
+    @Test
+    void createReorder_rejectedCloneThenResubmittedAndApproved_originalSourceStaysApproved_supersedeWalkStopsAtClone() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        DealQuotationDto clone = quotationService.createReorder(source.id(), salesActor);
+        quotationService.submit(clone.id(), salesActor);
+        DealQuotationDto rejectedClone = quotationService.reject(clone.id(),
+            new RejectRequest("แก้ไขราคาก่อนอนุมัติ"), salesManagerActor);
+        assertThat(rejectedClone.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(rejectedClone.derivedFromQuotationId()).isEqualTo(source.id());
+
+        // Resubmitting the rejected clone mints a REVISION of it (a new row/number, parent =
+        // the clone) -- not a same-row PENDING_APPROVAL flip. This revision carries NO
+        // derivedFromQuotationId of its own (item 2's fix) -- only parentQuotationId.
+        DealQuotationDto revisionOfClone = quotationService.submit(clone.id(), salesActor);
+        assertThat(revisionOfClone.id()).isNotEqualTo(clone.id());
+        assertThat(revisionOfClone.parentQuotationId()).isEqualTo(clone.id());
+        assertThat(revisionOfClone.derivedFromQuotationId()).isNull();
+        assertThat(revisionOfClone.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
+
+        DealQuotationDto approvedRevision =
+            quotationService.approve(revisionOfClone.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approvedRevision.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+
+        // The clone (the revision's own parent) is superseded by the ancestor walk...
+        assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+        // ...but the walk stops there -- the clone's own parentQuotationId is null, so it never
+        // reaches the ORIGINAL source, which stays APPROVED throughout.
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /**
+     * Opus review pin: an ordinary REVISION of an APPROVED clone (via {@link #createRevision},
+     * not a rejection-resubmit) must supersede only the clone itself, never the clone's OWN
+     * source -- {@code approve}'s ancestor walk climbs {@code parentQuotationId} only, and the
+     * clone's {@code parentQuotationId} is null (it links to its source via
+     * {@code derivedFromQuotationId} only), so the walk has nowhere further to climb.
+     */
+    @Test
+    void revisionOfAnApprovedReorderClone_whenApproved_supersedesTheCloneButNotTheOriginalSource() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        DealQuotationDto clone = quotationService.createReorder(source.id(), salesActor);
+        quotationService.submit(clone.id(), salesActor);
+        DealQuotationDto approvedClone = quotationService.approve(clone.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approvedClone.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+
+        DealQuotationDto revision = quotationService.createRevision(approvedClone.id(), salesActor);
+        assertThat(revision.parentQuotationId()).isEqualTo(approvedClone.id());
+        assertThat(revision.derivedFromQuotationId()).isNull();
+        quotationService.submit(revision.id(), salesActor);
+        DealQuotationDto approvedRevision =
+            quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approvedRevision.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+
+        // The clone is superseded (it is the revision's direct parent)...
+        assertThat(quotationService.get(approvedClone.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.SUPERSEDED);
+        // ...but the ORIGINAL source is not -- the clone's own parentQuotationId is null, so the
+        // walk never climbs past it.
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /** Cloning a clone: the next suffix in the SAME shared numbering family, and
+     * {@code derivedFromQuotationId} points at the IMMEDIATE source (the first clone), never the
+     * original root -- provenance is one hop, not transitively resolved to the root. */
+    @Test
+    void createReorder_cloningAClone_getsTheNextSuffix_andPointsDerivedFromAtTheImmediateSource() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        String base = DealQuotationRepository.baseNumber(source.number(), source.revisionNo());
+
+        DealQuotationDto clone1 = quotationService.createReorder(source.id(), salesActor);
+        assertThat(clone1.number()).isEqualTo(base + "-2");
+        quotationService.submit(clone1.id(), salesActor);
+        DealQuotationDto approvedClone1 =
+            quotationService.approve(clone1.id(), new ApproveRequest(null), salesManagerActor);
+
+        DealQuotationDto clone2 = quotationService.createReorder(approvedClone1.id(), salesActor);
+        assertThat(clone2.number()).isEqualTo(base + "-3");
+        // Points at clone1 (its own, immediate source) -- NOT at the original root `source`.
+        assertThat(clone2.derivedFromQuotationId()).isEqualTo(approvedClone1.id());
+        assertThat(clone2.derivedFromQuotationId()).isNotEqualTo(source.id());
+        assertThat(clone2.parentQuotationId()).isNull();
+
+        // Neither the immediate source (clone1) nor the original root is ever superseded by this.
+        assertThat(quotationService.get(approvedClone1.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.APPROVED);
+        assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
+    }
+
+    /** Legacy row (owner ruling, see {@link #revisionOfALegacyBareNumberedQuotation_appendsMinus2_neverRewritesTheBareNumber_neverCollides}
+     * above for the identical rule on the revision path): a quotation issued before the
+     * -1-suffix change carries a BARE number at revisionNo 1. Cloning one must append "-2" to the
+     * bare number, never rewrite it, and never collide with the "-1" format a fresh quotation
+     * mints today. */
+    @Test
+    void createReorder_ofALegacyBareNumberedQuotation_appendsMinus2_neverRewritesTheBareNumber() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+        String bareLegacyNumber = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
+        jdbc.update("UPDATE sales.quotation SET number = :number WHERE quotation_id = :id",
+            java.util.Map.of("number", bareLegacyNumber, "id", created.id()));
+
+        quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approvedLegacy =
+            quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approvedLegacy.number()).isEqualTo(bareLegacyNumber);
+
+        DealQuotationDto clone = quotationService.createReorder(approvedLegacy.id(), salesActor);
+        assertThat(clone.number()).isEqualTo(bareLegacyNumber + "-2");
+        assertThat(clone.revisionNo()).isEqualTo(2);
+        assertThat(clone.derivedFromQuotationId()).isEqualTo(approvedLegacy.id());
+        assertThat(clone.parentQuotationId()).isNull();
+    }
+
+    /** The ticket_event row itself, read back through {@code TicketRepository#findById} (a REAL
+     * read of {@code sales.ticket_event}, not a mock) -- pins that {@code createReorder} actually
+     * writes {@code TicketEventKind.DEAL_QUOTATION_REORDERED} (a real ticket_event kind, chk_event_kind
+     * widened for it in V186), carrying both numbers in its Thai message. */
+    @Test
+    void createReorder_writesADealQuotationReorderedTicketEvent() {
+        DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
+        DealQuotationDto clone = quotationService.createReorder(source.id(), salesActor);
+
+        var ticket = tickets.findById(ticketId).orElseThrow();
+        assertThat(ticket.events())
+            .anySatisfy(event -> {
+                assertThat(event.kind()).isEqualTo(TicketEventKind.DEAL_QUOTATION_REORDERED);
+                assertThat(event.message())
+                    .contains(clone.number())
+                    .contains(source.number())
+                    .contains("สั่งเหมือนเดิม");
+            });
     }
 
     @Test

@@ -37,6 +37,10 @@ export const EVENT_KIND_LABEL = {
   DOCUMENT_ISSUED:    'ออกใบแจ้งยอดมัดจำ',
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
+  // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186) -- a genuinely new kind, not a reuse of
+  // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without
+  // ever revising, rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
+  DEAL_QUOTATION_REORDERED: 'สร้างจากใบเดิม (สั่งเหมือนเดิม)',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
   EDITED:             'แก้ไขรายการสินค้า',
