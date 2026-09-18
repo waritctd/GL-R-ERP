@@ -354,12 +354,39 @@ public class CustomerQuotationRepository {
      *       immediate parent.</li>
      *   <li>{@code pr.status = 'SUPERSEDED'} restricts this to requests a revision actually
      *       replaced. Without it a sibling or the issuing request itself could be swept up.</li>
+     *   <li>{@code pr.recipient_type = ...} (GLA-124) scopes this to root <b>and recipient</b>,
+     *       not root alone. A revision chain is only ever meant to hold ONE recipient (designer,
+     *       owner, or buyer) — PR #999 closed the two write paths ({@code
+     *       createCustomerChangeRevision}, {@code updateDraft}) that could put a mismatched
+     *       recipient into a chain — but this UPDATE has no way to know that invariant held for
+     *       every row it might touch. Without this clause, a chain that DOES contain two
+     *       recipients (legacy pre-guard data, or any future write path that reintroduces the
+     *       gap) has the OTHER recipient's still-live, customer-held ISSUED quotation silently
+     *       flipped to SUPERSEDED the moment THIS recipient's quotation issues — a document the
+     *       customer already holds, retired with no warning and no relation to what actually
+     *       happened. {@code sales.pricing_request.recipient_type} is {@code NOT NULL} with a
+     *       CHECK constraint (V59, never relaxed by any later migration) on every row of this
+     *       table, so a plain {@code =} is correct and deliberate here — there is no legal NULL
+     *       on either side for it to silently drop rows against. (This is unlike {@code
+     *       sales.quotation.recipient_type}, which DOES carry a legacy {@code UNSPECIFIED}
+     *       default from V52 — irrelevant here because this predicate compares two {@code
+     *       sales.pricing_request} rows, not {@code sales.quotation} ones.) {@code IS NOT
+     *       DISTINCT FROM} would be the right operator if a NULL were reachable on this column;
+     *       it is not, so plain {@code =} stands.</li>
      *   <li>{@code q.pricing_request_id <> :pricingRequestId} is belt-and-braces on top of that:
      *       the request being issued is never SUPERSEDED at this point, but a future caller
      *       should not have to know that to use this safely.</li>
      *   <li>The {@code doc_status IN (...)} list matches the one the eager path used, so the same
      *       quotations retire — only later.</li>
      * </ul>
+     *
+     * <p>Both correlated subqueries read {@code :pricingRequestId}'s own row, which cannot be
+     * absent: the sole caller ({@code CustomerQuotationService#issue}) has already loaded this
+     * exact pricing request via {@code requirePricingRequest} earlier in the same transaction,
+     * under the same {@link #lockPricingRequest} advisory-lock hold, and nothing in this codebase
+     * ever deletes a {@code sales.pricing_request} row. If that invariant were ever violated, both
+     * subqueries would return NULL, {@code NULL = NULL} is never true in SQL, and the UPDATE would
+     * simply match zero rows — a safe failure (nothing superseded) rather than an unsafe one.
      *
      * @return number of quotations superseded; 0 is the normal case for a first issue.
      */
@@ -374,6 +401,9 @@ public class CustomerQuotationRepository {
                AND COALESCE(pr.root_pricing_request_id, pr.pricing_request_id) = (
                      SELECT COALESCE(root_pricing_request_id, pricing_request_id)
                        FROM sales.pricing_request
+                      WHERE pricing_request_id = :pricingRequestId)
+               AND pr.recipient_type = (
+                     SELECT recipient_type FROM sales.pricing_request
                       WHERE pricing_request_id = :pricingRequestId)
                AND q.doc_status IN ('ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
