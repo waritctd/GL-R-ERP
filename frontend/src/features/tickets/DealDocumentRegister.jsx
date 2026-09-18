@@ -9,7 +9,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
-import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
+import { depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
 import { canViewDealQuotation } from '../quotations/quotationMeta.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
@@ -285,8 +285,14 @@ export function DealDocumentRegister({
                   icon="fileText"
                   title={doc.docNumber ?? `ร่างใบแจ้งยอดมัดจำ #${doc.id}`}
                   meta={`มัดจำ ${Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%`}
-                  status={{ label: doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง', tone: doc.status === 'ISSUED' ? 'success' : 'neutral' }}
-                  actions={doc.status === 'ISSUED' ? [
+                  status={depositNoticeStatusLabel(doc.status)}
+                  // GLA-117: a SUPERSEDED notice was once ISSUED (DepositNoticeRepository#supersede
+                  // only ever transitions FROM ISSUED, keeping doc_number/pdf_path/xlsx_path
+                  // intact) and DepositNoticeService#getPdf/getXlsx re-render from that persisted
+                  // snapshot with no status guard at all — so it must stay downloadable exactly
+                  // like an ISSUED one. Only DRAFT (never rendered, no doc number yet) has no
+                  // download actions.
+                  actions={doc.status === 'ISSUED' || doc.status === 'SUPERSEDED' ? [
                     { label: 'PDF', busy: busyKey === `deposit-${doc.id}-pdf`, onClick: () => downloadDepositNotice(doc, 'pdf') },
                     { label: 'Excel', busy: busyKey === `deposit-${doc.id}-xlsx`, onClick: () => downloadDepositNotice(doc, 'xlsx') },
                   ] : []}

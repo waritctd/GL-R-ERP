@@ -664,6 +664,29 @@ export function quotationStatusLabel(value) {
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }
 
+// GLA-117: central status label for sales.deposit_notice.status, replacing the inline
+// `status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternaries that used to live in
+// DealDocumentRegister.jsx/DealDepositPanel.jsx/DepositNoticePage.jsx — that ternary rendered
+// every non-ISSUED status (including SUPERSEDED, written by
+// DepositNoticeRepository#supersede) as "ฉบับร่าง" (draft), which made a superseded, already-
+// issued document look like an untouched draft. Authoritative status list verified against the
+// backend: `status VARCHAR(20) NOT NULL DEFAULT 'DRAFT'` on `sales.deposit_notice` is a plain
+// varchar with NO CHECK constraint (V12__documents_and_revision.sql's own comment: "DRAFT |
+// ISSUED | SUPERSEDED"); DepositNoticeRepository only ever writes DRAFT (default), ISSUED
+// (#issue), and SUPERSEDED (#supersede) — CANCELLED is never written anywhere in
+// th.co.glr.hr.deposit. docs/api/status-catalog.json does not publish a deposit-notice status
+// group, so there is no digest-coverage guard to satisfy here (unlike quotationStatusLabel).
+// An unmapped value deliberately falls through to the raw status code rather than a fallback
+// label — guessing a fallback is what caused this bug in the first place.
+export function depositNoticeStatusLabel(value) {
+  const map = {
+    DRAFT: { label: 'ฉบับร่าง', tone: 'neutral' },
+    ISSUED: { label: 'ออกแล้ว', tone: 'success' },
+    SUPERSEDED: { label: 'ถูกแทนที่', tone: 'neutral' },
+  };
+  return map[value] ?? { label: value || '-', tone: 'neutral' };
+}
+
 // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
 // sales.quotation_item_discount_approval.status.
 export function discountApprovalStatusLabel(value) {
