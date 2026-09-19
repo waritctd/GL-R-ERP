@@ -461,7 +461,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
-        ticketService.completeDelivery(ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), importActor);
+        // V184: completeDelivery's gate (canWriteDelivery) transferred to {ceo, owning-rep} only --
+        // ownerRep, not importActor. See DeliveryAuthzIntegrationTest for the authz pin itself.
+        ticketService.completeDelivery(ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), ownerRep);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
 

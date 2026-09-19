@@ -1948,21 +1948,23 @@ function requireSession() {
 }
 
 /**
- * Mirrors TicketService.isFulfilmentOrOwningRep — import/CEO, or the `sales` rep who owns the deal.
- *
- * <p>Backs the ส่งมอบสินค้า writes (stages 13-14, owner ruling 2026-08-17). sales_manager is
- * excluded deliberately: ROLE_PERMISSIONS records it as read+comment oversight only.
- *
- * <p>KNOWN DIVERGENCE, not fixed here: `reserveStock` in this file still gates on
- * hasRole('import','ceo') although the real canDeclareStockCoverage has allowed the owning rep since
- * PR #706. That mock is STRICTER than production, which is the safe direction (CLAUDE.md: a mock more
- * permissive than production is the dangerous one), and it belongs to a different feature — flagged
- * rather than widened under this branch.
+ * REVIEW ROUND 1, S2 (2026-09-18): mirrors TicketService.canWriteDelivery exactly — CEO, or the
+ * `sales` rep who owns the deal. import is DELIBERATELY absent: ส่งมอบสินค้า write access moved
+ * from import to Sales (owner ruling 2026-08-17), a TRANSFER not an addition. This function
+ * REPLACES a prior `requireFulfilmentOrOwningRep` helper that still admitted import (a leftover
+ * from before that ruling, and — once checked — with no OTHER caller left to justify keeping it
+ * around, so it was deleted rather than left as dead code): reusing that helper here meant import
+ * could record/complete delivery in mock mode although the real TicketService#canWriteDelivery
+ * already refused it — a mock MORE permissive than production, the dangerous direction CLAUDE.md
+ * calls out. Backs both the recordDelivery/completeDelivery mutation gates AND the
+ * RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY
+ * advertising condition in actions() below, so the two cannot drift into offering a button that
+ * instantly 403s.
  */
-function requireFulfilmentOrOwningRep(ticket) {
+function requireOwningRepOrCeo(ticket) {
   const user = requireSession();
   const owns = user.role === 'sales' && ticket?.createdById === user.id;
-  if (!['import', 'ceo'].includes(user.role) && !owns) {
+  if (user.role !== 'ceo' && !owns) {
     fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
   return user;
@@ -4737,9 +4739,9 @@ function requireDealQuotationViewAccess(ticket, user) {
 }
 
 // Mirrors DealQuotationService's create/update/submit/cancel/createRevision gate: sales (deal
-// owner), sales_manager (any deal), or a canCreateQuotation grant (any deal). Same shape as
-// requireDealQuotationTicketWriteAccess's pricing-request sibling, requireFulfilmentOrOwningRep,
-// above.
+// owner), sales_manager (any deal), or a canCreateQuotation grant (any deal). Same
+// "owns = role check + createdById" shape as requireOwningRepOrCeo above, applied to a different
+// role set.
 function requireDealQuotationWriteAccess(ticket, user) {
   if (hasDealQuotationMockGrant(user)) return;
   const owns = user.role === 'sales' && ticket?.createdById === user.id;
@@ -6049,10 +6051,11 @@ export const api = {
     },
 
     async recordDelivery(id, payload) {
-      // Stages 13-14 are Sales's (owner ruling 2026-08-17), additive to import/CEO — the gate is
+      // Stages 13-14 are Sales's (owner ruling 2026-08-17) — CEO, or the deal's OWN owning rep,
+      // ONLY (REVIEW ROUND 1, S2: import DROPPED, see requireOwningRepOrCeo's own doc). The gate is
       // ownership-aware, so the ticket is loaded FIRST. Mirrors TicketService.canWriteDelivery.
       const ticket = findTicketRaw(Number(id));
-      const user = requireFulfilmentOrOwningRep(ticket);
+      const user = requireOwningRepOrCeo(ticket);
       requireActive(ticket);
       recordDeliveryForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -6060,7 +6063,7 @@ export const api = {
 
     async completeDelivery(id, payload = {}) {
       const ticket = findTicketRaw(Number(id));
-      const user = requireFulfilmentOrOwningRep(ticket);
+      const user = requireOwningRepOrCeo(ticket); // REVIEW ROUND 1, S2
       requireActive(ticket);
       const remaining = (ticket.items ?? [])
         .map((item) => ({ itemId: item.id, qty: moneyValue(Number(item.qty ?? 0) - Number(item.qtyDelivered ?? 0)) }))
@@ -6139,14 +6142,22 @@ export const api = {
         if (['sales_manager', 'ceo'].includes(user.role)) {
           add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
         }
-        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery -> isFulfilmentOrOwningRep
-        // (#818, stages 13-14 belong to Sales, ADDITIVE so import/ceo keep it): the advertisement
-        // and the mutation gate must come off the same predicate or the UI offers a button that
-        // instantly 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT
-        // `dealOwner`, which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales")
-        // and sales_manager is read+comment oversight only, so widening here would make the mock
-        // MORE permissive than production, the one direction CLAUDE.md calls dangerous.
-        if ((['import', 'ceo'].includes(user.role) || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
+        // Mirrors TicketService#canRecordDelivery -> canWriteDelivery exactly (REVIEW ROUND 1, S2,
+        // 2026-09-18): CEO, or the deal's own owning sales rep -- the advertisement and the
+        // mutation gate must come off the same predicate or the UI offers a button that instantly
+        // 403s. `owner` (above) is exactly the Java's second limb -- deliberately NOT `dealOwner`,
+        // which also admits sales_manager/ceo: Java's SALES_ROLES is Set.of("sales") and
+        // sales_manager is read+comment oversight only, so widening here would make the mock MORE
+        // permissive than production, the one direction CLAUDE.md calls dangerous.
+        //
+        // import was DROPPED from this condition (previously `['import', 'ceo'].includes(user.role)
+        // || owner`) -- it used to be additive to Sales (#818), but the 2026-08-17 ruling was a
+        // TRANSFER, not an addition: ส่งมอบสินค้า write access moved FROM import TO Sales, and
+        // requireOwningRepOrCeo (backing recordDelivery/completeDelivery's own mutation gate just
+        // above in this file) already reflects that. Leaving `import` here left the mock MORE
+        // permissive than the real TicketService#canWriteDelivery -- a real divergence this review
+        // caught, not a hypothetical one.
+        if ((user.role === 'ceo' || owner) && hasRemainingDelivery(ticket) && deliveryAvailable(ticket)) {
           add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
           add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
         }
@@ -6619,6 +6630,17 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    // REVIEW ROUND 1 nit (2026-09-18): the real TicketService#markIrSent/markShipping/
+    // markGoodsReceived additionally 409 when tickets.hasLiveImportRequests(ticketId) -- once a
+    // deal is tracked by the V184 per-factory ใบขอซื้อ aggregate, these legacy one-shot buttons
+    // must refuse in favour of ImportRequestService#advanceStep. This mock deliberately does NOT
+    // reproduce that guard: the stored aggregate's own routes (POST .../import-requests, .../issue,
+    // .../advance-step, ...) are SERVER_ONLY (see frontend/src/api/serverContract.test.js) with no
+    // mockApi implementation, so ticket.fulfillmentStatus can never actually reach IR_ISSUED via
+    // that path in mock mode -- there is no reachable state where this guard's absence would let a
+    // mock-driven click through that production would refuse. Kept EXACT-STATUS ("=== 'IR_ISSUED'",
+    // not ">="), matching the real service's own compare-and-advance shape, so this stays inert
+    // rather than silently widening if that changes.
     async markIrSent(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));

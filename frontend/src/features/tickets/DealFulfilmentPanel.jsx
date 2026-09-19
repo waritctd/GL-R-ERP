@@ -477,12 +477,14 @@ export function DealFulfilmentPanel({
           <div className="flex items-center gap-2">
             <StepNumber no={2} />
             <strong className="text-sm">ส่งมอบสินค้า</strong>
-            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17); import/ceo
-                remain because #818 was additive. Mirrors TicketService#canWriteDelivery, which is
-                what actually gates the controls below -- a rep arriving here from the new
-                RECORD_DELIVERY CTA must not find the step badged as someone else's work.
-                sales_manager is absent on purpose: read+comment oversight only. */}
-            <StepRoleTag owners={['sales', 'import', 'ceo']} viewerRole={role} />
+            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17). REVIEW ROUND
+                1, S2 (2026-09-18): import DROPPED from this list -- TicketService#canWriteDelivery
+                (the single source of truth this tag mirrors) is CEO, or the deal's own owning sales
+                rep, ONLY; import's write access to ส่งมอบสินค้า was a transfer to Sales, not an
+                addition, and badging import as a co-owner here would misrepresent who the mutation
+                gate (and the RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY actions below) actually let
+                through. sales_manager is absent on purpose too: read+comment oversight only. */}
+            <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

@@ -1231,13 +1231,16 @@ class TicketServiceTest {
             FulfilmentStatus.GOODS_RECEIVED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
+        // V184: canWriteDelivery transferred stages 13-14 to {ceo, owning-rep} only, so this
+        // business-logic (not authz) test now uses salesActor (id 1, this deal's owner) rather
+        // than importActor (id 3) -- see DeliveryAuthzIntegrationTest for the authz pin itself.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), eq("ส่งบางส่วน"), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), eq("ส่งบางส่วน"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")),
             eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
@@ -1254,12 +1257,14 @@ class TicketServiceTest {
         // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
+        // V184: business-logic test, actor swapped to the owning rep -- see the note on
+        // recordPartialDelivery_updatesLineProgressAndStatus above.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งส่วนที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), salesActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(3L), anyString(),
+        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.DELIVERY_COMPLETED), anyString(), anyString(), anyString(),
             eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
@@ -1272,11 +1277,17 @@ class TicketServiceTest {
 
         RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))), null);
-        assertConflict(() -> service.recordPartialDelivery(10L, over, importActor));
+        // V184 update: import USED to get past the gate (the 2026-08-17 widening kept import/CEO
+        // alongside the newly-added owning rep) and land on the over-delivery CONFLICT below, same
+        // as salesActor still does. The later 2026-09/V184 transfer (canWriteDelivery — see
+        // TicketService's own Javadoc) removed import from the gate entirely, so it is now a
+        // FORBIDDEN, never reaching the over-delivery rule at all. See
+        // DeliveryAuthzIntegrationTest#import_noLongerRecordsDelivery... for the dedicated pin.
+        assertForbidden(() -> service.recordPartialDelivery(10L, over, importActor));
         // salesActor is id 1 and this deal's createdById is 1, so it OWNS the deal. Stages 13-14
         // (ส่งมอบสินค้า) are Sales's as of 2026-08-17, so the owning rep gets past the gate and is
-        // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. This assertion
-        // flipping is the whole point of that change; `otherSales` below is the refusal that stays.
+        // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. `otherSales`
+        // below is the refusal that stays (never owned the deal, never had a path in).
         assertConflict(() -> service.recordPartialDelivery(10L, over, salesActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, otherSales));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
@@ -1290,8 +1301,11 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null,
             DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
 
+        // V184: salesActor (the owning rep), not importActor -- import no longer passes
+        // requireDeliveryAccess at all, so it would be FORBIDDEN before ever reaching the
+        // inactive-deal CONFLICT this test is actually about.
         assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), importActor));
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), salesActor));
     }
 
     @Test
@@ -1303,9 +1317,10 @@ class TicketServiceTest {
             FulfilmentStatus.FROM_STOCK);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), importActor);
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(3L), eq("ส่งครบจากสต็อก"), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(1L), eq("ส่งครบจากสต็อก"), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -1327,10 +1342,11 @@ class TicketServiceTest {
         // No prior WAREHOUSE delivery record — the goods-received EVENT is the signal.
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งของนำเข้าที่เหลือ",
-            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), importActor);
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), salesActor);
 
-        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(3L), anyString(), any(),
+        verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), anyString(), any(),
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
@@ -2179,7 +2195,8 @@ class TicketServiceTest {
             Optional.of(delivered), Optional.of(delivered));
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
-        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+        // V184: salesActor, not importActor -- see the note above recordPartialDelivery_updatesLineProgressAndStatus.
+        service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERED);

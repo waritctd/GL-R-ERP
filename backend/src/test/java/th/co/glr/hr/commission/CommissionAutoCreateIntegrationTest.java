@@ -452,8 +452,11 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
             importActor);
+        // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
+        // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
+        // owner) is used here instead of importActor; this fixture is not testing delivery authz.
         TicketDto delivered = ticketService.completeDelivery(
-            ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), importActor);
+            ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         assertThat(delivered.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
         assertThat(delivered.summary().salesStage()).isNotEqualTo(DealStage.CLOSED_PAID);

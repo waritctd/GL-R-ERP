@@ -1104,12 +1104,18 @@ export async function declareStockCoverage(sessions, role, ticketId, lines) {
  * fully paid before delivery finished (:1199-1203; never the case in this slice, since
  * {@link confirmFinalPayment} always runs after this).
  */
+// REVIEW ROUND 1, B1 (2026-09-18): called as sessions.sales, not sessions.import. TicketService#
+// canWriteDelivery is now CEO, or the deal's OWN owning sales rep -- import's write access to
+// ส่งมอบสินค้า was a TRANSFER to Sales (owner ruling 2026-08-17), not an addition, so calling this
+// as import now 403s. Every deal this file drives is created via createTicket(sessions.sales, ...)
+// (sessions.sales is therefore always the deal's createdById), so sessions.sales is also always
+// the owning rep for every call site in this suite.
 export async function completeDelivery(sessions, ticketId, { note, recipientName } = {}) {
-  const response = await apiWrite(sessions.import, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
+  const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deliveries/complete`, {
     note: note ?? null,
     recipientName: recipientName ?? null,
   });
-  expect(response.status(), `import POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
+  expect(response.status(), `sales (owning rep) POST /api/tickets/${ticketId}/deliveries/complete`).toBe(200);
   const { ticket } = await response.json();
   return ticket;
 }

@@ -361,8 +361,10 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
 
+        // V184: completeDelivery's gate transferred to {ceo, owning-rep} only -- salesActor, not
+        // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself.
         TicketDto afterDelivery = ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest(null, null), importActor);
+            deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
         assertThat(afterDelivery.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
         // Both POs are now RECEIVED — a terminal (CLOSED) PO status, so neither
@@ -414,7 +416,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
 
         procurement.recordGoodsReceived(poA.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
         procurement.recordGoodsReceived(poB.id(), new RecordGoodsReceivedRequest(BigDecimal.TEN, null), importActor);
-        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest(null, null), importActor);
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
         insertInvoiceAttachment(deal.ticketId, accountUserId);
 

@@ -6,9 +6,11 @@ import java.util.Set;
  * Lifecycle of a ใบขอซื้อ (F-SM-001), mirroring {@code sales.deposit_notice}'s own
  * DRAFT/ISSUED/SUPERSEDED rather than inventing a fourth vocabulary for the same idea.
  *
- * <p><strong>WIP — nothing reads this yet.</strong> It belongs to the STORED import-request
- * aggregate, which has no service and no controller. The shipped feature
- * ({@link ImportRequestService}) is stateless and has no lifecycle at all.
+ * <p>Backs the STORED import-request aggregate ({@link ImportRequestService}'s {@code
+ * createDrafts}/{@code issue}/{@code revise}/{@code deleteDraft} onward) — cheap nit, REVIEW ROUND
+ * 2: this used to say "WIP — nothing reads this yet... the shipped feature is stateless and has no
+ * lifecycle at all", true only of the original preview-only cut of this feature and stale since the
+ * stored aggregate landed.
  *
  * <p>There is deliberately no {@code CANCELLED}. A draft that should not exist is DELETED — it has
  * no number and no audit weight, so a tombstone would be litter. An ISSUED form cannot be cancelled

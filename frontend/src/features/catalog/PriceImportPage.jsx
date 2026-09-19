@@ -99,6 +99,18 @@ function countryLabel(countries, code) {
 // sales.factory_config — email is this change's whole point (see PriceImportPage's own comment
 // on the factory list below), so it is deliberately NOT required: a factory may sit here with no
 // contact email until จัดซื้อ has one to enter, same as every real factory does today.
+// REVIEW ROUND 1, S6: 'ZZ' (อื่นๆ) is a real, backend-valid country, but it REQUIRES a typed
+// countryOther that this page has no field for yet (PR-B adds it — import-request-per-factory-
+// PLAN.md §C). Offering 'ZZ' here today would let a rep pick it and then hit the backend's "กรุณา
+// ระบุชื่อประเทศเมื่อเลือก อื่นๆ" 400 with no way to satisfy it from this form, so it is hidden from
+// the picker's OPTIONS — except when it is already the factory's CURRENT value, so an existing ZZ
+// factory (created via the ใบขอซื้อ auto-create path, which DOES collect countryOther) still shows
+// a valid selection instead of a blank one, and PriceImportService#updateFactory's own S6 fix keeps
+// its stored countryOther when this form's submit omits the field.
+function selectableCountries(countries, currentCode) {
+  return countries.filter((c) => c.countryCode !== 'ZZ' || c.countryCode === currentCode);
+}
+
 function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const isEdit = Boolean(factory);
   const [name, setName]         = useState(factory?.name ?? '');
@@ -161,7 +173,7 @@ function FactoryFormModal({ factory, countries, onClose, onSaved }) {
               onChange={(e) => setCountry(e.target.value)}
             >
               <option value="">— เลือกประเทศ —</option>
-              {countries.map((c) => (
+              {selectableCountries(countries, factory?.country).map((c) => (
                 <option key={c.countryCode} value={c.countryCode}>{c.nameTh} ({c.countryCode})</option>
               ))}
             </select>
