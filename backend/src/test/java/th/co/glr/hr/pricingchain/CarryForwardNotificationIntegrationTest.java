@@ -315,10 +315,22 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
             List.of(pricingItem(quantity)));
     }
 
+    // Rebased onto develop @84f4123e (V184): V185/GLA-125 made color/texture/thicknessMm/
+    // sqmPerPiece/piecesPerBox/a quantity/originCountry/leadTimeMin+MaxDays unconditionally
+    // required on every item (PricingRequestService#requireItemFieldsComplete) -- the old
+    // 18-arg compat shape this used to build (requestedQty/requestedQtySqm/requestedUnit/
+    // requestedUnitBasis sent directly, no tile fields at all) now 400s with "ขาด สี, ผิว,
+    // ความหนา, ...". Rebuilt as a complete new-form item: PIECES mode with wastageMode NONE and
+    // roundToFullBox false so the derived requestedQty comes out EXACTLY equal to `quantity`
+    // (piecesFinal == piecesInput, no wastage/box rounding) -- preserving this fixture's original
+    // "requestedQty/quotedQuantity both equal `quantity`" arithmetic, which the parent/child
+    // FactoryQuoteCarryForward equality check and the factory-response quoted amount both rely on.
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
-        return new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null, "SCG",
-            "Tile CF Mail", "SCG Tile CF Mail", null, null, "60x60", FACTORY, quantity, quantity, "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        return new PricingRequestRequests.PricingRequestItemRequest(
+            null, catalogProductId, null, "SCG", "Tile CF Mail", "SCG Tile CF Mail", "ขาว", "ด้าน",
+            "60x60", FACTORY, null, null, null, null, QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), "PIECES", null, quantity.intValueExact(),
+            "NONE", null, 4, null, false, "ไทย-สต็อก", 3, 7, null, null, null, null);
     }
 
     private ReceiveFactoryQuoteRequest factoryResponse(long pricingRequestItemId, BigDecimal quantity) {
