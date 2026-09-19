@@ -826,6 +826,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
+  // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — confirmFinalPayment/
+  // recordPayment alike — is account ONLY now, no CEO fallback. `isAccount` above still includes
+  // ceo (canConfirmPayments is unchanged and still backs SET_BILLING, which DID keep its CEO
+  // fallback), so it is deliberately NOT reused for the payment-recording flags below — mirrors
+  // TicketService's new PAYMENT_RECORD_ROLES exactly.
+  const isMoneyRecorder = role === 'account';
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
   // Slice A "chip diet": DealStagePanel's own read-only "ส่งมอบ x/y" badge
@@ -899,8 +905,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && (ps == null || ps === 'CUSTOMER_CONFIRMED') && isSales,
-    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isAccount,
-    recordPayment:      hasAction('RECORD_PAYMENT') && isAccount,
+    confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
+    recordPayment:      hasAction('RECORD_PAYMENT') && isMoneyRecorder,
     setBilling:         hasAction('SET_BILLING') && isAccount,
     downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
@@ -958,19 +964,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
-  // !isAccount on the two payment-wait lines (P3, review round 2): account
-  // is the role that CLEARS these two waits (confirmDeposit/
-  // confirmFinalPayment — see nextAccountAction in accountActions.js) — for
-  // account specifically, this line would otherwise read "รอชำระมัดจำ" right
-  // next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button,
-  // stating the same fact twice (once as a call to action, once as a
-  // blocker) instead of pairing the blocker with a role that ISN'T the one
-  // who can act on it — exactly the contradiction this line's own doc
+  // !isMoneyRecorder on the two payment-wait lines (P3, review round 2): account is the ONLY role
+  // that CLEARS these two waits (confirmDeposit/confirmFinalPayment — see nextAccountAction in
+  // accountActions.js) — for account specifically, this line would otherwise read "รอชำระมัดจำ"
+  // right next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button, stating the same
+  // fact twice (once as a call to action, once as a blocker) instead of pairing the blocker with a
+  // role that ISN'T the one who can act on it — exactly the contradiction this line's own doc
   // comment above warns against.
+  //
+  // GLA-118 review fix: this used to read `!isAccount`, which ALSO suppressed the blocker for the
+  // CEO — isAccount (canConfirmPayments) still includes ceo for SET_BILLING's sake, but
+  // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
+  // longer clears either wait and must see the same read-only status a sales/import viewer does,
+  // not silence.
   const blocker = closeConfirmedAt && !can.verifyClose
     ? 'รอ CEO ตรวจสอบปิดงาน'
-    : ps === 'DEPOSIT_NOTICE_ISSUED' && !isAccount ? 'รอชำระมัดจำ'
-      : ps === 'AWAITING_FINAL_PAYMENT' && !isAccount ? 'รอชำระส่วนที่เหลือ'
+    : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
+      : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'
         : null;
 
   // The cockpit's primary action: the ONE workflow button for this viewer's

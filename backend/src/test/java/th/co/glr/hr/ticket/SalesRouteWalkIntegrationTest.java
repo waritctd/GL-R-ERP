@@ -413,8 +413,10 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Credit terms, decided before the order is confirmed: payment_status is still null here,
         // so waiveDeposit's own "no deposit invoice issued yet" guard holds.
+        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- driven
+        // as ownerRep (createTicketWithItems's ownerRepId owns this deal).
         ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", accountActor);
+            "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", ownerRep);
         assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
         ticketService.confirmCustomer(ticketId, ownerRep);
