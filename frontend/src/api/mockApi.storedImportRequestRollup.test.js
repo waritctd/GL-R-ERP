@@ -72,11 +72,19 @@ async function driveTwoFactoryTicketToOrderReceived() {
         sourceTicketItemId: itemA.id, productId: 1, brand: 'Panaria', model: 'Ivory Lappato',
         factory: 'Panaria SpA', requestedQty: 10, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
         quantityType: 'ESTIMATE',
+        // V185/GLA-125: the direct-deal item fields are required on a pricing request item.
+        color: 'ขาว', texture: 'ด้าน', size: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'PIECES', piecesInput: 10, wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: false,
+        originCountry: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90,
       },
       {
         sourceTicketItemId: itemB.id, productId: 4, brand: 'REFIN', model: 'L-Trim',
         factory: 'REFIN', requestedQty: 20, requestedUnit: 'แผ่น', requestedUnitBasis: 'PER_PIECE',
         quantityType: 'ESTIMATE',
+        // V185/GLA-125: the direct-deal item fields are required on a pricing request item.
+        color: 'ขาว', texture: 'ด้าน', size: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'PIECES', piecesInput: 20, wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: false,
+        originCountry: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90,
       },
     ],
   });
