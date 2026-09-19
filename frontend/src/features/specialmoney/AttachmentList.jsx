@@ -19,7 +19,7 @@ function bytesToLabel(bytes) {
  * `api.specialMoney.attachments(id)` and `attachmentDownloadUrl()` already existed in
  * `api/hrApi.js` and were never called anywhere. This component wires both, for either audience:
  *
- * - the requester (`canUpload`, on their own SUBMITTED request — mirrors
+ * - the owning employee (`canUpload`, on their own SUBMITTED request — mirrors
  *   `SpecialMoneyService.requireCanAttach()`, the same gate `SpecialMoneyPanel`'s own
  *   `canAttach()` already enforces for the upload control)
  * - the reviewer (CEO, read-only — sees the actual files before deciding, not a count)

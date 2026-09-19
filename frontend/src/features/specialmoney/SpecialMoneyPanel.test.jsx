@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpecialMoneyPanel } from './SpecialMoneyPanel.jsx';
 import { TYPE_GROUPS } from './specialMoneyRules.js';
@@ -250,6 +250,57 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
+  // The submit-for picker never had a live path: SpecialMoneyEmployeeOption.directReport is
+  // hardcoded false in Java (SpecialMoneyRepository -- "directReport is now ALWAYS false -- nobody
+  // may file for anybody") and resolveTargetEmployee refuses any target but self for every role,
+  // so even a stale/hypothetical GET /employees payload with a second roster row must never
+  // surface a picker -- there is only ever the requester's own name, disabled.
+  describe('submit-for picker: self-only, no on-behalf select', () => {
+    function rosterWithStaleSecondEntry() {
+      return {
+        employees: [
+          { employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false },
+          // Hypothetical stale payload shaped like the old on-behalf list -- directReport: true
+          // (or self: false) can no longer happen for real, but the frontend must not react to it
+          // even if a future regression somehow reintroduced it server-side.
+          { employeeId: 8, employeeName: 'ผู้จัดการ', employeeCode: 'GLR-008', self: false, directReport: true },
+        ],
+      };
+    }
+
+    it('renders only the disabled display input, never a <select>/combobox, against a roster with a second entry', async () => {
+      api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
+      const { queryClient } = renderPanel();
+
+      // The display input shows user.name before GET /employees resolves, so waiting on it alone
+      // would assert against an empty roster and pass even with the old picker back in place.
+      // Wait until the two-entry roster is in the cache, then let React commit the re-render.
+      await waitFor(() => expect(queryClient.getQueryData(queryKeys.specialMoneyEmployees())).toHaveLength(2));
+      await act(async () => {});
+      await screen.findByDisplayValue('พนักงาน ทดสอบ');
+      expect(screen.queryByRole('combobox', { name: /พนักงาน/ })).toBeNull();
+      expect(document.getElementById('smr-employee')).toBeNull();
+      expect(document.getElementById('smr-employee-display')).not.toBeNull();
+      expect(document.getElementById('smr-employee-display').disabled).toBe(true);
+    });
+
+    // A regression pin, not proof of the picker's removal: the old select also defaulted to the
+    // caller's own id, so this passes on either code. The render test above is the one that can fail.
+    it('submits the viewer\'s own employeeId regardless of the extra roster entry', async () => {
+      api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
+      renderPanel();
+
+      await selectType('AID_WEDDING');
+      fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+      fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
+      fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
+
+      await waitFor(() => expect(api.specialMoney.create).toHaveBeenCalledTimes(1));
+      const payload = api.specialMoney.create.mock.calls[0][0];
+      expect(payload.employeeId).toBe(1);
+    });
+  });
+
   // Backend contract trap (`detail` is Map<String,String> on the wire): every value sent, numeric
   // or boolean, must already be a string by the time it reaches create()'s payload.
   describe('detail payload string-typing per type', () => {
@@ -412,6 +463,63 @@ describe('SpecialMoneyPanel', () => {
       await waitFor(() => expect(api.specialMoney.attachments).toHaveBeenCalledWith(4001));
       // canUpload (requester, still SUBMITTED) renders FileUploadField's own upload affordance.
       expect(await screen.findByText('เลือกไฟล์')).not.toBeNull();
+    });
+  });
+
+  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only
+  // while SUBMITTED. The old "or whoever filed on their behalf" (requested_by_id) disjunct was
+  // removed in Java 2026-08-10 (SpecialMoneyScopeIntegrationTest's
+  // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow) -- these pin the frontend button gate
+  // to match, wrong-way-round first.
+  describe('cancel/attach gate: owner-only, not requester-only', () => {
+    it('offers a legacy on-behalf filer (requestedById matches the viewer) no cancel or upload control on someone else\'s row', async () => {
+      const hrUser = { employeeId: 7, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7 })],
+      });
+      renderPanel(hrUser);
+
+      // The row must actually render before the absence of its buttons means anything -- otherwise
+      // this assertion would also pass if the row (or the whole panel) failed to render at all.
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
+      expect(screen.queryByText('เลือกไฟล์')).toBeNull();
+    });
+
+    it('offers the owning employee both cancel and upload on their own SUBMITTED row, even though someone else is recorded as requestedById', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7 })],
+      });
+      renderPanel(user); // user.employeeId === 1, the row's owning employee
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      await waitFor(() => expect(api.specialMoney.attachments).toHaveBeenCalledWith(4001));
+
+      expect(await screen.findByRole('button', { name: 'ยกเลิกคำขอ' })).not.toBeNull();
+      expect(await screen.findByText('เลือกไฟล์')).not.toBeNull();
+    });
+
+    it('offers a user with no employee record no cancel or upload control, even on a row whose employeeId is also missing', async () => {
+      const noEmployeeUser = { employeeId: null, name: 'ผู้ดูแลระบบ', role: 'hr', manager: false };
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: null, requestedById: null })],
+      });
+      renderPanel(noEmployeeUser);
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
+      expect(screen.queryByText('เลือกไฟล์')).toBeNull();
+    });
+
+    it('offers the owning employee no cancel button once their own row is no longer SUBMITTED', async () => {
+      api.specialMoney.list.mockResolvedValue({
+        requests: [submittedRequest({ employeeId: 1, requestedById: 7, status: 'APPROVED', approvedAmount: 5000 })],
+      });
+      renderPanel(user);
+
+      await screen.findByText(/พนักงาน ทดสอบ ·/);
+      expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
     });
   });
 
