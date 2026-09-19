@@ -55,9 +55,10 @@ const numberFieldSchema = z
 // never round-trip back into a valid fraction.
 const percentFieldSchema = numberFieldSchema.refine((value) => Number(value) <= 100, 'กรอกได้ไม่เกิน 100%');
 
-// sellingPriceRoundUpTo is the RoundUp() step -- must be strictly positive, or every selling
-// price calculation downstream (branches 3-5) divides by zero.
-const positiveNumberFieldSchema = numberFieldSchema.refine((value) => Number(value) > 0, 'ต้องมากกว่า 0');
+// positiveNumberFieldSchema (used only by sellingPriceRoundUpTo) is REMOVED along with that
+// field from FORMULA_SCALAR_FIELDS below (owner ruling 2026-09-19, Phase 2 CEO pricing) -- the
+// selling-price formula no longer rounds up to it at all, so there is nothing left to validate
+// as "strictly positive" here.
 
 const configFormSchema = z.object({
   freightPerSqm: numberFieldSchema,
@@ -189,7 +190,12 @@ const FORMULA_SCALAR_FIELDS = [
   { key: 'costBuffer', label: 'บัฟเฟอร์ต้นทุนรวม (B2)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'sellingBuffer', label: 'บัฟเฟอร์ราคาขาย (B3)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'defaultMarginPct', label: 'อัตรากำไรเริ่มต้น', hint: '% (เก็บในระบบเป็นเศษส่วน)', schema: percentFieldSchema, isPercent: true },
-  { key: 'sellingPriceRoundUpTo', label: 'ปัดราคาขายขึ้นเป็นทวีคูณของ (บาท)', hint: 'บาท — ต้องมากกว่า 0', schema: positiveNumberFieldSchema },
+  // sellingPriceRoundUpTo REMOVED from this list (owner ruling 2026-09-19, Phase 2 CEO pricing):
+  // the selling-price formula no longer rounds up to this multiple at all -- it rounds HALF_UP
+  // to 2dp instead (PricingFormulaEngine#sellingPrice). The column itself is untouched in the DB
+  // (no migration) and the CEO can no longer edit or see a figure that has stopped doing
+  // anything, which would only invite the question "why isn't my price a multiple of this any
+  // more". See the read-only summary table below, which drops the same field for the same reason.
 ];
 
 const dutyRateRowSchema = z.object({
@@ -284,6 +290,14 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
       const raw = Number(values[field.key]);
       payload[field.key] = field.isPercent ? raw / 100 : raw;
     });
+    // sellingPriceRoundUpTo (owner ruling 2026-09-19, Phase 2 CEO pricing): removed from
+    // FORMULA_SCALAR_FIELDS above, so it is no longer editable or even shown -- but
+    // UpdatePricingFormulaConfigRequest on the backend still declares it @NotNull (the column
+    // and its request field are DELIBERATELY untouched, no migration), so the save would 400 with
+    // a missing-field error if this payload dropped it. Pass the CONFIG's existing (frozen)
+    // value straight through unedited -- the CEO can no longer change it, but a save of every
+    // OTHER field must not accidentally null out a column the backend still requires non-null.
+    payload.sellingPriceRoundUpTo = Number(config.sellingPriceRoundUpTo);
     payload.freightRates = config.freightRates.map((rate) => ({
       originCountryCode: rate.originCountryCode,
       thicknessMinMm: rate.thicknessMinMm,
@@ -1039,17 +1053,18 @@ export function CeoSettingsPage({ showToast }) {
                       <td className="px-2.5 py-1 text-text-muted">อัตรากำไรเริ่มต้น</td>
                       <td className="px-2.5 py-1 font-semibold text-success">{pctDisplay(formulaConfig.defaultMarginPct)}</td>
                     </tr>
-                    <tr>
-                      <td className="px-2.5 py-1 text-text-muted">ปัดราคาขายขึ้นเป็นทวีคูณของ</td>
-                      <td className="px-2.5 py-1 font-semibold">{moneyDisplay(formulaConfig.sellingPriceRoundUpTo)} บาท</td>
-                      <td />
-                      <td />
-                    </tr>
                   </tbody>
                 </table>
               </div>
               <p className="m-0 mt-1.5 text-[10px] text-text-muted">
                 B1/B2/B3 และ 1.15/0.0045 เป็นตัวคูณดิบ (ไม่ใช่ % และไม่ใช่ VAT) — VAT 7% แยกคิดตอนออกใบเสนอราคาลูกค้าเสมอ
+              </p>
+              {/* Owner ruling 2026-09-19 (Phase 2 CEO pricing): "ปัดราคาขายขึ้นเป็นทวีคูณของ" is
+                  removed from this table -- the selling-price formula rounds HALF_UP to 2dp now,
+                  never up to this multiple, so the CEO can no longer edit or read a figure that
+                  no longer affects anything. The column itself is untouched in the database. */}
+              <p className="m-0 mt-1 text-[10px] text-text-muted">
+                ราคาขายปัดทศนิยม 2 ตำแหน่งแบบปกติ (ไม่ปัดขึ้นเป็นทวีคูณอีกต่อไป)
               </p>
             </div>
 

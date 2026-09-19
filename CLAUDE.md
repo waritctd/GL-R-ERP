@@ -127,9 +127,11 @@ real-backend e2e suite (`cd frontend && npm run test:e2e`, see `frontend/e2e-rea
 drives a real browser against real Spring services and a real Postgres, with no mock in the path.
 `e2e-real/api-authz.spec.js` is where a role gate's *observed* behaviour is pinned. It does not
 replace requirement 2 above — a real-DB integration test through the Java service is still what
-proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence. Three
-roles have no seeded persona (`account`, `warehouse`, `qc`), so that suite says nothing about them;
-the README lists the gaps.
+proves a scope filter reaches the `WHERE` clause — but a green run there is real evidence. All
+nine roles `DivisionAccessPolicy.roleFor` can return have a seeded persona (`account`, `warehouse`
+and `qc` were added by `db/migration-demo/V139`, #665), and the suite iterates `REAL_ROLES` from
+`e2e-real/helpers/accounts.js`. This line used to say those three had no persona; that stopped
+being true with V139. The README lists what the suite still does not cover.
 
 **There is only one e2e suite now.** The mock-frontend suite (`frontend/e2e/`, its own
 `playwright.config.js`, and `e2e-ci.yml`) was removed on 2026-08-08 — owner ruling, one e2e job per

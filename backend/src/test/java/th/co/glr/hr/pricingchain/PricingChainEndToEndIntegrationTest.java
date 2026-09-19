@@ -342,9 +342,10 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         PricingDecisionItemDto approvedItemA = decisionItemFor(approved, itemAId);
         PricingDecisionItemDto approvedItemB = decisionItemFor(approved, itemBId);
-        // V152 (V109 engine wiring): selling price is now RoundUp[cost x (1+margin) x
-        // selling_buffer, nearest ฿10] — see formulaSellingPrice's own javadoc — not the old bare
-        // cost x (1+margin).
+        // V152 (V109 engine wiring), rounding rule replaced by owner ruling 2026-09-19 (Phase 2
+        // CEO pricing): selling price is cost x (1+margin) x selling_buffer, rounded HALF_UP to
+        // 2dp — see formulaSellingPrice's own javadoc — no longer rounded UP to the nearest ฿10,
+        // and not the original bare cost x (1+margin) either.
         BigDecimal expectedApprovedA = formulaSellingPrice(
             approvedItemA.frozenLandedCostPerRequestedUnitThb(), approvedItemA.approvedMarginPct());
         BigDecimal expectedApprovedB = formulaSellingPrice(
@@ -637,16 +638,15 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
     /**
      * V109 selling-price formula (V152) hand-reimplemented independently of
-     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#roundUpSellingPrice}: {@code cost x
-     * (1+margin) x selling_buffer}, rounded UP to the nearest {@code selling_price_round_up_to} —
-     * replacing the old bare {@code cost x (1+margin)} this test hard-coded before the engine
-     * swap. Buffer (1.07) and round-up-to (10) match V109's seeded defaults, unchanged by this
-     * fixture.
+     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#sellingPrice}: {@code cost x
+     * (1+margin) x selling_buffer}, rounded HALF_UP to 2dp — owner ruling 2026-09-19 (Phase 2 CEO
+     * pricing) replaced the old "round UP to the nearest selling_price_round_up_to" rule this
+     * helper used to reimplement. Buffer (1.07) matches V109's seeded default, unchanged by this
+     * fixture; {@code selling_price_round_up_to} is no longer consulted at all.
      */
     private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
         BigDecimal raw = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(new BigDecimal("1.07"));
-        BigDecimal units = raw.divide(BigDecimal.TEN, 0, RoundingMode.CEILING);
-        return units.multiply(BigDecimal.TEN).setScale(4, RoundingMode.HALF_UP);
+        return raw.setScale(2, RoundingMode.HALF_UP);
     }
 
     private CustomerQuotationItemDto quotationItemFor(CustomerQuotationDto quotation, long pricingRequestItemId) {

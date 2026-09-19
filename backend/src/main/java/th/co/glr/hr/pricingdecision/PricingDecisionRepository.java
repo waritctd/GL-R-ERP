@@ -98,7 +98,14 @@ public class PricingDecisionRepository {
         long pricingRequestItemId, long pricingCostingItemId, String requestedUnitBasis,
         BigDecimal requestedQuantity, BigDecimal normalizedQuantityPieces,
         BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
-        String currency, BigDecimal proposedMarginPct, BigDecimal proposedSellingPrice) {}
+        String currency, BigDecimal proposedMarginPct, BigDecimal proposedSellingPrice,
+        // Phase 2 (owner ruling A, 2026-09-19, V187): the auto-calculated formula price is a REAL
+        // stored value from the moment the item is created, not a UI placeholder — it becomes
+        // list_unit_price's starting value (the NET mode's ราคาตั้ง) so a CEO who picks NET and
+        // never types anything still has a real, storable price to approve. Same figure as
+        // proposedSellingPrice (2dp, matching this column's scale) whenever a formula price could
+        // be computed; null when it could not (e.g. uncostable line) — same as proposedSellingPrice.
+        BigDecimal listUnitPrice) {}
 
     public void insertItems(long decisionId, List<WriteItem> items) {
         if (items.isEmpty()) {
@@ -118,35 +125,77 @@ public class PricingDecisionRepository {
                 .addValue("frozenLandedCostPerRequestedUnitThb", item.frozenLandedCostPerRequestedUnitThb())
                 .addValue("currency", item.currency())
                 .addValue("proposedMarginPct", item.proposedMarginPct())
-                .addValue("proposedSellingPrice", item.proposedSellingPrice());
+                .addValue("proposedSellingPrice", item.proposedSellingPrice())
+                .addValue("listUnitPrice", item.listUnitPrice());
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.pricing_decision_item
                 (pricing_decision_id, pricing_request_item_id, pricing_costing_item_id, requested_unit_basis,
                  requested_quantity, normalized_quantity_pieces, frozen_landed_cost_per_piece_thb,
                  frozen_landed_cost_per_requested_unit_thb, currency, proposed_margin_pct,
-                 proposed_selling_price_per_requested_unit)
+                 proposed_selling_price_per_requested_unit, list_unit_price)
             VALUES
                 (:decisionId, :pricingRequestItemId, :pricingCostingItemId, :requestedUnitBasis,
                  :requestedQuantity, :normalizedQuantityPieces, :frozenLandedCostPerPieceThb,
                  :frozenLandedCostPerRequestedUnitThb, :currency, :proposedMarginPct,
-                 :proposedSellingPrice)
+                 :proposedSellingPrice, :listUnitPrice)
             """, batch);
     }
 
     public int updateDecisionNote(long id, String ceoNote) {
+        return updateDecisionHeader(id, ceoNote, null);
+    }
+
+    /** Phase 2 (V187): {@code priceMode} joins {@code ceoNote} under the same COALESCE
+     * ("omit/null = unchanged") semantics — chosen once, then left alone on every later call that
+     * does not pass it again. DRAFT-only, same guard as every other mutation here. */
+    public int updateDecisionHeader(long id, String ceoNote, String priceMode) {
         return jdbc.update("""
             UPDATE sales.pricing_decision
                SET ceo_note = COALESCE(:ceoNote, ceo_note),
+                   price_mode = COALESCE(:priceMode, price_mode),
                    updated_at = now()
              WHERE pricing_decision_id = :id AND status = 'DRAFT'
-            """, new MapSqlParameterSource().addValue("id", id).addValue("ceoNote", ceoNote));
+            """, new MapSqlParameterSource().addValue("id", id).addValue("ceoNote", ceoNote)
+                .addValue("priceMode", priceMode));
     }
 
+    /**
+     * Phase 2 (V187) price-mode fields -- {@code listUnitPrice}/{@code discountPct} (NET),
+     * {@code specialPriceSqm} (SPECIAL_SQM), {@code directNetPrice} (DIRECT_NET). Review finding
+     * #6 (2026-09-19): each needs the SAME tri-state (set / clear / leave untouched) the legacy
+     * {@code sellingPriceOverride} already has, not a plain COALESCE -- a blanked input (the CEO
+     * clears a field back to empty) must actually clear the stored value, not silently leave the
+     * old one in place because a null parameter is indistinguishable from "omitted". The paired
+     * {@code clearXxx} boolean is that explicit "yes, really clear this" signal.
+     *
+     * <p>{@code netUnitPrice}/{@code netUnitPriceComputed} is a different shape again: the SERVER
+     * always decides this column's value (never client input), so the tri-state here is "the
+     * caller computed a definitive value (write it, even NULL)" vs. "this call did not touch net
+     * at all (leave it alone)" -- {@code netUnitPriceComputed} is that second signal. Reused by
+     * {@code PricingDecisionService}'s mode-switch recompute (review finding #2): a pure
+     * net-only write, every other field left null/false/untouched.
+     */
     public record ItemUpdate(
         long itemId, BigDecimal marginPct, BigDecimal sellingPrice,
         BigDecimal minimumSellingPrice, String decisionNote,
-        BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride) {}
+        BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride,
+        BigDecimal listUnitPrice, boolean clearListUnitPrice,
+        BigDecimal discountPct, boolean clearDiscountPct,
+        BigDecimal specialPriceSqm, boolean clearSpecialPriceSqm,
+        BigDecimal directNetPrice, boolean clearDirectNetPrice,
+        BigDecimal netUnitPrice, boolean netUnitPriceComputed) {
+        /** The pre-finding-#6/#2 shape (plain COALESCE, no clear/compute signals) -- kept so the
+         * few call sites that only ever SET (never clear) these fields, and never touch net
+         * unilaterally, stay simple. */
+        public ItemUpdate(long itemId, BigDecimal marginPct, BigDecimal sellingPrice,
+                          BigDecimal minimumSellingPrice, String decisionNote,
+                          BigDecimal sellingPriceOverride, boolean clearSellingPriceOverride) {
+            this(itemId, marginPct, sellingPrice, minimumSellingPrice, decisionNote,
+                sellingPriceOverride, clearSellingPriceOverride,
+                null, false, null, false, null, false, null, false, null, false);
+        }
+    }
 
     /** Returns the number of rows actually touched — the caller compares this against the
      * requested item count to detect an itemId that does not belong to this decision.
@@ -172,7 +221,17 @@ public class PricingDecisionRepository {
                 .addValue("minimumSellingPrice", u.minimumSellingPrice())
                 .addValue("decisionNote", u.decisionNote())
                 .addValue("sellingPriceOverride", u.sellingPriceOverride())
-                .addValue("clearOverride", u.clearSellingPriceOverride());
+                .addValue("clearOverride", u.clearSellingPriceOverride())
+                .addValue("listUnitPrice", u.listUnitPrice())
+                .addValue("clearListUnitPrice", u.clearListUnitPrice())
+                .addValue("discountPct", u.discountPct())
+                .addValue("clearDiscountPct", u.clearDiscountPct())
+                .addValue("specialPriceSqm", u.specialPriceSqm())
+                .addValue("clearSpecialPriceSqm", u.clearSpecialPriceSqm())
+                .addValue("directNetPrice", u.directNetPrice())
+                .addValue("clearDirectNetPrice", u.clearDirectNetPrice())
+                .addValue("netUnitPrice", u.netUnitPrice())
+                .addValue("netUnitPriceComputed", u.netUnitPriceComputed());
         }
         int[] counts = jdbc.batchUpdate("""
             UPDATE sales.pricing_decision_item
@@ -185,6 +244,33 @@ public class PricingDecisionRepository {
                    manual_selling_price_per_requested_unit = CASE
                        WHEN :clearOverride THEN NULL
                        ELSE COALESCE(:sellingPriceOverride, manual_selling_price_per_requested_unit)
+                   END,
+                   -- Phase 2 (V187), review finding #6: each price-mode input gets the SAME
+                   -- tri-state (set / clear / leave untouched) as manual_selling_price above --
+                   -- see ItemUpdate's own Javadoc for why a plain COALESCE cannot express "clear".
+                   list_unit_price = CASE
+                       WHEN :clearListUnitPrice THEN NULL
+                       ELSE COALESCE(:listUnitPrice, list_unit_price)
+                   END,
+                   discount_pct = CASE
+                       WHEN :clearDiscountPct THEN NULL
+                       ELSE COALESCE(:discountPct, discount_pct)
+                   END,
+                   special_price_sqm = CASE
+                       WHEN :clearSpecialPriceSqm THEN NULL
+                       ELSE COALESCE(:specialPriceSqm, special_price_sqm)
+                   END,
+                   direct_net_price = CASE
+                       WHEN :clearDirectNetPrice THEN NULL
+                       ELSE COALESCE(:directNetPrice, direct_net_price)
+                   END,
+                   -- net_unit_price is NEVER client input -- netUnitPriceComputed is the caller
+                   -- (PricingDecisionService) saying "I derived a definitive value this call,
+                   -- write it verbatim, even if NULL"; false means this call did not touch net
+                   -- at all (reused as-is by the mode-switch recompute, review finding #2).
+                   net_unit_price = CASE
+                       WHEN :netUnitPriceComputed THEN :netUnitPrice
+                       ELSE net_unit_price
                    END,
                    updated_at = now()
              WHERE pricing_decision_item_id = :itemId
@@ -208,10 +294,21 @@ public class PricingDecisionRepository {
      * Deliberately does NOT touch {@code proposed_margin_pct}/{@code approved_*} — a cost-driven
      * recompute never overwrites a margin the CEO already set, or anything {@code approve()} froze.
      * Same DRAFT-only guard shape as {@link #updateItems}.
-     */
+     *
+     * <p>{@code listUnitPrice}/{@code netUnitPrice} (owner correction, 2026-09-19): whenever
+     * {@code proposedSellingPrice} (the formula reference) changes here, Phase 2's NET-mode list
+     * price must move WITH it — {@code list_unit_price} is never a client input (ruling A: the CEO
+     * never types it), so the ONLY way it can stay correct after a cost-driven recompute is for
+     * this exact write path to carry it. Freezing it at {@code insertItems} time only (the
+     * original, wrong design) left an item that starts uncostable permanently unable to reach a
+     * NET approval even after {@code overrideItemCost} made it costable — reintroducing review
+     * finding #1's deadlock through a second door. Both fields are UNCONDITIONAL overwrites here
+     * (always {@code money2(proposedSellingPrice)}/the freshly recomputed net, including to NULL
+     * when the item just became uncostable again) — never tri-state, because neither is ever
+     * client-supplied on this path; see {@code PricingDecisionService#deriveListAndNet}. */
     public record FrozenCostUpdate(
         long itemId, BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
-        BigDecimal proposedSellingPrice) {}
+        BigDecimal proposedSellingPrice, BigDecimal listUnitPrice, BigDecimal netUnitPrice) {}
 
     public int updateFrozenCosts(long decisionId, List<FrozenCostUpdate> updates) {
         if (updates.isEmpty()) {
@@ -225,13 +322,17 @@ public class PricingDecisionRepository {
                 .addValue("itemId", u.itemId())
                 .addValue("frozenPerPiece", u.frozenLandedCostPerPieceThb())
                 .addValue("frozenPerRequestedUnit", u.frozenLandedCostPerRequestedUnitThb())
-                .addValue("sellingPrice", u.proposedSellingPrice());
+                .addValue("sellingPrice", u.proposedSellingPrice())
+                .addValue("listUnitPrice", u.listUnitPrice())
+                .addValue("netUnitPrice", u.netUnitPrice());
         }
         int[] counts = jdbc.batchUpdate("""
             UPDATE sales.pricing_decision_item
                SET frozen_landed_cost_per_piece_thb = :frozenPerPiece,
                    frozen_landed_cost_per_requested_unit_thb = :frozenPerRequestedUnit,
                    proposed_selling_price_per_requested_unit = :sellingPrice,
+                   list_unit_price = :listUnitPrice,
+                   net_unit_price = :netUnitPrice,
                    updated_at = now()
              WHERE pricing_decision_item_id = :itemId
                AND pricing_decision_id = :decisionId
@@ -389,7 +490,9 @@ public class PricingDecisionRepository {
                    pdi.approved_margin_pct, pdi.proposed_selling_price_per_requested_unit,
                    pdi.approved_selling_price_per_requested_unit,
                    pdi.minimum_selling_price_per_requested_unit, pdi.decision_note,
-                   pdi.created_at, pdi.updated_at, pdi.manual_selling_price_per_requested_unit
+                   pdi.created_at, pdi.updated_at, pdi.manual_selling_price_per_requested_unit,
+                   pri.sqm_per_piece, pdi.list_unit_price, pdi.discount_pct, pdi.special_price_sqm,
+                   pdi.direct_net_price, pdi.net_unit_price
               FROM sales.pricing_decision_item pdi
               JOIN sales.pricing_request_item pri ON pri.pricing_request_item_id = pdi.pricing_request_item_id
               JOIN sales.pricing_costing_item pci ON pci.pricing_costing_item_id = pdi.pricing_costing_item_id
@@ -443,7 +546,7 @@ public class PricingDecisionRepository {
             SELECT pricing_decision_id, decision_code, pricing_request_id, pricing_costing_id,
                    decision_version_no, status, default_margin_pct, currency, fx_rate_used, fx_source,
                    fx_effective_date, ceo_note, return_reason, created_by, created_at, updated_at,
-                   approved_by, approved_at, returned_at
+                   approved_by, approved_at, returned_at, price_mode
               FROM sales.pricing_decision pd
             """;
     }
@@ -469,7 +572,8 @@ public class PricingDecisionRepository {
             nullableLong(rs, "approved_by"),
             instant(rs, "approved_at"),
             instant(rs, "returned_at"),
-            items
+            items,
+            rs.getString("price_mode")
         );
     }
 
@@ -504,7 +608,13 @@ public class PricingDecisionRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             manualSellingPrice,
-            effectiveSellingPrice
+            effectiveSellingPrice,
+            rs.getBigDecimal("sqm_per_piece"),
+            rs.getBigDecimal("list_unit_price"),
+            rs.getBigDecimal("discount_pct"),
+            rs.getBigDecimal("special_price_sqm"),
+            rs.getBigDecimal("direct_net_price"),
+            rs.getBigDecimal("net_unit_price")
         );
     }
 
