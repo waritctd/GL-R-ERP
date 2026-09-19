@@ -2063,6 +2063,117 @@ function withDerivedCosting(costing) {
   return { ...costing, items: (costing.items ?? []).map(withDerivedCostingItemFields) };
 }
 
+// ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) — mirrors
+// PricingDecisionService#computeNetUnitPrice's per-mode dispatch, and its "never reimplement"
+// rule. NET's round2(list x (1 - pct/100)) has no rounding-order subtlety (same reasoning
+// computeDealQuotationLine's own netUnitPrice already uses above), so it is safe to mirror.
+//
+// Review finding #7 (2026-09-19): SPECIAL_SQM was a dead end in mock mode (always null) — the
+// mock is this repo's default QA/demo surface (CLAUDE.md "Mock API contract"), so a mode that
+// NEVER produces a number here is a mode nobody can demo or click through. It is now implemented
+// by mirroring WastageCalculator#netPerPieceFromSpecialSqm's exact two-step rounding order --
+// see that method's own Javadoc for why the naive reading (strip VAT then divide) is WRONG:
+//   piecesPerSqm = round2(1 / sqmPerPiece)                          -- rounded FIRST
+//   exVat        = round10dp(special / 1.07)                        -- carried at high precision
+//   netPerPiece  = round2(exVat / piecesPerSqm)
+// Labelled explicitly as a non-authoritative MIRROR (this docblock, plus mockApi's own file
+// header) — CLAUDE.md's own point stands: a green mock-driven test here is evidence about
+// plumbing, never independent evidence that the ALGORITHM is right on the real service. Pinned
+// against the owner's own 4 documented cases (WastageCalculatorTest's fixture, 2026-09-11):
+//   1350 @ 0.36 sqm/piece -> 453.84   1400 @ 0.36 sqm/piece -> 470.65
+//   1800 @ 0.72 sqm/piece -> 1210.25   790 @ 0.72 sqm/piece -> 531.16
+function mockNetPerPieceFromSpecialSqm(specialPerSqmIncVat, sqmPerPiece) {
+  if (specialPerSqmIncVat == null || Number(specialPerSqmIncVat) <= 0) {
+    fail('ราคาพิเศษ ต้องมากกว่า 0', 400);
+  }
+  if (sqmPerPiece == null || Number(sqmPerPiece) <= 0) {
+    fail('รายการนี้ไม่มี ตร.ม./แผ่น จึงคำนวณราคาพิเศษ บาท/ตร.ม. ไม่ได้', 422);
+  }
+  const piecesPerSqm = round2(1 / Number(sqmPerPiece));
+  const exVat = Math.round((Number(specialPerSqmIncVat) / 1.07) * 1e10) / 1e10;
+  return round2(exVat / piecesPerSqm);
+}
+
+// Review finding #7: reject a negative price and do NOT write any field before failing -- the
+// caller (updatePricingDecision below) must validate/derive net BEFORE mutating `item`, so a
+// throw here leaves the stored row exactly as it was pre-call, same as the real service's
+// request-validation-before-persistence ordering.
+function requireNonNegativeMockPrice(value, fieldNameTh) {
+  if (value != null && Number(value) < 0) {
+    fail(`${fieldNameTh} ต้องไม่ติดลบ`, 400);
+  }
+}
+
+function computeMockCeoNetUnitPrice(priceMode, listUnitPrice, discountPct, specialPriceSqm, directNetPrice, sqmPerPiece) {
+  requireNonNegativeMockPrice(listUnitPrice, 'ราคา/หน่วย');
+  requireNonNegativeMockPrice(specialPriceSqm, 'ราคาพิเศษ บาท/ตร.ม.');
+  requireNonNegativeMockPrice(directNetPrice, 'ราคาสุทธิต่อแผ่น');
+  if (discountPct != null && (Number(discountPct) < 0 || Number(discountPct) > 100)) {
+    fail('ส่วนลด % ต้องอยู่ระหว่าง 0-100', 400);
+  }
+  if (priceMode === 'NET') {
+    if (listUnitPrice == null) return null;
+    const discount = discountPct == null ? 0 : Number(discountPct);
+    return round2(Number(listUnitPrice) * (1 - discount / 100));
+  }
+  if (priceMode === 'SPECIAL_SQM') {
+    if (specialPriceSqm == null) return null;
+    return mockNetPerPieceFromSpecialSqm(specialPriceSqm, sqmPerPiece);
+  }
+  if (priceMode === 'DIRECT_NET') {
+    return directNetPrice == null ? null : round2(Number(directNetPrice));
+  }
+  return null;
+}
+
+// Owner correction (2026-09-19), mirroring PricingDecisionService#deriveListAndNet: whenever
+// item.proposedSellingPricePerRequestedUnit is recomputed (recalculatePricingDecisionCost,
+// overridePricingDecisionItemCost — the two mock handlers that touch it), listUnitPrice must move
+// WITH it, and netUnitPrice must be re-derived for the decision's current mode. listUnitPrice was
+// previously written ONCE at startPricingDecision and never refreshed — a mock mirror of the exact
+// design flaw the coordinator's correction fixes on the real backend: an item that starts uncosted
+// (listUnitPrice stuck null) could become costable via overridePricingDecisionItemCost yet stay
+// permanently unable to reach a NET approval, since nothing here ever refreshed listUnitPrice.
+// Ruling B still applies: an active "ปรับราคาเอง" override replaces the fresh list price as NET's
+// effective list price, exactly as the modeChanging loop above already does.
+function mockRefreshListAndNet(decision, item) {
+  item.listUnitPrice = item.proposedSellingPricePerRequestedUnit == null
+    ? null : round2(item.proposedSellingPricePerRequestedUnit);
+  if (decision.priceMode == null) {
+    item.netUnitPrice = null;
+    return;
+  }
+  const effectiveListPrice = item.manualSellingPricePerRequestedUnit != null
+    ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
+  try {
+    item.netUnitPrice = computeMockCeoNetUnitPrice(decision.priceMode, effectiveListPrice,
+      item.discountPct, item.specialPriceSqm, item.directNetPrice, item.sqmPerPiece);
+  } catch {
+    item.netUnitPrice = null;
+  }
+}
+
+/** Phase 2, CEO-only field stripping (owner rulings 2026-09-18/19) — mirrors
+ * PricingDecisionService#stripPriceModeFieldsForNonCeo. NOT authoritative (CLAUDE.md "Mock API
+ * contract") — verify the real 403/null-field behaviour against the Java service; this only keeps
+ * the mock from being MORE permissive than production for the two roles
+ * (import, ceo) that ever reach getPricingDecision/listPricingDecisions. */
+function stripCeoPriceModeFields(decision, user) {
+  if (user.role === 'ceo') return decision;
+  return {
+    ...decision,
+    priceMode: null,
+    items: decision.items.map((item) => ({
+      ...item,
+      listUnitPrice: null,
+      discountPct: null,
+      specialPriceSqm: null,
+      directNetPrice: null,
+      netUnitPrice: null,
+    })),
+  };
+}
+
 function buildMockDoc(doc) {
   const items = doc.items ?? [];
   const depositPct = doc.depositPercent ?? 0.5;
@@ -12515,6 +12626,10 @@ export const api = {
         approvedBy: null,
         approvedAt: null,
         returnedAt: null,
+        // Phase 2 (owner rulings 2026-09-18/19, V187): NULL until the CEO picks a mode via
+        // updatePricingDecision — mirrors PricingDecisionRepository.createDraft's own INSERT,
+        // which never sets price_mode either. CEO-only; stripped for import on get/list below.
+        priceMode: null,
         items: costing.items.map((costingItem) => {
           const prItem = pr.items.find((i) => i.id === costingItem.pricingRequestItemId);
           const frozenPerPiece = Number(costingItem.landedCostPerUnitThb ?? 0);
@@ -12576,6 +12691,26 @@ export const api = {
             // effectiveSellingPricePerRequestedUnit pair. NULL = no override, the formula drives
             // this line's price.
             manualSellingPricePerRequestedUnit: null,
+            // Phase 2 (V187) — sqmPerPiece is NOT new/CEO-only info (Sales already typed it on
+            // the item form, V185); carried through so the mode picker's eligibility check and
+            // the SPECIAL_SQM preview both have it, mirroring PricingDecisionItemDto's own field.
+            sqmPerPiece: prItem?.sqmPerPiece ?? null,
+            // CEO-only price-mode inputs + server-derived net. Stripped for import on get/list
+            // below (see stripCeoPriceModeFields).
+            //
+            // Owner ruling A (2026-09-19, Phase 2 CEO pricing): listUnitPrice is a REAL stored
+            // value from creation, mirroring PricingDecisionRepository#insertItems (backend) --
+            // it is the SAME auto-calculated formula price as proposedSellingPricePerRequestedUnit
+            // above (rounded to 2dp, matching this column's real NUMERIC(14,2) scale), never a
+            // null placeholder the UI fills in later. This was the one field this mock left null
+            // at creation before the Opus review caught it (finding #3, "the prefill is a
+            // placeholder") -- fixed here at the source instead of only in the UI.
+            listUnitPrice: proposedSellingPricePerRequestedUnit == null
+              ? null : round2(proposedSellingPricePerRequestedUnit),
+            discountPct: null,
+            specialPriceSqm: null,
+            directNetPrice: null,
+            netUnitPrice: null,
           };
         }),
       };
@@ -12588,8 +12723,12 @@ export const api = {
     },
 
     async listPricingDecisions(id) {
-      hasRole('import', 'ceo');
-      return delay({ items: mockPricingDecisions.filter((d) => d.pricingRequestId === Number(id)) });
+      const user = hasRole('import', 'ceo');
+      return delay({
+        items: mockPricingDecisions
+          .filter((d) => d.pricingRequestId === Number(id))
+          .map((d) => stripCeoPriceModeFields(d, user)),
+      });
     },
 
     async getPricingDecisionSalesView(id) {
@@ -12628,10 +12767,10 @@ export const api = {
     },
 
     async getPricingDecision(id) {
-      hasRole('import', 'ceo');
+      const user = hasRole('import', 'ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
       if (!decision) fail('ไม่พบมติราคานี้', 404);
-      return delay({ decision });
+      return delay({ decision: stripCeoPriceModeFields(decision, user) });
     },
 
     // Phase 1 UI simplification ("ปรับราคาเอง"): sellingPriceOverride/clearSellingPriceOverride
@@ -12641,11 +12780,39 @@ export const api = {
     // 2026-08-16) — any payload still carrying it is silently ignored, same as any other field
     // the real backend's DTO no longer declares.
     async updatePricingDecision(id, payload) {
-      hasRole('ceo');
+      const user = hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(id));
       if (!decision) fail('ไม่พบมติราคานี้', 404);
       if (decision.status !== 'DRAFT') fail('มติราคานี้ไม่ได้อยู่ในสถานะที่แก้ไขได้', 409);
+      // Phase 2 (owner rulings 2026-09-18/19, V187): the mode picker — mirrors
+      // PricingDecisionService.update's own requireValidPriceMode + requireNewFormEligible order.
+      const modeChanging = payload.priceMode != null && payload.priceMode !== decision.priceMode;
+      if (payload.priceMode != null) {
+        if (!['NET', 'SPECIAL_SQM', 'DIRECT_NET'].includes(payload.priceMode)) {
+          fail('priceMode ต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
+        }
+        const newFormEligible = decision.items.length > 0
+          && decision.items.every((i) => i.requestedUnitBasis === 'PER_PIECE' && i.sqmPerPiece != null);
+        if (!newFormEligible) {
+          fail('คำขอราคานี้เป็นรูปแบบเดิม (ไม่ได้ใช้แบบฟอร์มรายการแบบใหม่) ไม่สามารถเลือกวิธีกรอกราคาแบบ CEO ได้', 400);
+        }
+        decision.priceMode = payload.priceMode;
+      }
       if (payload.ceoNote != null) decision.ceoNote = payload.ceoNote;
+      if (modeChanging) {
+        // Review finding #2: switching mode recomputes EVERY item's net from its OWN stored
+        // inputs for the NEW mode, never leaving a stale figure from the old one.
+        for (const item of decision.items) {
+          const effectiveListPrice = item.manualSellingPricePerRequestedUnit != null
+            ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
+          try {
+            item.netUnitPrice = computeMockCeoNetUnitPrice(decision.priceMode, effectiveListPrice,
+              item.discountPct, item.specialPriceSqm, item.directNetPrice, item.sqmPerPiece);
+          } catch {
+            item.netUnitPrice = null;
+          }
+        }
+      }
       for (const itemPayload of payload.items ?? []) {
         const item = decision.items.find((i) => i.id === Number(itemPayload.pricingDecisionItemId));
         if (!item) fail(`รายการที่ ${itemPayload.pricingDecisionItemId} ไม่ได้เป็นของมติราคานี้`, 400);
@@ -12659,10 +12826,65 @@ export const api = {
         if (itemPayload.sellingPriceOverride != null && Number(itemPayload.sellingPriceOverride) < 0) {
           fail('ราคาที่ปรับต้องไม่ติดลบ', 400);
         }
-        if (itemPayload.marginPct != null) {
+        // Review finding #6: set + clear mutually exclusive, per field. listUnitPrice/
+        // clearListUnitPrice are GONE (owner correction 2026-09-19) — see updatePricingDecision's
+        // mockRefreshListAndNet-driven handling of marginPct below for why.
+        [['discountPct', 'clearDiscountPct', 'ส่วนลด %'],
+          ['specialPriceSqm', 'clearSpecialPriceSqm', 'ราคาพิเศษ บาท/ตร.ม.'],
+          ['directNetPrice', 'clearDirectNetPrice', 'ราคาสุทธิต่อแผ่น']].forEach(([valueKey, clearKey, labelTh]) => {
+          if (itemPayload[valueKey] != null && itemPayload[clearKey]) {
+            fail(`ระบุ${labelTh}พร้อมกับล้างค่าในคำขอเดียวกันไม่ได้`, 400);
+          }
+        });
+        // Review finding #4/#5: round discount/special/direct to their column scale BEFORE
+        // deriving the net, so the stored input and the stored net always agree (a >2dp value,
+        // e.g. a 12.345% discount, rounds to what actually gets persisted).
+        // computeMockCeoNetUnitPrice itself throws (via fail) on a negative or out-of-range
+        // value — validated below BEFORE any `item.xxx = ...` write, per finding #7's own ask
+        // ("not write fields before failing").
+        const discountPctNext = itemPayload.clearDiscountPct ? null
+          : itemPayload.discountPct != null ? round2(Number(itemPayload.discountPct)) : item.discountPct;
+        const specialPriceSqmNext = itemPayload.clearSpecialPriceSqm ? null
+          : itemPayload.specialPriceSqm != null ? round2(Number(itemPayload.specialPriceSqm)) : item.specialPriceSqm;
+        const directNetPriceNext = itemPayload.clearDirectNetPrice ? null
+          : itemPayload.directNetPrice != null ? round2(Number(itemPayload.directNetPrice)) : item.directNetPrice;
+        // Owner correction (2026-09-19): marginPct (the LEGACY margin-formula path, still a valid
+        // request field) recomputes proposedSellingPricePerRequestedUnit exactly like
+        // overridePricingDecisionItemCost/recalculatePricingDecisionCost do -- so listUnitPrice
+        // (never a client input any more, mirrors PricingDecisionService#applyItemUpdates) must be
+        // derived from THAT fresh figure here too, not the payload (which no longer carries one).
+        const marginTouched = itemPayload.marginPct != null;
+        const listUnitPriceNext = marginTouched
+          ? (item.frozenLandedCostPerRequestedUnitThb == null
+              ? null
+              : round2(item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct))))
+          : item.listUnitPrice;
+        const touchesPriceModeFields = itemPayload.discountPct != null || itemPayload.clearDiscountPct
+          || itemPayload.specialPriceSqm != null || itemPayload.clearSpecialPriceSqm
+          || itemPayload.directNetPrice != null || itemPayload.clearDirectNetPrice;
+        let netUnitPriceNext;
+        let netUnitPriceTouched = false;
+        if (decision.priceMode != null && (touchesPriceModeFields || touchesPriceOverride || marginTouched)) {
+          if (touchesPriceModeFields && decision.priceMode == null) {
+            fail('กรุณาเลือกวิธีกรอกราคา (priceMode) ก่อนกรอกราคาของรายการ', 400);
+          }
+          const effectiveListPrice = itemPayload.clearSellingPriceOverride ? listUnitPriceNext
+            : itemPayload.sellingPriceOverride != null ? Number(itemPayload.sellingPriceOverride)
+            : item.manualSellingPricePerRequestedUnit != null ? item.manualSellingPricePerRequestedUnit
+            : listUnitPriceNext;
+          // Validates (throws via fail, BEFORE any write below) and derives in one pass.
+          netUnitPriceNext = computeMockCeoNetUnitPrice(decision.priceMode, effectiveListPrice,
+            discountPctNext, specialPriceSqmNext, directNetPriceNext, item.sqmPerPiece);
+          netUnitPriceTouched = true;
+        } else if (touchesPriceModeFields && decision.priceMode == null) {
+          fail('กรุณาเลือกวิธีกรอกราคา (priceMode) ก่อนกรอกราคาของรายการ', 400);
+        }
+        // Every value above validated cleanly — now, and only now, write.
+        if (marginTouched) {
           item.proposedMarginPct = itemPayload.marginPct;
-          item.proposedSellingPricePerRequestedUnit =
-            item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
+          item.proposedSellingPricePerRequestedUnit = item.frozenLandedCostPerRequestedUnitThb == null
+            ? null
+            : item.frozenLandedCostPerRequestedUnitThb * (1 + Number(itemPayload.marginPct));
         }
         if (itemPayload.minimumSellingPrice != null) item.minimumSellingPricePerRequestedUnit = itemPayload.minimumSellingPrice;
         if (itemPayload.clearSellingPriceOverride) {
@@ -12671,10 +12893,15 @@ export const api = {
           item.manualSellingPricePerRequestedUnit = Number(itemPayload.sellingPriceOverride);
         }
         if (itemPayload.decisionNote != null) item.decisionNote = itemPayload.decisionNote;
+        item.listUnitPrice = listUnitPriceNext;
+        item.discountPct = discountPctNext;
+        item.specialPriceSqm = specialPriceSqmNext;
+        item.directNetPrice = directNetPriceNext;
+        if (netUnitPriceTouched) item.netUnitPrice = netUnitPriceNext;
         item.updatedAt = new Date().toISOString();
       }
       decision.updatedAt = new Date().toISOString();
-      return delay({ decision });
+      return delay({ decision: stripCeoPriceModeFields(decision, user) });
     },
 
     // V141 ("CEO owns costing", PR #702). Mirrors PricingDecisionService.recalculateCost: DRAFT
@@ -12708,7 +12935,13 @@ export const api = {
         if (item.proposedMarginPct != null) {
           item.proposedSellingPricePerRequestedUnit =
             item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+        } else {
+          item.proposedSellingPricePerRequestedUnit = null;
         }
+        // Owner correction (2026-09-19): the formula reference just moved -- listUnitPrice/
+        // netUnitPrice must move with it (mirrors PricingDecisionService#deriveListAndNet, wired
+        // into the real recalculateCost via recomputeCostingInPlace).
+        mockRefreshListAndNet(decision, item);
         item.updatedAt = new Date().toISOString();
       }
       decision.updatedAt = new Date().toISOString();
@@ -12763,7 +12996,13 @@ export const api = {
       if (item.proposedMarginPct != null) {
         item.proposedSellingPricePerRequestedUnit =
           item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+      } else {
+        item.proposedSellingPricePerRequestedUnit = null;
       }
+      // Owner correction (2026-09-19): same refresh as recalculatePricingDecisionCost above --
+      // this is the exact call the coordinator's 5-step scenario drives (uncosted item ->
+      // overrideItemCost -> listUnitPrice populated).
+      mockRefreshListAndNet(decision, item);
       item.updatedAt = new Date().toISOString();
       decision.updatedAt = new Date().toISOString();
       return delay({ decision });
@@ -12825,33 +13064,55 @@ export const api = {
           409,
         );
       }
-      // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be
-      // "missing" any more (see the auto-population below) — and an item with an active
-      // "ปรับราคาเอง" override needs no margin at all, mirroring
-      // PricingDecisionService#approve's own missingMargin exemption for an overridden item.
-      const missingMargin = decision.items
-        .filter((i) => i.proposedMarginPct == null && i.manualSellingPricePerRequestedUnit == null)
-        .map((i) => i.id);
-      if (missingMargin.length) {
-        fail(`ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: [${missingMargin}]`, 422);
+      // Phase 2 (owner rulings 2026-09-18/19, V187): a new-form decision (non-null priceMode) is
+      // driven entirely by the CEO's price-mode inputs — mirrors
+      // PricingDecisionService#approve's own newForm branch exactly, including which gate
+      // replaces which.
+      const newForm = decision.priceMode != null;
+      if (newForm) {
+        const missingPrice = decision.items.filter((i) => i.netUnitPrice == null).map((i) => i.id);
+        if (missingPrice.length) {
+          fail(`ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ — รายการที่ยังไม่มีราคา: [${missingPrice}]`, 422);
+        }
+      } else {
+        // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be
+        // "missing" any more (see the auto-population below) — and an item with an active
+        // "ปรับราคาเอง" override needs no margin at all, mirroring
+        // PricingDecisionService#approve's own missingMargin exemption for an overridden item.
+        const missingMargin = decision.items
+          .filter((i) => i.proposedMarginPct == null && i.manualSellingPricePerRequestedUnit == null)
+          .map((i) => i.id);
+        if (missingMargin.length) {
+          fail(`ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: [${missingMargin}]`, 422);
+        }
       }
       // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin,
       // UNLESS an explicit "ปรับราคาเอง" override is active, in which case that value freezes in
       // verbatim and the formula never runs for this line at all (mirrors
-      // PricingDecisionService#approve's own override-vs-formula precedence).
+      // PricingDecisionService#approve's own override-vs-formula precedence). A new-form item
+      // freezes its own net price instead — never a margin, never the formula.
       for (const item of decision.items) {
-        const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
-        item.approvedSellingPricePerRequestedUnit = hasPriceOverride
-          ? item.manualSellingPricePerRequestedUnit
-          : item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
-        item.approvedMarginPct = item.proposedMarginPct;
-        // Money hole this closes (Phase 1 UI simplification, owner ruling 2026-08-16):
-        // CustomerQuotationService's three below-minimum 422 guards are each null-guarded, so a
-        // NULL minimum silently disarms every one of them. Auto-populate with the approved price
-        // itself (today's "any discount refused" outcome) whenever the CEO has not explicitly set
-        // a lower floor — mirrors PricingDecisionService#approve exactly.
-        if (item.minimumSellingPricePerRequestedUnit == null) {
-          item.minimumSellingPricePerRequestedUnit = item.approvedSellingPricePerRequestedUnit;
+        if (newForm) {
+          // Owner ruling: the CEO's own discount is PRE-approved — approved and minimum freeze
+          // to the SAME net price (never a lower explicit floor), so it can never trip the V155
+          // per-line discount-approval gate on the later customer quotation.
+          item.approvedSellingPricePerRequestedUnit = item.netUnitPrice;
+          item.minimumSellingPricePerRequestedUnit = item.netUnitPrice;
+          item.approvedMarginPct = null;
+        } else {
+          const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
+          item.approvedSellingPricePerRequestedUnit = hasPriceOverride
+            ? item.manualSellingPricePerRequestedUnit
+            : item.frozenLandedCostPerRequestedUnitThb * (1 + Number(item.proposedMarginPct));
+          item.approvedMarginPct = item.proposedMarginPct;
+          // Money hole this closes (Phase 1 UI simplification, owner ruling 2026-08-16):
+          // CustomerQuotationService's three below-minimum 422 guards are each null-guarded, so a
+          // NULL minimum silently disarms every one of them. Auto-populate with the approved
+          // price itself (today's "any discount refused" outcome) whenever the CEO has not
+          // explicitly set a lower floor — mirrors PricingDecisionService#approve exactly.
+          if (item.minimumSellingPricePerRequestedUnit == null) {
+            item.minimumSellingPricePerRequestedUnit = item.approvedSellingPricePerRequestedUnit;
+          }
         }
         item.updatedAt = new Date().toISOString();
       }

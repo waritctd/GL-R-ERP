@@ -230,41 +230,56 @@ class PricingFormulaEngineTest {
         assertThat(result).isEqualByComparingTo("915.370232");
     }
 
-    // ── Selling price round-up — the exact cases the brief calls out by number ──────────────
+    // ── Selling price rounding — owner ruling 2026-09-19 (Phase 2 CEO pricing): SP is now
+    // HALF_UP 2dp, no longer rounded UP to the nearest selling_price_round_up_to. The old
+    // "round-up to nearest ฿10" cases below are REPLACED, not merely renamed — their own old
+    // assertions (130.0000/200.0000/190.0000/200.0000) no longer hold under the new rule. ──────
 
-    /** cost=100, margin=0.20, buffer=1.07: raw = 100 x 1.20 x 1.07 = 128.4 -- between the ฿120
-     * and ฿130 multiples, so RoundUp takes it to ฿130, not down to ฿120. Exercises the full
-     * three-factor multiplication (cost x margin x buffer) before the round-up step, unlike the
-     * isolated-input tests below. */
+    /** cost=100, margin=0.20, buffer=1.07: raw = 100 x 1.20 x 1.07 = 128.4, which is already
+     * exactly 2dp — HALF_UP 2dp leaves it unchanged (no more bump to the ฿130 multiple the old
+     * round-up rule gave it). Exercises the full three-factor multiplication (cost x margin x
+     * buffer) before the rounding step, unlike the isolated-input tests below. */
     @Test
-    void roundUp_costMarginAndBufferAllApplied_thenRoundsUpToNextTen() {
-        BigDecimal result = engine.roundUpSellingPrice(bd("100"), bd("0.20"), bd("1.07"), bd("10"));
-        assertThat(result).isEqualByComparingTo("130.0000");
+    void sellingPrice_costMarginAndBufferAllApplied_roundsHalfUpToTwoDp() {
+        BigDecimal result = engine.sellingPrice(bd("100"), bd("0.20"), bd("1.07"));
+        assertThat(result).isEqualByComparingTo("128.40");
     }
 
-    /** The brief's own worked example: ฿191.96 must round UP to ฿200, never down to ฿190. Fed in
-     * directly as the pre-buffer cost with margin=0 and buffer=1 so the RAW figure equals exactly
-     * 191.96, isolating the round-up step from the multiplication steps. */
+    /** The OLD round-up brief's own worked example, now under the NEW rule: ฿191.96 in (margin=0,
+     * buffer=1, so the raw figure equals exactly 191.96) stays ฿191.96 — it no longer bumps to
+     * ฿200. This is the owner's own stated correction (2026-09-19): "฿191.96 no longer becomes
+     * ฿200; it prints as ฿191.96." */
     @Test
-    void roundUp_19196_roundsUpTo200_theBriefsOwnWorkedExample() {
-        BigDecimal result = engine.roundUpSellingPrice(bd("191.96"), BigDecimal.ZERO, BigDecimal.ONE, bd("10"));
-        assertThat(result).isEqualByComparingTo("200.0000");
+    void sellingPrice_19196_noLongerRoundsUpTo200_stays19196() {
+        BigDecimal result = engine.sellingPrice(bd("191.96"), BigDecimal.ZERO, BigDecimal.ONE);
+        assertThat(result).isEqualByComparingTo("191.96");
     }
 
-    /** Companion to the above: an exact multiple (190.00) must stay 190.00, not bump to 200 —
-     * same isolation technique (margin=0, buffer=1). */
+    /** HALF_UP at the 2dp boundary: a third-decimal exactly at 5 rounds up (191.965 -> 191.97). */
     @Test
-    void roundUp_19000_exactMultiple_staysAt190() {
-        BigDecimal result = engine.roundUpSellingPrice(bd("190.00"), BigDecimal.ZERO, BigDecimal.ONE, bd("10"));
-        assertThat(result).isEqualByComparingTo("190.0000");
+    void sellingPrice_halfUpAtThirdDecimal_roundsUp() {
+        BigDecimal result = engine.sellingPrice(bd("191.965"), BigDecimal.ZERO, BigDecimal.ONE);
+        assertThat(result).isEqualByComparingTo("191.97");
     }
 
-    /** One satang above an exact multiple must still round all the way up to the next ฿10 —
-     * RoundUp has no "close enough" tolerance. */
+    /** Companion: just under the halfway point rounds down (191.964 -> 191.96) — HALF_UP is not
+     * "always up", only exact halves are. */
     @Test
-    void roundUp_oneSatangAboveExactMultiple_stillRoundsUpToNextTen() {
-        BigDecimal result = engine.roundUpSellingPrice(bd("190.01"), BigDecimal.ZERO, BigDecimal.ONE, bd("10"));
-        assertThat(result).isEqualByComparingTo("200.0000");
+    void sellingPrice_justBelowHalfUpAtThirdDecimal_roundsDown() {
+        BigDecimal result = engine.sellingPrice(bd("191.964"), BigDecimal.ZERO, BigDecimal.ONE);
+        assertThat(result).isEqualByComparingTo("191.96");
+    }
+
+    /** The owner's own worked example (2026-09-19, Phase 2 CEO pricing UAT): UC per แผ่น
+     * 1,061.20 x margin 20% x selling_buffer 1.07 must print as a 2-decimal figure, NOT the old
+     * round-up-to-฿10 result of ฿1,370 — raw = 1061.20 x 1.20 x 1.07 = 1,362.5808, HALF_UP 2dp =
+     * ฿1,362.58. {@code selling_price_round_up_to} is not passed to {@link
+     * PricingFormulaEngine#sellingPrice} at all any more — it has no effect on this figure. */
+    @Test
+    void sellingPrice_ownersWorkedExample_uc1061_20_neverRoundsUpTo1370() {
+        BigDecimal result = engine.sellingPrice(bd("1061.20"), bd("0.20"), bd("1.07"));
+        assertThat(result).isEqualByComparingTo("1362.58");
+        assertThat(result).isNotEqualByComparingTo("1370");
     }
 
     private PricingFormulaConfigDto config(BigDecimal ivf, BigDecimal ir, BigDecimal ib, BigDecimal costBuffer,

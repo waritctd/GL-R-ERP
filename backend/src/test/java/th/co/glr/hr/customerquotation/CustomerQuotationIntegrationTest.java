@@ -378,22 +378,24 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // per piece = 91537.0200/200 = 457.6851, and 9153.7020*10 == 457.6851*200 exactly.
         //
         // But the LINE TOTAL below is no longer basis-invariant, and that is now CORRECT, not a
-        // regression: V109's RoundUp[cost x (1+margin) x selling_buffer, nearest ฿10] rounds at
-        // the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity — so the same underlying
-        // cost rounds up by a different RELATIVE amount depending on how large the per-unit price
-        // is, and that per-unit rounding slop gets multiplied by a different quantity (10 boxes
-        // vs 200 pieces) on each side. Hand-verified at margin=0.10 (approvedSingleItemPricingRequest's
-        // own default), sellingBuffer=1.07:
-        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> RoundUp/10 -> ฿10,780.0000/box
-        //              x 10 boxes   = ฿107,800.0000
-        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> RoundUp/10 -> ฿540.0000/piece
-        //              x 200 pieces = ฿108,000.0000
-        // A genuine ฿200 difference on a ฿108k order (≈0.19%) — the price of rounding granularity,
-        // not a computation error; asserting the two independently-derived expectations (rather
-        // than asserting the two totals equal EACH OTHER, which is no longer true) is what proves
-        // that.
-        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo("107800.0000");
-        assertThat(perPieceItem.lineSubtotal()).isEqualByComparingTo("108000.0000");
+        // regression. Owner ruling 2026-09-19 (Phase 2 CEO pricing) replaced V109's original rule
+        // — cost x (1+margin) x selling_buffer, rounded UP to the nearest ฿10 — with HALF_UP 2dp
+        // (see PricingFormulaEngine#sellingPrice, formerly roundUpSellingPrice). It still
+        // rounds at the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity, so the same
+        // underlying cost still rounds by a different RELATIVE amount depending on how large the
+        // per-unit price is, and that per-unit rounding slop still gets multiplied by a different
+        // quantity (10 boxes vs 200 pieces) on each side — only the rounding RULE changed, not
+        // this structural non-invariance. Hand-verified at margin=0.10
+        // (approvedSingleItemPricingRequest's own default), sellingBuffer=1.07:
+        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
+        //              x 10 boxes   = ฿107,739.10
+        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> HALF_UP 2dp -> ฿538.70/piece
+        //              x 200 pieces = ฿107,740.00
+        // A genuine ฿0.90 difference on a ฿107.7k order — the price of rounding granularity, not a
+        // computation error; asserting the two independently-derived expectations (rather than
+        // asserting the two totals equal EACH OTHER, which is not true) is what proves that.
+        assertThat(perBoxItem.lineSubtotal()).isEqualByComparingTo("107739.10");
+        assertThat(perPieceItem.lineSubtotal()).isEqualByComparingTo("107740.00");
         assertThat(perBoxQuotation.subtotalAmount()).isEqualByComparingTo(perBoxItem.lineSubtotal());
         assertThat(perPieceQuotation.subtotalAmount()).isEqualByComparingTo(perPieceItem.lineSubtotal());
     }

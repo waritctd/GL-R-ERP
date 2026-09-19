@@ -347,20 +347,23 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         // V152 (V109 engine wiring): the SELLING price total is no longer basis-invariant, and
         // that is now CORRECT, not a regression — see LandedCostCalculatorFormulaIntegrationTest
         // and CustomerQuotationIntegrationTest's identical scenario for the full explanation.
-        // RoundUp[cost x (1+margin) x selling_buffer, nearest ฿10] rounds at the PER-REQUESTED-
-        // UNIT level BEFORE multiplying by quantity, so the same underlying landed cost
-        // (91537.0200 total either way) rounds up by a different RELATIVE amount depending on
-        // how large the per-unit price is, and that per-unit slop is multiplied by a different
-        // quantity (10 boxes vs 200 pieces) on each side. Hand-verified at margin=0.10 (this
-        // test's own default), sellingBuffer=1.07:
-        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> RoundUp/10 -> ฿10,780.0000/box
-        //              x 10 boxes   = ฿107,800.0000
-        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> RoundUp/10 -> ฿540.0000/piece
-        //              x 200 pieces = ฿108,000.0000
+        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): SP now rounds HALF_UP to 2dp instead of
+        // RoundUp to the nearest ฿10 — the figures below are the NEW rule's own hand-verified
+        // values, replacing the old RoundUp ones. The rounding still happens at the
+        // PER-REQUESTED-UNIT level BEFORE multiplying by quantity, so the same underlying landed
+        // cost (91537.0200 total either way) still rounds by a different RELATIVE amount
+        // depending on how large the per-unit price is, and that per-unit slop is multiplied by a
+        // different quantity (10 boxes vs 200 pieces) on each side — basis-invariance is still the
+        // wrong intuition for the SELLING total, just via a different (now HALF_UP 2dp) rounding
+        // step. Hand-verified at margin=0.10 (this test's own default), sellingBuffer=1.07:
+        //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
+        //              x 10 boxes   = ฿107,739.10
+        //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> HALF_UP 2dp -> ฿538.70/piece
+        //              x 200 pieces = ฿107,740.00
         BigDecimal perBoxSellingTotal = perBoxItem.proposedSellingPricePerRequestedUnit().multiply(perBoxItem.requestedQuantity());
         BigDecimal perPieceSellingTotal = perPieceItem.proposedSellingPricePerRequestedUnit().multiply(perPieceItem.requestedQuantity());
-        assertThat(perBoxSellingTotal).isEqualByComparingTo("107800.0000");
-        assertThat(perPieceSellingTotal).isEqualByComparingTo("108000.0000");
+        assertThat(perBoxSellingTotal).isEqualByComparingTo("107739.10");
+        assertThat(perPieceSellingTotal).isEqualByComparingTo("107740.00");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1345,17 +1348,17 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * V109 selling-price formula (V152) hand-reimplemented independently of
-     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#roundUpSellingPrice}: {@code cost x
-     * (1+margin) x selling_buffer}, rounded UP to the nearest {@code selling_price_round_up_to} —
-     * replacing the old bare {@code cost x (1+margin)} this test suite hard-coded before the
-     * engine swap. Buffer (1.07) and round-up-to (10) match V109's seeded defaults, which every
-     * fixture in this class relies on being current (nothing here mutates
-     * {@code sales.pricing_formula_config}).
+     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#sellingPrice}: {@code cost x
+     * (1+margin) x selling_buffer}, rounded HALF_UP to 2dp — owner ruling 2026-09-19 (Phase 2 CEO
+     * pricing) replaced the old "round UP to the nearest selling_price_round_up_to" rule this
+     * helper used to reimplement. Buffer (1.07) matches V109's seeded default, which every fixture
+     * in this class relies on being current (nothing here mutates
+     * {@code sales.pricing_formula_config}); {@code selling_price_round_up_to} is no longer
+     * consulted at all.
      */
     private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
         BigDecimal raw = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(new BigDecimal("1.07"));
-        BigDecimal units = raw.divide(BigDecimal.TEN, 0, java.math.RoundingMode.CEILING);
-        return units.multiply(BigDecimal.TEN).setScale(4, java.math.RoundingMode.HALF_UP);
+        return raw.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, String marginPct) {

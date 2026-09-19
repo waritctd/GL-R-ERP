@@ -400,6 +400,16 @@ function buildDecisionItem(overrides = {}) {
     decisionNote: null,
     // Phase 1 UI simplification ("ปรับราคาเอง") — no override by default.
     manualSellingPricePerRequestedUnit: null,
+    // Phase 2 (owner rulings 2026-09-18/19, V187) — sqmPerPiece is null by default, which makes
+    // this fixture LEGACY-shaped under isNewFormEligibleDecision despite requestedUnitBasis
+    // already being PER_PIECE above (matching the real backend's own eligibility rule: PER_PIECE
+    // AND sqmPerPiece both required). Tests exercising the new mode picker pass sqmPerPiece.
+    sqmPerPiece: null,
+    listUnitPrice: null,
+    discountPct: null,
+    specialPriceSqm: null,
+    directNetPrice: null,
+    netUnitPrice: null,
     ...overrides,
   };
 }
@@ -424,6 +434,8 @@ function buildDecision(overrides = {}) {
     approvedAt: null,
     returnedAt: null,
     items: [buildDecisionItem()],
+    // Phase 2 (V187) — null until the CEO picks a mode; CEO-only (stripped for import server-side).
+    priceMode: null,
     ...overrides,
   };
 }
@@ -1847,9 +1859,11 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // P2 fix (2026-09): PricingDecisionService.computeSellingPrice is roundUp(cost x (1 + margin) x
-  // sellingBuffer) with NO VAT term — VAT 7% is only ever added later, on the customer quotation.
-  // Every place a CEO or sales rep reads a selling price on this page must say so.
+  // P2 fix (2026-09): PricingDecisionService.computeSellingPrice is cost x (1 + margin) x
+  // sellingBuffer, rounded HALF_UP to 2dp (owner ruling 2026-09-19, Phase 2 CEO pricing —
+  // formerly rounded UP to the nearest ฿10) with NO VAT term — VAT 7% is only ever added later,
+  // on the customer quotation. Every place a CEO or sales rep reads a selling price on this page
+  // must say so.
   describe('selling price is stated as ก่อน VAT (P2 fix)', () => {
     it('shows a persistent ก่อน VAT note in the CEO panel without expanding anything, and labels the per-item line', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1876,6 +1890,387 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       // Design correction 2 still holds — no cost/margin field leaks into this sales-facing view.
       expect(screen.queryByText(/ต้นทุน/)).toBeNull();
       expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
+    });
+  });
+
+  // ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) ────────────────────────
+  describe('CEO price mode (Phase 2)', () => {
+    function newFormItem(overrides = {}) {
+      return buildDecisionItem({ sqmPerPiece: 0.36, ...overrides });
+    }
+
+    it('shows no mode picker for a legacy decision (default fixture has no sqmPerPiece)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
+      // Legacy UI (ปรับราคาเอง, formula derivation) still renders exactly as before.
+      expandDerivation();
+      expect(screen.getByTestId('pcr-ceo-price-override-8001')).not.toBeNull();
+    });
+
+    it('shows the mode picker for a new-form-eligible decision, and none of the legacy margin UI', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem()] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByRole('group', { name: 'วิธีกรอกราคา' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' })).not.toBeNull();
+      // Opus review finding #1 (2026-09-19), and review minors #6/#8 (2026-09-19): the cost
+      // machinery (ปรับต้นทุนเอง, ประเภทสินค้า) is KEPT for a new-form item too, so the CEO can
+      // still correct cost/duty (e.g. mosaic at 10%) — it no longer disappears the way the first
+      // Phase 2 pass wrongly removed it, AND now renders in the card's MAIN BODY (no longer inside
+      // a collapsed "วิธีคำนวณราคานี้" section — no expanding needed). "ปรับราคาเอง" (now
+      // "ปรับราคาตั้งเอง", owner ruling B) is also kept, reusing the SAME testid — it replaces
+      // the auto list price, not the final price. Default fixture's priceMode is null (no mode
+      // chosen yet), and the override control shows for null-or-NET (review minor #1) — only
+      // DIRECT_NET/SPECIAL_SQM hide it, see the "hides ปรับราคาตั้งเอง" tests below.
+      expect(screen.getByTestId('pcr-ceo-price-override-8001')).not.toBeNull();
+    });
+
+    it('keeps the cost override AND duty/product-type override reachable for a new-form item too (Opus review finding #1), visible in the main body without expanding anything (review minor #8)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      const costingItem = buildCostingItemWithOverride({ id: 1 });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
+      });
+      // buildDecision()'s default pricingCostingId (601) does NOT match buildCosting()'s default
+      // id (21) -- same deliberate id: 601 override renderWithCostingItem's own comment explains.
+      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      expect(screen.getByTestId('pcr-ceo-product-type-override-8001')).not.toBeNull();
+    });
+
+    // Reproduced against a genuine new-form decision, per the coordinator's screenshots of the
+    // mock demo (2026-09-19): a seeded decision item forced to PER_PIECE with sqmPerPiece 0.72 and
+    // listUnitPrice = proposed (83), NET mode with 10% typed but NOT yet saved.
+    it('shows the auto formula price (ราคาตั้ง (สูตร)) in the main body without expanding anything (review minor #6)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'NET',
+          items: [newFormItem({
+            sqmPerPiece: 0.72, proposedSellingPricePerRequestedUnit: 83, listUnitPrice: 83, netUnitPrice: 83,
+          })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      // Never inside CollapsibleSection any more -- no click/expand call in this test at all.
+      // getByText's regex match is a substring test against the whole matched element's
+      // textContent, so this returns the row itself (label + both <code> figures) -- checked
+      // this way rather than a second getByText(/฿83\.00/) because netUnitPrice is ALSO 83 here
+      // (ruling A's zero-discount auto-fill), which renders its own separate "฿83.00" elsewhere
+      // on the card.
+      const formulaPriceRow = screen.getByText(/ราคาตั้ง \(สูตร\)/);
+      expect(formulaPriceRow.textContent).toContain('83.00');
+      // 83 / 0.72 = 115.2777... -> round2 -> 115.28.
+      expect(formulaPriceRow.textContent).toContain('115.28');
+    });
+
+    it('the live preview reflects a typed discount even when a net price was already saved (review minor #7)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'NET',
+          // Mirrors the repro exactly: listUnitPrice = proposed = 83, already saved at
+          // netUnitPrice = 83 (ruling A's zero-discount auto-fill), 1000 requested pieces so the
+          // line-total figures match the coordinator's own worked numbers.
+          items: [newFormItem({
+            sqmPerPiece: 0.72, listUnitPrice: 83, discountPct: null, netUnitPrice: 83, requestedQuantity: 1000,
+          })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      // Before typing: shows the SAVED net, no "ตัวอย่าง" caveat.
+      expect(screen.getByText(/฿83\.00/)).not.toBeNull();
+      expect(screen.queryByText(/ตัวอย่าง ยังไม่บันทึก/)).toBeNull();
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+
+      // round2(83 x (1 - 10/100)) = 74.70 -- NOT the stale saved 83.00 any more.
+      expect(await screen.findByText(/74\.70/)).not.toBeNull();
+      expect(screen.getByText(/ตัวอย่าง ยังไม่บันทึก/)).not.toBeNull();
+      // รวมเป็นเงิน follows the live preview too: round2(1000 x 74.70) = 74,700.00.
+      expect(screen.getByText(/74,700\.00/)).not.toBeNull();
+    });
+
+    it('aligns "รวมเป็นเงิน" with the net-price figure, not detached near the top of the card (review minor #9)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 83, netUnitPrice: 83 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const netLabel = screen.getByText(/ราคาสุทธิ\/แผ่น/);
+      const totalLabel = screen.getByText(/รวมเป็นเงิน/);
+      expect(netLabel.closest('div')).toBe(totalLabel.closest('div'));
+    });
+
+    it('shows ปรับต้นทุนเอง/ปรับราคาตั้งเอง in the main body next to the prices (review minor #8), without expanding anything', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [newFormItem()] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      const costButton = screen.getByTestId('pcr-ceo-cost-override-8001');
+      const priceButton = screen.getByTestId('pcr-ceo-price-override-8001');
+      const priceLabel = screen.getByText(/ราคาตั้ง \(สูตร\)/);
+      // Same rendered row/section as the prices, not inside a collapsed element -- offsetParent
+      // is null only for display:none/detached nodes in jsdom, which CollapsibleSection's
+      // collapsed body actually unmounts entirely (see this file's own header comment on it), so
+      // a plain presence check already proves "not hidden inside a collapsed section".
+      expect(costButton).not.toBeNull();
+      expect(priceButton).not.toBeNull();
+      expect(priceLabel).not.toBeNull();
+    });
+
+    // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" only ever affects the price under NET
+    // (or before a mode is chosen) -- DIRECT_NET/SPECIAL_SQM never consult it, so offering it
+    // there let the CEO believe an override priced a line it never touched.
+    it('hides ปรับราคาตั้งเอง under DIRECT_NET (review minor #1)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
+      // ปรับต้นทุนเอง stays reachable -- that IS the correct way to clear the uncosted gate here.
+      expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+    });
+
+    it('hides ปรับราคาตั้งเอง under SPECIAL_SQM (review minor #1)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'SPECIAL_SQM', items: [newFormItem({ specialPriceSqm: 1350, netUnitPrice: 453.84 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
+    });
+
+    it('switching an already-chosen mode asks for confirmation before calling updatePricingDecision', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ netUnitPrice: 900 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-mode-DIRECT_NET'));
+      expect(api.pricingRequests.updatePricingDecision).not.toHaveBeenCalled();
+
+      const dialog = await screen.findByRole('dialog', { name: 'เปลี่ยนวิธีกรอกราคา' });
+      expect(within(dialog).getByText(/ค่าที่กรอกไว้ของวิธีเดิมจะไม่ถูกใช้/)).not.toBeNull();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'เปลี่ยนวิธีกรอกราคา' }));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { priceMode: 'DIRECT_NET' },
+      ));
+    });
+
+    it('picking a mode for the FIRST time (no prior mode) needs no confirmation', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem()] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-mode-NET'));
+      expect(screen.queryByRole('dialog', { name: 'เปลี่ยนวิธีกรอกราคา' })).toBeNull();
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { priceMode: 'NET' },
+      ));
+    });
+
+    it('disables approve when an item has no cost and no ปรับราคาเอง — mirrors the server\'s uncosted gate', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'NET',
+          items: [newFormItem({
+            frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
+            manualSellingPricePerRequestedUnit: null,
+          })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+      expect(screen.getByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).not.toBeNull();
+    });
+
+    it('picking NET calls updatePricingDecision with priceMode alone', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ items: [newFormItem()] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-mode-NET'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { priceMode: 'NET' },
+      ));
+    });
+
+    it('NET mode: no list-price input exists; typing a discount previews against the SERVER list price and saves only the discount', async () => {
+      // Owner correction (2026-09-19): list_unit_price is never CEO-typed (ruling A) — it is
+      // always the server-computed formula price, so this decision item's fixture supplies it
+      // directly (mirroring what startReview/overrideItemCost would have populated), and the
+      // page must render it read-only rather than as an editable input.
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 1000 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+      fireEvent.change(screen.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+
+      // Client PREVIEW only (round2(1000 * (1 - 10/100)) = 900.00), computed against the
+      // server-provided item.listUnitPrice — never sent to the server as a stored value; the
+      // server recomputes and returns its own netUnitPrice on save.
+      expect(await screen.findByText(/900\.00/)).not.toBeNull();
+      expect(screen.getByText(/ตัวอย่าง ยังไม่บันทึก/)).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            discountPct: 10,
+            clearDiscountPct: false,
+            specialPriceSqm: null,
+            clearSpecialPriceSqm: false,
+            directNetPrice: null,
+            clearDirectNetPrice: false,
+          }],
+        },
+      ));
+    });
+
+    it('SPECIAL_SQM mode: shows "คำนวณเมื่อบันทึก" instead of a client-computed preview', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      fireEvent.change(screen.getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
+
+      // Never a client-side number for this mode — WastageCalculator#netPerPieceFromSpecialSqm's
+      // rounding order is the algorithm; only the real service may compute it (see
+      // previewCeoNetUnitPrice's own header comment).
+      expect(screen.getByText('คำนวณเมื่อบันทึก')).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001,
+        {
+          items: [{
+            pricingDecisionItemId: 8001,
+            discountPct: null,
+            clearDiscountPct: false,
+            specialPriceSqm: 1350,
+            clearSpecialPriceSqm: false,
+            directNetPrice: null,
+            clearDirectNetPrice: false,
+          }],
+        },
+      ));
+    });
+
+    it('DIRECT_NET mode: preview IS the typed value; shows the server-saved netUnitPrice once present', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'DIRECT_NET',
+          items: [newFormItem({ directNetPrice: 777, netUnitPrice: 777 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      // Already saved (netUnitPrice present) — shown as the real figure, no "ตัวอย่าง" caveat.
+      expect(screen.getByText(/฿777\.00/)).not.toBeNull();
+      expect(screen.queryByText(/ตัวอย่าง ยังไม่บันทึก/)).toBeNull();
+    });
+
+    it('disables approve until every new-form item has a netUnitPrice, and shows the Thai warning', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({
+          priceMode: 'NET',
+          items: [newFormItem({ id: 8001, netUnitPrice: null }), newFormItem({ id: 8002, netUnitPrice: 900 })],
+        })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+      expect(screen.getByText('ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ')).not.toBeNull();
+    });
+
+    it('CEO-only: import never sees the mode picker or price-mode inputs (server already strips the fields; UI only ever renders this panel for ceo)', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 1000 })] })],
+      });
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+
+      // Import never even reaches the CEO panel (canSeeRawPricingDecision(user) && !isImport(user)
+      // gates it out entirely) — mirrors the existing "Import sees no CEO decision UI" coverage
+      // for the legacy panel.
+      expect(screen.queryByText('การพิจารณาราคาขายของ CEO')).toBeNull();
+      expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
     });
   });
 });
