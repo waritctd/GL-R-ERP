@@ -1,0 +1,84 @@
+# GL-R-ERP self-hosted stack — Ubuntu + Docker + Cloudflare Tunnel.
+# All persistent data lives on the LUKS-encrypted data disk mounted at /srv/glr.
+#
+# Reach the app ONLY through Cloudflare Tunnel (cloudflared → caddy). No inbound
+# port is published to the host or the router. Uncomment caddy's 127.0.0.1 port
+# only for local-on-server smoke testing.
+#
+# Secrets come from ./.env (chmod 600, gitignored). See .env.example.
+name: glr-erp
+
+services:
+  postgres:
+    # ⚠️ MATCH the Supabase Postgres MAJOR version (check it in Phase 0). A dump from
+    # a newer server will not restore into an older one.
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hris
+      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME}
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      # Keep the data subdir tidy under the mount point.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - /srv/glr/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SPRING_DATASOURCE_USERNAME} -d hris"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Not published to the host — only the backend reaches it on the compose network.
+
+  backend:
+    # PRE-BUILT image that CONTAINS the licensed Thai fonts (#666). NEVER build the
+    # backend from source on this server — the fonts are gitignored, so a self-built
+    # image renders every PDF in substitute fonts. Pull the pinned tag (Phase 3).
+    image: ghcr.io/waritctd/glr-hr-backend:${BACKEND_IMAGE_TAG}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Bare `prod` — the REAL production profile (no demo seed). This is what makes
+      # ProductionReadinessConfig hard-fail on boot if a REQUIRED env is missing, which
+      # is the behaviour we want on a real deployment. (Empty-DB smoke in Phase 5 flips
+      # this to prod,demo temporarily to get seed logins — see the runbook.)
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: "8080"
+      # Points at the postgres service on the compose network.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hris
+      # We sit behind Caddy + Cloudflare; trust X-Forwarded-* so Spring builds correct
+      # absolute URLs and sees the request as HTTPS.
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+    volumes:
+      - /srv/glr/uploads:/srv/glr/uploads
+    # Not published — Caddy proxies /api to it on the compose network.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - backend
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /srv/glr/www:/srv/www:ro       # frontend dist (built with mocks off, portal unlocked)
+      - caddy_data:/data
+      - caddy_config:/config
+    # ports:
+    #   - "127.0.0.1:8081:80"          # ← uncomment for local-on-server smoke test only
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - caddy
+    # Ingress (hostname → http://caddy:80) is configured in the Cloudflare Zero Trust
+    # dashboard for a token-managed tunnel. cloudflared only needs the token + network.
+
+volumes:
+  caddy_data:
+  caddy_config:

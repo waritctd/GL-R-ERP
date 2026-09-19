@@ -1,0 +1,33 @@
+# Origin reverse proxy for GL-R-ERP, behind Cloudflare Tunnel.
+#
+# TLS is terminated at the Cloudflare edge, so this listens on plain :80 inside the
+# Docker network — cloudflared connects to it. Nothing here is internet-facing.
+#
+# One origin serves BOTH the SPA and /api, so the app is same-origin: the XSRF-TOKEN
+# cookie and the GLR_HR_SESSION cookie work without any CORS round-trip.
+
+:80 {
+	encode gzip zstd
+
+	# Backend API — everything under /api goes to Spring on 8080.
+	handle /api/* {
+		reverse_proxy backend:8080 {
+			# Preserve the client protocol/host so Spring (forward-headers-strategy=framework)
+			# builds correct HTTPS absolute URLs and marks the session cookie Secure.
+			header_up X-Forwarded-Proto {http.request.header.X-Forwarded-Proto}
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	# Health probe passthrough (also used by Cloudflare Access bypass — see runbook §Phase 6).
+	handle /actuator/health {
+		reverse_proxy backend:8080
+	}
+
+	# Frontend SPA — static files with history-API fallback to index.html.
+	handle {
+		root * /srv/www
+		try_files {path} /index.html
+		file_server
+	}
+}

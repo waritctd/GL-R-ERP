@@ -1,0 +1,9 @@
+# Never commit secrets or backup artifacts from this ops folder.
+.env
+*.key
+*.keyfile
+luks-*.key
+backups/
+*.dump
+*.sql.gz
+*.tar.zst
