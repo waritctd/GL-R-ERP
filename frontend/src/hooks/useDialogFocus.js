@@ -12,7 +12,20 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
 // persistent, non-modal side panel (e.g. the payroll panel at >=1280px, beside the table rather than
 // over it) -- trapping Tab or closing on Escape would be wrong there, since the rest of the page is
 // not actually hidden or inert in that mode.
-export function useDialogFocus({ active, containerRef, onClose }) {
+//
+// `initialFocusRef` (optional): the element to focus instead of the first tabbable element (which
+// defaults to the header's own close button, since it renders before `children` in the DOM). A
+// caller that wants a specific field focused on open CANNOT reliably win that race with a second,
+// sibling effect of its own -- ApproveSpecialMoneyDialog.jsx tried exactly that (focus the amount
+// input from an effect one level up, relying on child-before-parent effect ordering) and it lost in
+// a real browser: React 18 StrictMode (main.jsx wraps the app in it) double-invokes effects for
+// fibers that are FRESHLY MOUNTING in a commit -- Modal mounts fresh every time a dialog opens, so
+// its focus effect gets mount -> cleanup (which restores focus to whatever had it before opening,
+// via `previouslyFocused`) -> mount again, and that extra remount re-set focus to the close button
+// LAST. The caller's own effect, on an already-mounted component, only ran once and lost the race.
+// Passing the target in HERE avoids the race entirely: it is the same single effect either way, so
+// a StrictMode remount just re-applies the same correct target instead of overriding it.
+export function useDialogFocus({ active, containerRef, onClose, initialFocusRef }) {
   const previouslyFocused = useRef(null);
   const onCloseRef = useRef(onClose);
   // Keep the ref current on every render without re-running the effect below.
@@ -26,7 +39,7 @@ export function useDialogFocus({ active, containerRef, onClose }) {
     const focusables = () => Array.from(container?.querySelectorAll(FOCUSABLE) ?? []);
 
     const initial = focusables();
-    (initial[0] ?? container)?.focus();
+    (initialFocusRef?.current ?? initial[0] ?? container)?.focus();
 
     function onKeyDown(event) {
       if (event.key === 'Escape') {
@@ -55,5 +68,5 @@ export function useDialogFocus({ active, containerRef, onClose }) {
         previouslyFocused.current.focus();
       }
     };
-  }, [active, containerRef]);
+  }, [active, containerRef, initialFocusRef]);
 }

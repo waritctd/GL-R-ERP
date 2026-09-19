@@ -14,12 +14,17 @@ const SIZE_CLASSNAMES = {
   lg: 'w-[min(1040px,100%)] max-h-[calc(100dvh-40px)]',
 };
 
-export function Modal({ title, subtitle, children, footer, onClose, testId, size = 'md' }) {
+export function Modal({
+  title, subtitle, children, footer, onClose, testId, size = 'md', initialFocusRef,
+}) {
   const panelRef = useRef(null);
   // Modal is only ever mounted while shown, so the trap is unconditionally active for its lifetime
   // (see useDialogFocus.js -- the payroll detail panel is the other consumer, and gates this on its
   // >=1280px side-by-side vs <1280px overlay mode instead).
-  useDialogFocus({ active: true, containerRef: panelRef, onClose });
+  // `initialFocusRef` (optional): see useDialogFocus.js's own comment on it -- this is what lets a
+  // caller focus a specific field (rather than the header's close button, the default first
+  // tabbable element) without racing a StrictMode remount for it.
+  useDialogFocus({ active: true, containerRef: panelRef, onClose, initialFocusRef });
 
   return (
     <div
