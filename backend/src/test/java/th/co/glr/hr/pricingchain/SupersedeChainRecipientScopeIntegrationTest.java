@@ -25,6 +25,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
 import th.co.glr.hr.customerquotation.DiscountApprovalRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -332,10 +333,17 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
             new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
     }
 
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+    // quantity are now required on every item PricingRequestService#createDraft persists —
+    // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+    // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null, "SCG",
-            "Tile GLA-124", "SCG Tile GLA-124", null, null, "60x60", FACTORY, quantity, quantity, "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+            "Tile GLA-124", "SCG Tile GLA-124", "White", "Matte", "60x60", FACTORY, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, quantity.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private ReceiveFactoryQuoteRequest factoryResponse(long pricingRequestItemId, BigDecimal quantity) {

@@ -65,7 +65,7 @@ const EVENT_LABEL = {
  * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
  * FIX 1.
  */
-export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user }, ref) {
+export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, showToast }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -240,6 +240,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
         <PricingRequestCreateModal
           ticketItems={ticketItems}
           deal={deal}
+          showToast={showToast}
           onClose={() => setCreateOpen(false)}
           onCreated={() => { setCreateOpen(false); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
@@ -256,6 +257,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           <PricingRequestCreateModal
             mode="edit"
             initialValue={editDetailQuery.data}
+            showToast={showToast}
             onClose={() => setEditingId(null)}
             onCreated={() => { setEditingId(null); invalidate(); }}
             updateFn={(id, payload) => api.pricingRequests.update(id, payload)}

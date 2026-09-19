@@ -20,6 +20,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -168,10 +169,16 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             List.of(pricingItem()));
     }
 
+    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
+    // quantity are now required on every item PricingRequestService#createDraft persists — see
+    // PricingRequestService#resolveItems' Javadoc.
     private PricingRequestItemRequest pricingItem() {
         return new PricingRequestItemRequest(null, catalogProductId, null, "Toyota", "Hilux", "Toyota Hilux",
-            null, null, null, null, new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE,
-            QuantityType.REFERENCE, null, null, null);
+            "White", "Matte", "60x60", null, null, null, null, null,
+            QuantityType.REFERENCE, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private TicketItemRequest ticketItem() {

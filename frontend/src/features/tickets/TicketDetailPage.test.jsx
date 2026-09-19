@@ -94,6 +94,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
       },
+      // GLA-125: PricingRequestCreateModal's header-terms section fetches the same
+      // eligible-display-name list the direct-deal quotation editor uses.
+      dealQuotations: {
+        displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+      },
       // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel reads/writes
       // this namespace directly, same pattern as pricingRequests above.
       depositNotices: {

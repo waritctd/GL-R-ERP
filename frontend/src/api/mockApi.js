@@ -1215,8 +1215,9 @@ function requireCustomerViewer() {
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
-// Mirrors th.co.glr.hr.pricingrequest.UnitBasis.VALUES (financial-integrity review Finding B).
-const UNIT_BASIS_VALUES = PRICING_REQUEST_UNIT_BASIS_OPTIONS.map((o) => o.code);
+// V185: requestedUnitBasis is no longer client-supplied (resolvePricingRequestItem always
+// derives it to PER_PIECE), so the UnitBasis.VALUES membership check this constant fed is gone
+// too — see requirePricingRequestItemFieldsValid's own comment.
 
 function nextPricingRequestCode() {
   return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
@@ -1715,6 +1716,24 @@ function buildPricingRequestSummary(pr) {
     // Step 6: non-null once pricingRequests.confirmOrder has bridged this (terminal,
     // QUOTATION_ACCEPTED) request into the legacy ticket payment/deposit pipeline.
     orderConfirmedAt: pr.orderConfirmedAt ?? null,
+    // GLA-125 header terms + customerId (second review pass, finding N2): create()/update()/
+    // createCustomerChangeRevision() already store all of these directly on `pr` (see those
+    // handlers' own field assignments), but this builder used to strip them all back out of
+    // every response -- a mock-mode edit/revision would open with every one of these blank
+    // (never seeded from what was actually saved) and the header-terms save would look like it
+    // silently reverted, and the ผู้สั่งซื้อ picker would stay disabled forever (no customerId
+    // ever reaching PricingRequestSummaryDto.customerId, which the picker's `pickerCustomerId`
+    // fallback chain depends on for edit/revision mode). Mirrors
+    // PricingRequestRepository#mapSummary's own read of these same columns (V185 extension).
+    paymentTermMode: pr.paymentTermMode ?? null,
+    creditDays: pr.creditDays ?? null,
+    validityDays: pr.validityDays ?? null,
+    printedByDisplayId: pr.printedByDisplayId ?? null,
+    salesRepDisplayId: pr.salesRepDisplayId ?? null,
+    deptCode: pr.deptCode ?? null,
+    unitCode: pr.unitCode ?? null,
+    omitContactHonorific: pr.omitContactHonorific ?? false,
+    customerId: ticket?.customerId ?? null,
   };
 }
 
@@ -1755,22 +1774,27 @@ function normalizePricingRequestCurrency(targetCurrency) {
 // separately by the callers of this helper). A mock that skips this is the
 // dangerous direction (issue #199): it would accept a blank unit / zero qty
 // that the real backend 400s on.
+// V185 (direct-deal-form parity): requestedQty/requestedUnit/requestedUnitBasis are no longer
+// client-required — resolvePricingRequestItem below derives all three (see its own Javadoc-style
+// comment), mirroring PricingRequestRequests.PricingRequestItemRequest's own relaxation of those
+// three bean-validation annotations. quantityType stays required (the form still sends the
+// ESTIMATE default even though it is no longer user-editable — see
+// PricingRequestCreateModal.jsx's own note).
 function requirePricingRequestItemFieldsValid(items) {
   items.forEach((item, index) => {
-    if (item.requestedQty == null || !(Number(item.requestedQty) >= 0.0001)) {
-      fail('requestedQty ต้องมากกว่าหรือเท่ากับ 0.0001', 400);
-    }
-    if (!item.requestedUnit?.trim()) {
-      fail('requestedUnit ต้องไม่เว้นว่าง', 400);
-    }
-    // Mirrors PricingRequestItemRequest's @NotBlank requestedUnitBasis (V68,
-    // financial-integrity review Finding B) — the machine-readable basis
-    // PricingCostingService now normalizes the requested quantity against.
-    if (!item.requestedUnitBasis?.trim()) {
-      fail('requestedUnitBasis ต้องไม่เว้นว่าง', 400);
-    }
     if (!item.quantityType?.trim()) {
       fail('quantityType ต้องไม่เว้นว่าง', 400);
+    }
+    // V185 (Opus review finding #9, 2026-09-18, RESTORED): requestedUnitBasis is no longer
+    // client-REQUIRED (resolvePricingRequestItem below always derives it to PER_PIECE), but
+    // PricingRequestService.validateItems still runs on the RAW payload BEFORE resolveItems
+    // overwrites this field — so an EXPLICIT, unrecognised value is still a 400 on the real
+    // backend today. This mock briefly dropped the check entirely on the theory that the field
+    // was dead; it is not dead, only optional. `null`/absent is fine either way (the new form's
+    // only payload shape); only a present-but-invalid value is rejected, mirroring
+    // `item.requestedUnitBasis() != null && !UnitBasis.isValid(...)` exactly.
+    if (item.requestedUnitBasis != null && !PRICING_REQUEST_UNIT_BASIS_OPTIONS.some((u) => u.code === item.requestedUnitBasis)) {
+      fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
     }
     // Mirrors PricingRequestService.validateItems: an item must actually name
     // a product somehow — a link to an existing deal line, a catalog
@@ -1784,6 +1808,147 @@ function requirePricingRequestItemFieldsValid(items) {
       fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
     }
   });
+}
+
+// GLA-125 (owner ruling 2026-09-18): a PricingRequest has no price yet, so unlike
+// sales.quotation's deposit_percent/remainder_mode/full_payment_term trio, there is no "deposit
+// percentage" concept here — just a plain two-way choice, mirroring
+// PricingRequestService#validateHeaderTerms exactly.
+const PRICING_REQUEST_PAYMENT_TERM_MODES = ['CREDIT', 'ON_DELIVERY'];
+
+function requirePricingRequestHeaderTermsValid(payload) {
+  if (payload.paymentTermMode == null) return;
+  if (!PRICING_REQUEST_PAYMENT_TERM_MODES.includes(payload.paymentTermMode)) {
+    fail(`ไม่รองรับเงื่อนไขการชำระเงิน '${payload.paymentTermMode}'`, 400);
+  }
+  if (payload.paymentTermMode === 'CREDIT' && !(Number(payload.creditDays) >= 1)) {
+    fail('กรุณาระบุจำนวนวันเครดิต', 400);
+  }
+}
+
+// V185 (direct-deal-form parity, owner ruling 2026-09-18): every field the direct-deal quotation
+// form marks required is required here too — mirrors PricingRequestService#requireItemFieldsComplete
+// field-for-field (same Thai messages, same "รายการที่ N: ขาด ..." shape). Not required:
+// brand/productCode/originCountry/leadTimeMin/MaxDays — same as that Java method.
+function requirePricingRequestItemFieldsComplete(items) {
+  items.forEach((item, index) => {
+    const missing = [];
+    if (!item.model?.trim()) missing.push('รุ่น');
+    if (!item.color?.trim()) missing.push('สี');
+    if (!item.texture?.trim()) missing.push('ผิว');
+    if (!item.size?.trim()) missing.push('ขนาด');
+    if (!(Number(item.thicknessMm) > 0)) missing.push('ความหนา');
+    if (!(Number(item.piecesPerBox) >= 1)) missing.push('จำนวนแผ่นต่อกล่อง');
+    if (!(Number(item.sqmPerPiece) > 0)) missing.push('ตร.ม./แผ่น');
+    const hasQuantity = item.quantityMode === 'PIECES'
+      ? Number(item.piecesInput) >= 1
+      : Number(item.areaSqm) > 0;
+    if (!hasQuantity) missing.push('จำนวน');
+    // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (+ typed name when "อื่นๆ") and
+    // ระยะเวลานำเข้า are required on the PCR form -- mirrors
+    // PricingRequestService#requireItemFieldsComplete exactly.
+    if (!item.originCountry?.trim()) {
+      missing.push('ประเทศต้นทาง');
+    } else if (item.originCountry === 'อื่นๆ' && !item.originCountryOther?.trim()) {
+      missing.push('ชื่อประเทศต้นทาง (อื่นๆ)');
+    }
+    if (item.leadTimeMinDays == null || item.leadTimeMaxDays == null) {
+      missing.push('ระยะเวลานำเข้า (วัน)');
+    } else if (Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
+      fail(`รายการที่ ${index + 1}: ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด`, 400);
+    }
+    if (missing.length) {
+      fail(`รายการที่ ${index + 1}: ขาด ${missing.join(', ')}`, 400);
+    }
+  });
+}
+
+/**
+ * V185 (direct-deal-form parity): DERIVES requestedQty/requestedQtySqm/requestedUnit/
+ * requestedUnitBasis from the item's own tile fields, mirroring
+ * PricingRequestService#resolveItem/resolveItems — Sales no longer types a quantity or unit
+ * directly. Reuses `computeDealQuotationLine` (the SAME piece/wastage/box-rounding arithmetic the
+ * direct-deal quotation mock already uses for its calculate-line preview) for the piece counts,
+ * rather than a second hand-rolled copy — see that function's own "⚠ STUB ARITHMETIC" Javadoc for
+ * why its NUMBERS are a placeholder (not the real backend WastageCalculator) and why that is
+ * deliberate rather than a gap: mock-driven tests here are therefore evidence about the PLUMBING
+ * (does the derived value reach the row / requested_qty_sqm / boxes), never independent evidence
+ * that the real Java WastageCalculator rounds the same way.
+ *
+ * Must be called AFTER requirePricingRequestItemFieldsComplete (sqmPerPiece/piecesPerBox/etc are
+ * assumed present).
+ *
+ * `rowNumber` (0-based, optional — every call site has one in scope from its own `.map((item,
+ * i) => ...)`) is only for the two Opus-review-restored bound checks below, so their Thai
+ * messages match `requireItemFieldsComplete`'s own "รายการที่ N: ..." shape; omitting it just
+ * drops the row number from those two messages, it never skips the checks.
+ */
+function resolvePricingRequestItem(item, rowNumber = 0) {
+  // V185 (Opus review finding #9, 2026-09-18, RESTORED): WastageCalculator#applyWastage caps
+  // wastageValue at <= 100 for PERCENT and <= 1,000,000 for PIECES (and rejects negative either
+  // way), throwing IllegalArgumentException that PricingRequestService#resolveItem turns into a
+  // 400 — computeDealQuotationLine below has NO such cap (it is a display-only preview stub, see
+  // its own "STUB ARITHMETIC" Javadoc), so this mock must enforce the bound itself rather than
+  // silently accepting a value the real backend would 400 on.
+  const wastageValue = Number(item.wastageValue) || 0;
+  if (wastageValue < 0) {
+    fail(`รายการที่ ${rowNumber + 1}: ข้อมูลรายการไม่ถูกต้อง: wastageValue must not be negative, got: ${wastageValue}`, 400);
+  }
+  if (item.wastageMode === 'PERCENT' && wastageValue > 100) {
+    fail(`รายการที่ ${rowNumber + 1}: ข้อมูลรายการไม่ถูกต้อง: wastageValue must be <= 100 percent, got: ${wastageValue}`, 400);
+  }
+  if (item.wastageMode === 'PIECES' && wastageValue > 1_000_000) {
+    fail(`รายการที่ ${rowNumber + 1}: ข้อมูลรายการไม่ถูกต้อง: wastageValue must be <= 1000000 pieces, got: ${wastageValue}`, 400);
+  }
+  // Second review pass ("#9 remainder", 2026-09-19): WastageCalculator#calculate also calls
+  // requireReasonableSqmPerPiece(sqmPerPiece) whenever sqmPerPiece is present and positive — an
+  // H4 sanity bound (0.001 <= sqmPerPiece <= 10; a genuine tile is never smaller than 1000 mm² or
+  // larger than 10 sqm per piece) that catches a unit mistake (e.g. size entered in mm² instead of
+  // m²) BEFORE it derives a wildly wrong piece count. computeDealQuotationLine below has no such
+  // bound (same "STUB ARITHMETIC" reason as the wastage caps just above), so this mock must
+  // enforce it itself or an out-of-range value the real backend would 400 on would silently derive
+  // a nonsense requestedQty/requestedQtySqm here instead.
+  const sqmPerPieceValue = Number(item.sqmPerPiece);
+  if (sqmPerPieceValue > 0 && (sqmPerPieceValue < 0.001 || sqmPerPieceValue > 10)) {
+    fail(`รายการที่ ${rowNumber + 1}: ข้อมูลรายการไม่ถูกต้อง: ขนาดสินค้าไม่สมเหตุสมผล — กรุณาตรวจสอบหน่วยของขนาด`, 400);
+  }
+  const line = computeDealQuotationLine({
+    sqmPerPiece: item.sqmPerPiece,
+    quantityMode: item.quantityMode,
+    areaSqm: item.areaSqm,
+    piecesInput: item.piecesInput,
+    wastageMode: item.wastageMode,
+    wastageValue: item.wastageValue,
+    piecesPerBox: item.piecesPerBox,
+    roundToFullBox: item.roundToFullBox,
+    // Price-free: this derivation only ever reads the PIECE-count fields off the result
+    // (piecesFinal/piecesBeforeWastage/piecesAfterWastage/boxes) below, never netUnitPrice/
+    // lineAmount/calculationLine — see PricingRequestService#resolveItem's own comment on why the
+    // real backend calls WastageCalculator.calculate with a zero price for the identical reason.
+    unitPrice: 0,
+  });
+  // V185 (Opus review finding #2, 2026-09-18): mirrors PricingRequestService#resolveItem's own
+  // piecesFinal < 1 rejection — a small AREA input against a large sqmPerPiece can derive to
+  // ZERO pieces, which violates V59's chk_pricing_request_item_qty (requested_qty > 0).
+  if (line.piecesFinal < 1) {
+    fail(`รายการที่ ${rowNumber + 1}: จำนวนที่คำนวณได้เป็น 0 ชิ้น กรุณาระบุจำนวนหรือขนาดให้มากขึ้น`, 400);
+  }
+  return {
+    // Mirrors DealQuotationLines.TILE_UNIT_TH / PricingRequestService.PIECE_UNIT_LABEL.
+    requestedUnit: 'แผ่น',
+    requestedUnitBasis: 'PER_PIECE',
+    requestedQty: line.piecesFinal,
+    requestedQtySqm: Number(item.sqmPerPiece) > 0 ? round2(line.piecesFinal * Number(item.sqmPerPiece)) : null,
+    piecesBeforeWastage: line.piecesBeforeWastage,
+    piecesAfterWastage: line.piecesAfterWastage,
+    boxes: line.boxes,
+    // GLA-125: mirrors PricingRequestService#resolveItem's own normalization — only ever
+    // persisted under the "อื่นๆ" origin_country sentinel, cleared for every other value. Placed
+    // here (not left to each call site) so all THREE callers (create/update/
+    // createCustomerChangeRevision) normalize it identically, including the revision path, whose
+    // item construction otherwise spreads `...item` verbatim.
+    originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
+  };
 }
 
 // Mirrors PricingRequestItemDto.resolvedFactory(): the catalog snapshot first, then Sales's own
@@ -11481,10 +11646,6 @@ export const api = {
         if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
           fail(`ไม่รองรับประเภทจำนวน '${item.quantityType}'`, 400);
         }
-        // Mirrors PricingRequestService.validateItems's UnitBasis.isValid check.
-        if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
-          fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
-        }
       }
       if (payload.targetCurrency && payload.targetCurrency.trim().length !== 3) {
         fail('targetCurrency ต้องเป็นรหัสสกุลเงิน 3 ตัวอักษร', 400);
@@ -11492,12 +11653,18 @@ export const api = {
       if (payload.recipientContactId == null && !payload.recipientLabel?.trim()) {
         fail('ต้องระบุผู้รับคำขอราคา (recipientContactId หรือ recipientLabel)', 400);
       }
+      // GLA-125 header terms.
+      requirePricingRequestHeaderTermsValid(payload);
       const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
       for (const item of payload.items) {
         if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
           fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${ticketId}`, 400);
         }
       }
+      // V185: required-field completeness (owner ruling), then derive requestedQty/Unit/Basis —
+      // see PricingRequestService#resolveItems' own Javadoc for why this order matters (a row
+      // missing a required field must never reach the derivation step).
+      requirePricingRequestItemFieldsComplete(payload.items);
 
       const now = new Date().toISOString();
       const id = mockPricingRequestSeq++;
@@ -11515,15 +11682,33 @@ export const api = {
         texture: item.texture ?? null,
         size: item.size ?? null,
         factory: item.factory ?? null,
-        requestedQty: item.requestedQty,
-        requestedQtySqm: item.requestedQtySqm ?? null,
-        requestedUnit: item.requestedUnit,
-        requestedUnitBasis: item.requestedUnitBasis,
+        // V185: requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis are DERIVED, never
+        // the client-sent value — see resolvePricingRequestItem's own Javadoc.
+        ...resolvePricingRequestItem(item, i),
         quantityType: item.quantityType,
         targetDeliveryDate: item.targetDeliveryDate ?? null,
         deliveryLocation: item.deliveryLocation ?? null,
         specialRequirement: item.specialRequirement ?? null,
         sortOrder: i,
+        // V185 (direct-deal-form parity) — sales-entered tile fields, mirrors
+        // sales.pricing_request_item's new columns (V185).
+        productCode: item.productCode ?? null,
+        thicknessMm: item.thicknessMm ?? null,
+        sqmPerPiece: item.sqmPerPiece ?? null,
+        quantityMode: item.quantityMode ?? null,
+        areaSqm: item.areaSqm ?? null,
+        piecesInput: item.piecesInput ?? null,
+        wastageMode: item.wastageMode ?? null,
+        wastageValue: item.wastageValue ?? null,
+        piecesPerBox: item.piecesPerBox ?? null,
+        sqmPerBox: item.sqmPerBox ?? null,
+        roundToFullBox: item.roundToFullBox !== false,
+        originCountry: item.originCountry ?? null,
+        leadTimeMinDays: item.leadTimeMinDays ?? null,
+        leadTimeMaxDays: item.leadTimeMaxDays ?? null,
+        // GLA-125: mirrors PricingRequestService#resolveItem's own normalization — only ever
+        // persisted under the "อื่นๆ" sentinel, cleared for every other origin_country value.
+        originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
         // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only
         // by submit()'s snapshotCatalogSelections mirror below, never at create/update time,
         // matching PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
@@ -11551,6 +11736,16 @@ export const api = {
         customerTargetPrice: payload.customerTargetPrice ?? null,
         targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
         note: payload.note ?? null,
+        // GLA-125 header terms — mirrors sales.pricing_request's own new columns (V185
+        // extension). NOT yet carried onto the quotation (Phase 3).
+        paymentTermMode: payload.paymentTermMode ?? null,
+        creditDays: payload.creditDays ?? null,
+        validityDays: payload.validityDays ?? null,
+        printedByDisplayId: payload.printedByDisplayId ?? null,
+        salesRepDisplayId: payload.salesRepDisplayId ?? null,
+        deptCode: payload.deptCode ?? null,
+        unitCode: payload.unitCode ?? null,
+        omitContactHonorific: payload.omitContactHonorific ?? false,
         clientRequestId: payload.clientRequestId,
         // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
         // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
@@ -11619,9 +11814,6 @@ export const api = {
           if (!PRICING_REQUEST_QUANTITY_TYPE_VALUES.includes(item.quantityType)) {
             fail(`ไม่รองรับประเภทจำนวน '${item.quantityType}'`, 400);
           }
-          if (!UNIT_BASIS_VALUES.includes(item.requestedUnitBasis)) {
-            fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
-          }
         }
         const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
         for (const item of payload.items) {
@@ -11629,10 +11821,14 @@ export const api = {
             fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${pr.ticketId}`, 400);
           }
         }
+        // V185 — see create()'s identical comment.
+        requirePricingRequestItemFieldsComplete(payload.items);
       }
       if (payload.targetCurrency != null && payload.targetCurrency.trim().length !== 3) {
         fail('targetCurrency ต้องเป็นรหัสสกุลเงิน 3 ตัวอักษร', 400);
       }
+      // GLA-125 header terms.
+      requirePricingRequestHeaderTermsValid(payload);
 
       pr.recipientType = payload.recipientType;
       pr.recipientContactId = payload.recipientContactId ?? null;
@@ -11641,6 +11837,16 @@ export const api = {
       pr.customerTargetPrice = payload.customerTargetPrice ?? null;
       pr.targetCurrency = normalizePricingRequestCurrency(payload.targetCurrency);
       pr.note = payload.note ?? null;
+      // GLA-125 header terms — FULL REPLACEMENT, same posture as every other editable field on
+      // this PUT (this handler's own class-level comment above).
+      pr.paymentTermMode = payload.paymentTermMode ?? null;
+      pr.creditDays = payload.creditDays ?? null;
+      pr.validityDays = payload.validityDays ?? null;
+      pr.printedByDisplayId = payload.printedByDisplayId ?? null;
+      pr.salesRepDisplayId = payload.salesRepDisplayId ?? null;
+      pr.deptCode = payload.deptCode ?? null;
+      pr.unitCode = payload.unitCode ?? null;
+      pr.omitContactHonorific = payload.omitContactHonorific ?? false;
       if (payload.items != null) {
         pr.items = payload.items.map((item, i) => ({
           id: mockPricingRequestItemSeq++,
@@ -11655,15 +11861,28 @@ export const api = {
           texture: item.texture ?? null,
           size: item.size ?? null,
           factory: item.factory ?? null,
-          requestedQty: item.requestedQty,
-          requestedQtySqm: item.requestedQtySqm ?? null,
-          requestedUnit: item.requestedUnit,
-          requestedUnitBasis: item.requestedUnitBasis,
+          // V185 — see create()'s identical comment.
+          ...resolvePricingRequestItem(item, i),
           quantityType: item.quantityType,
           targetDeliveryDate: item.targetDeliveryDate ?? null,
           deliveryLocation: item.deliveryLocation ?? null,
           specialRequirement: item.specialRequirement ?? null,
           sortOrder: i,
+          productCode: item.productCode ?? null,
+          thicknessMm: item.thicknessMm ?? null,
+          sqmPerPiece: item.sqmPerPiece ?? null,
+          quantityMode: item.quantityMode ?? null,
+          areaSqm: item.areaSqm ?? null,
+          piecesInput: item.piecesInput ?? null,
+          wastageMode: item.wastageMode ?? null,
+          wastageValue: item.wastageValue ?? null,
+          piecesPerBox: item.piecesPerBox ?? null,
+          sqmPerBox: item.sqmPerBox ?? null,
+          roundToFullBox: item.roundToFullBox !== false,
+          originCountry: item.originCountry ?? null,
+          leadTimeMinDays: item.leadTimeMinDays ?? null,
+          leadTimeMaxDays: item.leadTimeMaxDays ?? null,
+          originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
           // See create()'s identical block above for why these start null.
           priceListVersionId: null,
           catalogPriceId: null,
@@ -13139,6 +13358,10 @@ export const api = {
       }
       if (!payload.items?.length) fail('ต้องมีรายการอย่างน้อย 1 รายการ', 400);
       requirePricingRequestItemFieldsValid(payload.items ?? []);
+      // V185 — see create()'s identical comment.
+      requirePricingRequestItemFieldsComplete(payload.items ?? []);
+      // GLA-125 header terms.
+      requirePricingRequestHeaderTermsValid(payload);
       const parentStatus = parent.status;
       const revisionId = mockPricingRequestSeq++;
       parent.status = 'SUPERSEDED';
@@ -13159,15 +13382,34 @@ export const api = {
         customerTargetPrice: payload.customerTargetPrice ?? null,
         targetCurrency: normalizePricingRequestCurrency(payload.targetCurrency),
         note: payload.note ?? null,
+        // GLA-125 header terms — explicit overrides from `payload`, same as every other field
+        // above. Without these, the `...parent` spread at the top of this object would silently
+        // inherit the PARENT's header terms regardless of what the caller actually sent for the
+        // revision (the exact bug class Opus review finding #1 was about, one level up).
+        paymentTermMode: payload.paymentTermMode ?? null,
+        creditDays: payload.creditDays ?? null,
+        validityDays: payload.validityDays ?? null,
+        printedByDisplayId: payload.printedByDisplayId ?? null,
+        salesRepDisplayId: payload.salesRepDisplayId ?? null,
+        deptCode: payload.deptCode ?? null,
+        unitCode: payload.unitCode ?? null,
+        omitContactHonorific: payload.omitContactHonorific ?? false,
         submittedAt: null,
         pickedUpAt: null,
         cancelledAt: null,
         createdAt: now,
         updatedAt: now,
         items: (payload.items ?? []).map((item, i) => ({
+          ...item,
+          // V185: requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis are DERIVED,
+          // never the client-sent value — spread AFTER `...item` so these overwrite whatever
+          // (now-ignored) values the payload carried.
+          ...resolvePricingRequestItem(item, i),
+          // `id`/`pricingRequestId` spread LAST — this mock has no stable-item-id concept
+          // (PricingRequestRepository.replaceItems always regenerates ids), so a fresh id here
+          // must never be overwritten by anything the payload item happened to carry.
           id: mockPricingRequestItemSeq++,
           pricingRequestId: revisionId,
-          ...item,
           sortOrder: i,
         })),
         events: [],

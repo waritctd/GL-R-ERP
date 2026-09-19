@@ -413,10 +413,20 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         long ticketItemId = created.items().get(0).id();
 
         BigDecimal quantity = new BigDecimal("10");
+        // Rebased onto develop @84f4123e (V184): V185/GLA-125 made color/texture/thicknessMm/
+        // sqmPerPiece/piecesPerBox/a quantity/originCountry/leadTimeMin+MaxDays unconditionally
+        // required (PricingRequestService#requireItemFieldsComplete) -- the old 18-arg compat
+        // shape (requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis sent directly, no
+        // tile fields) now 400s with "ขาด สี, ผิว, ความหนา, ... ประเทศต้นทาง, ระยะเวลานำเข้า (วัน)".
+        // Rebuilt as a complete new-form item: PIECES mode, wastageMode NONE, roundToFullBox
+        // false, so the derived requestedQty comes out EXACTLY equal to `quantity` -- preserving
+        // this fixture's original "requestedQty/quotedQuantity both equal `quantity`" arithmetic
+        // that driveDraftPricingRequestToQuotationAccepted's factory response relies on.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            ticketItemId, catalogProductId, null, "SCG", "Tile AccountNotice", "SCG Tile AccountNotice", null, null,
-            "60x60", FACTORY, quantity, quantity, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            ticketItemId, catalogProductId, null, "SCG", "Tile AccountNotice", "SCG Tile AccountNotice", "ขาว", "ด้าน",
+            "60x60", FACTORY, null, null, null, null, QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), "PIECES", null, quantity.intValueExact(),
+            "NONE", null, 4, null, false, "ไทย-สต็อก", 3, 7, null, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("5000.00"), "THB", "deposit-notice account-notify walk", UUID.randomUUID().toString(),

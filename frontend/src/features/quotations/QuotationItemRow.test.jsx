@@ -348,6 +348,19 @@ describe('QuotationItemRow', () => {
     expect('leadTimeMinDays' in lastPatch).toBe(false);
   });
 
+  // Second review pass, finding N4: sales.quotation_item has no origin_country_other column at
+  // all (only sales.pricing_request_item does, V185) -- direct-deal's own itemInputFromRow never
+  // reads item.originCountryOther, so a typed-name box shown here would silently drop whatever
+  // the rep typed into it on every save, with no error. It must render (and be reachable) only
+  // when the PCR-only `requireOriginCountry` prop is set.
+  it('never shows "ระบุประเทศต้นทาง" for อื่นๆ on direct-deal (requireOriginCountry unset) -- the box would silently drop its own value on save', () => {
+    renderRow();
+
+    fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อื่นๆ' } });
+
+    expect(screen.queryByLabelText('ระบุประเทศต้นทาง')).toBeNull();
+  });
+
   // F1: ตำแหน่งติดตั้ง moved OUT of the row and into its group's header. A per-row copy of that
   // field would put the label back in two places and let them disagree.
   it('no longer renders a per-item ตำแหน่งติดตั้ง field', () => {
@@ -957,5 +970,65 @@ describe('ขายแผ่นไม่เต็มกล่อง — owner-ap
   it('readOnly disables it regardless of แผ่น/กล่อง', () => {
     renderRoundLoose({}, { readOnly: true });
     expect(screen.getByLabelText(/^ขายแผ่นไม่เต็มกล่อง/).disabled).toBe(true);
+  });
+});
+
+// V185 (PricingRequestCreateModal / Phase 1 of the sales-flow redesign): the PCR item form
+// reuses this row with hidePricing, since CEO pricing is a later phase.
+describe('QuotationItemRow — hidePricing (V185)', () => {
+  it('renders a price input by default (hidePricing not set) — NET mode', () => {
+    renderRow({}, vi.fn());
+    expect(screen.getByLabelText(/^ราคา\/หน่วย/)).not.toBeNull();
+  });
+
+  it('hides ราคา/หน่วย และส่วนลด under hidePricing (NET mode)', () => {
+    const item = { ...emptyQuotationItem() };
+    render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
+    expect(screen.queryByLabelText(/^ราคา\/หน่วย/)).toBeNull();
+    expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
+  });
+
+  it('hides ราคาตั้ง/ราคาพิเศษ under hidePricing (SPECIAL_SQM mode)', () => {
+    const item = { ...emptyQuotationItem() };
+    render(
+      <QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()}
+        priceMode="SPECIAL_SQM" hidePricing />,
+    );
+    expect(screen.queryByLabelText(/ราคาตั้ง/)).toBeNull();
+    expect(screen.queryByLabelText(/ราคาพิเศษ/)).toBeNull();
+  });
+
+  it('hides ราคาสุทธิ under hidePricing (DIRECT_NET mode)', () => {
+    const item = { ...emptyQuotationItem() };
+    render(
+      <QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()}
+        priceMode="DIRECT_NET" hidePricing />,
+    );
+    expect(screen.queryByLabelText(/ราคาสุทธิ/)).toBeNull();
+  });
+
+  it('never renders the live ฿ calculation footer under hidePricing', () => {
+    const item = { ...emptyQuotationItem(), calculationLine: 'ทดสอบ', lineAmount: 1234 };
+    render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
+    expect(screen.queryByText('ทดสอบ')).toBeNull();
+  });
+
+  it('still renders every non-price field under hidePricing — รุ่น/สี/ผิว/ขนาด/ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง/จำนวน/เผื่อ/ประเทศต้นทาง/ระยะเวลานำเข้า', () => {
+    const item = { ...emptyQuotationItem() };
+    render(<QuotationItemRow item={item} index={0} onChange={vi.fn()} onRemove={vi.fn()} hidePricing />);
+    expect(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/)).not.toBeNull();
+    expect(screen.getByLabelText(/^สี/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ผิว/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ขนาด \(ซม\.\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ความหนา \(มม\.\)/)).not.toBeNull();
+    expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./)).not.toBeNull();
+    expect(screen.getByLabelText(/^แผ่น\/กล่อง/)).not.toBeNull();
+    expect(screen.getByLabelText(/^จำนวน/)).not.toBeNull();
+    // "เผื่อ (wastage)"'s FormField htmlFor points at an input that only renders once a
+    // "กำหนดเอง"/PIECES custom value is in play — getByLabelText has nothing to pair with on a
+    // fresh row, so the label text itself is what is asserted here instead.
+    expect(screen.getByText('เผื่อ (wastage)')).not.toBeNull();
+    expect(screen.getByLabelText(/^ประเทศต้นทาง/)).not.toBeNull();
+    expect(screen.getByLabelText(/^ระยะเวลานำเข้า \(วัน\)/)).not.toBeNull();
   });
 });

@@ -651,7 +651,21 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "V109 formula test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+
+        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
+
+        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
+
+        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
+
+        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
+
+        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
+
+        // how an item.s requested_unit_basis got set, only what it does with the value.
+
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()
@@ -684,7 +698,21 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         CreatePricingRequestRequest request = new CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "V109 multi-item test", UUID.randomUUID().toString(), List.of(itemA, itemB));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+
+        // every item.s requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
+
+        // directly), which would make it impossible to construct a PER_SQM/PER_BOX/PER_LINEAR_M-basis
+
+        // item for this costing-conversion test. PricingRequestRepository.create performs the exact
+
+        // same DB write createDraft would (persistence only, per that class.s own header Javadoc), just
+
+        // without the sales-form-specific derivation/validation -- LandedCostCalculator does not care
+
+        // how an item.s requested_unit_basis got set, only what it does with the value.
+
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = factoryQuoteService.generateDrafts(pricingRequestId, importActor).stream()

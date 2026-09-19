@@ -117,6 +117,12 @@ public class FactoryQuoteCarryForward {
      * the requested quantity and its unit basis. Fields that cannot (delivery location, special
      * requirement, target delivery date, the free-text note) are deliberately not compared: they
      * are exactly the "commercial terms only" changes this shortcut exists to serve.
+     *
+     * <p>V185 (Opus review finding #4, 2026-09-18): {@code thicknessMm}/{@code productCode}/
+     * {@code originCountry} joined the direct-deal-parity tile fields but were missing from this
+     * comparison — a revision that changed ONLY thickness (or product code, or origin country)
+     * could carry forward a factory quote priced for a different physical product. All three are
+     * compared null-safe (two legacy/pre-V185 rows both null still count as equal).
      */
     static Map<Long, Long> equivalentItemMapping(List<PricingRequestItemDto> parentItems,
                                                  List<PricingRequestItemDto> childItems) {
@@ -149,6 +155,14 @@ public class FactoryQuoteCarryForward {
             && Objects.equals(a.requestedUnit(), b.requestedUnit())
             && Objects.equals(a.requestedUnitBasis(), b.requestedUnitBasis())
             && Objects.equals(a.quantityType(), b.quantityType())
+            && Objects.equals(a.productCode(), b.productCode())
+            && Objects.equals(a.originCountry(), b.originCountry())
+            // Second review pass, finding N3: originCountryOther (GLA-125's typed name under the
+            // "อื่นๆ" sentinel) is a genuinely different product-identity fact from originCountry
+            // itself — two "อื่นๆ" rows naming different countries are not the same order, and
+            // this comparison used to let that difference through silently.
+            && Objects.equals(a.originCountryOther(), b.originCountryOther())
+            && sameAmount(a.thicknessMm(), b.thicknessMm())
             // compareTo, not equals: BigDecimal.equals("10").equals("10.00") is FALSE (scale is
             // part of equality), and a quantity re-entered with a different scale is the same
             // quantity. Using equals here would silently disable the shortcut for half the real

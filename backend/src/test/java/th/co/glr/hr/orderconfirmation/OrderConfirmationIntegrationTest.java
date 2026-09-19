@@ -35,6 +35,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.CreateRevisionRe
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
@@ -725,10 +726,16 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private long driveToQuotationIssuedNotYetAccepted(BigDecimal rawUnitPrice) {
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", null, null, "60x60", FACTORY,
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", "White", "Matte", "60x60", FACTORY,
+            null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "step 6 acceptance walk", UUID.randomUUID().toString(), List.of(item));
