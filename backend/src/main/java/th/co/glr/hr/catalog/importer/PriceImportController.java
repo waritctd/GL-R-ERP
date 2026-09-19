@@ -46,6 +46,21 @@ public class PriceImportController {
         return user;
     }
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: the owning sales rep hitting {@code ImportRequestFactoryCard}'s
+     * new-factory country picker (V184 createDrafts auto-create path, DealFulfilmentPanel.jsx) has
+     * no other way to read this list — {@link #requireImporter} left them 403'd and the picker
+     * rendered permanently empty. Country codes/names are not sensitive (unlike factory pricing),
+     * so READ widens to sales + sales_manager; every write on this controller (createFactory,
+     * updateFactory, and the factories list itself) stays import/ceo-only via
+     * {@link #requireImporter} above, unchanged.
+     */
+    private UserPrincipal requireCountriesReader(HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        sessions.requireAnyRole(user, "ceo", "import", "sales", "sales_manager");
+        return user;
+    }
+
     @GetMapping("/factories")
     List<Map<String, Object>> factories(HttpSession session) {
         requireImporter(session);
@@ -80,10 +95,11 @@ public class PriceImportController {
     }
 
     /** Backs the factory editor's country select, so a typo/unseeded free-text country can no
-     * longer reach {@code createFactory}/{@code updateFactory} and 500. */
+     * longer reach {@code createFactory}/{@code updateFactory} and 500. Also backs the STORED
+     * ใบขอซื้อ new-factory country picker (V184, PR-B) — see {@link #requireCountriesReader}. */
     @GetMapping("/countries")
     List<Map<String, Object>> countries(HttpSession session) {
-        requireImporter(session);
+        requireCountriesReader(session);
         return svc.listCountries();
     }
 

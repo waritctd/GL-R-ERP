@@ -126,7 +126,10 @@ describe('ImportOverview', () => {
     }
 
     expect(ctaFor('บริษัท A')).toBe('ออกคำขอนำเข้า');
-    expect(ctaFor('บริษัท B')).toBe('ส่งคำขอนำเข้าแล้ว');
+    // PR-B REVIEW ROUND 1, S8: IR_ISSUED's CTA is now the neutral "อัปเดตสถานะนำเข้า" — the old
+    // "ส่งคำขอนำเข้าแล้ว" implied a single legacy click /fulfilment no longer performs for an
+    // IR-tracked deal (see importActions.js's nextImportAction, markIrSent branch).
+    expect(ctaFor('บริษัท B')).toBe('อัปเดตสถานะนำเข้า');
     expect(ctaFor('บริษัท C')).toBe('บันทึกออกเดินทาง');
     expect(ctaFor('บริษัท D')).toBe('ยืนยันรับเข้าคลัง');
     expect(ctaFor('บริษัท F')).toBe('รับงาน · ขอราคา');

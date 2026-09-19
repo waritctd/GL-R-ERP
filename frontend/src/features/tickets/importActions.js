@@ -7,8 +7,16 @@
 //
 // The third consumer was ProcurementFulfilmentPage until ebaf6888 deleted it;
 // this header went on naming it for six days after it stopped existing.
-// features/fulfilment/ImportFulfilmentPage.jsx (งานนำเข้า) is the live one, and
-// unlike its predecessor it PERFORMS the transitions rather than linking to them.
+//
+// PR-B REVIEW ROUND 2, X1: features/fulfilment/ImportFulfilmentPage.jsx (งานนำเข้า) was
+// REDESIGNED for per-factory tracking (V184) and no longer performs any of the four legacy
+// deal-level transitions below — it advances a per-factory STORED ใบขอซื้อ row's own step
+// instead (api.storedImportRequests.advanceStep), a different action entirely. The previous
+// text here claimed it "PERFORMS the transitions rather than linking to them", which stopped
+// being true the moment that redesign landed: only `markIrSent` still routes there now (its
+// legacy section lists non-tracked IR_ISSUED deals with a link out); `issueImportRequest`,
+// `markShipping` and `markGoodsReceived` route to the deal page (`/tickets/:id`), where
+// DealFulfilmentPanel still performs them for a deal that has not started per-factory tracking.
 //
 // Deliberately status-only (no `hasAction`/`availableActions` check):
 // DealFulfilmentPanel still gates the real button on
@@ -65,23 +73,28 @@ export function nextFulfilmentActionCode(ticket) {
 }
 
 /**
- * The four fulfilment-chain codes the งานนำเข้า workspace (/fulfilment) owns and
- * performs in place — stage 12, DealStage.PROCUREMENT.
+ * The ONLY fulfilment-chain code the งานนำเข้า workspace (/fulfilment) still owns —
+ * stage 12, DealStage.PROCUREMENT.
  *
- * Exported so the workspace selects its rows from the SAME list this module uses
- * to route CTAs there. A second copy in the page would drift the day delivery
- * moves: the page would keep filtering one set while the CTA routed another.
+ * PR-B REVIEW ROUND 2, X1: used to list all four legacy codes
+ * (`issueImportRequest`/`markIrSent`/`markShipping`/`markGoodsReceived`), back when the
+ * workspace performed each one as a single deal-level click. The per-factory redesign (V184)
+ * replaced that with a row-level step tracker the page drives off `api.storedImportRequests`
+ * directly — it has no way to act on the other three any more (there is no "issue"/"ship"/
+ * "receive" button on that page for a deal with nothing stored yet, and it doesn't even list a
+ * null-fulfillmentStatus deal, which `issueImportRequest` targets). `markIrSent` is the one
+ * survivor: its own legacy section still lists a deal that reached IR_ISSUED WITHOUT going
+ * through the stored aggregate (no per-factory rows), with a link out rather than an in-place
+ * action — see that section's own comment in ImportFulfilmentPage.jsx for why. The other three
+ * codes now route to `/tickets/:id`, where DealFulfilmentPanel still performs them.
  *
- * `recordDelivery` — the fifth code nextFulfilmentActionCode can return — is
- * deliberately absent. Delivery is Sales's now (owner ruling 2026-08-17), so
- * the workspace excludes it, same as nextImportAction's own worklist CTA does
- * (see that function's doc comment below) — neither this workspace nor
- * Import's dashboard prompts for it any more. salesActions.js is where its
- * CTA lives now.
+ * Exported so the workspace's OWN candidate/legacy classification (ImportFulfilmentPage.jsx)
+ * can be reasoned about against the same code this module routes CTAs with, even though the
+ * page no longer imports this list directly — it derives candidacy from fulfillmentStatus
+ * itself (see that file's header). Kept as a single-entry list rather than inlined so the CTA
+ * router below reads as "is this the workspace's code", not a magic string.
  */
-export const FULFILMENT_WORKSPACE_CODES = [
-  'issueImportRequest', 'markIrSent', 'markShipping', 'markGoodsReceived',
-];
+export const FULFILMENT_WORKSPACE_CODES = ['markIrSent'];
 
 /**
  * The full "what does Import own next" decision for a deal, including the
@@ -100,8 +113,12 @@ export const FULFILMENT_WORKSPACE_CODES = [
  * `to` is the CTA's navigation target, and it always points at THE PAGE THAT CAN
  * PERFORM THE ACTION — never at a page that merely displays it:
  *
- *   pickupPricingRequest  -> '/pricing-requests'  (คิวขอราคา — the pickup button)
- *   the four import steps -> '/fulfilment'        (งานนำเข้า — acts in place)
+ *   pickupPricingRequest                        -> '/pricing-requests'  (คิวขอราคา — the pickup button)
+ *   markIrSent                                  -> '/fulfilment'        (งานนำเข้า — its legacy section)
+ *   issueImportRequest/markShipping/
+ *     markGoodsReceived                         -> '/tickets/:id'       (deal page — DealFulfilmentPanel
+ *                                                                         performs these three; PR-B
+ *                                                                         REVIEW ROUND 2, X1)
  *
  * `recordDelivery` is deliberately ABSENT from that table, even though
  * nextFulfilmentActionCode (above) still returns it for a delivery-ready
@@ -127,5 +144,15 @@ export function nextImportAction(ticket, pricingRequests = []) {
   // same owner ruling — this is the second, worklist-CTA half of that same exclusion.
   if (!code || code === 'recordDelivery') return null;
   const to = FULFILMENT_WORKSPACE_CODES.includes(code) ? '/fulfilment' : `/tickets/${ticket.id}`;
-  return { code, label: IMPORT_ACTION_LABELS[code], to };
+  // PR-B REVIEW ROUND 1, S8: 'markIrSent' (fulfillmentStatus IR_ISSUED) is the code every
+  // IR-TRACKED deal sits at for its whole per-factory tracking period (V184/PR-B) — this label used
+  // to say "ส่งคำขอนำเข้าแล้ว" ("mark IR sent"), a single legacy ACTION that /fulfilment no longer
+  // performs in one click; the real control there is now a per-factory 6-step tracker
+  // (FactoryProgressBar). This resolver has no query of its own to tell an IR-tracked deal from a
+  // legacy one still on the old 4-step chain, so the neutral label is correct either way — it never
+  // claims a single-click action the destination page might not offer. Both ImportOverview's
+  // dashboard tile and TicketDetailPage's sticky bar read this same label via workState.js's
+  // nextImportAction call, so relabeling here fixes both surfaces at once.
+  const label = code === 'markIrSent' ? 'อัปเดตสถานะนำเข้า' : IMPORT_ACTION_LABELS[code];
+  return { code, label, to };
 }
