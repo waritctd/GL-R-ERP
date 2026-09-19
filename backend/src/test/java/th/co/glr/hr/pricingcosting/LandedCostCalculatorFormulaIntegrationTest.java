@@ -173,9 +173,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
      * landed cost/piece   = UC x sqmPerPiece(1)                        = 915.3702 (money4)
      * total landed cost   = 915.3702 x 100 pieces                      = 91,537.0200
      *
-     * Selling price (margin 20%, no manual override):
+     * Selling price (margin 20%, no manual override) — owner ruling 2026-09-19 (Phase 2 CEO
+     * pricing) replaced the old RoundUp-to-nearest-฿10 rule with HALF_UP 2dp:
      * raw = 915.3702 x 1.20 x selling_buffer(1.07) = 1175.3353368
-     * RoundUp to nearest ฿10: 1175.3353368 / 10 = 117.53... -> ceiling 118 -> x10             = 1,180.0000
+     * HALF_UP 2dp: 1175.3353368                                                          = 1,175.34
      * </pre>
      */
     @Test
@@ -204,7 +205,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
         assertThat(item.frozenLandedCostPerRequestedUnitThb()).isEqualByComparingTo("915.3702");
         assertThat(item.proposedMarginPct()).isEqualByComparingTo("0.20");
-        assertThat(item.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo("1180.0000");
+        assertThat(item.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo("1175.34");
     }
 
     /**
@@ -492,7 +493,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
         BigDecimal approvedPriceBefore = approved.items().get(0).approvedSellingPricePerRequestedUnit();
         BigDecimal approvedMarginBefore = approved.items().get(0).approvedMarginPct();
-        assertThat(approvedPriceBefore).isEqualByComparingTo("1180.0000");
+        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): HALF_UP 2dp, not RoundUp to nearest ฿10
+        // -- same 915.3702 base cost / 20% margin / 1.07 buffer as singleItem_fullFormulaPipeline
+        // _everyStepHandVerified's own hand-computed derivation.
+        assertThat(approvedPriceBefore).isEqualByComparingTo("1175.34");
 
         // Publish a new config version with DIFFERENT numbers.
         publishNewFormulaConfigVersion();

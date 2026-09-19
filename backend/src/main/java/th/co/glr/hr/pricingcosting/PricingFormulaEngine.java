@@ -24,8 +24,19 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
  * S  = clearance_fee[qty_sqm]                          flat THB, per factory shipment
  * TC = [ (C + i + F) x (1 + T) x cost_buffer ] + S     (B2)
  * UC = TC / Q                                          Q = that factory shipment's total sqm
- * SP = RoundUp[ UC x (1 + margin_pct) x selling_buffer , to nearest selling_price_round_up_to ]
+ * SP = UC x (1 + margin_pct) x selling_buffer, rounded HALF_UP to 2 decimal places
  * </pre>
+ *
+ * <p><b>Phase 2 CEO-pricing rounding change (owner-approved, 2026-09-19):</b> {@code SP} is no
+ * longer rounded UP to the nearest {@code selling_price_round_up_to} — it is rounded HALF_UP to
+ * 2 decimal places, full stop. {@code selling_price_round_up_to} ({@code
+ * sales.pricing_formula_config.selling_price_round_up_to}) is consequently DEAD — the column
+ * stays in the schema and the config DTO (no migration, nothing reads it destructively), but no
+ * formula step consumes it any more. This applies to every price this engine computes from now
+ * on, legacy PCRs included; an ALREADY-APPROVED {@code pricing_decision}'s stored
+ * {@code approved_selling_price_per_requested_unit} is never rewritten — only a not-yet-approved
+ * decision recomputes through the new rule. See {@link #sellingPrice} (renamed from the old
+ * {@code roundUpSellingPrice}, which took a now-unused {@code roundUpTo} parameter).
  *
  * <p>insurance_buffer / cost_buffer / selling_buffer are deliberate COST BUFFERS, not VAT — the
  * customer quotation separately adds VAT 7%, untouched by this class.
@@ -202,19 +213,21 @@ public class PricingFormulaEngine {
     }
 
     /**
-     * SP = RoundUp[UC x (1 + margin_pct) x selling_buffer, to nearest {@code roundUpTo}].
+     * SP = UC x (1 + margin_pct) x selling_buffer, rounded HALF_UP to 2dp.
      *
-     * <p>"RoundUp" means the smallest multiple of {@code roundUpTo} that is &gt;= the raw figure —
-     * this codebase's pricing brief is explicit that ฿191.96 must become ฿200 and an exact
-     * multiple like ฿190.00 must STAY ฿190.00, never bump to ฿200. {@link RoundingMode#CEILING} on
-     * {@code raw / roundUpTo} gives exactly that: CEILING rounds toward positive infinity, so a
-     * value with no fractional part (the exact-multiple case) is left unchanged, and any
-     * fractional remainder rounds up to the next whole unit.
+     * <p><b>Owner-approved rounding change (2026-09-19), superseding the old "RoundUp to nearest
+     * {@code selling_price_round_up_to}" rule</b> (${@code roundUpSellingPrice}, removed — it took
+     * a {@code roundUpTo} argument this method no longer has any use for). The old rule's own
+     * worked example, ฿191.96 -&gt; ฿200 (nearest ฿10), no longer holds: ฿191.96 now prints as
+     * ฿191.96. 2dp HALF_UP, not 4dp {@link #money4}, because this is the CUSTOMER-FACING selling
+     * price — {@code sales.pricing_decision_item.proposed/approved_selling_price_per_requested_unit}
+     * are NUMERIC(18,4) so a 4dp value would still fit the column, but the printed/quoted figure
+     * (and every sibling Phase-2 price column, {@code list_unit_price} etc., V187) is 2dp money,
+     * matching {@code sales.quotation_item.unit_price} (NUMERIC(14,2), V49) throughout the
+     * direct-deal quotation this whole pricing chain eventually feeds.
      */
-    public BigDecimal roundUpSellingPrice(BigDecimal costPerUnitThb, BigDecimal marginPct, BigDecimal sellingBuffer,
-                                          BigDecimal roundUpTo) {
+    public BigDecimal sellingPrice(BigDecimal costPerUnitThb, BigDecimal marginPct, BigDecimal sellingBuffer) {
         BigDecimal raw = costPerUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(sellingBuffer);
-        BigDecimal units = raw.divide(roundUpTo, 0, RoundingMode.CEILING);
-        return money4(units.multiply(roundUpTo));
+        return raw.setScale(2, RoundingMode.HALF_UP);
     }
 }
