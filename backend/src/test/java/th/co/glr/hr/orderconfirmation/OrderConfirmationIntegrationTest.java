@@ -453,11 +453,12 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Reuses the existing, real backend authz gate on {@code confirmDepositPaid}/{@code
-     * recordPayment} (ACCOUNT_ROLES = {account, ceo}) — cited, not re-proven: {@code
-     * TicketServiceTest.confirmDepositPaid_rejectsSalesRole}/{@code confirmDepositPaid_rejectsImportRole}
-     * already cover this at the unit level. This test only proves it holds for a NEW-CHAIN deal
-     * specifically (real DB, real quotation-sourced payable amount).
+     * Reuses the existing, real backend authz gate on {@code confirmDepositPaid} (GLA-118:
+     * {@code DEPOSIT_CONFIRM_ROLES} = {@code {account}}, no CEO fallback) — cited, not re-proven:
+     * {@code TicketServiceTest.confirmDepositPaid_rejectsSalesRole}/{@code
+     * confirmDepositPaid_rejectsImportRole} already cover this at the unit level. This test only
+     * proves it holds for a NEW-CHAIN deal specifically (real DB, real quotation-sourced payable
+     * amount).
      */
     @Test
     void confirmDepositPaid_salesActor_cannotReach_onNewChainDeal() {
@@ -503,8 +504,10 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         long pricingRequestId = driveToQuotationAccepted();
         orderConfirmation.confirmOrder(pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
 
+        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- salesActor
+        // owns ticketId (created via ticketService.create(..., salesActor) in setUp).
         TicketDto waived = ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
-            "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", accountActor);
+            "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", salesActor);
         assertThat(waived.summary().depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
         TicketDto afterIr = ticketService.issueImportRequest(ticketId, importActor);

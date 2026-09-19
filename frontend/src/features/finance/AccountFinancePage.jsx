@@ -61,7 +61,7 @@ function rowAmount(ticket) {
  * list scope today, so those two stages will read empty under the current
  * backend even though the filter/column wiring is correct end-to-end.
  */
-export function AccountFinancePage({ showToast }) {
+export function AccountFinancePage({ user, showToast }) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -86,7 +86,11 @@ export function AccountFinancePage({ showToast }) {
   const worklist = useMemo(() => {
     const allTickets = dedupeById(scopedQuery.data ?? [], closedPaidQuery.data ?? []);
     return allTickets
-      .map((ticket) => ({ ticket, action: nextAccountAction(ticket) }))
+      // GLA-118 (owner ruling 2026-09-20, part A): pass the viewer's role so the CEO (who reaches
+      // this page too, canConfirmPayments is unchanged) never gets offered confirmDeposit/
+      // confirmFinalPayment — those are account only now, no CEO fallback. See
+      // nextAccountAction's own `viewerRole` Javadoc.
+      .map((ticket) => ({ ticket, action: nextAccountAction(ticket, user?.role) }))
       .filter((row) => row.action != null)
       .sort((a, b) => {
         if (a.action.urgent !== b.action.urgent) return a.action.urgent ? -1 : 1;
@@ -95,7 +99,7 @@ export function AccountFinancePage({ showToast }) {
         if (dueA !== dueB) return dueA - dueB;
         return rowAmount(b.ticket) - rowAmount(a.ticket);
       });
-  }, [scopedQuery.data, closedPaidQuery.data]);
+  }, [scopedQuery.data, closedPaidQuery.data, user?.role]);
 
   const stageCounts = useMemo(() => {
     const counts = Object.fromEntries(STAGE_FILTERS.map((s) => [s.key, 0]));

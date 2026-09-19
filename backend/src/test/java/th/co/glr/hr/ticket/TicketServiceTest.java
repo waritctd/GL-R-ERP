@@ -953,16 +953,10 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmDepositPaid_byCeoFallback_isAllowed() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
-        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
-        when(ticketRepo.sumPaid(10L)).thenReturn(BigDecimal.ZERO, new BigDecimal("500.00"));
-        service.confirmDepositPaid(10L, ceoActor);
-        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("DEPOSIT"),
-            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
-            eq(4L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
-        verify(ticketRepo).advancePaymentStatus(
-            10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
+    void confirmDepositPaid_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-17): the CEO fallback ACCOUNT_ROLES used to grant here
+        // (see the removed confirmDepositPaid_byCeoFallback_isAllowed) is gone — account ONLY now.
+        assertForbidden(() -> service.confirmDepositPaid(10L, ceoActor));
     }
 
     @Test
@@ -1368,17 +1362,12 @@ class TicketServiceTest {
     }
 
     @Test
-    void confirmFinalPayment_byCeoFallback_isAllowed() {
+    void confirmFinalPayment_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
+        // here (see the removed confirmFinalPayment_byCeoFallback_isAllowed) is gone — recording
+        // ANY payment, including the final one, is account ONLY now.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
-        when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
-        when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
-            new BigDecimal("1000.00"));
-        service.confirmFinalPayment(10L, ceoActor);
-        verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
-            argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
-            eq(4L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        verify(ticketRepo).advancePaymentStatus(
-            10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
+        assertForbidden(() -> service.confirmFinalPayment(10L, ceoActor));
     }
 
     @Test
@@ -1450,6 +1439,29 @@ class TicketServiceTest {
         assertConflict(() -> service.recordPayment(10L,
             new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
             accountActor));
+    }
+
+    @Test
+    void recordPayment_rejectsCeoRole() {
+        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
+        // here is gone — recording a payment (deposit or balance alike) is account ONLY now, no
+        // CEO fallback, no owning-rep exception.
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            ceoActor));
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("BALANCE", new BigDecimal("100.00"), null, null, null, null, false),
+            ceoActor));
+    }
+
+    @Test
+    void recordPayment_rejectsOwningSalesRep() {
+        // GLA-118 part A: recording money received was never a sales-side action, and the owning
+        // rep gets no special exception — unlike deposit-policy Rule B, this gate has no ownership
+        // clause at all.
+        assertForbidden(() -> service.recordPayment(10L,
+            new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
+            salesActor));
     }
 
     @Test
@@ -1943,18 +1955,27 @@ class TicketServiceTest {
     }
 
     @Test
-    void waiveDeposit_accountOrCeoOnlyAndIssueImportRequestCanBypassNotice() {
+    void waiveDeposit_ownerOrSalesManagerOnlyAndIssueImportRequestCanBypassNotice() {
+        // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
+        // (owner ruling 2026-09-20, part B). salesActor (id 1L) owns ticket 10L (stubDeal's
+        // createdById), so it grants here where the old ACCOUNT_ROLES gate (account/ceo) used to.
+        // This used to be named waiveDeposit_ownerOnlyAndIssueImportRequestCanBypassNotice, from
+        // when the 2026-09-17 ruling was owner-only with no sales_manager backup.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null);
 
-        service.waiveDeposit(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", accountActor);
+        service.waiveDeposit(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", salesActor);
 
-        verify(ticketRepo).updateDepositPolicy(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", 5L);
-        verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
+        verify(ticketRepo).updateDepositPolicy(10L, DepositPolicy.WAIVED, "ลูกค้าเครดิตดี", 1L);
+        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
             eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
             eq("deposit_policy → WAIVED — ลูกค้าเครดิตดี"));
-        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales ขอเอง", salesActor));
-        assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", accountActor));
+        // account, ceo, and a non-owning sales rep are still refused. sales_manager is NOT in
+        // this list any more — see waiveDeposit_grantsSalesManagerAsBackupOwner below.
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "account ขอเอง", accountActor));
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "ceo ขอเอง", ceoActor));
+        assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales อื่นขอเอง", otherSales));
+        assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", salesActor));
 
         // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
         // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
@@ -1973,6 +1994,47 @@ class TicketServiceTest {
         stubDeal(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
         assertConflict(() -> service.issueImportRequest(12L, importActor));
+    }
+
+    @Test
+    void waiveDeposit_grantsSalesManagerAsBackupOwner() {
+        // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set deposit policy as a
+        // backup to the owning rep. The clause reused is EXACTLY requireDealOwnership's /
+        // canDealOwnership's bare "sales_manager".equals(role) check — global, not scoped to
+        // whichever team owns this deal — so salesManagerActor (id 8L) grants here even though it
+        // did not create ticket 14L (owner is 1L).
+        stubDeal(14L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        service.waiveDeposit(14L, DepositPolicy.WAIVED, "sales_manager สำรอง", salesManagerActor);
+
+        verify(ticketRepo).updateDepositPolicy(14L, DepositPolicy.WAIVED, "sales_manager สำรอง", 8L);
+        verify(ticketRepo).addEvent(eq(14L), eq(8L), anyString(),
+            eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
+            eq("deposit_policy → WAIVED — sales_manager สำรอง"));
+    }
+
+    @Test
+    void waiveDeposit_sameIdAsOriginalOwnerButRoleNoLongerSales_decidesByRoleNotId() {
+        // Nit case: a user whose id equals createdById but whose CURRENT role is no longer
+        // "sales" (e.g. promoted to sales_manager, or moved to another department entirely) must
+        // be judged by canSetDepositPolicy's role-based clauses, never by the id match alone —
+        // SALES_ROLES.contains(role) is false for "sales_manager"/"account", so the ownership
+        // half of the OR never fires for them; only the separate sales_manager clause can grant.
+        stubDeal(15L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        // id 1L (== createdById), role promoted to sales_manager: granted, but via the
+        // sales_manager clause, not the ownership clause (SALES_ROLES excludes "sales_manager").
+        UserPrincipal promotedOwner = actor(1L, "sales_manager");
+        service.waiveDeposit(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", promotedOwner);
+        verify(ticketRepo).updateDepositPolicy(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", 1L);
+
+        // id 1L (== createdById), role moved to account entirely: refused — account is in neither
+        // clause, and the id match alone grants nothing.
+        UserPrincipal movedToAccount = actor(1L, "account");
+        assertForbidden(() ->
+            service.waiveDeposit(15L, DepositPolicy.WAIVED, "ย้ายแผนกแล้ว", movedToAccount));
     }
 
     @Test
@@ -2087,6 +2149,65 @@ class TicketServiceTest {
     private List<String> actionCodes(long ticketId, UserPrincipal actor) {
         return service.actions(ticketId, actor).availableActions().stream()
             .map(TicketResponses.TicketActionDto::action).toList();
+    }
+
+    /**
+     * Review fix: {@code WAIVE_DEPOSIT} must not be offered once a deposit notice exists, matching
+     * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
+     * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
+     * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
+     * dies on click, the same discipline {@link #actions_offersReserveStockToTheDealOwner_butNotToAnotherRep}
+     * documents for RESERVE_STOCK. This used to be named
+     * actions_offersWaiveDepositToOwnerOnly_andDepositPaidToAccountOnly and asserted the OPPOSITE
+     * for {@code salesActor} — that assertion was wrong; see canSetDepositPolicy's own Javadoc for
+     * why the advertisement and the write gate are deliberately NOT the same predicate.
+     * {@code otherSales} is left out — a non-owning sales rep cannot even call {@code actions()} on
+     * someone else's deal (requireViewAccess is owner-scoped for sales).
+     */
+    @Test
+    void actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount() {
+        stubDeal(50L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_NOTICE_ISSUED", null,
+            DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(50L, salesActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, salesManagerActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, ceoActor)).doesNotContain("WAIVE_DEPOSIT", "DEPOSIT_PAID");
+        assertThat(actionCodes(50L, accountActor)).contains("DEPOSIT_PAID").doesNotContain("WAIVE_DEPOSIT");
+    }
+
+    /**
+     * The positive case {@link #actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount}
+     * deliberately does not cover: a deal whose payment track has not started yet (paymentStatus
+     * null) still owes WAIVE_DEPOSIT to the owner and, per Rule B, to sales_manager as a backup —
+     * account/ceo/a non-owning rep still see nothing.
+     */
+    @Test
+    void actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted() {
+        stubDeal(51L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
+            DealStage.ORDER_RECEIVED, null);
+
+        assertThat(actionCodes(51L, salesActor)).contains("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, salesManagerActor)).contains("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, ceoActor)).doesNotContain("WAIVE_DEPOSIT");
+        assertThat(actionCodes(51L, accountActor)).doesNotContain("WAIVE_DEPOSIT");
+    }
+
+    /**
+     * GLA-118 (owner ruling 2026-09-20, part A): FINAL_PAYMENT must not be advertised to the CEO
+     * any more — the old ACCOUNT_ROLES-based advertisement used to offer it, and offering a button
+     * that now 403s on click is exactly what {@link #canIssueImportRequest}'s "never advertise a
+     * dead action" discipline exists to prevent. (RECORD_PAYMENT's own advertisement,
+     * {@code canRecordPayment}, additionally requires {@code amountPayable > 0}, which the stub
+     * infra here always zeroes — that half of the gate is pinned by
+     * {@code DepositPolicyAuthzIntegrationTest}'s real-DB companion instead, where amountPayable is
+     * computed for real.)
+     */
+    @Test
+    void actions_neverOffersFinalPaymentToCeo_onlyToAccount() {
+        stubTicketWithTracks(52L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+
+        assertThat(actionCodes(52L, ceoActor)).doesNotContain("FINAL_PAYMENT");
+        assertThat(actionCodes(52L, accountActor)).contains("FINAL_PAYMENT");
     }
 
     @Test

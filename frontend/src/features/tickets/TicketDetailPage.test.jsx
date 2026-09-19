@@ -804,6 +804,11 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
   });
 
+  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
+  // ceoUser, but confirmFinalPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO
+  // fallback) — explicitly renders as accountUser so this UX-34 regression test still exercises
+  // a viewer who can actually reach the button, rather than silently asserting against a viewer
+  // who no longer can.
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -838,7 +843,7 @@ describe('TicketDetailPage', () => {
       }),
     });
 
-    renderTicketDetailPage();
+    renderTicketDetailPage(accountUser);
 
     const finalPaymentButton = await screen.findByRole('button', { name: 'ยืนยันชำระครบ (Final Payment)' });
     fireEvent.click(finalPaymentButton);
@@ -943,6 +948,10 @@ describe('TicketDetailPage', () => {
   // modals — see TicketCreateModal.jsx / DepositNoticePage.jsx for the same
   // aria-invalid + aria-describedby + role="alert" contract this mirrors. ──
 
+  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
+  // ceoUser, but recordPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO fallback) —
+  // explicitly renders as accountUser so this inline-validation test still exercises a viewer who
+  // can actually reach the button.
   it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -951,7 +960,7 @@ describe('TicketDetailPage', () => {
       availableActions: [{ action: 'RECORD_PAYMENT', kind: 'payment', label: 'บันทึกรับชำระเงิน' }],
     });
 
-    renderTicketDetailPage();
+    renderTicketDetailPage(accountUser);
     // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section now —
     // the Modal itself, once opened, stays mounted regardless of the active
     // tab (it's not inside any TabPanel).
@@ -1995,12 +2004,15 @@ describe('TicketDetailPage', () => {
   // would otherwise mask the same bug by giving account a real primary action
   // instead (see workState.test.js's own account/ORDER_RECEIVED case).
   //
-  // The "shows it to someone else" side uses sales_manager, not ceo — ROLE_
-  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`,
-  // so `isAccount` is ALSO true for ceo (they can confirm payments too); using
-  // ceo here would have silently exercised the exact same guard as the
-  // account case instead of a genuine "someone who isn't account" control.
-  describe('blocker line respects !isAccount (P3)', () => {
+  // The "shows it to someone else" side originally used sales_manager, not ceo — ROLE_
+  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`, so the OLD
+  // `isAccount` guard was ALSO true for ceo, which silently suppressed the blocker for them too
+  // (using ceo here would have exercised the exact same guard as the account case instead of a
+  // genuine "someone who isn't account" control) — this was itself the bug GLA-118 found: the
+  // page now uses `isMoneyRecorder` (role === 'account' exactly) for this guard, not `isAccount`,
+  // specifically so the CEO stops being silently lumped in with account. See the ceo-specific
+  // case below, added for that fix.
+  describe('blocker line respects !isMoneyRecorder (P3, tightened by GLA-118)', () => {
     function legacyDepositWaitingTicket() {
       return buildTicket({
         summary: {
@@ -2038,6 +2050,25 @@ describe('TicketDetailPage', () => {
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
       expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
+    });
+
+    // GLA-118 review fix: this is the case the old `!isAccount` guard got wrong — canConfirmPayments
+    // (and so the old `isAccount`) still includes ceo, but recording/confirming a payment is
+    // account-only now (PAYMENT_RECORD_ROLES/DEPOSIT_CONFIRM_ROLES have no CEO fallback), so the
+    // CEO no longer clears this wait and must see the same read-only "รอชำระมัดจำ" status a
+    // sales_manager viewer does, not silence.
+    it('shows "รอชำระมัดจำ" to ceo too — the CEO can no longer confirm the deposit either', async () => {
+      api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
+      api.tickets.actions.mockResolvedValue({
+        currentState: {
+          lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'document_issued',
+        },
+        availableActions: [],
+      });
+
+      renderTicketDetailPage(ceoUser);
+
+      expect((await screen.findAllByText(/รอชำระมัดจำ/)).length).toBeGreaterThan(0);
     });
   });
 
@@ -2369,14 +2400,19 @@ describe('TicketDetailPage', () => {
       expect(section.getByText('รับชำระมัดจำ')).not.toBeNull();
     });
 
-    it('account can change the deposit policy via api.tickets.setDepositPolicy', async () => {
+    // GLA-118 (owner ruling 2026-09-17): deposit policy is set by the OWNING sales rep only now
+    // — not account. This used to be named
+    // 'account can change the deposit policy via api.tickets.setDepositPolicy' and drove it as
+    // accountUser; renamed and switched to salesOwnerUser (id 1, matching buildTicket's default
+    // summary.createdById) because the gate flipped from account/ceo-only to owning-rep-only.
+    it('the owning rep can change the deposit policy via api.tickets.setDepositPolicy', async () => {
       api.tickets.actions.mockResolvedValueOnce({
         currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
         availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
       });
       api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำ' } }) });
 
-      renderTicketDetailPage(accountUser);
+      renderTicketDetailPage(salesOwnerUser);
       const section = await depositSection();
       fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
 
@@ -2386,6 +2422,59 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
         701, { policy: 'WAIVED', reason: 'ลูกค้าประจำ' },
       ));
+    });
+
+    // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set the deposit policy too, as a
+    // backup to the owning rep — DealDepositPanel's canSetPolicy now reads
+    // `role === 'sales_manager' || (isSales && isOwner)`, not isOwner alone.
+    it('sales_manager can also change the deposit policy via api.tickets.setDepositPolicy', async () => {
+      const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+      api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'CREDIT_CUSTOMER', depositPolicyReason: 'สำรองโดยผจก.' } }) });
+
+      renderTicketDetailPage(salesManagerUser);
+      const section = await depositSection();
+      fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
+
+      fireEvent.change(screen.getByLabelText('เหตุผล *'), { target: { value: 'สำรองโดยผจก.' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+      await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
+        701, { policy: 'WAIVED', reason: 'สำรองโดยผจก.' },
+      ));
+    });
+
+    // Wrong-way-round (CLAUDE.md "permission changes must ship evidence"): the component must
+    // not blindly trust an advertised action. Even if the API response advertises WAIVE_DEPOSIT
+    // (e.g. a stale cache, or a bug on the server), account must not see the button — DealDepositPanel's
+    // own isSales/isOwner check (defense in depth) must refuse it independently of hasAction().
+    it('never offers the policy-change button to account, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+
+      renderTicketDetailPage(accountUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
+    });
+
+    // Same wrong-way-round proof for ceo, which lost the fallback entirely (used to be
+    // account/ceo).
+    it('never offers the policy-change button to ceo, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
+      api.tickets.actions.mockResolvedValueOnce({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
     });
 
     it('a waived deposit policy renders the notice/payment steps as skipped, with the reason', async () => {
@@ -2418,6 +2507,25 @@ describe('TicketDetailPage', () => {
       fireEvent.click(await section.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
 
       await waitFor(() => expect(api.tickets.confirmDepositPaid).toHaveBeenCalledWith(701));
+    });
+
+    // GLA-118: the CEO fallback on confirmDepositPaid is gone. Wrong-way-round + defense in
+    // depth, same shape as the WAIVE_DEPOSIT proofs above: even if the API wrongly advertises
+    // DEPOSIT_PAID to a ceo viewer, DealDepositPanel's own role === 'account' check must still
+    // hide the button.
+    it('never offers the confirm-deposit button to ceo, even if the API wrongly advertises DEPOSIT_PAID', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [{ action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' }],
+      });
+
+      renderTicketDetailPage(ceoUser);
+      const section = await depositSection();
+
+      expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
     });
 
     it('import (no business in the deposit section) never gets a "การเงิน" tab at all', async () => {

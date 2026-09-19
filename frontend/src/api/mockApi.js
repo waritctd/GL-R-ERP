@@ -2159,6 +2159,26 @@ function requireOwningRepOrCeo(ticket) {
   return user;
 }
 
+/**
+ * GLA-118: mirrors TicketService.canSetDepositPolicy exactly — the OWNING sales rep, OR
+ * sales_manager as a backup (owner ruling 2026-09-20, part B; the original 2026-09-17 ruling was
+ * owner-only, see git history). The sales_manager clause is copied VERBATIM from
+ * mockCanDealOwnership (`user?.role === 'sales_manager'`) — the same bare, global check
+ * TicketService.requireDealOwnership/canDealOwnership use, no team/division scoping — so this is
+ * deliberately NOT a call to mockCanDealOwnership itself (which also admits ceo, and this gate must
+ * not). Deliberately NOT requireOwningRepOrCeo above (which also admits ceo) and NOT
+ * hasRole('account', 'ceo') (the old gate, still used for other account actions in this file) — a
+ * mock more permissive than TicketService#waiveDeposit here would be the dangerous direction
+ * CLAUDE.md warns about. account/ceo keep read access to depositPolicy (the field is never hidden
+ * from them), just not this write.
+ */
+function requireDepositPolicyOwner(ticket) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!owns && user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
 function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -6620,7 +6640,10 @@ export const api = {
     },
 
     async recordPayment(id, payload) {
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+      // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
+      // balance, ...) alike. This used to be hasRole('account', 'ceo').
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       recordPaymentForTicket(ticket, user, payload ?? {});
@@ -6718,9 +6741,14 @@ export const api = {
         // through the PricingRequest chain instead (api.pricingRequests.*).
         if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
         if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
-        if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+        // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
+        // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
+        // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
+        // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
+        // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
+        if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
         const paymentFields = derivePaymentFields(ticket);
-        if (['account', 'ceo'].includes(user.role) && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
+        if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
           add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
         }
         if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
@@ -6765,7 +6793,9 @@ export const api = {
         }
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-        if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+        // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
+        // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
+        if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
         // Three-party close: account confirms, CEO verifies. Sales is not involved.
         let closeReady = true;
         try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
@@ -6800,7 +6830,21 @@ export const api = {
             requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
           });
         }
-        if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+        // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
+        // part B) -- not account, not ceo, not any other sales rep. Mirrors
+        // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
+        // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
+        // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
+        // deposit policy is narrower than the usual "deal ownership" grant.
+        //
+        // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
+        // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
+        // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
+        // action past that point would offer a button that dies on click.
+        const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
+        if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
+          add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+        }
       } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
         add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
         if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
@@ -7194,9 +7238,11 @@ export const api = {
     //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
-      // Money receipts are confirmed by ฝ่ายบัญชี (CEO fallback) — mirrors
-      // TicketService.ACCOUNT_ROLES.
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
+      // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
+      // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
+      // covers SET_BILLING and similar non-payment actions.
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
@@ -7289,8 +7335,11 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      // Mirrors TicketService.ACCOUNT_ROLES (ฝ่ายบัญชี + CEO fallback).
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+      // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
+      // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
+      // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
@@ -7436,11 +7485,19 @@ export const api = {
     },
 
     async setDepositPolicy(id, payload) {
-      const user = hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
       if (!['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(payload.policy)) fail(`ไม่รองรับนโยบายยกเว้นมัดจำ '${payload.policy}'`, 400);
       if (!(payload.reason || '').trim()) fail('ต้องระบุเหตุผลนโยบายมัดจำ', 400);
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      // GLA-118 (owner rulings 2026-09-17/20): the OWNING sales rep or a sales_manager — not account, not ceo.
+      // See requireDepositPolicyOwner's own Javadoc-style comment above.
+      const user = requireDepositPolicyOwner(ticket);
+      // Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued
+      // (payment track past CUSTOMER_CONFIRMED), the policy can't be waived after the fact — that
+      // is a credit note, not a policy change. Same position as Java: after the owner check.
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย', 409);
+      }
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
