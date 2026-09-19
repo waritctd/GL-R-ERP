@@ -27,6 +27,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -370,9 +371,16 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
     ) {
         Long productId = "Factory A-CostingAuthz".equals(factory) ? catalogProductIdFactoryA
             : "Factory B-CostingAuthz".equals(factory) ? catalogProductIdFactoryB : null;
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=qty keeps the derived requestedQty byte-identical to `qty`.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, null, null, "60x60", factory, qty, qty, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

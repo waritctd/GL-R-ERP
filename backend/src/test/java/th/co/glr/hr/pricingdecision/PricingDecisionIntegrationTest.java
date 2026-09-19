@@ -35,6 +35,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -1317,7 +1318,11 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "step 3 unit test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+        // every item's requestedUnitBasis to PER_PIECE, which would make it impossible to construct
+        // the non-PER_PIECE requestedUnitBasis this unit-conversion matrix exists to test.
+        // PricingRequestRepository.create performs the exact same DB write createDraft would.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C3");
@@ -1380,9 +1385,16 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     ) {
         Long productId = "Factory A3".equals(factory) ? catalogProductIdFactoryA
             : "Factory B3".equals(factory) ? catalogProductIdFactoryB : null;
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
+        // piecesInput=qty keeps the derived requestedQty byte-identical to `qty`.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, null, null, "60x60", factory, qty, qty, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

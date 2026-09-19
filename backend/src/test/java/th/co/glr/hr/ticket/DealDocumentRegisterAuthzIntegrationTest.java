@@ -34,6 +34,7 @@ import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationService;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.deposit.DepositNoticeRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
@@ -49,7 +50,6 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
-import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
@@ -200,10 +200,16 @@ class DealDocumentRegisterAuthzIntegrationTest extends AbstractPostgresIntegrati
 
         long catalogPriceId = insertCatalogProduct("Factory Doc Register", "TH", "DOCREG-001",
             new BigDecimal("100.00"), "THB", "per_piece");
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         var item = new PricingRequestRequests.PricingRequestItemRequest(null, catalogPriceId, null,
-            "Brand", "Model", "Brand Model", null, null, "60x60", "Factory Doc Register",
-            new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            "Brand", "Model", "Brand Model", "White", "Matte", "60x60", "Factory Doc Register",
+            null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         var createPrRequest = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "doc register authz test", UUID.randomUUID().toString(), List.of(item));

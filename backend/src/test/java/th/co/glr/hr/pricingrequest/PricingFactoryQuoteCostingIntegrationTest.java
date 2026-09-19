@@ -39,6 +39,7 @@ import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -1122,9 +1123,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
                 null, "THB", "catalog gate test", UUID.randomUUID().toString(),
                 List.of(new PricingRequestRequests.PricingRequestItemRequest(
-                    null, archivedProductId, null, "Brand", "Model", "Brand Model", null, null, "60x60",
-                    "Factory Archived", new BigDecimal("1"), new BigDecimal("1"), "piece", UnitBasis.PER_PIECE,
-                    QuantityType.CONFIRMED, null, null, null))),
+                    null, archivedProductId, null, "Brand", "Model", "Brand Model", "White", "Matte", "60x60",
+                    "Factory Archived", null, null, null, null,
+                    QuantityType.CONFIRMED, null, null, null,
+                    null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+                    null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+                    false, "ไทย-สต็อก", 3, 7, null, null, null))),
             salesActor).summary().id();
 
         assertThatThrownBy(() -> pricingRequestService.submit(pricingRequestId, salesActor))
@@ -1647,16 +1651,31 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
      * factory on EITHER side — no catalog product to snapshot one from, and no free text. That is
      * the shape the whole section above is about, and nothing else in this file produced it.
      */
+    // V185: model is now unconditionally required (owner ruling), independent of whether the item
+    // has a catalog link — "free text" here means no catalog PRODUCT, not no model. Both helpers
+    // pass `description` itself as the model so they (a) keep reaching resolveItems' happy path
+    // and (b) keep printing the SAME text callers already assert on via
+    // PricingRequestItemDto#displayName() (brand/model, falling back to productDescription only
+    // when both are blank) — model is no longer blank here, so it becomes the source of that text
+    // instead of the fallback, and the two are deliberately kept equal so no caller's assertion
+    // needs to change. productId stays null on both — the "no catalog product to snapshot" shape
+    // both are actually testing is untouched.
     private PricingRequestRequests.PricingRequestItemRequest factorylessPricingItem(String description) {
-        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, null, description,
-            null, null, "60x60", null, new BigDecimal("1"), new BigDecimal("1"), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, description,
+            description, "White", "Matte", "60x60", null, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private PricingRequestRequests.PricingRequestItemRequest freeTextPricingItem(String description) {
-        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, null, description,
-            null, null, "60x60", "Free Text Factory", new BigDecimal("1"), new BigDecimal("1"), "piece",
-            UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+        return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, description,
+            description, "White", "Matte", "60x60", "Free Text Factory", null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1815,7 +1834,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "unit conversion test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
+        // every item's requestedUnitBasis to PER_PIECE (the new sales form never types a unit/basis
+        // directly), which would make it impossible to construct the PER_SQM/PER_BOX/PER_LINEAR_M
+        // requestedUnitBasis this whole unit-conversion matrix exists to test.
+        // PricingRequestRepository.create performs the exact same DB write createDraft would
+        // (persistence only, per that class's own header Javadoc).
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C");
@@ -1874,7 +1899,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             null, "THB", "unit basis draft seed test", UUID.randomUUID().toString(), List.of(item));
-        long pricingRequestId = pricingRequestService.createDraft(ticketId, request, salesActor).summary().id();
+        // V185: see singleItemCosting's identical comment -- this test specifically asserts the
+        // draft's seeded unitBasis is NOT PER_PIECE, which createDraft can no longer produce.
+        long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), request, salesRepId);
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(pricingRequestId, importActor), "Factory C");
@@ -2094,9 +2121,20 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         // product — one dedicated catalog product per factory, created in wireServicesAndCreateDeal.
         Long productId = "Factory A".equals(factory) ? catalogProductIdFactoryA
             : "Factory B".equals(factory) ? catalogProductIdFactoryB : null;
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists (see
+        // PricingRequestService#resolveItems). requestedQty/requestedUnit/requestedUnitBasis are no
+        // longer client-sent — resolveItems DERIVES them via WastageCalculator instead, and this
+        // whole file's exact-quantity assertions depend on that derivation reproducing `qty`
+        // BYTE-FOR-BYTE: quantityMode PIECES with piecesInput = qty, no wastage, and
+        // roundToFullBox = false so piecesPerBox (required, but otherwise irrelevant here) can
+        // never round `qty` up to some other number the rest of this file does not expect.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, null, null, "60x60", factory, qty, qty, "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

@@ -767,57 +767,27 @@ public class DealQuotationRepository {
      * employees in the sales division ({@code DivisionAccessPolicy.SALES_DIVISION_CODE}, the SAME
      * population {@code CommissionRepository#findActiveSalesRepOptions} already queries) and (b)
      * any active employee holding the {@code hr.employee.can_create_quotation} grant (e.g.
-     * ภิญญดา, who is {@code qc} role, not sales division). ONE predicate
-     * ({@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}), shared with
-     * {@link #isEligibleQuotationDisplayName}, so the options list and the create/update
-     * validation can never disagree about who is eligible.
+     * ภิญญดา, who is {@code qc} role, not sales division).
+     *
+     * <p>Second review pass, finding N5 (2026-09-19): the predicate itself now lives in
+     * {@link th.co.glr.hr.commission.QuotationDisplayNameEligibility}, shared with
+     * {@code PricingRequestRepository}'s own {@code printedByDisplayId}/{@code salesRepDisplayId}
+     * validation, so the two forms' eligible-employee rule can never drift apart. This method and
+     * {@link #isEligibleQuotationDisplayName} keep their own names/signatures — every existing
+     * caller here is unaffected — and simply delegate.
      */
-    private static final String QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE = """
-        e.is_active AND (
-            EXISTS (SELECT 1 FROM hr.division d WHERE d.division_id = e.division_id
-                      AND LOWER(TRIM(COALESCE(NULLIF(TRIM(d.source_code), ''), split_part(d.name_th, '-', 1))))
-                          = :salesDivisionCode)
-            OR e.can_create_quotation
-        )
-        """;
-
-    /** The options list for the ผู้พิมพ์/พนักงานขาย print-name selectors — see
-     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE}'s Javadoc for who is included. Same
-     * {@code CommissionRepOptionDto} shape (id + Thai display name) as
-     * {@code CommissionRepository#findActiveSalesRepOptions}, and the same
-     * {@code COALESCE(..., employee_code)} display-name fallback / active-only / order-by-name
-     * pattern — deliberately NOT calling that method directly, since it excludes grant holders
-     * outside the sales division. */
     public List<th.co.glr.hr.commission.CommissionRepOptionDto> findEligibleQuotationDisplayNameOptions(
             String salesDivisionCode) {
-        return jdbc.query("""
-            SELECT e.employee_id,
-                   COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), e.employee_code)
-                       AS display_name
-              FROM hr.employee e
-             WHERE %s
-             ORDER BY display_name, e.employee_id
-            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
-            new MapSqlParameterSource().addValue("salesDivisionCode", salesDivisionCode),
-            (rs, rowNum) -> new th.co.glr.hr.commission.CommissionRepOptionDto(
-                rs.getLong("employee_id"), rs.getString("display_name")));
+        return th.co.glr.hr.commission.QuotationDisplayNameEligibility.options(jdbc, salesDivisionCode);
     }
 
     /** Whether {@code employeeId} is in the SAME eligible union {@link
      * #findEligibleQuotationDisplayNameOptions} lists — the validation
      * {@code DealQuotationService#create}/{@code #update} run before accepting a
-     * {@code printedByDisplayId}/{@code salesRepDisplayId}. Shares
-     * {@link #QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE} with that method so the two can never
-     * disagree about who is eligible. */
+     * {@code printedByDisplayId}/{@code salesRepDisplayId}. See that method's Javadoc for why the
+     * predicate itself now lives in {@code QuotationDisplayNameEligibility}. */
     public boolean isEligibleQuotationDisplayName(long employeeId, String salesDivisionCode) {
-        Boolean found = jdbc.queryForObject("""
-            SELECT EXISTS (SELECT 1 FROM hr.employee e WHERE e.employee_id = :employeeId AND (%s))
-            """.formatted(QUOTATION_DISPLAY_NAME_ELIGIBLE_PREDICATE),
-            new MapSqlParameterSource()
-                .addValue("employeeId", employeeId)
-                .addValue("salesDivisionCode", salesDivisionCode),
-            Boolean.class);
-        return Boolean.TRUE.equals(found);
+        return th.co.glr.hr.commission.QuotationDisplayNameEligibility.isEligible(jdbc, employeeId, salesDivisionCode);
     }
 
     public Optional<DealQuotationDto> findById(long quotationId) {

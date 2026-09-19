@@ -2125,7 +2125,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               this panel. */}
           <div id="pricing-request-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
-              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} />
+              <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} />
             ) : null}
           </div>
       </TabPanel>

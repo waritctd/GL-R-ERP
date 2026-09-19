@@ -774,7 +774,8 @@ export function sizeTextDiffersFromCatalogFaceSize(sizeText, catalogSizeText) {
 // checklist that blocks บันทึกร่าง/ส่งขออนุมัติ alike (buildQuotationChecklist's `itemErrorsByRow`)
 // must keep calling this with the default. Only a SUBMIT-specific caller passes `true` — see
 // QuotationEditorPage's own `submitItemErrorsByRow`.
-export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH', { requireLeadTime = false } = {}) {
+export function validateQuotationItem(item, priceMode = 'NET', documentLanguage = 'TH',
+  { requireLeadTime = false, skipPricing = false, requireOriginCountry = false } = {}) {
   if (lineTypeOf(item) === LINE_TYPE_PLAIN) return validatePlainItem(item);
   // English per-sqm (owner decision 2026-09-13): the USD/ตร.ม. IS the unit price.
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
@@ -793,20 +794,27 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
     errors.piecesPerBox = 'กรุณาระบุแผ่น/กล่อง';
   }
   if (!(Number(item?.sqmPerPiece) > 0)) errors.sqmPerPiece = 'กรุณาระบุแผ่น/ตร.ม.';
-  if (priceMode === 'DIRECT_NET') {
-    if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
-    // Optional here, but a typed one must still be positive — the server refuses a non-positive
-    // unitPrice on every TILE row whatever the mode.
-    if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
-      errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
+  // skipPricing (V185, PricingRequestCreateModal): the PCR item form has NO price/discount inputs
+  // at all in this phase (CEO pricing is a later phase) — every check below this line is about a
+  // price field this form never renders, so none of them apply. Everything ABOVE (model through
+  // sqmPerPiece/piecesPerBox) and BELOW (quantity, lead time) still does — the PCR form requires
+  // the exact same non-price fields the direct-deal form does (owner ruling).
+  if (!skipPricing) {
+    if (priceMode === 'DIRECT_NET') {
+      if (!(Number(item?.directNetPrice) > 0)) errors.directNetPrice = 'กรุณาระบุราคาสุทธิ/แผ่น';
+      // Optional here, but a typed one must still be positive — the server refuses a non-positive
+      // unitPrice on every TILE row whatever the mode.
+      if (item?.unitPrice !== '' && item?.unitPrice != null && !(Number(item.unitPrice) > 0)) {
+        errors.unitPrice = 'ราคาตั้งต้องมากกว่าศูนย์';
+      }
+    } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
+      errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
     }
-  } else if (!perSqm && !(Number(item?.unitPrice) > 0)) {
-    errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/แผ่น)' : 'กรุณาระบุราคา/หน่วย';
-  }
-  if (priceMode === 'SPECIAL_SQM') {
-    if (!(Number(item?.specialPriceSqm) > 0)) {
-      errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
-    } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    if (priceMode === 'SPECIAL_SQM') {
+      if (!(Number(item?.specialPriceSqm) > 0)) {
+        errors.specialPriceSqm = perSqm ? 'กรุณาระบุราคา (USD/ตร.ม.)' : 'กรุณาระบุราคาพิเศษ (บาท/ตร.ม.)';
+      } else if (!withinDecimals(item.specialPriceSqm, 2)) errors.specialPriceSqm = 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง';
+    }
   }
   // ตร.ม./กล่อง itself is now OPTIONAL (Option B) — no "required" check here at all, only a
   // decimal-places check on whatever value IS typed. A blank value derives the printed sqm
@@ -823,6 +831,35 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   // — SUBMIT only (see this function's own Javadoc for why the default leaves it off).
   if (requireLeadTime && (item?.leadTimeMinDays == null || item?.leadTimeMaxDays == null)) {
     errors.leadTimeMinDays = 'กรุณาระบุระยะเวลานำเข้า (วัน)';
+  }
+  // Second review pass, finding N6 (2026-09-19): min <= max used to be checked UNCONDITIONALLY
+  // ("a genuine data error on either form" -- true in isolation, but it reached direct-deal too,
+  // where nobody asked for it: an EXISTING draft with min > max could no longer be saved at all,
+  // and QuotationEditorPage's own submit banner (missingLeadTimeSeqs, keyed on any truthy
+  // errors.leadTimeMinDays) reported it with the WRONG sentence -- "กรุณาระบุระยะเวลานำเข้า" (please
+  // fill this in), the MISSING message, for a row that was not missing anything.
+  //
+  // Gated to requireOriginCountry -- the PCR-only flag (same signal N4 gates the
+  // ระบุประเทศต้นทาง box on) -- so direct-deal's two validateQuotationItem call sites
+  // (itemErrorsByRow's draft-save default, and submitItemErrorsByRow's requireLeadTime-only call;
+  // neither ever passes requireOriginCountry) can never produce this error, and both the stale-draft
+  // and wrong-banner symptoms disappear there. The PCR form (which always passes
+  // requireOriginCountry: true, see PricingRequestCreateModal#validateItemFields) keeps the check,
+  // and already renders fieldErrors.leadTimeMinDays verbatim per-row instead of flattening it into
+  // a boolean banner -- so it already carries its OWN correct, distinct message here
+  // ('ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด') with nothing further to change there.
+  else if (requireOriginCountry && item?.leadTimeMinDays != null && item?.leadTimeMaxDays != null
+      && Number(item.leadTimeMinDays) > Number(item.leadTimeMaxDays)) {
+    errors.leadTimeMinDays = 'ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด';
+  }
+  // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง is required on the PCR form only
+  // (requireOriginCountry) — direct-deal keeps it optional (default false, unchanged).
+  if (requireOriginCountry) {
+    if (!item?.originCountry?.trim()) {
+      errors.originCountry = 'กรุณาระบุประเทศต้นทาง';
+    } else if (item.originCountry === 'อื่นๆ' && !item?.originCountryOther?.trim()) {
+      errors.originCountryOther = 'กรุณาระบุชื่อประเทศต้นทาง';
+    }
   }
   return errors;
 }

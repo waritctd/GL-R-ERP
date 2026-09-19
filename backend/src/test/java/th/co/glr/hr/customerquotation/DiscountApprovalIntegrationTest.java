@@ -34,6 +34,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQu
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 import th.co.glr.hr.customerquotation.DiscountApprovalDtos.DiscountApprovalDto;
 import th.co.glr.hr.customerquotation.DiscountApprovalRequests.RejectDiscountApprovalRequest;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
@@ -452,10 +453,16 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
      * discount is below minimum, exactly like {@code approvedPricingRequest} in
      * {@code CustomerQuotationIntegrationTest}. */
     private long approvedOneItemPricingRequest() {
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
+        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            null, catalogProductId1, null, "SCG", "Tile DA1", "SCG Tile DA1", null, null, "60x60",
-            "Factory Discount1", new BigDecimal("10"), new BigDecimal("10"), "piece", UnitBasis.PER_PIECE,
-            QuantityType.CONFIRMED, null, null, null);
+            null, catalogProductId1, null, "SCG", "Tile DA1", "SCG Tile DA1", "White", "Matte", "60x60",
+            "Factory Discount1", null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "discount approval test request", UUID.randomUUID().toString(),
@@ -504,8 +511,11 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         String brand, String model, String factory, long productId
     ) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
-            brand + " " + model, null, null, "60x60", factory, new BigDecimal("10"), new BigDecimal("10"),
-            "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
+            brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     private ReceiveFactoryQuoteRequest response(String ref, long pricingRequestItemId) {

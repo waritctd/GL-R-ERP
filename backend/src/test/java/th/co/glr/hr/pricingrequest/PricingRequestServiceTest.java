@@ -29,6 +29,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -198,12 +199,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(501L, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verify(requestRepo).addEvent(eq(20L), eq(10L), eq(1L), any(),
             eq(PricingRequestEventKind.PRICING_REQUEST_CREATED), eq(null), eq(PricingRequestStatus.DRAFT),
             eq(null), eq(null));
@@ -216,7 +217,7 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
@@ -264,14 +265,20 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: model is now unconditionally required (see itemRequestWithIdentity's own
+        // Javadoc) — this test isolates sourceTicketItemId as the identity signal, ALONGSIDE the
+        // now-mandatory model, not instead of it.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(501L, null, null, null, null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(501L, null, null, "Model (baseline)", null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        // any(), not eq(request): resolveItems() derives requestedQty/Unit/Basis and the wastage
+        // audit columns onto a NEW PricingRequestItemRequest before this call, so the object the
+        // repository actually receives is never equal to the one this test built.
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -279,14 +286,15 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, 77L, null, null, null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(null, 77L, null, "Model (baseline)", null)));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -296,12 +304,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(itemRequestWithIdentity(null, null, null, "Model X", null)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -318,13 +326,16 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment
+        // — model is now unconditionally required alongside whatever else identifies the item.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
-            List.of(itemRequestWithIdentity(null, null, null, null, null, "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+            List.of(itemRequestWithIdentity(null, null, null, "Model (baseline)", null,
+                "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -363,12 +374,15 @@ class PricingRequestServiceTest {
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L))).thenReturn(0L);
+        // any(), not eq(sampleCreateRequest()): resolveItems() derives requestedQty/Unit/Basis
+        // onto a new item object before this call, so the actual argument is never equal to a
+        // fresh sampleCreateRequest() call's own (unresolved) items.
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(0L);
 
         var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
 
         assertThat(replay.summary().id()).isEqualTo(20L);
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(sampleCreateRequest()), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verify(requestRepo, never()).replaceItems(anyLong(), any());
         verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
@@ -487,12 +501,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
     @Test
@@ -522,12 +536,12 @@ class PricingRequestServiceTest {
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
-        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L))).thenReturn(20L);
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
         service.createDraft(10L, request, salesActor);
 
-        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), eq(request), eq(1L));
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
         verifyNoInteractions(contactRepo);
     }
 
@@ -1592,12 +1606,33 @@ class PricingRequestServiceTest {
         return itemDtoWithIdentity(sourceTicketItemId, null, "Brand", "Model", null);
     }
 
+    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
+    // quantity are now REQUIRED on every item reaching PricingRequestService#resolveItems (every
+    // createDraft/updateDraft/createCustomerChangeRevision item, unconditionally) — see that
+    // method's own Javadoc. sampleItemRequest and itemRequestWithIdentity below supply a complete
+    // baseline of those fields so every "accepts ..." test in this file (which reaches
+    // resolveItems on its happy path) keeps passing; the "rejects ..." identity tests never reach
+    // that far (validateItems' isProductIdentified check throws first), so the baseline is inert
+    // for them either way.
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
-        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, quantityType, null, null, null);
+        return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null,
+            "สี", "ผิว", "60x60", null,
+            null, null, null, null, quantityType, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
-    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null. */
+    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null —
+     * INCLUDING {@code model}, so a "rejects" test isolating sourceTicketItemId/productId/
+     * productDescription/brand/specialRequirement alone still hits {@code isProductIdentified}'s
+     * rejection exactly as before V185 (that check runs BEFORE {@code resolveItems}, so a null
+     * model here never reaches the new completeness gate on those tests). An "accepts ... alone"
+     * test that isolates a NON-model field DOES reach {@code resolveItems} on its happy path and
+     * must pass its own real {@code model} value at the call site instead — see e.g.
+     * {@code createDraft_acceptsItemIdentifiedByProductIdAlone} below, which no longer describes
+     * "productId with model blank" (impossible now that model is unconditionally required) but
+     * "productId identifies the item, on top of the now-mandatory baseline fields". */
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement) {
         return itemRequestWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
@@ -1606,8 +1641,12 @@ class PricingRequestServiceTest {
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement,
                                                                      String productDescription) {
-        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model, productDescription, null, null, null, null,
-            new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE, null, null, specialRequirement);
+        return new PricingRequestItemRequest(sourceTicketItemId, productId, null, brand, model,
+            productDescription, "สี", "ผิว", "60x60", null,
+            null, null, null, null, QuantityType.REFERENCE, null, null, specialRequirement,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
     /** Same as {@link #sampleItem}, but with every identity field controllable for the Part 1 submit-recheck tests. */

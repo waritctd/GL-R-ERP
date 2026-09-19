@@ -52,6 +52,7 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { piecesPerSqmFromSqmPerPiece } from '../quotations/quotationMeta.js';
 
 // V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
 // override (LandedCostCalculator defaults every item to TILE — see PricingFormulaEngine's own
@@ -103,6 +104,43 @@ function itemDisplayName(item) {
  * the window in which its missing input can still be supplied.
  */
 const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
+
+// ── V185 (direct-deal-form parity) + owner clarification 2026-09-18, FINAL ruling (reversing an
+// earlier "relabel to ยี่ห้อ" instruction this comment used to describe): the label on THIS page
+// stays โรงงาน, for both the sales-entered value below and Import's own SetItemFactoryRequest
+// control — read-only display of the new sales-entered tile fields on each item card. `—` for
+// anything a legacy (pre-V185) item never carried. ─────────────────────────────────────────────
+function formatOrDash(value, suffix = '') {
+  return value == null || value === '' ? '—' : `${value}${suffix}`;
+}
+
+/** แผ่น/ตร.ม. — the RECIPROCAL of the stored sqm_per_piece, same convention the direct-deal
+ * quotation editor displays (QuotationItemRow's own piecesPerSqmDisplay). */
+function formatPiecesPerSqm(item) {
+  if (item?.sqmPerPiece == null) return '—';
+  const reciprocal = piecesPerSqmFromSqmPerPiece(item.sqmPerPiece);
+  return reciprocal == null ? '—' : String(reciprocal);
+}
+
+function formatLeadTime(item) {
+  if (item?.leadTimeMinDays == null && item?.leadTimeMaxDays == null) return '—';
+  const min = item.leadTimeMinDays ?? '?';
+  const max = item.leadTimeMaxDays ?? '?';
+  return `${min}–${max} วัน`;
+}
+
+function formatQuantityAsEntered(item) {
+  if (item?.quantityMode === 'PIECES') return formatOrDash(item.piecesInput, ' แผ่น');
+  if (item?.quantityMode === 'AREA') return formatOrDash(item.areaSqm, ' ตร.ม.');
+  return '—';
+}
+
+function formatWastage(item) {
+  if (!item?.wastageMode || item.wastageMode === 'NONE') return 'ไม่มี';
+  if (item.wastageMode === 'PERCENT') return formatOrDash(item.wastageValue, '%');
+  if (item.wastageMode === 'PIECES') return formatOrDash(item.wastageValue, ' แผ่น');
+  return '—';
+}
 
 function PricingRequestDetailSkeleton() {
   return (
@@ -1323,6 +1361,24 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
         </div>
+        {/* GLA-125 (owner ruling 2026-09-18): header terms, read-only for every viewer including
+            Import — they carry no price or discount, only when/how the eventual quotation would
+            be paid for and printed. Rendered only when at least one is actually set, so a
+            pre-GLA-125 request (every field null) shows nothing extra here. NOT yet reflected on
+            the quotation itself — see V185's migration header (Phase 3). */}
+        {(summary.paymentTermMode || summary.validityDays != null || summary.deptCode
+          || summary.unitCode || summary.printedByDisplayId != null || summary.salesRepDisplayId != null
+          || summary.omitContactHonorific) ? (
+          <div className="grid gap-x-4 gap-y-1 border-t border-border p-4 pt-3 text-xs text-text-muted sm:grid-cols-3">
+            <span>เงื่อนไขการชำระเงิน: {summary.paymentTermMode === 'CREDIT'
+              ? `เครดิต ${summary.creditDays ?? '—'} วัน`
+              : summary.paymentTermMode === 'ON_DELIVERY' ? 'ชำระเมื่อส่งมอบ' : '—'}</span>
+            <span>ยืนราคา: {summary.validityDays != null ? `${summary.validityDays} วัน` : '—'}</span>
+            <span>ฝ่าย: {summary.deptCode || '—'}</span>
+            <span>หน่วยงาน / รหัสผู้ออกแบบ: {summary.unitCode || '—'}</span>
+            <span>ไม่เติม &quot;คุณ&quot; หน้าชื่อผู้รับ: {summary.omitContactHonorific ? 'ใช่' : 'ไม่ใช่'}</span>
+          </div>
+        ) : null}
       </Panel>
 
       <Panel flush title="รายการสินค้าและราคาตั้งต้น">
@@ -1351,6 +1407,31 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
             // sortOrder, so "รายการที่ N" means this exact row on both sides.
             const position = index + 1;
+            // Owner ruling 2026-09-18 (reversed from an earlier ยี่ห้อ ruling): the label on this
+            // panel is โรงงาน, not ยี่ห้อ — matching the PCR form's own `brandLabel="โรงงาน"`
+            // override (PricingRequestCreateModal.jsx). Two DIFFERENT values both say โรงงาน here,
+            // so (Opus review finding #6, 2026-09-18) they are shown as two SEPARATE lines rather
+            // than one falling back to the other:
+            //   - `salesBrandValue`: exactly what Sales typed/picked (`brand`), never anything
+            //     else — a card whose rep left this blank now correctly shows "—", not whatever
+            //     factory routing happened to resolve to.
+            //   - `factoryName` (below): the factory this line is actually ROUTED to — the
+            //     catalog snapshot's resolvedFactoryName, or Import's own SetItemFactoryRequest
+            //     gap-fill (both land in the SAME `factory` column via itemFactoryName's
+            //     precedence) — shown on its own line, amber + "ยังไม่ได้ระบุ" when neither has
+            //     set one yet, matching the owner's own suggested disambiguation ("the assigned
+            //     one is the control, the sales value is read-only text beside it"). Import's OWN
+            //     factory-assignment control below also says โรงงาน; this line is what tells
+            //     Import (or anyone) what it currently holds without scrolling to the control.
+            //     The underlying "is a factory resolved for routing" check (missingFactoryItems,
+            //     canSetItemFactory, setItemFactory) is UNCHANGED.
+            const salesBrandValue = item.brand?.trim() || null;
+            const productCode = item.productCode?.trim() || item.catalogProductCode || null;
+            // Owner ruling: nothing discount-related exists in Phase 1, and Import never sees
+            // เผื่อ (wastage) or the pre-wastage quantity — only the FINAL order quantity (pieces
+            // after wastage + full-box rounding, boxes, sqm equivalent). Sales/CEO/everyone else
+            // keeps the full breakdown. UI scoping only — no backend authz change.
+            const showWastageDetail = !isImport(user);
             return (
               <div
                 key={item.id}
@@ -1365,12 +1446,49 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>{`โรงงาน (ที่ฝ่ายขายกรอก): ${salesBrandValue ?? '—'}`}</span>
                   <span className={factoryName ? undefined : 'font-bold text-warning-dark'}>
-                    {`Factory: ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
+                    {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
                   </span>
-                  <span>Catalog: {item.catalogProductCode ?? '-'}</span>
+                  <span>รหัสสินค้า: {productCode ?? '-'}</span>
                   <span>Base: {item.catalogBasePrice != null ? `${formatCurrency(item.catalogBasePrice, item.catalogCurrency ?? 'THB')} (preliminary)` : '-'}</span>
                 </div>
+                {/* V185: the sales-entered tile fields, read-only for every viewer — legacy
+                    (pre-V185) items show "—" for whichever of these they never carried. */}
+                <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-1.5 text-xs text-text-muted sm:grid-cols-3">
+                  <span>สี: {formatOrDash(item.color)}</span>
+                  <span>ผิว: {formatOrDash(item.texture)}</span>
+                  <span>ขนาด: {formatOrDash(item.size)}</span>
+                  <span>ความหนา: {formatOrDash(item.thicknessMm, ' มม.')}</span>
+                  <span>แผ่น/ตร.ม.: {formatPiecesPerSqm(item)}</span>
+                  <span>แผ่น/กล่อง: {formatOrDash(item.piecesPerBox)}</span>
+                  <span>ขายแผ่นไม่เต็มกล่อง: {item.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'}</span>
+                  <span>
+                    ประเทศต้นทาง: {formatOrDash(item.originCountry)}
+                    {/* GLA-125 item 2: the typed name is the actual answer once origin_country
+                        is the "อื่นๆ" sentinel -- showing just "อื่นๆ" alone would tell Import
+                        nothing. */}
+                    {item.originCountry === 'อื่นๆ' ? ` (${formatOrDash(item.originCountryOther)})` : ''}
+                  </span>
+                  <span>ระยะเวลานำเข้า: {formatLeadTime(item)}</span>
+                </div>
+                {/* Final order quantity — what Import must actually order — shown to EVERY
+                    viewer: pieces after wastage + full-box rounding (the request's own
+                    requestedQty/requestedUnit, already shown in the header above), plus boxes and
+                    the ตร.ม. equivalent. */}
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-1.5 text-xs text-text-muted">
+                  <span className="font-bold text-text">จำนวนสั่งซื้อ: {item.requestedQty ?? '—'} {item.requestedUnit ?? ''}</span>
+                  <span>กล่อง: {formatOrDash(item.boxes)}</span>
+                  <span>เทียบ ตร.ม.: {formatOrDash(item.requestedQtySqm, ' ตร.ม.')}</span>
+                </div>
+                {/* เผื่อ (wastage) and the AS-ENTERED (pre-wastage) quantity — sales/CEO only, per
+                    owner ruling 2026-09-18: Import sees only the final order quantity above. */}
+                {showWastageDetail ? (
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                    <span>จำนวนที่กรอก: {formatQuantityAsEntered(item)}</span>
+                    <span>เผื่อ (wastage): {formatWastage(item)}</span>
+                  </div>
+                ) : null}
                 {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
                     refuses to re-route one that does (a factory quote may already be grouped under
                     that name), so offering an editable value here would promise something the
@@ -2653,6 +2771,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <PricingRequestCreateModal
           mode="revision"
           initialValue={request}
+          showToast={showToast}
           onClose={() => setRevisionModalOpen(false)}
           onCreated={(result) => {
             setRevisionModalOpen(false);

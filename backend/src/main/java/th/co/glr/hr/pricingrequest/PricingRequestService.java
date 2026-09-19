@@ -2,6 +2,7 @@ package th.co.glr.hr.pricingrequest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -20,6 +21,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -132,6 +134,14 @@ public class PricingRequestService {
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateSourceItemsBelongToTicket(ticketId, request.items());
+        // GLA-125 header terms.
+        validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId());
+        // V185 (direct-deal-form parity): derive requestedQty/requestedQtySqm/requestedUnit/
+        // requestedUnitBasis and the wastage audit columns from the item's own tile fields — see
+        // #resolveItems' own Javadoc. Every item created from here on goes through this, never
+        // just the client-sent (now optional) requestedQty/Unit/Basis.
+        request = withResolvedItems(request, resolveItems(request.items()));
 
         String requestCode = requests.nextRequestCode();
         long id = requests.create(ticketId, requestCode, request, actor.id());
@@ -234,9 +244,14 @@ public class PricingRequestService {
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
+        // GLA-125 header terms.
+        validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId());
         if (request.items() != null) {
             validateItems(request.items());
             validateSourceItemsBelongToTicket(summary.ticketId(), request.items());
+            // V185 — see createDraft's identical comment.
+            request = withResolvedItems(request, resolveItems(request.items()));
         }
 
         boolean updated = requests.updateDraft(id, request);
@@ -608,8 +623,13 @@ public class PricingRequestService {
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
+        // GLA-125 header terms.
+        validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId());
         validateItems(request.items());
         validateSourceItemsBelongToTicket(parent.ticketId(), request.items());
+        // V185 — see createDraft's identical comment.
+        request = withResolvedItems(request, resolveItems(request.items()));
 
         long newId = requests.createCustomerChangeRevision(parent, request, actor.id());
         if (newId == 0L) {
@@ -1017,13 +1037,58 @@ public class PricingRequestService {
         }
     }
 
+    // GLA-125 header terms (owner ruling 2026-09-18): a PricingRequest has no price yet, so
+    // unlike sales.quotation's deposit_percent/remainder_mode/full_payment_term trio (V165/V181),
+    // there is no "deposit percentage" concept here at all — just a plain two-way choice between
+    // CREDIT (pairs with a required day count) and ON_DELIVERY (no day count). Validated in Java,
+    // not a DB CHECK, matching quantityMode/wastageMode's own posture on the item record.
+    private static final Set<String> PAYMENT_TERM_MODES = Set.of("CREDIT", "ON_DELIVERY");
+
+    private void validateHeaderTerms(String paymentTermMode, Integer creditDays,
+                                     Long printedByDisplayId, Long salesRepDisplayId) {
+        if (paymentTermMode != null) {
+            if (!PAYMENT_TERM_MODES.contains(paymentTermMode)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับเงื่อนไขการชำระเงิน '" + paymentTermMode + "'");
+            }
+            if ("CREDIT".equals(paymentTermMode) && (creditDays == null || creditDays < 1)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต");
+            }
+        }
+        // Second review pass, finding N5 (2026-09-19): this method used to validate
+        // paymentTermMode/creditDays only. printedByDisplayId/salesRepDisplayId went straight to
+        // the repository unchecked, so an unknown id 500'd on the sales.pricing_request FK
+        // constraint instead of a clean 400, and an active-but-ineligible employee (any id at
+        // all, sales division or not, holding no can_create_quotation grant) was silently
+        // accepted. requireEligibleDisplayEmployeeId reuses the exact eligibility predicate
+        // direct-deal's DealQuotationService#requireEligibleDisplayEmployeeId already enforces for
+        // the identically-named fields on sales.quotation (see
+        // th.co.glr.hr.commission.QuotationDisplayNameEligibility's Javadoc) — never a second,
+        // independently-drifting copy of that rule.
+        requireEligibleDisplayEmployeeId(printedByDisplayId);
+        requireEligibleDisplayEmployeeId(salesRepDisplayId);
+    }
+
+    private void requireEligibleDisplayEmployeeId(Long employeeId) {
+        if (employeeId == null) {
+            return;
+        }
+        if (!requests.isEligibleQuotationDisplayName(employeeId, th.co.glr.hr.auth.DivisionAccessPolicy.SALES_DIVISION_CODE)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "พนักงานที่เลือกไม่สามารถแสดงเป็นผู้พิมพ์หรือพนักงานขายในคำขอราคาได้");
+        }
+    }
+
     private void validateItems(List<PricingRequestItemRequest> items) {
         for (int i = 0; i < items.size(); i++) {
             PricingRequestItemRequest item = items.get(i);
             if (!QuantityType.isValid(item.quantityType())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทจำนวน '" + item.quantityType() + "'");
             }
-            if (!UnitBasis.isValid(item.requestedUnitBasis())) {
+            // V185: requestedUnitBasis is no longer @NotBlank on the DTO — #resolveItems always
+            // derives it to PER_PIECE for every item from here on, so a null here (the new form's
+            // only payload shape) is not an error. Only an EXPLICIT, unrecognised value is —
+            // preserved for a legacy caller that still sends one directly.
+            if (item.requestedUnitBasis() != null && !UnitBasis.isValid(item.requestedUnitBasis())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "ไม่รองรับ requestedUnitBasis '" + item.requestedUnitBasis() + "'");
             }
@@ -1031,6 +1096,206 @@ public class PricingRequestService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, identityErrorMessage(i));
             }
         }
+    }
+
+    /**
+     * V185 (direct-deal-form parity, owner ruling 2026-09-18): every field the direct-deal
+     * quotation form (see {@code frontend/src/features/quotations/QuotationItemRow.jsx}) marks required
+     * is required here too — model/color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
+     * quantity for the item's own quantityMode. Deliberately NOT required (mirrors the direct-deal
+     * form's own optional fields): brand, productCode, originCountry, leadTimeMin/MaxDays. There is
+     * no price field of any kind here — CEO pricing is a later phase, not this one.
+     *
+     * <p>Mirrors {@code DealQuotationService#requireItemComplete} field-for-field, minus the price
+     * branch (perSqm/unitPrice) that method has and this one never will, and reuses its exact Thai
+     * field labels so a rep sees the SAME wording on both forms.
+     */
+    // GLA-125 (owner ruling 2026-09-18): ORIGIN_COUNTRY_OPTIONS' own sentinel code (quotationMeta.js)
+    // for "the rep typed a country not on the fixed list" — a literal Thai string, not an ISO/'ZZ'
+    // code (that convention belongs to a DIFFERENT list, price_catalog.factories.country).
+    private static final String ORIGIN_COUNTRY_OTHER = "อื่นๆ";
+
+    private void requireItemFieldsComplete(int rowNumber, PricingRequestItemRequest item) {
+        List<String> missing = new ArrayList<>();
+        if (!hasText(item.model())) missing.add("รุ่น");
+        if (!hasText(item.color())) missing.add("สี");
+        if (!hasText(item.texture())) missing.add("ผิว");
+        if (!hasText(item.size())) missing.add("ขนาด");
+        if (item.thicknessMm() == null || item.thicknessMm().signum() <= 0) missing.add("ความหนา");
+        if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
+        if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
+        if (!hasItemQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
+        // GLA-125 item 1: ประเทศต้นทาง is required on the PCR form (unlike the direct-deal
+        // quotation, where it stays optional — DealQuotationRequests.ItemInput is untouched).
+        if (!hasText(item.originCountry())) {
+            missing.add("ประเทศต้นทาง");
+        } else if (ORIGIN_COUNTRY_OTHER.equals(item.originCountry().trim()) && !hasText(item.originCountryOther())) {
+            // GLA-125 item 2: อื่นๆ needs the typed name too.
+            missing.add("ชื่อประเทศต้นทาง (อื่นๆ)");
+        }
+        // GLA-125 item 3: ระยะเวลานำเข้า is required (min <= max) — unlike the direct-deal
+        // quotation, where it is only required at SUBMIT time (DealQuotationService's own
+        // requireEveryTileItemHasALeadTime), never at create/update. A PricingRequest has no
+        // separate submit-time gate for this, so it is required from create/update onward instead.
+        if (item.leadTimeMinDays() == null || item.leadTimeMaxDays() == null) {
+            missing.add("ระยะเวลานำเข้า (วัน)");
+        } else if (item.leadTimeMinDays() > item.leadTimeMaxDays()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าสูงสุด");
+        }
+        if (!missing.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": ขาด " + String.join(", ", missing));
+        }
+    }
+
+    /** Mirrors {@code DealQuotationService#hasQuantity} exactly — AREA is the default reading of
+     * any blank/other quantityMode, matching {@code WastageCalculator.Input}'s own Javadoc. */
+    private boolean hasItemQuantity(String quantityMode, BigDecimal areaSqm, Integer piecesInput) {
+        if (WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)) {
+            return piecesInput != null && piecesInput >= 1;
+        }
+        return areaSqm != null && areaSqm.signum() > 0;
+    }
+
+    /**
+     * V185: the piece unit label a PER_PIECE pricing-request line prints — mirrors {@code
+     * th.co.glr.hr.dealquotation.DealQuotationLines#TILE_UNIT_TH} verbatim (that constant is
+     * package-private there); duplicated here rather than exposed cross-package, the same
+     * deliberate small-duplication convention this class already uses for {@code SALES_ROLES}/
+     * {@code IMPORT_ROLES} (see their own comment).
+     */
+    private static final String PIECE_UNIT_LABEL = "แผ่น";
+
+    /**
+     * V185 (direct-deal-form parity): validates every item is complete ({@link
+     * #requireItemFieldsComplete}) and DERIVES {@code requestedQty}/{@code requestedQtySqm}/
+     * {@code requestedUnit}/{@code requestedUnitBasis} — Sales no longer types a quantity or unit
+     * directly, the form only collects the tile fields below, exactly like a direct-deal
+     * quotation's TILE row.
+     *
+     * <p>Reuses {@code WastageCalculator.calculate} — the SAME arithmetic core the direct-deal
+     * quotation uses — rather than re-implementing wastage/box-rounding math a second time. It
+     * takes a price ({@code unitPrice}) as a required argument with no price-free overload, so this
+     * calls it with {@link BigDecimal#ZERO} and a null discount and reads only the PIECE-count
+     * results ({@code piecesFinal}/{@code piecesBeforeWastage}/{@code piecesAfterWastage}/
+     * {@code boxes}) back off the {@link WastageCalculator.Result} — the same device {@code
+     * DealQuotationService#calculateLine} cannot use for ITS preview (that path unconditionally
+     * REQUIRES a positive price — see this migration's PR body for why the direct-deal
+     * calculate-line preview could not be reused here either).
+     *
+     * <p>{@code requestedQtySqm} reuses {@link WastageCalculator#sqmQuantityFromPieces} — {@code
+     * round2(piecesFinal x sqmPerPiece)} — verbatim.
+     *
+     * <p>Does NOT resolve a catalog-geometry fallback for {@code sqmPerPiece} the way {@code
+     * DealQuotationService#resolveSqmPerPiece} does for a catalog pick with no {@code sqm_per_piece}
+     * of its own (step 1 of that method: "the item's own sqmPerPiece, if Sales supplied one" is
+     * always what a real caller sends, because the reused {@code QuotationItemRow} component
+     * always resolves and patches {@code sqmPerPiece} onto the row before it is ever submitted —
+     * see that component's own {@code resolveTileSqmPerPiece}). {@link #requireItemFieldsComplete}
+     * simply requires a positive value be present; a row whose catalog pick resolves nothing and
+     * whose size does not parse is rejected with "ขาด ตร.ม./แผ่น", the same outcome the direct-deal
+     * form gives in that case.
+     */
+    private List<PricingRequestItemRequest> resolveItems(List<PricingRequestItemRequest> items) {
+        List<PricingRequestItemRequest> resolved = new ArrayList<>(items.size());
+        for (int i = 0; i < items.size(); i++) {
+            resolved.add(resolveItem(i, items.get(i)));
+        }
+        return resolved;
+    }
+
+    private PricingRequestItemRequest resolveItem(int rowNumber, PricingRequestItemRequest item) {
+        requireItemFieldsComplete(rowNumber, item);
+        // Mirrors DealQuotationRequests.ItemInput/tileInputFromRow's own "blank quantityMode reads
+        // as AREA" default (WastageCalculator.calculate itself requires the literal string).
+        String quantityMode = hasText(item.quantityMode())
+            ? item.quantityMode() : WastageCalculator.QUANTITY_MODE_AREA;
+        boolean roundToFullBox = item.roundToFullBox() == null || item.roundToFullBox();
+        WastageCalculator.Result result;
+        try {
+            result = WastageCalculator.calculate(new WastageCalculator.Input(
+                item.sqmPerPiece(), quantityMode, item.areaSqm(), item.piecesInput(),
+                item.wastageMode(), item.wastageValue(), item.piecesPerBox(),
+                BigDecimal.ZERO, null, roundToFullBox));
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
+        }
+        // Opus review finding #2 (2026-09-18): a small AREA input against a large sqmPerPiece can
+        // derive to ZERO pieces (e.g. 0.3 m² at 0.72 m²/piece rounds down to 0) -- and 0 violates
+        // V59's chk_pricing_request_item_qty (requested_qty > 0), which would otherwise reach the
+        // repository as a raw DataIntegrityViolationException (500) instead of a caller-fixable
+        // 400. Caught here, before that INSERT, with the same per-row Thai message shape as every
+        // other requireItemFieldsComplete/WastageCalculator failure in this method.
+        if (result.piecesFinal() < 1) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "รายการที่ " + (rowNumber + 1) + ": จำนวนที่คำนวณได้เป็น 0 ชิ้น กรุณาระบุจำนวนหรือขนาดให้มากขึ้น");
+        }
+        BigDecimal requestedQty = BigDecimal.valueOf(result.piecesFinal());
+        BigDecimal requestedQtySqm = item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
+            ? WastageCalculator.sqmQuantityFromPieces(result.piecesFinal(), item.sqmPerPiece())
+            : null;
+        // GLA-125 item 2: originCountryOther is only ever meaningful under the "อื่นๆ" sentinel —
+        // requireItemFieldsComplete above already refused a blank one THERE, so the only
+        // normalization left is the other direction: a value sent for any OTHER origin_country
+        // (or none at all) is cleared rather than persisted, so it can never linger stale under a
+        // country it was not actually typed for.
+        String originCountryOther = ORIGIN_COUNTRY_OTHER.equals(item.originCountry())
+            ? item.originCountryOther() : null;
+        return new PricingRequestItemRequest(
+            item.sourceTicketItemId(), item.productId(), item.variantId(), item.brand(), item.model(),
+            item.productDescription(), item.color(), item.texture(), item.size(), item.factory(),
+            requestedQty, requestedQtySqm, PIECE_UNIT_LABEL, UnitBasis.PER_PIECE, item.quantityType(),
+            item.targetDeliveryDate(), item.deliveryLocation(), item.specialRequirement(),
+            item.productCode(), item.thicknessMm(), item.sqmPerPiece(), quantityMode, item.areaSqm(),
+            item.piecesInput(), item.wastageMode(), item.wastageValue(), item.piecesPerBox(),
+            item.sqmPerBox(), roundToFullBox, item.originCountry(), item.leadTimeMinDays(),
+            item.leadTimeMaxDays(), result.piecesBeforeWastage(), result.piecesAfterWastage(),
+            result.boxes(), originCountryOther);
+    }
+
+    // ── V185: reconstruct the top-level request record with a RESOLVED items list, so
+    // PricingRequestRepository's create/updateDraft/createCustomerChangeRevision — unchanged,
+    // still reading request.items() themselves — persist the derived quantities instead of
+    // whatever (now-optional, ignored) requestedQty/Unit/Basis the client sent. Kept as three small
+    // overloads rather than widening those repository methods' signatures, which would break every
+    // existing hand-wired `new PricingRequestRepository(jdbc)` test call site. ──────────────────
+    // GLA-125: every withResolvedItems overload below must pass the header-term fields through
+    // EXPLICITLY (not rely on a compat constructor default) — the exact same bug class as Opus
+    // review finding #1 (factory/variantId), just at the request-header level instead of the item
+    // level. Reconstructing via a compat constructor here would silently NULL out
+    // paymentTermMode/creditDays/validityDays/printedByDisplayId/salesRepDisplayId/deptCode/
+    // unitCode/omitContactHonorific on every create/update/customer-change-revision.
+    private CreatePricingRequestRequest withResolvedItems(CreatePricingRequestRequest request,
+                                                          List<PricingRequestItemRequest> items) {
+        return new CreatePricingRequestRequest(request.recipientType(), request.recipientContactId(),
+            request.recipientLabel(), request.requiredDate(), request.customerTargetPrice(),
+            request.targetCurrency(), request.note(), request.clientRequestId(),
+            request.paymentTermMode(), request.creditDays(), request.validityDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId(), request.deptCode(),
+            request.unitCode(), request.omitContactHonorific(), items);
+    }
+
+    private UpdatePricingRequestRequest withResolvedItems(UpdatePricingRequestRequest request,
+                                                          List<PricingRequestItemRequest> items) {
+        return new UpdatePricingRequestRequest(request.recipientType(), request.recipientContactId(),
+            request.recipientLabel(), request.requiredDate(), request.customerTargetPrice(),
+            request.targetCurrency(), request.note(),
+            request.paymentTermMode(), request.creditDays(), request.validityDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId(), request.deptCode(),
+            request.unitCode(), request.omitContactHonorific(), items);
+    }
+
+    private CustomerChangeRevisionRequest withResolvedItems(CustomerChangeRevisionRequest request,
+                                                            List<PricingRequestItemRequest> items) {
+        return new CustomerChangeRevisionRequest(request.revisionReason(), request.clientRequestId(),
+            request.recipientType(), request.recipientContactId(), request.recipientLabel(),
+            request.requiredDate(), request.customerTargetPrice(), request.targetCurrency(),
+            request.note(),
+            request.paymentTermMode(), request.creditDays(), request.validityDays(),
+            request.printedByDisplayId(), request.salesRepDisplayId(), request.deptCode(),
+            request.unitCode(), request.omitContactHonorific(), items);
     }
 
     /**

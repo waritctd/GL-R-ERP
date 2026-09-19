@@ -79,6 +79,11 @@ vi.mock('../../api/index.js', () => ({
     meta: {
       unitBases: vi.fn(),
     },
+    // GLA-125: PricingRequestCreateModal's header-terms section (opened here in mode="revision")
+    // fetches the same eligible-display-name list the direct-deal quotation editor uses.
+    dealQuotations: {
+      displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+    },
   },
 }));
 
@@ -116,8 +121,21 @@ function buildRequest(overrides = {}) {
         catalogBrand: null,
         catalogModel: null,
         productDescription: 'กระเบื้องพื้น SCG A1',
+        color: 'ขาว',
         texture: 'ด้าน',
         size: '60x60',
+        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestCreateModal can save — see that component's own
+        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        thicknessMm: 10,
+        sqmPerPiece: 0.36,
+        quantityMode: 'PIECES',
+        piecesInput: 20,
+        piecesPerBox: 4,
+        // GLA-125: required on this form too.
+        originCountry: 'ไทย-สต็อก',
+        leadTimeMinDays: 3,
+        leadTimeMaxDays: 7,
         quantityType: 'CONFIRMED',
         requestedQty: 20,
         requestedUnit: 'แผ่น',
@@ -1128,7 +1146,9 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
       request.summary.id,
       expect.objectContaining({
         revisionReason: 'ลูกค้าเปลี่ยนจำนวน',
-        items: [expect.objectContaining({ requestedQty: 30 })],
+        // V185: the client no longer sends requestedQty at all (the server derives it via
+        // WastageCalculator) — piecesInput is the wire field the edited "จำนวน" input feeds.
+        items: [expect.objectContaining({ piecesInput: 30 })],
       }),
     ));
   });
@@ -1904,6 +1924,126 @@ describe('PricingRequestDetailPage mobile layout', () => {
     // SECTION is present.
     expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
     // ต้นทุนนำเข้า is deliberately absent for Import — see the hiding test above.
+  });
+});
+
+// V185 (direct-deal-form parity) + owner ruling 2026-09-18 (label reversed back to โรงงาน, not
+// ยี่ห้อ — see PricingRequestDetailPage.jsx's own comment on brandDisplay): the "รายการสินค้าและ
+// ราคาตั้งต้น" item card shows every sales-entered tile field read-only, and hides เผื่อ
+// (wastage)/the pre-wastage quantity from Import specifically — everyone else (sales, CEO) still
+// sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
+// already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
+// fixture's own V185 comment).
+describe('PricingRequestDetailPage item card — V185 sales-entered fields', () => {
+  it('shows the sales-entered tile fields read-only to every viewer', async () => {
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+
+    expect(screen.getByText('สี: ขาว')).not.toBeNull();
+    expect(screen.getByText('ผิว: ด้าน')).not.toBeNull();
+    expect(screen.getByText('ขนาด: 60x60')).not.toBeNull();
+    expect(screen.getByText('ความหนา: 10 มม.')).not.toBeNull();
+    expect(screen.getByText('แผ่น/กล่อง: 4')).not.toBeNull();
+  });
+
+  it('shows เผื่อ (wastage) and the pre-wastage quantity to Sales', async () => {
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+
+    expect(screen.getByText(/^เผื่อ \(wastage\):/)).not.toBeNull();
+    expect(screen.getByText(/^จำนวนที่กรอก:/)).not.toBeNull();
+  });
+
+  it('shows เผื่อ (wastage) and the pre-wastage quantity to the CEO', async () => {
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+
+    expect(screen.getByText(/^เผื่อ \(wastage\):/)).not.toBeNull();
+    expect(screen.getByText(/^จำนวนที่กรอก:/)).not.toBeNull();
+  });
+
+  it('hides เผื่อ (wastage) and the pre-wastage quantity from Import — final order quantity only', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+
+    expect(screen.queryByText(/^เผื่อ \(wastage\):/)).toBeNull();
+    expect(screen.queryByText(/^จำนวนที่กรอก:/)).toBeNull();
+    // The final order quantity (what must actually be ordered) stays visible to Import.
+    expect(screen.getByText(/^จำนวนสั่งซื้อ:/)).not.toBeNull();
+  });
+
+  it('shows the final order quantity (จำนวนสั่งซื้อ) to every viewer, including Import', async () => {
+    for (const user of [salesOwner, importUser, ceoUser]) {
+      const { unmount } = renderDetailPage({ user });
+      await waitForLoaded();
+      expect(screen.getByText(/^จำนวนสั่งซื้อ:/)).not.toBeNull();
+      unmount();
+    }
+  });
+
+  it('renders "—" for a legacy item with none of the new fields', async () => {
+    const request = buildRequest({
+      items: [{
+        id: 1, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1',
+        catalogBrand: null, catalogModel: null, productDescription: 'กระเบื้องพื้น SCG A1',
+        texture: null, size: null, color: null,
+        thicknessMm: null, sqmPerPiece: null, quantityMode: null, piecesInput: null,
+        piecesPerBox: null, roundToFullBox: true,
+        quantityType: 'CONFIRMED', requestedQty: 20, requestedUnit: 'แผ่น',
+        requestedUnitBasis: 'PER_PIECE', resolvedFactoryName: 'SCG Ceramics', factory: null,
+        catalogProductCode: 'SCG-A1', catalogBasePrice: 120, catalogCurrency: 'THB',
+        targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
+      }],
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(screen.getByText('สี: —')).not.toBeNull();
+    expect(screen.getByText('ผิว: —')).not.toBeNull();
+    expect(screen.getByText('ความหนา: —')).not.toBeNull();
+    expect(screen.getByText('แผ่น/กล่อง: —')).not.toBeNull();
+    // The legacy row's OWN requestedQty/requestedUnit (client-typed under the old form) still
+    // renders in the final-order-quantity line — this never depended on the new columns.
+    expect(screen.getByText('จำนวนสั่งซื้อ: 20 แผ่น')).not.toBeNull();
+  });
+
+  // Owner ruling 2026-09-18: the label is โรงงาน, not ยี่ห้อ — but the VALUE shown is still the
+  // sales-entered brand, captioned to distinguish it from Import's own factory-assignment control
+  // just below (which also says โรงงาน — see PricingRequestDetailPage.jsx's own comment).
+  it('shows the sales-entered value captioned "โรงงาน (ที่ฝ่ายขายกรอก)", never the old bare "Factory:" label', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+
+    expect(screen.getByText(/^โรงงาน \(ที่ฝ่ายขายกรอก\):/)).not.toBeNull();
+    expect(screen.queryByText(/^Factory:/)).toBeNull();
+    expect(screen.queryByText(/^ยี่ห้อ:/)).toBeNull();
+  });
+
+  // Opus review finding #6 (2026-09-18): before this fix, a card whose sales rep left the
+  // โรงงาน-labelled brand field blank fell back to showing Import's ROUTING resolution
+  // (resolvedFactoryName/factory) under the "(ที่ฝ่ายขายกรอก)" caption — misattributing an
+  // Import/catalog value to Sales. The two must render as separate lines instead.
+  it('shows the sales value and Import\'s resolved factory as two SEPARATE lines, never one falling back to the other', async () => {
+    renderDetailPage({ user: importUser });
+    await waitForLoaded();
+
+    // The default fixture's item has a real `brand` ("SCG") AND a real `resolvedFactoryName`
+    // ("SCG Ceramics") that DIFFER — proving neither line is standing in for the other.
+    expect(screen.getByText('โรงงาน (ที่ฝ่ายขายกรอก): SCG')).not.toBeNull();
+    expect(screen.getByText('โรงงานที่กำหนด (Import): SCG Ceramics')).not.toBeNull();
+  });
+
+  it('shows the sales value as em-dash (never Import\'s routing resolution) when Sales left the brand blank, plus an amber "ยังไม่ได้ระบุ" on the routing line when nothing has resolved one either', async () => {
+    const request = buildRequest({
+      items: [{ ...buildRequest().items[0], brand: null, resolvedFactoryName: null, factory: null }],
+    });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded();
+
+    expect(screen.getByText('โรงงาน (ที่ฝ่ายขายกรอก): —')).not.toBeNull();
+    const routingLine = screen.getByText(/^โรงงานที่กำหนด \(Import\):/);
+    expect(routingLine.textContent).toBe('โรงงานที่กำหนด (Import): ยังไม่ได้ระบุ');
+    expect(routingLine.className).toContain('text-warning-dark');
   });
 });
 
