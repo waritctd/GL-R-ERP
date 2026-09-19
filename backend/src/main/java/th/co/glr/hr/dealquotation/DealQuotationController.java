@@ -150,6 +150,15 @@ public class DealQuotationController {
         return Map.of("quotation", quotations.createRevision(id, user));
     }
 
+    /** GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — clone an APPROVED direct-deal quotation
+     * into a new, independent DRAFT. Named {@code reorders}, sibling to {@code revisions} above,
+     * for the SAME reason that route is plural: one source may be cloned any number of times. */
+    @PostMapping("/deal-quotations/{id}/reorders")
+    Map<String, DealQuotationDto> createReorder(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.createReorder(id, user));
+    }
+
     @PostMapping("/deal-quotations/{id}/cancel")
     Map<String, DealQuotationDto> cancel(@PathVariable long id,
                                          @RequestBody(required = false) CancelRequest request,

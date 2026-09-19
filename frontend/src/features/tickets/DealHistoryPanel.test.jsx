@@ -70,4 +70,23 @@ describe('DealHistoryPanel', () => {
     // crash, and both still render (order unaffected by this fix).
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
+
+  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL
+  // entry, so a missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind]
+  // ?? event.kind`) -- a rep would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
+  it('labels DEAL_QUOTATION_SUPERSEDED in Thai rather than falling through to the raw kind string', () => {
+    render(
+      <DealHistoryPanel
+        events={[
+          { id: 1, kind: 'DEAL_QUOTATION_SUPERSEDED', actorName: 'พนักงานขาย',
+            message: 'ใบ QT-2026-0001-1 ถูกแทนที่ด้วย QT-2026-0001-2', createdAt: '2026-09-19T09:00:00.000Z' },
+        ]}
+        activities={[]}
+      />,
+    );
+
+    const item = screen.getByRole('listitem').textContent;
+    expect(item).toContain('ใบเสนอราคาถูกแทนที่');
+    expect(item).not.toContain('DEAL_QUOTATION_SUPERSEDED');
+  });
 });
