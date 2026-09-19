@@ -53,9 +53,19 @@ public class ImportRequestRepository {
           JOIN sales.ticket t ON t.ticket_id = r.ticket_id
         """;
 
+    /**
+     * PR-B REVIEW ROUND 1, S9: {@code ORDER BY r.brand} was stale — V184 made {@code brand} a
+     * nullable display snapshot and {@code factory_id}/{@code factory_name} the real per-row
+     * identity (owner decision 2, GLA-105), so a null brand sorted those rows unpredictably ahead
+     * of/behind the rest instead of grouping by factory. {@code factory_name} is NOT NULL (the
+     * snapshot every row carries regardless of brand), so it orders every row deterministically.
+     * Mirrored by mockApi.js's own {@code mockImportRequestsForTicket} sort (the helper
+     * {@code storedImportRequests.listForTicket} actually delegates to) — see that function's own
+     * comment.
+     */
     public List<ImportRequestDto> findByTicket(long ticketId) {
         List<ImportRequestDto> rows = jdbc.query(
-            SELECT_IR + " WHERE r.ticket_id = :id ORDER BY r.brand, r.version",
+            SELECT_IR + " WHERE r.ticket_id = :id ORDER BY r.factory_name, r.version",
             Map.of("id", ticketId), (rs, n) -> mapRow(rs));
         return withItems(rows);
     }

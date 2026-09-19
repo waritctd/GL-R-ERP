@@ -110,6 +110,38 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── lifecycle (per-FACTORY as of V184) ──────────────────────────────────────────────────────
 
+    /**
+     * PR-B REVIEW ROUND 1, S9: {@code ImportRequestRepository.findByTicket} used to {@code ORDER BY
+     * r.brand, r.version} — stale since V184 made {@code brand} a nullable DISPLAY snapshot
+     * (derived from {@code ticket_item.brand}, see {@code ImportRequestService.FactoryGroup
+     * #brandLabel}) and {@code factory_id}/{@code factory_name} the real, NOT NULL per-row identity
+     * (owner decision 2, GLA-105). Reproduces the bug directly: the two lines' brands are seeded in
+     * the OPPOSITE alphabetical order from their resolved factories, so the old ordering would
+     * return [zeta, alpha] while the fix (ORDER BY factory_name) must return [alpha, zeta].
+     */
+    @Test
+    void list_ordersByFactoryName_notByTheNullableBrandSnapshot() {
+        long alphaFactoryId = insertFactory("Alpha Factory Order Test");
+        long zetaFactoryId = insertFactory("Zeta Factory Order Test");
+        long orderTicketId = insertTicket("IRORDER-1", "บริษัท ทดสอบลำดับ จำกัด");
+        // brand "Zzz Brand" (sorts LAST) is on the factory that sorts FIRST by name, and vice
+        // versa — see this test's own Javadoc above for why that combination is deliberate.
+        insertItemWithDivergentBrand(orderTicketId, "Zzz Brand", "Alpha Factory Order Test",
+            "Model A", "10x10 cm", "5", "pcs", 0);
+        insertItemWithDivergentBrand(orderTicketId, "Aaa Brand", "Zeta Factory Order Test",
+            "Model Z", "10x10 cm", "5", "pcs", 1);
+
+        List<ImportRequestDto> drafts = service.createDrafts(orderTicketId, null, owner);
+        // Confirms the fixture actually diverges brand from factory name before trusting the
+        // ordering assertion below.
+        assertThat(byFactory(drafts, alphaFactoryId).brand()).isEqualTo("Zzz Brand");
+        assertThat(byFactory(drafts, zetaFactoryId).brand()).isEqualTo("Aaa Brand");
+
+        List<ImportRequestDto> listed = service.list(orderTicketId, owner);
+        assertThat(listed).extracting(ImportRequestDto::factoryId)
+            .containsExactly(alphaFactoryId, zetaFactoryId);
+    }
+
     @Test
     void createDrafts_isOnePerFactory_andSkipsFactoriesAlreadyCovered() {
         List<ImportRequestDto> first = service.createDrafts(ticketId, null, owner);
@@ -870,6 +902,22 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)
             VALUES (:t, :brand, :model, :size, :qty, :unit, :sort, :factory)
             """, new MapSqlParameterSource().addValue("t", ticket).addValue("brand", factory)
+                .addValue("model", model).addValue("size", size)
+                .addValue("qty", new BigDecimal(qty)).addValue("unit", unit)
+                .addValue("sort", sortOrder).addValue("factory", factory));
+    }
+
+    /**
+     * Like {@link #insertItem} but lets {@code brand} and {@code factory} diverge — {@link
+     * #insertItem} deliberately sets them equal, which is the everyday fixture shape but cannot
+     * exercise {@link #list_ordersByFactoryName_notByTheNullableBrandSnapshot}'s bug.
+     */
+    private void insertItemWithDivergentBrand(long ticket, String brand, String factory, String model,
+                            String size, String qty, String unit, int sortOrder) {
+        jdbc.update("""
+            INSERT INTO sales.ticket_item (ticket_id, brand, model, size, qty, unit, sort_order, factory)
+            VALUES (:t, :brand, :model, :size, :qty, :unit, :sort, :factory)
+            """, new MapSqlParameterSource().addValue("t", ticket).addValue("brand", brand)
                 .addValue("model", model).addValue("size", size)
                 .addValue("qty", new BigDecimal(qty)).addValue("unit", unit)
                 .addValue("sort", sortOrder).addValue("factory", factory));

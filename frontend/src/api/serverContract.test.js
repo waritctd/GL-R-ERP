@@ -261,58 +261,11 @@ const SERVER_ONLY = {
   // ใบเสนอราคา tabs (F5) and the deal card's เลขที่ผู้เสียภาษี / โทร. fields (F7) now call
   // them, so the stale-entry test below is what required deleting them here.
 
-  // ── The STORED ใบขอซื้อ aggregate — capability built backend-first, UI not landed ──────────
-  // Nine routes for one document lifecycle: draft per brand, edit, issue (minting IR<yy><nnn> or
-  // accepting an override), revise, delete, read, and print from the stored snapshot. All gated
-  // {import, ceo} in ImportRequestService except required-by-note, which is SALES's field and carries
-  // its own gate; all proven wrong-way-round against real Postgres by
-  // StoredImportRequestIntegrationTest.
-  //
-  // Deliberately NOT wired into hrApi.js in the same change. This PR is a migration plus nine
-  // endpoints plus fourteen integration tests; bundling the UI would make it unreviewable, and the
-  // preview half of this feature shipped exactly this way (#812 backend, #816 UI) without trouble.
-  // The PREVIEW routes remain live and reachable, so the form is still obtainable meanwhile — what is
-  // missing is only the recorded, numbered version.
-  'POST /api/tickets/{}/import-requests':
-    'Raises one DRAFT per brand on the deal, skipping brands that already have a live form. The '
-    + 'entry point for the stored lifecycle.',
-  'GET /api/tickets/{}/import-requests':
-    'The deal\'s stored forms, all versions, with each one\'s printed sheet count.',
-  'GET /api/import-requests/{}':
-    'One stored form by its own id, with its items and printed sheet count — the read the edit and '
-    + 'issue screens will load before acting on a specific version.',
-  'PATCH /api/import-requests/{}':
-    'Edits a draft\'s body, or the import-owned footer of an issued form (those blocks are filled in '
-    + 'by hand AFTER issue). PATCH semantics — an absent field is left alone, never blanked.',
-  'POST /api/import-requests/{}/issue':
-    'DRAFT -> ISSUED: mints IR<yy><nnn> from sales.document_sequence, or accepts a caller override '
-    + 'without advancing the sequence, and supersedes the version it replaces.',
-  'POST /api/import-requests/{}/revise':
-    'Prepares a correction as a new DRAFT at the next version, copying the issued body. The previous '
-    + 'version stays ISSUED until the replacement issues.',
-  'DELETE /api/import-requests/{}':
-    'Deletes a DRAFT. An issued form is never deleted — it is superseded.',
-  'GET /api/import-requests/{}/file':
-    'Prints a stored form from ITS OWN snapshot, so an issued document keeps saying what it said '
-    + 'when it was signed even if the deal is later edited.',
-  'POST /api/import-requests/{}/advance-step':
-    'Advances an ISSUED row\'s per-factory progress by one step (V184, GLA-100/S12-S17) -- import/CEO '
-    + 'only. Built backend-first alongside the per-factory migration; no screen calls it yet.',
-  'POST /api/import-requests/{}/lead-time':
-    'Sets an ISSUED row\'s lead time (V184, owner decision 09-18 #2) -- import/CEO only, the '
-    + 'post-issue counterpart to PATCH .../import-requests/{}\'s leadTimeMinDays/MaxDays body '
-    + 'fields (the DRAFT-stage edit). Built backend-first; no screen calls it yet.',
-  'PATCH /api/import-requests/{}/email-draft':
-    'Edits the drafted order-email (owner decision 09-18 #3 §B) -- owning rep/CEO/import, while '
-    + 'not yet marked sent. Built backend-first alongside REVIEW ROUND 1\'s second pass; PR-B '
-    + '(import-request-per-factory-PLAN.md §C) wires the UI. No screen calls it yet.',
-  'POST /api/import-requests/{}/mark-email-sent':
-    'Records that a human sent the drafted order-email BY HAND -- this system never sends mail '
-    + 'itself. Idempotent: a second call 409s. Built backend-first, same as email-draft above; no '
-    + 'screen calls it yet.',
-  'PUT /api/tickets/{}/required-by-note':
-    'Sets the deal-level "กำหนดวันที่ต้องการของ". The one route in this family that belongs to SALES '
-    + '(deal owner or CEO) rather than import, gated from DealStage.ORDER_RECEIVED onward.',
+  // The STORED ใบขอซื้อ aggregate's twelve routes stood here (createDrafts through
+  // required-by-note) between PR-A (#1008, backend-first) and PR-B, which wired every one of them
+  // into DealFulfilmentPanel's per-factory cards and the /fulfilment งานนำเข้า worklist — see
+  // api.storedImportRequests in hrApi.js. They are gone rather than re-worded: the stale-entry
+  // assertion below is what required deleting them here.
 
   // The three ใบขอซื้อ (F-SM-001) GETs were listed here between #812 and this change, as a
   // capability built backend-first whose UI had not landed. They are gone rather than re-worded:
@@ -596,6 +549,13 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
+  // PR-B (import-request-per-factory UI): DealFulfilmentPanel/ImportFulfilmentPage both read the
+  // stored ใบขอซื้อ list (GET .../import-requests, plural, per ticket) and every mutation already
+  // returns its own full row, so this single-row-by-id GET has no screen that needs it separately.
+  // storedImportRequests.get stays in hrApi.js as a faithful mirror of the controller route
+  // (ImportRequestController#getStored) for completeness/future callers, same reasoning as the
+  // other single-row GETs already in this list (deposit-notices, factory-quotes, ...).
+  'GET /api/import-requests/{}',
   // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
   // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
   // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar

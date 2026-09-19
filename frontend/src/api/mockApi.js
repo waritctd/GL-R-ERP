@@ -648,6 +648,11 @@ const MOCK_COUNTRIES = [
   { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
   { countryCode: 'TR', nameEn: 'Turkey', nameTh: 'ตุรกี' },
   { countryCode: 'VN', nameEn: 'Vietnam', nameTh: 'เวียดนาม' },
+  // 'ZZ' อื่นๆ (V184, owner decision 09-18) — a real, always-valid catch-all country that PAIRS
+  // with a required countryOther. Mirrors price_catalog.country's seeded ZZ row. Kept LAST in the
+  // literal array too (belt-and-braces with countries()'s own explicit re-sort below), so a caller
+  // that iterates MOCK_COUNTRIES directly without going through countries() still sees it last.
+  { countryCode: 'ZZ', nameEn: 'Other', nameTh: 'อื่นๆ' },
 ];
 
 // Mirrors PriceImportService.requireValidCountry: country is REQUIRED on both create and update,
@@ -660,6 +665,21 @@ function requireValidMockCountry(country) {
     fail(`ไม่พบรหัสประเทศนี้: ${code}`, 400);
   }
   return code;
+}
+
+// Mirrors PriceImportService.requireValidCountryOther (V184, owner decision 09-18): 'ZZ' (อื่นๆ)
+// REQUIRES a non-blank countryOther (≤100 chars); any other country FORBIDS one. Shared by
+// priceImport.createFactory/updateFactory and importRequests' factory auto-create path (PR-B) —
+// same pairing rule ImportRequestService#requireValidNewFactoryCountry enforces server-side.
+function requireValidMockCountryOther(countryCode, countryOther) {
+  const other = countryOther != null && String(countryOther).trim() ? String(countryOther).trim() : null;
+  if (countryCode === 'ZZ') {
+    if (!other) fail('กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ', 400);
+    if (other.length > 100) fail('ชื่อประเทศยาวเกินไป', 400);
+    return other;
+  }
+  if (other) fail('ระบุชื่อประเทศ (countryOther) ได้เฉพาะเมื่อเลือกประเทศ อื่นๆ', 400);
+  return null;
 }
 
 // Mirrors PriceImportService.blankToNull.
@@ -777,7 +797,11 @@ function currentFormulaConfig() {
 function sortedFormulaConfig(config) {
   return {
     ...config,
-    availableCountries: MOCK_COUNTRIES,
+    // 'ZZ' อื่นๆ (V184) is excluded from the freight-origin picker specifically — mirrors
+    // PricingFormulaConfigRepository, which excludes it because a ZZ factory has no freight rate
+    // row to key on (no real origin to look one up for). Only this list excludes it; the factory
+    // editor's own country picker (priceImport.countries() below) keeps it.
+    availableCountries: MOCK_COUNTRIES.filter((c) => c.countryCode !== 'ZZ'),
     freightRates: [...config.freightRates].sort((a, b) =>
       a.originCountryCode.localeCompare(b.originCountryCode)
       || a.thicknessMinMm - b.thicknessMinMm
@@ -1992,6 +2016,305 @@ function requireDealEntry() {
   return user;
 }
 
+// ── The STORED ใบขอซื้อ aggregate (V184, PR-A #1008 backend / PR-B UI, GLA-100/105) ──────────────
+// One row per (deal, FACTORY). Mirrors th.co.glr.hr.importrequest.ImportRequestService — see that
+// class's own Javadoc for the full authz matrix. Per CLAUDE.md's mock-contract rule, this mirrors
+// the WORKFLOW/SHAPE faithfully (roles, statuses, required fields, forward-only steps) but does
+// NOT attempt to reproduce every exotic text-regeneration edge case the real service's REVIEW
+// ROUND 2/3 fixes cover (e.g. detecting whether a carried-forward vesselEtaNote/email body is
+// "still exactly auto-derived" across a revision) — those are algorithmic details a mock mirroring
+// would only hide bugs in, not evidence of. PDF rendering is a "not supported in mock mode" stub,
+// same as the legacy importRequests.pages/download above.
+
+let mockImportRequestSeq = 1;
+const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying its own `items` array.
+
+// Mirrors th.co.glr.hr.importrequest.ImportRequestStep — same codes, same order, same Thai labels.
+const MOCK_IMPORT_REQUEST_STEPS = ['CONTACTED', 'ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS', 'RECEIVED'];
+const MOCK_IMPORT_REQUEST_STEP_LABELS_TH = {
+  CONTACTED: 'ติดต่อโรงงาน',
+  ORDERED: 'สั่งซื้อแล้ว',
+  PICKED_UP: 'รับสินค้าจากโรงงาน',
+  IN_TRANSIT: 'ระหว่างขนส่ง',
+  AWAITING_CUSTOMS: 'รอผ่านพิธีการศุลกากร',
+  RECEIVED: 'รับสินค้าเข้าคลัง',
+};
+function mockImportRequestStepIndex(step) {
+  return step == null ? -1 : MOCK_IMPORT_REQUEST_STEPS.indexOf(step);
+}
+
+// Mirrors th.co.glr.hr.importrequest.LeadTimeDefaults — fixed by factory ISO country code, mirroring
+// quotationMeta.js's ORIGIN_COUNTRY_OPTIONS. Any other code, including 'ZZ' อื่นๆ, has no default.
+function mockLeadTimeDefaults(countryCode) {
+  switch (countryCode) {
+    case 'IT': case 'ES': return { min: 75, max: 90 };
+    case 'CN': return { min: 30, max: 45 };
+    case 'TH': return { min: 3, max: 7 };
+    default: return null;
+  }
+}
+
+// Mirrors ImportRequestService.normalizeFactoryName: trim, collapse whitespace, case-insensitive,
+// Thai NFC.
+function mockNormalizeFactoryName(name) {
+  return (name ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Mirrors ImportRequestLinePrefill.buildColorSurfaceNote — the auto-derived note sub-row.
+function mockColorSurfaceNote(color, texture) {
+  const parts = [];
+  if (color && String(color).trim()) parts.push(`สี ${String(color).trim()}`);
+  if (texture && String(texture).trim()) parts.push(`ผิว ${String(texture).trim()}`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+// Mirrors TicketRepository.hasLiveImportRequests: at least one row for this deal is currently
+// ISSUED (a DRAFT-only or fully-superseded deal does not count). Backs the legacy deal-level
+// IR_SENT/SHIPPING/GOODS_RECEIVED action-advertisement gate AND the markIrSent/markShipping/
+// markGoodsReceived mutation refusal — see actions() and those three mutations below.
+function mockHasLiveImportRequests(ticketId) {
+  return mockImportRequests.some((r) => r.ticketId === Number(ticketId) && r.status === 'ISSUED');
+}
+
+function findStoredImportRequestRaw(id) {
+  const row = mockImportRequests.find((r) => r.id === Number(id));
+  if (!row) fail('ไม่พบใบขอซื้อนี้', 404);
+  return row;
+}
+
+// STORED-aggregate read gate — mirrors ImportRequestService#requireRead: CEO/import/sales_manager
+// unrestricted; sales only the deal's own owner.
+function requireStoredIrRead(ticket, user) {
+  if (user.role === 'ceo' || user.role === 'import' || user.role === 'sales_manager') return;
+  if (user.role === 'sales' && ticket.createdById === user.id) return;
+  fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+// The ORDER-EMAIL draft's write gate — mirrors ImportRequestService#requireFooterWrite: full-write
+// (owning rep/CEO) PLUS import. Distinct from the CEO-only PRINTED footer gate below.
+function requireStoredIrEmailWrite(ticket, user) {
+  if (user.role === 'ceo' || user.role === 'import') return;
+  if (user.role === 'sales' && ticket.createdById === user.id) return;
+  fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+}
+
+// "ประมาณ dd/MM/yy – dd/MM/yy (min–max วัน)" — mirrors ImportRequestService#defaultVesselEtaNote.
+function mockDefaultVesselEtaNote(anchorIso, minDays, maxDays) {
+  if (!anchorIso || minDays == null || maxDays == null) return null;
+  const fmt = (d) => {
+    const dt = new Date(d);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${String(dt.getFullYear()).slice(-2)}`;
+  };
+  const addDays = (iso, days) => {
+    const dt = new Date(iso);
+    dt.setDate(dt.getDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+  return `ประมาณ ${fmt(addDays(anchorIso, minDays))} – ${fmt(addDays(anchorIso, maxDays))} (${minDays}–${maxDays} วัน)`;
+}
+
+// "IR-<doc>-<factory>[-internal].pdf" — mirrors ImportRequestService.downloadFileName, shared by
+// the (stubbed) download route and the order-email draft's own "Attached:" line below.
+function mockImportRequestFileName(docNumber, id, factoryName, brand, factoryCopy) {
+  return `IR-${docNumber ?? `draft-${id}`}-${factoryName ?? brand ?? ''}${factoryCopy ? '' : '-internal'}.pdf`;
+}
+
+// Mirrors ImportRequestService#buildEmailDraft — a greeting, one numbered block per line, then
+// required-by / expected-arrival / attachment / signature. English body, never names the customer
+// or project (owner decision 09-19 #2).
+function mockBuildImportRequestEmailDraft(row, docNumber, issueDateIso, firstIssuedDateIso, requiredByNote, signerName, signerEmail) {
+  const lines = [`Dear ${row.factoryName} team,`, '',
+    `Please confirm this order, referencing our purchase order ${docNumber}:`, ''];
+  row.items.forEach((item, i) => {
+    if (i > 0) lines.push('');
+    const brandModel = [item.brand, item.model].filter((s) => s && String(s).trim()).join(' ');
+    let header = brandModel || item.code || 'Item';
+    const codeDiffersFromModel = item.code && (!item.model || item.code.trim().toLowerCase() !== item.model.trim().toLowerCase());
+    if (brandModel && item.code && codeDiffersFromModel) header = `${brandModel}  (Code: ${item.code})`;
+    lines.push(`${i + 1}. ${header}`);
+    const details = [];
+    if (item.color) details.push(`Colour: ${item.color}`);
+    if (item.texture) details.push(`Surface: ${item.texture}`);
+    if (item.size) details.push(`Size: ${item.size}`);
+    if (details.length) lines.push(`   ${details.join(' | ')}`);
+    if (item.qty != null) {
+      const qtyText = `${Number(item.qty)}`.replace(/\.?0+$/, '') || '0';
+      lines.push(`   Quantity: ${qtyText}${item.unit ? ` ${item.unit}` : ''}`);
+    }
+    const derivedNote = mockColorSurfaceNote(item.color, item.texture);
+    if (item.note && item.note !== derivedNote) lines.push(`   Note: ${item.note}`);
+  });
+  if (requiredByNote) lines.push('', `Required by: ${requiredByNote}`);
+  if (row.leadTimeMinDays != null && row.leadTimeMaxDays != null && firstIssuedDateIso) {
+    const addDays = (iso, days) => { const dt = new Date(iso); dt.setDate(dt.getDate() + days); return dt.toISOString().slice(0, 10); };
+    const fmt = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+    lines.push(`Expected arrival: approx. ${fmt(addDays(firstIssuedDateIso, row.leadTimeMinDays))} - ${fmt(addDays(firstIssuedDateIso, row.leadTimeMaxDays))}`);
+  }
+  lines.push('', `Attached: ${mockImportRequestFileName(docNumber, row.id, row.factoryName, row.brand, true)}`,
+    '', 'Thank you,', signerName || 'GL&R');
+  if (signerEmail) lines.push(signerEmail);
+  lines.push('GL&R');
+  return lines.join('\n');
+}
+
+// Resolves every deal line with remaining (non-stock-covered) quantity to a factory, grouping them
+// per factory — a SIMPLIFIED mirror of ImportRequestService#resolveFactoryGroups /
+// ImportRequestQueryRepository#factoryResolutionCandidates's cascade: direct catalog link, then a
+// typed factory name matched (normalized) against an existing factory, then auto-create from
+// `newFactoryCountries`. Never derives a factory from brand.
+function mockResolveFactoryGroups(ticket, request) {
+  const lines = (ticket.items ?? [])
+    .map((item) => ({ item, remainingQty: moneyValue(Number(item.qty || 0) - Number(item.qtyFromStock || 0)) }))
+    .filter(({ remainingQty }) => remainingQty > 0);
+  if (lines.length === 0) return [];
+
+  const byFactory = new Map(); // factoryId -> { items: [{item, remainingQty}], brands: Set }
+  const pendingByNormalized = new Map(); // normalized name -> { displayName, lines: [...] }
+
+  const addToFactory = (factoryId, item, remainingQty) => {
+    const bucket = byFactory.get(factoryId) ?? { items: [], brands: new Set() };
+    bucket.items.push({ item, remainingQty });
+    if (item.brand) bucket.brands.add(item.brand);
+    byFactory.set(factoryId, bucket);
+  };
+
+  for (const { item, remainingQty } of lines) {
+    let factoryId = item.resolvedFactoryId != null ? Number(item.resolvedFactoryId) : null;
+    if (factoryId == null && item.catalogPriceId != null) {
+      const product = mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId));
+      factoryId = product ? product.factoryId : null;
+    }
+    if (factoryId != null) { addToFactory(factoryId, item, remainingQty); continue; }
+    const candidateName = item.factory && String(item.factory).trim() ? String(item.factory).trim() : null;
+    if (!candidateName) {
+      fail(`รายการนี้ยังไม่ได้ระบุโรงงาน กรุณาระบุโรงงานก่อน: ${item.model || item.brand || `รายการ ${item.id}`}`, 409);
+    }
+    const normalized = mockNormalizeFactoryName(candidateName);
+    const existing = mockPriceImportFactories.find((f) => mockNormalizeFactoryName(f.name) === normalized);
+    if (existing) { addToFactory(existing.factoryId, item, remainingQty); continue; }
+    const pending = pendingByNormalized.get(normalized) ?? { displayName: candidateName, lines: [] };
+    pending.lines.push({ item, remainingQty });
+    pendingByNormalized.set(normalized, pending);
+  }
+
+  if (pendingByNormalized.size > 0) {
+    const supplied = new Map();
+    (request?.newFactoryCountries ?? []).forEach((entry) => {
+      if (entry?.factoryName) supplied.set(mockNormalizeFactoryName(entry.factoryName), entry);
+    });
+    const missing = [...pendingByNormalized.entries()]
+      .filter(([norm]) => !supplied.has(norm)).map(([, p]) => p.displayName);
+    if (missing.length > 0) fail(`กรุณาระบุประเทศให้กับโรงงานใหม่: ${missing.join(', ')}`, 409);
+    for (const [normalized, pending] of pendingByNormalized) {
+      const input = supplied.get(normalized);
+      const countryCode = requireValidMockCountry(input.countryCode);
+      const countryOther = requireValidMockCountryOther(countryCode, input.countryOther);
+      const factory = {
+        factoryId: mockPriceImportFactorySeq++,
+        name: pending.displayName,
+        country: countryCode,
+        countryOther,
+        defaultCurrency: 'EUR',
+        email: null,
+        unit: 'piece',
+        numberFormat: 'eu',
+        createdSource: 'IMPORT_REQUEST',
+      };
+      mockPriceImportFactories.push(factory);
+      pending.lines.forEach(({ item, remainingQty }) => addToFactory(factory.factoryId, item, remainingQty));
+    }
+  }
+
+  return [...byFactory.entries()].map(([factoryId, bucket]) => {
+    const factory = mockPriceImportFactories.find((f) => f.factoryId === factoryId);
+    return {
+      factoryId,
+      factoryName: factory?.name ?? null,
+      countryCode: factory?.country ?? null,
+      brandLabel: [...bucket.brands].join(', ') || null,
+      items: bucket.items.map(({ item, remainingQty }) => {
+        const product = item.catalogPriceId != null
+          ? mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId)) : null;
+        return {
+          ticketItemId: item.id,
+          code: product?.productCode || item.model || item.brand || `รายการ ${item.id}`,
+          size: item.size ?? null,
+          qty: remainingQty,
+          unit: item.unit ?? null,
+          note: mockColorSurfaceNote(item.color, item.texture),
+          color: item.color ?? null,
+          texture: item.texture ?? null,
+          brand: item.brand ?? null,
+          model: item.model ?? null,
+        };
+      }),
+    };
+  });
+}
+
+// PR-B REVIEW ROUND 1, S3: mirrors ImportRequestService#allFactoriesReceived's OTHER half —
+// requiredFactoryIds — a READ-ONLY, non-throwing companion to mockResolveFactoryGroups above.
+// The rollup must refuse to fire just because every CURRENTLY-ISSUED row is RECEIVED; it must also
+// confirm every factory the deal's own lines actually need an import for already HAS an issued
+// row — otherwise a factory still sitting in DRAFT (or never drafted at all) would let the deal
+// roll up to GOODS_RECEIVED early. Deliberately does NOT create a factory on the fly and does NOT
+// fail() on an unresolved/no-country line — it EXCLUDES it from the required set instead, matching
+// the real requiredFactoryIds's own documented contract ("does not invent a factory to demand an
+// IR for"). This is a SIMPLIFIED mirror (no newFactoryCountries lookup, since nothing here may
+// create), not a byte-for-byte port of the real resolution cascade.
+function mockRequiredFactoryIds(ticket) {
+  const ids = new Set();
+  (ticket.items ?? []).forEach((item) => {
+    const remainingQty = moneyValue(Number(item.qty || 0) - Number(item.qtyFromStock || 0));
+    if (remainingQty <= 0) return;
+    let factoryId = item.resolvedFactoryId != null ? Number(item.resolvedFactoryId) : null;
+    if (factoryId == null && item.catalogPriceId != null) {
+      const product = mockProductPrices.find((p) => p.priceId === Number(item.catalogPriceId));
+      factoryId = product ? product.factoryId : null;
+    }
+    if (factoryId == null && item.factory && String(item.factory).trim()) {
+      const normalized = mockNormalizeFactoryName(String(item.factory).trim());
+      const existing = mockPriceImportFactories.find((f) => mockNormalizeFactoryName(f.name) === normalized);
+      factoryId = existing ? existing.factoryId : null;
+    }
+    if (factoryId != null) ids.add(factoryId);
+    // else: unresolved line (no factory yet) — excluded, not blocking, per requiredFactoryIds.
+  });
+  return ids;
+}
+
+// Derived fields (expectedArrivalFrom/To) + pageCount, added on every read the same way
+// ImportRequestService#withPageCount does server-side — never stored.
+function mockImportRequestDto(row) {
+  const addDays = (iso, days) => {
+    if (!iso || days == null) return null;
+    const dt = new Date(iso);
+    dt.setDate(dt.getDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+  const anchor = row.firstIssuedDate;
+  return {
+    ...structuredClone(row),
+    expectedArrivalFrom: addDays(anchor, row.leadTimeMinDays),
+    expectedArrivalTo: addDays(anchor, row.leadTimeMaxDays),
+    // The real renderer's block-wise pagination is not reproduced in mock mode (see the legacy
+    // importRequests.pages above) — a stable placeholder is honest here since nothing in this UI
+    // acts differently above 1 page except a "N แผ่น" hint.
+    pageCount: row.items.length > 20 ? 2 : 1,
+  };
+}
+
+// PR-B REVIEW ROUND 1, S9: mirrors ImportRequestRepository.findByTicket's real
+// `ORDER BY r.factory_name, r.version` — NOT `r.brand`, which V184 made a nullable display
+// snapshot (factory_id/factory_name is the real per-row identity, owner decision 2, GLA-105).
+function mockImportRequestsForTicket(ticketId) {
+  return mockImportRequests
+    .filter((r) => r.ticketId === Number(ticketId))
+    .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version)
+    .map(mockImportRequestDto);
+}
+
 // --- tax-allowance declaration helpers (PR A, 2026-08-01) ---
 // Mirrors TaxAllowanceDeclarationDtos/TaxAllowanceDeclarationService/TaxAllowanceCapCatalog.
 
@@ -3176,6 +3499,54 @@ function autoAdvanceStage(ticket, targetStage, user) {
   ticket.salesStage = targetStage;
   ticket.stageUpdatedAt = new Date().toISOString();
   pushEvent(ticket, user, 'STAGE_CHANGED', fromStage, targetStage, 'อัตโนมัติจากขั้นตอนของดีล');
+}
+
+// Mirrors FulfilmentStatus.IMPORT_SEQUENCE (backend/src/main/java/th/co/glr/hr/ticket/
+// FulfilmentStatus.java) — the import axis, in progression order, exactly these four values.
+const MOCK_IMPORT_FULFILMENT_SEQUENCE = ['IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED'];
+
+// PR-B REVIEW ROUND 2, X5: mirrors TicketService#applyImportRequestRollup's own firewall guards
+// (backend/src/main/java/th/co/glr/hr/ticket/TicketService.java ~939-960) — called by
+// storedImportRequests.advanceStep below ONLY after it has confirmed (same as
+// ImportRequestService#advanceStep does before calling the real method) that every REQUIRED
+// factory already has an ISSUED row at RECEIVED. This function does not re-derive that check —
+// it only applies the four guards the Java method itself gates the WRITE on, in the same order:
+//
+//   1. PARTIALLY_DELIVERED (Owner decision 3, mixed stock+import Case 8) — event ONLY, no
+//      status/stage/payment write, so a delivery already under way is not disturbed.
+//   2. FULLY_DELIVERED — nothing left to unlock, nothing written at all.
+//   3. not on the import axis (IR_ISSUED/IR_SENT/SHIPPING/GOODS_RECEIVED) — nothing to roll up.
+//   4. already at or past GOODS_RECEIVED on that axis — nothing to roll up a second time.
+//
+// The previous inline check here (`allReceived && ticket.fulfillmentStatus !== 'PARTIALLY_DELIVERED'`)
+// missed all four: it silently dropped the PARTIALLY_DELIVERED event Java always writes (guard 1),
+// and had no guard at all for FULLY_DELIVERED or an already-GOODS_RECEIVED deal — a revised/reissued
+// row reaching RECEIVED a second time would re-push the GOODS_RECEIVED event and re-run
+// autoAdvanceStage every time.
+//
+// Exported (not just used internally) so mockApi.storedImportRequestRollup.test.js can pin each
+// guard directly against a plain ticket-like object — driving FULLY_DELIVERED or an
+// already-GOODS_RECEIVED deal through the full createDrafts/issue/advanceStep chain end to end
+// is not practical for these particular states (no other flow in this mock reaches them from a
+// live per-factory import request), unlike S3/S4's own real-fixture tests above.
+export function applyImportRequestRollupMock(ticket, actor) {
+  const cur = ticket.fulfillmentStatus;
+  if (cur === 'PARTIALLY_DELIVERED') {
+    pushEvent(ticket, actor, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+    return;
+  }
+  if (cur === 'FULLY_DELIVERED') return;
+  const importRank = MOCK_IMPORT_FULFILMENT_SEQUENCE.indexOf(cur);
+  if (importRank === -1) return; // not on the import axis (includes null/FROM_STOCK)
+  if (MOCK_IMPORT_FULFILMENT_SEQUENCE.indexOf('GOODS_RECEIVED') <= importRank) return; // already there or past it
+  ticket.fulfillmentStatus = 'GOODS_RECEIVED';
+  if (ticket.paymentStatus === 'DEPOSIT_PAID') {
+    ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
+    pushEvent(ticket, actor, 'AWAITING_FINAL_PAYMENT', ticket.status, ticket.status, null);
+  }
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  pushEvent(ticket, actor, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+  autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor);
 }
 
 function buildTicketDetail(ticket) {
@@ -6129,9 +6500,15 @@ export const api = {
         }
         if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
         if (['import', 'ceo'].includes(user.role) && canIssueIr) add('ISSUE_IMPORT_REQUEST', 'fulfillment', 'ออกคำขอนำเข้า');
-        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
-        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
-        if (['import', 'ceo'].includes(user.role) && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
+        // V184 (PR-B): once the deal is tracked per-factory (>= 1 ISSUED sales.import_request
+        // row), these three deal-level buttons all 409 — mirrors TicketService#addOperationalActions'
+        // own `irTracked` guard. canIssueIr already excludes a tracked deal on its own (the first
+        // factory issue sets fulfillmentStatus, so it is no longer null), matching the real
+        // canIssueImportRequest, which is why ISSUE_IMPORT_REQUEST above needs no separate check.
+        const irTracked = mockHasLiveImportRequests(ticket.id);
+        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_ISSUED') add('IR_SENT', 'fulfillment', 'ส่งคำขอนำเข้าแล้ว');
+        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
+        if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
         if (['import', 'ceo'].includes(user.role) && (ticket.items ?? []).length > 0 && hasRemainingDelivery(ticket)
             && ticket.fulfillmentStatus !== 'FULLY_DELIVERED') {
           add('RESERVE_STOCK', 'fulfillment', 'จองสินค้าจากสต็อก', { requiredFields: ['lines'] });
@@ -6630,21 +7007,20 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    // REVIEW ROUND 1 nit (2026-09-18): the real TicketService#markIrSent/markShipping/
-    // markGoodsReceived additionally 409 when tickets.hasLiveImportRequests(ticketId) -- once a
-    // deal is tracked by the V184 per-factory ใบขอซื้อ aggregate, these legacy one-shot buttons
-    // must refuse in favour of ImportRequestService#advanceStep. This mock deliberately does NOT
-    // reproduce that guard: the stored aggregate's own routes (POST .../import-requests, .../issue,
-    // .../advance-step, ...) are SERVER_ONLY (see frontend/src/api/serverContract.test.js) with no
-    // mockApi implementation, so ticket.fulfillmentStatus can never actually reach IR_ISSUED via
-    // that path in mock mode -- there is no reachable state where this guard's absence would let a
-    // mock-driven click through that production would refuse. Kept EXACT-STATUS ("=== 'IR_ISSUED'",
-    // not ">="), matching the real service's own compare-and-advance shape, so this stays inert
-    // rather than silently widening if that changes.
+    // V184 (PR-B): the real TicketService#markIrSent/markShipping/markGoodsReceived additionally
+    // 409 when tickets.hasLiveImportRequests(ticketId) -- once a deal is tracked by the per-factory
+    // ใบขอซื้อ aggregate, these legacy one-shot buttons refuse in favour of
+    // ImportRequestService#advanceStep. Now that api.storedImportRequests is implemented in mock
+    // mode (PR-B), ticket.fulfillmentStatus CAN reach IR_ISSUED via that path, so the comment that
+    // used to sit here ("this guard's absence is inert, nothing reachable would widen it") no
+    // longer holds -- the guard is now reproduced, exact message included.
     async markIrSent(id) {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
+      if (mockHasLiveImportRequests(ticket.id)) {
+        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+      }
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่งคำขอนำเข้าแล้วได้', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -6656,6 +7032,9 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
+      if (mockHasLiveImportRequests(ticket.id)) {
+        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+      }
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -6667,6 +7046,9 @@ export const api = {
       const user = hasRole('import');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
+      if (mockHasLiveImportRequests(ticket.id)) {
+        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+      }
       if (ticket.fulfillmentStatus !== 'SHIPPING') fail('ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
       if (ticket.paymentStatus === 'DEPOSIT_PAID') {
@@ -9689,6 +10071,355 @@ export const api = {
     },
   },
 
+  // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
+  // #1008 / PR-B, GLA-100/105). Role gates mirror ImportRequestService (see the helpers just above
+  // requireDealEntry). PDF rendering is a "not supported in mock mode" stub, same as the legacy
+  // importRequests.pages/download above — the block comment on that helper section explains why
+  // the exotic text-regeneration edge cases are simplified rather than mirrored exactly.
+  storedImportRequests: {
+    async createDrafts(ticketId, request) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = requireOwningRepOrCeo(ticket);
+      requireActive(ticket);
+      if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
+        fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
+      }
+      const groups = mockResolveFactoryGroups(ticket, request);
+      if (groups.length === 0) {
+        fail('ดีลนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)', 409);
+      }
+      const alreadyCovered = new Set(mockImportRequests
+        .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
+        .map((r) => r.factoryId));
+      let created = 0;
+      const now = new Date().toISOString();
+      for (const group of groups) {
+        if (alreadyCovered.has(group.factoryId)) continue;
+        const leadTime = mockLeadTimeDefaults(group.countryCode);
+        const id = mockImportRequestSeq++;
+        mockImportRequests.push({
+          id, ticketId: ticket.id, ticketCode: ticket.code,
+          brand: group.brandLabel, factoryId: group.factoryId, factoryName: group.factoryName,
+          version: 1, status: 'DRAFT', docNumber: null, issueDate: null, firstIssuedDate: null,
+          customerName: ticket.customerName ?? null, projectName: ticket.projectName ?? null,
+          requestedByName: user.name, requiredByNote: null,
+          depositReceivedDate: (db.paymentReceipts ?? [])
+            .filter((r) => r.ticketId === ticket.id && r.kind === 'DEPOSIT')
+            .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt))[0]?.receivedAt?.slice(0, 10) ?? null,
+          vesselEtaNote: null, checkedByName: null, checkedDate: null, approvedByName: null, approvedDate: null,
+          importStep: null, importStepAt: null, importStepById: null, importStepByName: null, importStepNote: null,
+          leadTimeMinDays: leadTime?.min ?? null, leadTimeMaxDays: leadTime?.max ?? null,
+          emailTo: null, emailSubject: null, emailBody: null, emailSentAt: null, emailSentById: null, emailSentByName: null,
+          createdById: user.id, createdByName: user.name, issuedById: null, issuedByName: null, issuedByEmail: null,
+          supersededById: null, createdAt: now, updatedAt: now, issuedAt: null,
+          items: group.items.map((it, i) => ({
+            id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: it.ticketItemId, seq: i + 1, ...it,
+          })),
+        });
+        created++;
+      }
+      if (created === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
+    },
+    async listForTicket(ticketId) {
+      const ticket = findTicketRaw(Number(ticketId));
+      requireStoredIrRead(ticket, requireSession());
+      return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
+    },
+    async get(id) {
+      const row = findStoredImportRequestRaw(id);
+      requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    // PATCH semantics — an absent field is left alone. Body fields (owning rep/CEO) move only
+    // while DRAFT; the printed footer (checked/approved/vessel ETA) is CEO-only regardless of
+    // status — mirrors ImportRequestService#update.
+    async update(id, request = {}) {
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      const user = requireSession();
+      const wantsLeadTimeChange = request.leadTimeMinDays != null || request.leadTimeMaxDays != null;
+      const wantsBodyChange = request.projectName != null || request.customerName != null
+        || request.requestedByName != null || request.requiredByNote != null
+        || request.items != null || wantsLeadTimeChange;
+      const wantsFooterChange = request.vesselEtaNote != null || request.checkedByName != null
+        || request.checkedDate != null || request.approvedByName != null || request.approvedDate != null;
+      if (wantsBodyChange) requireOwningRepOrCeo(ticket);
+      if (wantsFooterChange && user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!wantsBodyChange && !wantsFooterChange) requireStoredIrRead(ticket, user);
+      requireActive(ticket);
+      if (row.status === 'SUPERSEDED') fail('ใบขอซื้อฉบับนี้ถูกแทนที่แล้ว แก้ไขไม่ได้', 409);
+      const draft = row.status === 'DRAFT';
+      if (wantsBodyChange && !draft) {
+        fail('ใบขอซื้อที่ออกเลขแล้วแก้ไขเนื้อหาไม่ได้ — ต้องออกฉบับแก้ไขใหม่', 409);
+      }
+      if (draft) {
+        if (request.projectName != null) row.projectName = request.projectName;
+        if (request.customerName != null) row.customerName = request.customerName;
+        if (request.requestedByName != null) row.requestedByName = request.requestedByName;
+        if (request.requiredByNote != null) row.requiredByNote = request.requiredByNote;
+        if (request.items != null) {
+          if (request.items.length === 0) fail('ต้องมีรายการสินค้าอย่างน้อย 1 รายการ', 400);
+          row.items = request.items.map((it, i) => ({
+            id: `${row.id}-${i + 1}`, importRequestId: row.id, seq: i + 1, ...it,
+          }));
+        }
+        if (wantsLeadTimeChange) {
+          if ((request.leadTimeMinDays == null) !== (request.leadTimeMaxDays == null)) {
+            fail('ต้องระบุระยะเวลานำเข้าทั้งค่าต่ำสุดและสูงสุดพร้อมกัน', 400);
+          }
+          if (request.leadTimeMinDays != null && request.leadTimeMinDays > request.leadTimeMaxDays) {
+            fail('ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าค่าสูงสุด', 400);
+          }
+          row.leadTimeMinDays = request.leadTimeMinDays;
+          row.leadTimeMaxDays = request.leadTimeMaxDays;
+        }
+      }
+      if (wantsFooterChange) {
+        if (request.vesselEtaNote != null) row.vesselEtaNote = request.vesselEtaNote;
+        if (request.checkedByName != null) row.checkedByName = request.checkedByName;
+        if (request.checkedDate != null) row.checkedDate = request.checkedDate;
+        if (request.approvedByName != null) row.approvedByName = request.approvedByName;
+        if (request.approvedDate != null) row.approvedDate = request.approvedDate;
+      }
+      row.updatedAt = new Date().toISOString();
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    async issue(id, request) {
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      const user = requireOwningRepOrCeo(ticket);
+      requireActive(ticket);
+      if (row.status !== 'DRAFT') fail('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว', 409);
+      if (row.items.length === 0) fail('ใบขอซื้อยังไม่มีรายการสินค้า', 409);
+      if (row.leadTimeMinDays == null || row.leadTimeMaxDays == null) {
+        fail(`กรุณาระบุระยะเวลานำเข้า (วัน) ของโรงงาน ${row.factoryName}`, 409);
+      }
+      // Widened payment gate (REVIEW ROUND 2, S-C): the stored per-factory path accepts ANY
+      // status at or after deposit-ready, so a later factory or a revision is not blocked once
+      // the customer has paid further. A deal with no deposit at all is still refused.
+      //
+      // PR-B REVIEW ROUND 1, S4: the bypass branch used to also accept paymentStatus == null,
+      // which is MORE PERMISSIVE than the real gate — TicketService#requireImportRequestIssuable's
+      // own comment is explicit that "null is no longer treated as 'deposit bypassed' here — null
+      // may only ever advance to CUSTOMER_CONFIRMED, so a bypass-policy deal must have actually
+      // reached CUSTOMER_CONFIRMED (via confirmCustomer) before an IR can issue." A mock more
+      // permissive than production is the dangerous direction (CLAUDE.md) — it would let mock-mode
+      // testing issue an IR the real backend refuses.
+      const depositReadyOrLater = ['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
+        || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
+      if (ticket.status !== 'quotation_issued' || !depositReadyOrLater) {
+        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อออกใบเสนอราคาแล้วและรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+      }
+      const override = request?.docNumber?.trim() || null;
+      if (override && mockImportRequests.some((r) => r.docNumber === override)) {
+        fail(`เลขที่ใบขอซื้อ ${override} ถูกใช้แล้ว`, 409);
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const thaiYear = String(new Date().getFullYear() + 543).slice(-2);
+      const seqForYear = mockImportRequests.filter((r) => r.docNumber?.startsWith(`IR${thaiYear}`)).length + 1;
+      const docNumber = override || `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`;
+
+      // The predecessor this issue supersedes (this row's OWN previous version, if any) carries
+      // its progress step and first-issue date forward — mirrors lockIssuedPredecessor.
+      const predecessor = mockImportRequests.find((r) => r.ticketId === row.ticketId
+        && r.factoryId === row.factoryId && r.status === 'ISSUED');
+      let step; let stepAt; let stepById; let stepByName; let stepNote; let firstIssuedDate;
+      if (predecessor) {
+        step = predecessor.importStep; stepAt = predecessor.importStepAt;
+        stepById = predecessor.importStepById; stepByName = predecessor.importStepByName;
+        stepNote = predecessor.importStepNote; firstIssuedDate = predecessor.firstIssuedDate;
+        predecessor.status = 'SUPERSEDED';
+        predecessor.supersededById = row.id;
+      } else {
+        step = 'CONTACTED'; stepAt = today; stepById = user.id; stepByName = user.name; stepNote = null;
+        firstIssuedDate = today;
+      }
+
+      const derivedVesselEtaNote = mockDefaultVesselEtaNote(firstIssuedDate, row.leadTimeMinDays, row.leadTimeMaxDays);
+      row.vesselEtaNote = row.vesselEtaNote ? row.vesselEtaNote : derivedVesselEtaNote;
+      row.requiredByNote = row.requiredByNote || ticket.requiredByNote || null;
+
+      row.status = 'ISSUED';
+      row.docNumber = docNumber;
+      row.issueDate = today;
+      row.firstIssuedDate = firstIssuedDate;
+      row.issuedById = user.id;
+      row.issuedByName = user.name;
+      row.issuedByEmail = user.email ?? null;
+      row.issuedAt = new Date().toISOString();
+      row.updatedAt = row.issuedAt;
+      row.importStep = step; row.importStepAt = stepAt; row.importStepById = stepById;
+      row.importStepByName = stepByName; row.importStepNote = stepNote;
+      const factory = mockPriceImportFactories.find((f) => f.factoryId === row.factoryId);
+      row.emailTo = factory?.email ?? null;
+      row.emailSubject = `Purchase order ${docNumber} - GL&R`;
+      row.emailBody = mockBuildImportRequestEmailDraft(row, docNumber, today, firstIssuedDate, row.requiredByNote, user.name, user.email);
+
+      if (ticket.fulfillmentStatus == null) {
+        ticket.fulfillmentStatus = 'IR_ISSUED';
+        ticket.updatedAt = today;
+        pushEvent(ticket, user, 'IR_ISSUED', ticket.status, ticket.status,
+          `ออกใบขอซื้อ ${docNumber} (โรงงาน ${row.factoryName})`);
+        autoAdvanceStage(ticket, 'PROCUREMENT', user);
+      }
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    async revise(id) {
+      const issued = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(issued.ticketId);
+      const user = requireOwningRepOrCeo(ticket);
+      requireActive(ticket);
+      if (issued.status !== 'ISSUED') fail('ออกฉบับแก้ไขได้เฉพาะใบขอซื้อที่ออกเลขแล้ว', 409);
+      if (issued.importStep === 'RECEIVED') fail('ใบขอซื้อที่ได้รับสินค้าแล้ว (RECEIVED) แก้ไขไม่ได้', 409);
+      const id2 = mockImportRequestSeq++;
+      const now = new Date().toISOString();
+      mockImportRequests.push({
+        ...structuredClone(issued),
+        id: id2, version: issued.version + 1, status: 'DRAFT',
+        docNumber: null, issueDate: null, issuedById: null, issuedByName: null, issuedByEmail: null, issuedAt: null,
+        importStep: null, importStepAt: null, importStepById: null, importStepByName: null, importStepNote: null,
+        firstIssuedDate: null, // carried forward again at THIS draft's own issue, from ITS predecessor
+        emailTo: null, emailSubject: null, emailBody: null, emailSentAt: null, emailSentById: null, emailSentByName: null,
+        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now, supersededById: null,
+        items: issued.items.map((it, i) => ({ ...it, id: `${id2}-${i + 1}`, importRequestId: id2, seq: i + 1 })),
+      });
+      return delay({ importRequest: mockImportRequestDto(mockImportRequests.find((r) => r.id === id2)) });
+    },
+    async deleteDraft(id) {
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireOwningRepOrCeo(ticket);
+      requireActive(ticket);
+      if (row.status !== 'DRAFT') fail('ลบได้เฉพาะใบขอซื้อที่ยังไม่ออกเลข', 409);
+      mockImportRequests.splice(mockImportRequests.indexOf(row), 1);
+      return delay({ status: 'deleted' });
+    },
+    async advanceStep(id, request) {
+      const user = hasRole('import', 'ceo');
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireActive(ticket);
+      if (row.status !== 'ISSUED') fail('อัปเดตขั้นตอนได้เฉพาะใบขอซื้อที่ออกเลขแล้ว', 409);
+      const target = request?.targetStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(target)) fail(`ขั้นตอนไม่ถูกต้อง: ${target}`, 400);
+      const currentIdx = mockImportRequestStepIndex(row.importStep);
+      const targetIdx = mockImportRequestStepIndex(target);
+      if (targetIdx <= currentIdx) {
+        fail('เลื่อนขั้นตอนได้เฉพาะไปข้างหน้าเท่านั้น — แก้ไขย้อนหลังด้วยการออกฉบับแก้ไข', 409);
+      }
+      const eventDate = request?.eventDate || new Date().toISOString().slice(0, 10);
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (eventDate > todayIso) fail('วันที่ของขั้นตอนต้องไม่เป็นวันที่ในอนาคต', 400);
+      if (row.firstIssuedDate && eventDate < row.firstIssuedDate) {
+        fail(`วันที่ของขั้นตอนต้องไม่ก่อนวันที่ออกใบขอซื้อครั้งแรก (${row.firstIssuedDate})`, 400);
+      }
+      const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep ?? '—';
+      const toLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target] ?? target;
+      row.importStep = target; row.importStepAt = eventDate; row.importStepById = user.id;
+      row.importStepByName = user.name; row.importStepNote = request?.note ?? null;
+      row.updatedAt = new Date().toISOString();
+      const noteSuffix = request?.note ? ` — ${request.note}` : '';
+      pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+        `โรงงาน ${row.factoryName}: ${fromLabel} → ${toLabel}${noteSuffix}`);
+      if (target === 'RECEIVED') {
+        // PR-B REVIEW ROUND 1, S3: Mirrors ImportRequestService#allFactoriesReceived (called from
+        // #advanceStep before TicketService#applyImportRequestRollup) — TWO conditions, not one.
+        // This used to check only "every currently-ISSUED row is RECEIVED", which rolls up early
+        // when the deal has a factory that is still DRAFT (never issued yet): that factory's own
+        // IR would silently stop mattering to the rollup the moment the OTHER factories finished.
+        // The second condition (every REQUIRED factory — see mockRequiredFactoryIds — already has
+        // an ISSUED row here) closes that gap.
+        const liveRows = mockImportRequests.filter((r) => r.ticketId === ticket.id && r.status === 'ISSUED');
+        const requiredFactoryIds = mockRequiredFactoryIds(ticket);
+        const allReceived = liveRows.length > 0
+          && liveRows.every((r) => r.importStep === 'RECEIVED')
+          && [...requiredFactoryIds].every((fid) => liveRows.some((r) => r.factoryId === fid));
+        // PR-B REVIEW ROUND 2, X5: the actual WRITE (including the PARTIALLY_DELIVERED
+        // event-only case) is applyImportRequestRollupMock's own firewall, mirroring
+        // TicketService#applyImportRequestRollup — see that function's own header comment.
+        if (allReceived) {
+          applyImportRequestRollupMock(ticket, user);
+        }
+      }
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    async setLeadTime(id, request) {
+      const user = hasRole('import', 'ceo');
+      void user;
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireActive(ticket);
+      if (row.status !== 'ISSUED') fail('แก้ไขระยะเวลานำเข้าได้เฉพาะใบขอซื้อที่ออกเลขแล้ว', 409);
+      const { leadTimeMinDays, leadTimeMaxDays } = request ?? {};
+      if (leadTimeMinDays == null || leadTimeMaxDays == null) {
+        fail('ต้องระบุระยะเวลานำเข้าทั้งค่าต่ำสุดและสูงสุดพร้อมกัน', 400);
+      }
+      if (leadTimeMinDays > leadTimeMaxDays) fail('ระยะเวลานำเข้าต่ำสุดต้องไม่มากกว่าค่าสูงสุด', 400);
+      row.leadTimeMinDays = leadTimeMinDays;
+      row.leadTimeMaxDays = leadTimeMaxDays;
+      // Simplified mirror of REVIEW ROUND 2 S-D: only re-derive vesselEtaNote when it still looks
+      // auto-generated (the exact "still equals the previous generation" / "hasn't been
+      // hand-edited" tracking REVIEW ROUND 3 adds is not reproduced — see this section's own
+      // block comment on why).
+      if (!row.vesselEtaNote || /^ประมาณ /.test(row.vesselEtaNote)) {
+        row.vesselEtaNote = mockDefaultVesselEtaNote(row.firstIssuedDate, leadTimeMinDays, leadTimeMaxDays);
+      }
+      row.updatedAt = new Date().toISOString();
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    async updateEmailDraft(id, request) {
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireStoredIrEmailWrite(ticket, requireSession());
+      requireActive(ticket);
+      if (row.status !== 'ISSUED') fail('แก้ไขอีเมลได้เฉพาะใบขอซื้อที่ออกเลขแล้ว', 409);
+      if (row.emailSentAt) fail('อีเมลนี้ถูกส่งไปแล้ว แก้ไขไม่ได้', 409);
+      if (request?.emailTo != null) row.emailTo = request.emailTo;
+      if (request?.emailSubject != null) row.emailSubject = request.emailSubject;
+      if (request?.emailBody != null) row.emailBody = request.emailBody;
+      row.updatedAt = new Date().toISOString();
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    async markEmailSent(id) {
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      const user = requireSession();
+      requireStoredIrEmailWrite(ticket, user);
+      requireActive(ticket);
+      if (row.status !== 'ISSUED') fail('ทำเครื่องหมายส่งอีเมลได้เฉพาะใบขอซื้อที่ออกเลขแล้ว', 409);
+      if (row.emailSentAt) fail('อีเมลนี้ถูกส่งไปแล้ว', 409);
+      row.emailSentAt = new Date().toISOString();
+      row.emailSentById = user.id;
+      row.emailSentByName = user.name;
+      row.updatedAt = row.emailSentAt;
+      pushEvent(ticket, user, 'IMPORT_REQUEST_EMAIL_SENT', null, null,
+        `ส่งอีเมลสั่งซื้อของโรงงาน ${row.factoryName} แล้ว`);
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    // PDF rendering is not reproduced in mock mode — same "not supported" stub as the legacy
+    // importRequests.download above (ImportRequestRenderer's own PDFBox layout is server-only).
+    async download(id, copy) {
+      const row = findStoredImportRequestRaw(id);
+      requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
+      void copy;
+      fail('สร้างไฟล์ใบขอซื้อไม่รองรับในโหมดทดสอบ (mock) — ต้องใช้เซิร์ฟเวอร์จริง', 501);
+    },
+    // "กำหนดวันที่ต้องการของ" on the DEAL — sales(owner)/ceo, stage >= ORDER_RECEIVED.
+    async setRequiredByNote(ticketId, request) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = requireSession();
+      if (user.role !== 'sales' && user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (user.role === 'sales' && ticket.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      requireActive(ticket);
+      if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
+        fail('ระบุกำหนดวันที่ต้องการของได้หลังจากยืนยันคำสั่งซื้อแล้ว', 409);
+      }
+      ticket.requiredByNote = request?.requiredByNote?.trim() || null;
+      return delay({ status: 'saved' });
+    },
+  },
+
   // Mirrors CatalogController (catalog/) — product CRUD delegates to
   // PriceImportService.addProductManual()/updateProduct()/deleteProduct().
   // Both reads stay requireSession() — open to any logged-in user, matching the
@@ -10443,11 +11174,12 @@ export const api = {
     // A blank/unseeded country used to reach price_catalog.factories' NOT NULL + FK column and
     // 500; here it fails the same clean 400 the real service now raises. email/unit are the two
     // RFQ fields V163 folded onto this table from the dropped sales.factory_config.
-    async createFactory(name, country, defaultCurrency, email, unit) {
+    async createFactory(name, country, countryOther, defaultCurrency, email, unit) {
       hasRole('ceo', 'import');
       if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
       const trimmedName = String(name).trim();
       const countryCode = requireValidMockCountry(country);
+      const ctyOther = requireValidMockCountryOther(countryCode, countryOther);
       if (mockPriceImportFactories.some((f) => f.name === trimmedName)) {
         fail(`มีโรงงานชื่อนี้อยู่แล้ว: ${trimmedName}`, 409);
       }
@@ -10455,6 +11187,7 @@ export const api = {
         factoryId: mockPriceImportFactorySeq++,
         name: trimmedName,
         country: countryCode,
+        countryOther: ctyOther,
         defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
           ? String(defaultCurrency).trim().toUpperCase()
           : 'EUR',
@@ -10469,7 +11202,7 @@ export const api = {
     // unknown id, 400 bad country, 409 duplicate name. This is the actual fix's whole point — it's
     // the only way จัดซื้อ can put a real RFQ email on one of the 9 real factories, which have
     // never had one (see V163's migration header: the old email directory matched 0% of them).
-    async updateFactory(factoryId, name, country, defaultCurrency, email, unit) {
+    async updateFactory(factoryId, name, country, countryOther, defaultCurrency, email, unit) {
       hasRole('ceo', 'import');
       const fid = Number(factoryId);
       const factory = mockPriceImportFactories.find((f) => f.factoryId === fid);
@@ -10477,12 +11210,20 @@ export const api = {
       if (!name || !String(name).trim()) fail('ชื่อโรงงานห้ามว่าง', 400);
       const trimmedName = String(name).trim();
       const countryCode = requireValidMockCountry(country);
+      // REVIEW ROUND 1, S6: when the caller sends NO countryOther and the country is UNCHANGED ZZ,
+      // KEEP the stored value rather than requiring it again — mirrors PriceImportService
+      // .updateFactory's own comment. Only a caller that sends countryOther (even blank-to-clear)
+      // or CHANGES the country goes through the full requireValidMockCountryOther check.
+      const other = countryOther == null && countryCode === 'ZZ' && countryCode === factory.country
+        ? factory.countryOther ?? null
+        : requireValidMockCountryOther(countryCode, countryOther);
       if (mockPriceImportFactories.some((f) => f.factoryId !== fid && f.name === trimmedName)) {
         fail(`มีโรงงานชื่อนี้อยู่แล้ว: ${trimmedName}`, 409);
       }
       Object.assign(factory, {
         name: trimmedName,
         country: countryCode,
+        countryOther: other,
         defaultCurrency: defaultCurrency && String(defaultCurrency).trim()
           ? String(defaultCurrency).trim().toUpperCase()
           : 'EUR',
@@ -10497,9 +11238,18 @@ export const api = {
     // Sorted by nameTh (a COPY — MOCK_COUNTRIES itself is left in its declared order, since
     // fxRates/formula-config read that array directly) to mirror FactoryConfigRepository
     // .listCountries()'s real `ORDER BY name_th`, not just the same five rows in some order.
+    // 'ZZ' อื่นๆ (V184) is pulled out and appended LAST, mirroring listCountries()'s own ordering —
+    // a Thai locale sort would otherwise place "อื่นๆ" among the other อ-initial names.
+    // PR-B REVIEW ROUND 1, B2: READ widened to sales + sales_manager (real gate:
+    // PriceImportController#requireCountriesReader) — the owning sales rep's new-factory country
+    // picker on ImportRequestFactoryCard needs this list; every WRITE below (createFactory,
+    // updateFactory, upload/validate/commit, versions) stays ceo/import-only, unchanged.
     async countries() {
-      hasRole('ceo', 'import');
-      return delay([...MOCK_COUNTRIES].sort((a, b) => a.nameTh.localeCompare(b.nameTh, 'th')));
+      hasRole('ceo', 'import', 'sales', 'sales_manager');
+      const real = MOCK_COUNTRIES.filter((c) => c.countryCode !== 'ZZ')
+        .sort((a, b) => a.nameTh.localeCompare(b.nameTh, 'th'));
+      const other = MOCK_COUNTRIES.find((c) => c.countryCode === 'ZZ');
+      return delay(other ? [...real, other] : real);
     },
     async versions(factoryId) {
       hasRole('ceo', 'import');

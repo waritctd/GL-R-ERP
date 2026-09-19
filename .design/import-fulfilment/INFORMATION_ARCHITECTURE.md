@@ -286,3 +286,60 @@ service is what proves a role gate, and none was written because no role gate ch
 *stricter* than production here (the safe direction, but still a divergence), so mock-mode clicking
 as `ceo` will fail on all four actions while production would allow them. Not fixed on this branch:
 it is a mockApi authz change, outside a frontend-UI task's scope.
+
+---
+
+## 11. Revision 2026-09-19 — per-factory redesign, then rebuilt on the STORED aggregate (PR-B)
+
+**Status:** implemented — branch `feat/import-request-per-factory-ui` (PR-B).
+
+This section covers two changes in sequence, because the second one changed which backend the
+first one's UI talks to before either shipped.
+
+### 11.1 The per-factory redesign (Yang.Pongburit, `origin/feat/per-factory-import-tracking`,
+commit `65dfe171`, not merged — its BACKEND is not this branch's)
+
+Per-factory import tracking broke §4.2's premise: **a deal is no longer at one
+`fulfillment_status`.** It has N factories, each at its own step. Two bugs followed, both reported:
+a tracked deal sat mislabelled in "ออกคำขอนำเข้า" (its deal-level status stayed null through the
+whole import phase), and a fully-received deal vanished the instant the rollup set
+`GOODS_RECEIVED` (`nextFulfilmentActionCode` mapped that to `recordDelivery`, which this workspace
+filters out).
+
+The fix kept §0's core principle — this is "the room", not "a door" — and changed only the UNIT:
+from a deal at one of 4 `fulfillment_status` values to a FACTORY SHIPMENT at one of 6 `import_step`
+values, each rendered as a `FactoryProgressBar` (the same bar the deal page shows), grouped one
+card per deal with 6 step chips counting SHIPMENTS, a step filter that DIMS rather than hides, and
+an all-received deal dropping into a collapsed "รับครบแล้ว · รอส่งมอบ" group instead of vanishing.
+
+### 11.2 PR-B: rebuilt on the STORED aggregate, not Yang's own backend
+
+Yang's redesign was built against his own branch's backend (`api.importProgress`, a NEW
+`sales.factory_import_progress` table, zero tests). PR-A (#1008) rebuilt the backend instead on the
+EXISTING V154 `sales.import_request` aggregate — one stored row per (deal, FACTORY), not a second
+table — with fourteen real-DB integration tests and a materially different, ownership-aware role
+model (owning sales rep + CEO write the body/issue/revise; import + CEO advance steps and the
+post-issue lead time; the printed footer is CEO-only). This PR-B ports Yang's UI SHAPE (one card
+per deal, `FactoryProgressBar`, step chips, the dim-not-hide filter, the done group) onto that
+backend:
+
+| | Yang's redesign (§11.1) | PR-B (this branch) |
+|---|---|---|
+| Step codes | `IR_SENT/ORDERED/PICKED_UP/IN_TRANSIT/CUSTOMS_CLEARANCE/RECEIVED` | `CONTACTED/ORDERED/PICKED_UP/IN_TRANSIT/AWAITING_CUSTOMS/RECEIVED` (PR-A's own S12-S17 — `IR_SENT` collided with the deal-level `FulfilmentStatus`/`TicketEventKind` constant of the same name; `CUSTOMS_CLEARANCE` was a prior deleted constant) |
+| Row source | `api.importProgress.listAll` (one cross-deal endpoint) | **no cross-deal endpoint exists** for the stored aggregate — see the page's own header comment for the bounded per-candidate-deal fetch this port uses instead (`api.tickets.list` filtered to `fulfillmentStatus IR_ISSUED`/`GOODS_RECEIVED`, then `api.storedImportRequests.listForTicket` per candidate) |
+| Order email | generated live, nothing stored | a STORED draft per row (`emailTo/Subject/Body`, editable, `POST .../mark-email-sent`, idempotent) |
+| Added by PR-B | — | ส่งแล้ว (mark-email-sent), the expected-arrival range, post-issue lead-time edit (import/CEO), the ใบขอซื้อ PDF link (internal + factory copy) |
+| Deal page (`DealFulfilmentPanel`) | unchanged | new "ใบขอซื้อรายโรงงาน" section: per-factory create/issue/revise/delete (owning rep/CEO), a new-factory country picker (real country + อื่นๆ with a required typed name), the CEO-only footer, all reusing `FactoryProgressBar`/the email flow this page introduced |
+
+**Known limitation, not a backend change:** the bounded N+1 fetch above is real cost, acceptable for
+Import's worklist size, and not a substitute for a real cross-deal endpoint — flagged rather than
+worked around with a backend change, which is out of a frontend-UI branch's scope.
+
+Verification: `ImportFulfilmentPage.test.jsx` rewritten for `api.storedImportRequests` (10 tests:
+grouping, shipment-count chips, in-place advance, done-group placement, step filter, search, empty
+state, mark-sent, lead-time edit). `DealFulfilmentPanel.test.jsx` (new, 15 tests) covers the new
+section's role visibility, the country-required create flow, the CEO-only footer, mark-sent, and
+lead-time edit. Lint 0 errors, build ok. `VITE_USE_MOCKS=true` only — **nothing permission-shaped
+here is verified against the Java service**; PR-A's real-DB tests are what proves the role matrix.
+
+Co-Authored-By: Yang.Pongburit (§11.1's design and original implementation).

@@ -103,16 +103,34 @@ export const queryKeys = {
   // AccountFinancePage/CommissionPage's createFromDeal flow all use — same
   // `salesStage` query param, distinct key from the plain ticketList above.
   ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
-  ticketDetail: (id) => ['tickets', 'detail', id],
+  // PR-B REVIEW ROUND 1, S6: coerced to Number — TicketDetailPage reaches this id via
+  // useParams() (a STRING from the URL), while ImportFulfilmentPage/DealFulfilmentPanel pass the
+  // ticket's own `id`/`ticketId` field (a NUMBER from the API). ['tickets','detail','7'] and
+  // ['tickets','detail',7] are DIFFERENT cache keys to react-query, so an invalidation fired by
+  // one surface silently missed the other's cached entry — the two surfaces could disagree about
+  // a deal's own fulfilment state after an advance. Number(id) on an already-empty/undefined id
+  // is intentionally left alone (NaN) rather than defaulted, matching every other id-keyed entry
+  // below that has no "no id yet" caller.
+  ticketDetail: (id) => ['tickets', 'detail', id == null ? id : Number(id)],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
-  ticketActions: (id) => ['tickets', 'actions', id],
+  // PR-B REVIEW ROUND 1, S6 — see ticketDetail's own comment just above.
+  ticketActions: (id) => ['tickets', 'actions', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
   // Which brands a deal needs a ใบขอซื้อ for — one F-SM-001 per brand.
   importRequestBrands: (id) => ['tickets', 'import-request-brands', id],
+  // The STORED ใบขอซื้อ aggregate (V184, PR-B) — one entry per deal's whole per-factory list, and
+  // one for a single row by its own id (the edit/issue/advance-step screens load this before
+  // acting on a specific version).
+  // PR-B REVIEW ROUND 1, S6 — see ticketDetail's own comment above for why Number() matters here:
+  // ImportFulfilmentPage's rowsQueries and DealFulfilmentPanel's own storedIrQuery must land on the
+  // SAME cache entry for the same deal regardless of whether their ticketId arrived as a route
+  // param (string) or an already-numeric field.
+  storedImportRequests: (ticketId) => ['importRequests', 'byTicket', ticketId == null ? ticketId : Number(ticketId)],
+  storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
   ticketActivities: (id) => ['tickets', 'activities', id],

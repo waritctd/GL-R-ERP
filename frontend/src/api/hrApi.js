@@ -496,8 +496,8 @@ export const api = {
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
   },
-  // Mirrors ImportRequestController. Import/CEO only, enforced in ImportRequestService — these
-  // methods carry no gate of their own and must not be read as one.
+  // Mirrors ImportRequestController's SINGULAR (preview) routes. Import/CEO only, enforced in
+  // ImportRequestService — these methods carry no gate of their own and must not be read as one.
   importRequests: {
     brands: (ticketId) => apiRequest(API_ROUTES.importRequests.brands(ticketId)),
     pages: (ticketId, brand, requiredBy) =>
@@ -510,6 +510,47 @@ export const api = {
       if (!res.ok) throw new Error('Download failed');
       return res.blob();
     },
+  },
+  // Mirrors ImportRequestController's PLURAL routes — the STORED ใบขอซื้อ aggregate (V184, PR-A
+  // #1008 / PR-B UI, GLA-100/105). One row per (deal, factory), draft -> issue -> revise, with
+  // per-factory progress (S12-S17), lead time / expected arrival, and an order-email draft.
+  // Authorisation is enforced entirely in ImportRequestService — see its own Javadoc for the
+  // matrix (owning sales rep + CEO write the body/issue/revise/delete; import + CEO advance steps
+  // and post-issue lead time; import/CEO/sales_manager read unrestricted, sales scoped to their
+  // own deals; the footer + vessel ETA are CEO-only). These methods carry no gate of their own.
+  storedImportRequests: {
+    createDrafts: (ticketId, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId), { method: 'POST', body: payload }),
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.storedImportRequests.forTicket(ticketId)),
+    get: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id)),
+    // PATCH: an absent field is left alone, never blanked — see ImportRequestRequests.
+    // UpdateImportRequestRequest's own Javadoc.
+    update: (id, payload) => apiRequest(API_ROUTES.storedImportRequests.get(id), { method: 'PATCH', body: payload }),
+    issue: (id, payload) => apiRequest(API_ROUTES.storedImportRequests.issue(id), { method: 'POST', body: payload }),
+    revise: (id) => apiRequest(API_ROUTES.storedImportRequests.revise(id), { method: 'POST' }),
+    deleteDraft: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id), { method: 'DELETE' }),
+    advanceStep: (id, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.advanceStep(id), { method: 'POST', body: payload }),
+    setLeadTime: (id, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.leadTime(id), { method: 'POST', body: payload }),
+    updateEmailDraft: (id, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.emailDraft(id), { method: 'PATCH', body: payload }),
+    markEmailSent: (id) => apiRequest(API_ROUTES.storedImportRequests.markEmailSent(id), { method: 'POST' }),
+    // Binary, so it goes through fetch directly — same shape as importRequests.download above.
+    // `copy`: 'factory' | undefined (internal, the default).
+    download: async (id, copy) => {
+      const res = await fetch(API_ROUTES.storedImportRequests.file(id, copy), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดใบขอซื้อไม่สำเร็จ');
+      }
+      return res.blob();
+    },
+    // "กำหนดวันที่ต้องการของ" on the DEAL — sales-owned (owner or CEO), snapshotted onto each new
+    // draft. Distinct from the per-form `requiredByNote` body field on `update` above, which moves
+    // only while that ONE form is still DRAFT.
+    setRequiredByNote: (ticketId, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.requiredByNote(ticketId), { method: 'PUT', body: payload }),
   },
   catalog: {
     search: (q) => apiRequest(API_ROUTES.catalog.search(q ?? '')),
@@ -924,17 +965,20 @@ export const api = {
     factories: () => apiRequest(API_ROUTES.priceImport.factories),
     // country is now REQUIRED and validated against price_catalog.country (PriceImportService's
     // createFactory javadoc) — a blank/unseeded country used to reach the NOT NULL + FK column and
-    // 500 instead of a clean 400.
-    createFactory: (name, country, defaultCurrency, email, unit) => apiRequest(API_ROUTES.priceImport.factories, {
+    // 500 instead of a clean 400. countryOther (V184, PR-B) is required when country is 'ZZ'
+    // (อื่นๆ) and forbidden otherwise — PriceImportService.requireValidCountryOther.
+    createFactory: (name, country, countryOther, defaultCurrency, email, unit) => apiRequest(API_ROUTES.priceImport.factories, {
       method: 'POST',
-      body: { name, country, defaultCurrency, email, unit },
+      body: { name, country, countryOther, defaultCurrency, email, unit },
     }),
     // PUT /api/price-import/factories/{factoryId} — same body/validation as createFactory. 404
-    // unknown id, 400 bad country, 409 duplicate name (PriceImportService.updateFactory).
-    updateFactory: (factoryId, name, country, defaultCurrency, email, unit) =>
+    // unknown id, 400 bad country, 409 duplicate name (PriceImportService.updateFactory). Omitting
+    // countryOther while country stays 'ZZ' unchanged KEEPS the stored value server-side (REVIEW
+    // ROUND 1, S6) — see PriceImportService.updateFactory's own comment.
+    updateFactory: (factoryId, name, country, countryOther, defaultCurrency, email, unit) =>
       apiRequest(API_ROUTES.priceImport.factory(factoryId), {
         method: 'PUT',
-        body: { name, country, defaultCurrency, email, unit },
+        body: { name, country, countryOther, defaultCurrency, email, unit },
       }),
     // price_catalog.country options for the add/edit factory form's country select.
     countries: () => apiRequest(API_ROUTES.priceImport.countries),

@@ -80,10 +80,13 @@ function factoryUnitLabel(unit) {
 
 // `factory.country` is a price_catalog.country CODE (e.g. "IT") since V163's factory editor
 // replaced the old free-text input — resolves it to a Thai display name via the same roster the
-// picker itself offers, so the list reads "อิตาลี (IT)" instead of a bare code.
-function countryLabel(countries, code) {
+// picker itself offers, so the list reads "อิตาลี (IT)" instead of a bare code. `countryOther`
+// (V184, PR-B) is the typed name that pairs with 'ZZ' อื่นๆ — appended when present so the list
+// reads "อื่นๆ (ZZ) — Vietnam" rather than the opaque catch-all code alone.
+function countryLabel(countries, code, countryOther) {
   const match = countries.find((c) => c.countryCode === code);
-  return match ? `${match.nameTh} (${match.countryCode})` : (code || '—');
+  const base = match ? `${match.nameTh} (${match.countryCode})` : (code || '—');
+  return code === 'ZZ' && countryOther ? `${base} — ${countryOther}` : base;
 }
 
 // ── FactoryFormModal ─────────────────────────────────────────────────────────
@@ -99,22 +102,18 @@ function countryLabel(countries, code) {
 // sales.factory_config — email is this change's whole point (see PriceImportPage's own comment
 // on the factory list below), so it is deliberately NOT required: a factory may sit here with no
 // contact email until จัดซื้อ has one to enter, same as every real factory does today.
-// REVIEW ROUND 1, S6: 'ZZ' (อื่นๆ) is a real, backend-valid country, but it REQUIRES a typed
-// countryOther that this page has no field for yet (PR-B adds it — import-request-per-factory-
-// PLAN.md §C). Offering 'ZZ' here today would let a rep pick it and then hit the backend's "กรุณา
-// ระบุชื่อประเทศเมื่อเลือก อื่นๆ" 400 with no way to satisfy it from this form, so it is hidden from
-// the picker's OPTIONS — except when it is already the factory's CURRENT value, so an existing ZZ
-// factory (created via the ใบขอซื้อ auto-create path, which DOES collect countryOther) still shows
-// a valid selection instead of a blank one, and PriceImportService#updateFactory's own S6 fix keeps
-// its stored countryOther when this form's submit omits the field.
-function selectableCountries(countries, currentCode) {
-  return countries.filter((c) => c.countryCode !== 'ZZ' || c.countryCode === currentCode);
+// 'ZZ' (อื่นๆ) is a real, backend-valid country that PAIRS with a required typed countryOther —
+// PR-B restores it to this picker (it was temporarily hidden by PR-A, review round 1 S6, because
+// this form had no countryOther field yet) alongside the text input below.
+function selectableCountries(countries) {
+  return countries;
 }
 
 function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const isEdit = Boolean(factory);
   const [name, setName]         = useState(factory?.name ?? '');
   const [country, setCountry]   = useState(factory?.country ?? '');
+  const [countryOther, setCountryOther] = useState(factory?.countryOther ?? '');
   const [currency, setCurrency] = useState(factory?.defaultCurrency ?? 'EUR');
   const [email, setEmail]       = useState(factory?.email ?? '');
   const [unit, setUnit]         = useState(factory?.unit ?? 'piece');
@@ -125,12 +124,14 @@ function FactoryFormModal({ factory, countries, onClose, onSaved }) {
     e.preventDefault();
     if (!name.trim()) { setError('กรุณาใส่ชื่อโรงงาน'); return; }
     if (!country) { setError('กรุณาเลือกประเทศ'); return; }
+    if (country === 'ZZ' && !countryOther.trim()) { setError('กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ'); return; }
     setSaving(true);
     setError('');
+    const otherToSend = country === 'ZZ' ? countryOther.trim() : null;
     try {
       const saved = isEdit
-        ? await api.priceImport.updateFactory(factory.factoryId, name.trim(), country, currency, email.trim(), unit)
-        : await api.priceImport.createFactory(name.trim(), country, currency, email.trim(), unit);
+        ? await api.priceImport.updateFactory(factory.factoryId, name.trim(), country, otherToSend, currency, email.trim(), unit)
+        : await api.priceImport.createFactory(name.trim(), country, otherToSend, currency, email.trim(), unit);
       onSaved(saved);
     } catch (err) {
       // Surfaces the backend's own Thai 400/409 message (bad/blank country, duplicate name)
@@ -173,11 +174,22 @@ function FactoryFormModal({ factory, countries, onClose, onSaved }) {
               onChange={(e) => setCountry(e.target.value)}
             >
               <option value="">— เลือกประเทศ —</option>
-              {selectableCountries(countries, factory?.country).map((c) => (
+              {selectableCountries(countries).map((c) => (
                 <option key={c.countryCode} value={c.countryCode}>{c.nameTh} ({c.countryCode})</option>
               ))}
             </select>
           </FormField>
+          {country === 'ZZ' ? (
+            <FormField label="ระบุชื่อประเทศ" htmlFor="factory-country-other" required>
+              <input
+                id="factory-country-other"
+                type="text"
+                value={countryOther}
+                onChange={(e) => setCountryOther(e.target.value)}
+                placeholder="เช่น Vietnam"
+              />
+            </FormField>
+          ) : null}
           <FormField label="สกุลเงินหลัก" htmlFor="factory-currency">
             <select
               id="factory-currency"
@@ -319,7 +331,7 @@ function FactoryCard({ factory, countries, onEdit }) {
         </Button>
       </div>
       <span className="text-xs text-text-muted">
-        {countryLabel(countries, factory.country)} · {factory.defaultCurrency} · {factoryUnitLabel(factory.unit)}
+        {countryLabel(countries, factory.country, factory.countryOther)} · {factory.defaultCurrency} · {factoryUnitLabel(factory.unit)}
       </span>
       {factory.email ? (
         <span className="min-w-0 truncate text-xs text-text-muted">{factory.email}</span>
@@ -603,7 +615,7 @@ export function PriceImportPage({ showToast }) {
                 {factories.map((f) => (
                   <tr key={f.factoryId} className="border-b border-border hover:bg-surface-hover transition-colors">
                     <td className="px-5 py-2 font-medium text-text">{f.name}</td>
-                    <td className="px-2 py-2 text-text-muted">{countryLabel(countries, f.country)}</td>
+                    <td className="px-2 py-2 text-text-muted">{countryLabel(countries, f.country, f.countryOther)}</td>
                     <td className="px-2 py-2 text-text-muted">{f.defaultCurrency}</td>
                     <td className="px-2 py-2">
                       {f.email ? (

@@ -117,6 +117,32 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         pages: vi.fn(),
         download: vi.fn(),
       },
+      // PR-B REVIEW ROUND 1, S5: the STORED ใบขอซื้อรายโรงงาน (V184) section DealFulfilmentPanel
+      // added queries this for every canReadStoredIr viewer (sales owner/CEO/import/sales_manager)
+      // — same reason `importRequests` above is mocked: an undefined namespace throws a TypeError
+      // rather than resolving, which used to be silently swallowed into "no stored IRs" (S5's own
+      // fix now surfaces that as a genuine error instead, so this gap had to be closed here too).
+      // Defaults to an empty list — the everyday "not IR-tracked" case every legacy-chain test in
+      // this file assumes — and individual tests override with mockResolvedValueOnce where the
+      // per-factory aggregate itself is what's under test.
+      storedImportRequests: {
+        listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
+        createDrafts: vi.fn(),
+        get: vi.fn(),
+        update: vi.fn(),
+        issue: vi.fn(),
+        revise: vi.fn(),
+        deleteDraft: vi.fn(),
+        advanceStep: vi.fn(),
+        setLeadTime: vi.fn(),
+        updateEmailDraft: vi.fn(),
+        markEmailSent: vi.fn(),
+        download: vi.fn(),
+        setRequiredByNote: vi.fn(),
+      },
+      priceImport: {
+        countries: vi.fn().mockResolvedValue([]),
+      },
       // fix/ticket-edit-items-required-markers: edit-items mode's ยี่ห้อ/รุ่น fields now share
       // TicketCreateModal's CatalogAutocompleteField, which searches this on every keystroke
       // (debounced). Previously absent from this mock entirely — edit-items had no catalog search.

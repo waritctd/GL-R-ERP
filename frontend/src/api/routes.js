@@ -207,6 +207,24 @@ export const API_ROUTES = {
       return `/api/tickets/${ticketId}/import-request${p.toString() ? `?${p}` : ''}`;
     },
   },
+  // The STORED ใบขอซื้อ aggregate (V184, PR-A backend #1008 / PR-B UI) — one row per (deal,
+  // factory), draft/issue/revise/advance-step lifecycle. PLURAL paths throughout, mirroring
+  // ImportRequestController's own singular/plural split — see that class's Javadoc. Distinct from
+  // `importRequests` above, which stays the legacy read-only preview-per-brand family.
+  storedImportRequests: {
+    forTicket: (ticketId) => `/api/tickets/${ticketId}/import-requests`,
+    get: (id) => `/api/import-requests/${id}`,
+    issue: (id) => `/api/import-requests/${id}/issue`,
+    revise: (id) => `/api/import-requests/${id}/revise`,
+    advanceStep: (id) => `/api/import-requests/${id}/advance-step`,
+    leadTime: (id) => `/api/import-requests/${id}/lead-time`,
+    emailDraft: (id) => `/api/import-requests/${id}/email-draft`,
+    markEmailSent: (id) => `/api/import-requests/${id}/mark-email-sent`,
+    // `copy`: 'factory' downloads the factory copy (no customer/project/deposit date); anything
+    // else (including omitted) downloads the internal copy. See ImportRequestController#storedFile.
+    file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
+    requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
+  },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     prices: (q, factoryId, limit) => {

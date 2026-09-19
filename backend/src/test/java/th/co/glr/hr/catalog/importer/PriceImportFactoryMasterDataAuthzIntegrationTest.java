@@ -53,6 +53,15 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: everyone outside {@code requireCountriesReader}'s widened
+     * ceo/import/sales/sales_manager gate for the countries picker specifically. Deliberately a
+     * SEPARATE list from {@link #DENIED_ROLES} above — sales/sales_manager moved from denied to
+     * permitted for THIS ONE endpoint only; every write endpoint above must keep refusing them.
+     */
+    private static final List<String> DENIED_COUNTRIES_READ_ROLES =
+        List.of("employee", "warehouse", "qc", "hr", "account");
+
     private MockMvc mvc;
 
     @BeforeEach
@@ -469,17 +478,29 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
 
     // ── countries picker: authz ───────────────────────────────────────────────────────────────
 
+    /**
+     * PR-B REVIEW ROUND 1, B2: wrong-way-round — roles with no business reason to see the country
+     * picker (employee/warehouse/qc/hr/account) must still 403. sales/sales_manager are
+     * DELIBERATELY EXCLUDED from this list now — see {@link #importCeoSalesSalesManagerCanListCountries}.
+     */
     @Test
-    void nonImportCeoRolesCannotListCountries() throws Exception {
-        for (String role : DENIED_ROLES) {
+    void rolesOutsideTheWidenedCountriesGateCannotListCountries() throws Exception {
+        for (String role : DENIED_COUNTRIES_READ_ROLES) {
             mvc.perform(get("/api/price-import/countries").session(session(role)))
                 .andExpect(status().isForbidden());
         }
     }
 
+    /**
+     * PR-B REVIEW ROUND 1, B2 (owner-approved default): the owning sales rep's new-factory country
+     * picker on {@code ImportRequestFactoryCard} (V184 createDrafts auto-create path) needs to read
+     * this list — country codes are not sensitive, so READ widens to sales + sales_manager
+     * alongside the existing import/ceo. Writes (createFactory/updateFactory) are untouched — see
+     * the DENIED_ROLES-gated tests above, which still include sales/sales_manager.
+     */
     @Test
-    void importAndCeoCanListRealSeededCountries() throws Exception {
-        for (String role : List.of("import", "ceo")) {
+    void importCeoSalesSalesManagerCanListCountries() throws Exception {
+        for (String role : List.of("import", "ceo", "sales", "sales_manager")) {
             mvc.perform(get("/api/price-import/countries").session(session(role)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[?(@.countryCode == 'TH')].nameEn").exists())

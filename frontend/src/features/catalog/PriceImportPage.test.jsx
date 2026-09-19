@@ -36,6 +36,7 @@ vi.mock('../../api/index.js', () => ({
 const MOCK_COUNTRIES = [
   { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
   { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
+  { countryCode: 'ZZ', nameEn: 'Other', nameTh: 'อื่นๆ' },
 ];
 
 function renderPage(props = {}) {
@@ -167,7 +168,33 @@ describe('PriceImportPage factory master data (V163)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
-      'New Factory', 'IT', 'EUR', '', 'piece',
+      'New Factory', 'IT', null, 'EUR', '', 'piece',
+    ));
+  });
+
+  it('offers อื่นๆ (ZZ) again, and requires a typed country name before submitting it (PR-B)', async () => {
+    api.priceImport.createFactory.mockResolvedValue({
+      factoryId: 10, name: 'New Factory', country: 'ZZ', countryOther: 'Vietnam', defaultCurrency: 'EUR', email: null, unit: 'piece',
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: /เพิ่มโรงงาน/ }));
+    const countrySelect = await screen.findByLabelText(/^ประเทศ/);
+    expect(screen.getByRole('option', { name: 'อื่นๆ (ZZ)' })).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/ชื่อโรงงาน/), { target: { value: 'New Factory' } });
+    fireEvent.change(countrySelect, { target: { value: 'ZZ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    // Client-side guard: ZZ with no typed country name never reaches the API.
+    expect(api.priceImport.createFactory).not.toHaveBeenCalled();
+    expect(await screen.findByText('กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ')).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/^ระบุชื่อประเทศ/), { target: { value: 'Vietnam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
+      'New Factory', 'ZZ', 'Vietnam', 'EUR', '', 'piece',
     ));
   });
 
@@ -210,7 +237,7 @@ describe('PriceImportPage factory master data (V163)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(api.priceImport.updateFactory).toHaveBeenCalledWith(
-      3, 'CDE', 'IT', 'EUR', 'buy@cde.example', 'piece',
+      3, 'CDE', 'IT', null, 'EUR', 'buy@cde.example', 'piece',
     ));
     // The list re-renders with the saved email — no page reload needed to see the fix take effect.
     expect(await screen.findByText('buy@cde.example')).not.toBeNull();
