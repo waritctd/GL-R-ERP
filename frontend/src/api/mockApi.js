@@ -3022,6 +3022,16 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
 }
 
+// Mirrors ThaiText.money (backend/src/main/java/th/co/glr/hr/common/ThaiText.java): "," grouping,
+// no decimals for a whole amount, ".2f" for anything else — not a bare toLocaleString(), which
+// always shows either 0 or 2 decimals regardless of the amount.
+function mockThaiMoney(amount) {
+  const rounded = Math.round((Number(amount) || 0) * 100) / 100;
+  return Number.isInteger(rounded)
+    ? rounded.toLocaleString('en-US')
+    : rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // ── Deal pipeline: what this mock will and will not decide ────────────────────────────────────
 //
 // Read this before adding anything stage-shaped below.
@@ -10344,6 +10354,28 @@ export const api = {
       ticket.updatedAt = doc.updatedAt;
       pushEvent(ticket, user, 'DEPOSIT_NOTICE_ISSUED', ticket.status, ticket.status, `เอกสาร ${doc.docNumber} ออกแล้ว`);
 
+      // GLA-32 (2026-09-19): mirrors DepositNoticeService.issue's account-role notification —
+      // account@ is told at exactly this moment (watch for the payment, then confirm it).
+      // No revision branch here: unlike production (which loosens the precondition above to also
+      // accept paymentStatus === 'DEPOSIT_NOTICE_ISSUED' for a re-issue), this mock's own guard a
+      // few lines up only ever accepts 'CUSTOMER_CONFIRMED', so a revision re-issue 409s in mock
+      // mode before reaching here — a pre-existing mock/prod narrowing, not something this branch
+      // fixes.
+      //
+      // Opus review (2026-09-19): filters on `u.active`, matching the backend's `e.is_active =
+      // TRUE` (a deactivated account user gets no row there either); falls back to "ไม่ระบุลูกค้า"
+      // for a blank customerName (mirrors TicketService's identical fallback); shows BOTH the
+      // pre-VAT deposit and the VAT-inclusive total (`doc.totalPayable`, already computed by
+      // buildMockDoc at createDraft time — no re-derivation here) since account matches a bank
+      // transfer against the latter; and does not repeat "รอยืนยันรับชำระ" (already in the title
+      // string DEPOSIT_NOTICE_ISSUED renders as, see NotificationBell/pricingRequestMeta-style
+      // type maps) inside the message body.
+      const accountUsers = db.users.filter((u) => u.role === 'account' && u.active);
+      const accountCustomerName = doc.customerName?.trim() ? doc.customerName.trim() : 'ไม่ระบุลูกค้า';
+      accountUsers.forEach((acc) => addNotification(acc.id, ticket.id, ticket.code, 'DEPOSIT_NOTICE_ISSUED',
+        `ออกใบแจ้งรับมัดจำ ${doc.docNumber} แล้ว ดีล ${ticket.code} ลูกค้า ${accountCustomerName} `
+          + `ยอดมัดจำ ${mockThaiMoney(doc.depositAmount)} บาท (ยอดชำระรวม VAT ${mockThaiMoney(doc.totalPayable)} บาท)`));
+
       // Mirrors DepositNoticeService.issue's renderAfterCommit (PR #721 moved the PDF/XLSX
       // render into an afterCommit callback): the DTO issue() itself returns still reports
       // the PRE-render state, and only a subsequent read sees hasPdf/hasXlsx true. ORDER IS
@@ -10990,7 +11022,38 @@ export const api = {
           status: 'DRAFT',
           emailTo: factoryConfig?.email ?? null,
           emailSubject: `Pricing request ${pr.requestCode}`,
-          emailBody: items.map((item) => `${item.brand ?? ''} ${item.model ?? item.productDescription ?? ''}`).join('\n'),
+          // Mirrors FactoryQuoteService.emailBody's item-block loop (appendItemBlock, 2026-09):
+          // one numbered block per item — brand/model, catalog code, colour/surface/size,
+          // quantity (no trailing zeros), special requirement — skipping any blank field
+          // outright rather than printing "null" or "-". This mock never reproduces the
+          // surrounding greeting/sign-off text (it never claimed to), only the item-block shape.
+          emailBody: items
+            .map((item, index) => {
+              // firstText(): blank counts as missing, exactly like the Java helper.
+              const text = (v) => (v == null ? '' : String(v).trim());
+              const brand = text(item.brand);
+              const model = text(item.model) || text(item.productDescription);
+              const code = text(item.catalogProductCode);
+              const headerParts = [brand, model].filter(Boolean);
+              if (code) headerParts.push(headerParts.length ? `  (Code: ${code})` : `Code: ${code}`);
+              const lines = [`${index + 1}. ${headerParts.length ? headerParts.join(' ') : 'Item'}`];
+              const details = [
+                text(item.color) ? `Colour: ${text(item.color)}` : null,
+                text(item.texture) ? `Surface: ${text(item.texture)}` : null,
+                text(item.size) ? `Size: ${text(item.size)}` : null,
+              ].filter(Boolean);
+              if (details.length) lines.push(`   ${details.join(' | ')}`);
+              if (item.requestedQty != null && Number.isFinite(Number(item.requestedQty))) {
+                const unit = text(item.requestedUnit);
+                lines.push(`   Quantity: ${Number(item.requestedQty).toString()}${unit ? ` ${unit}` : ''}`);
+              }
+              const special = text(item.specialRequirement);
+              if (special) {
+                lines.push(`   Special requirement: ${special.replace(/\r\n?/g, '\n').replace(/\n/g, '\n   ')}`);
+              }
+              return lines.join('\n');
+            })
+            .join('\n\n'),
           emailSentAt: null,
           sentBy: null,
           supplierQuoteRef: null,

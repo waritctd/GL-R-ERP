@@ -16,6 +16,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customerquotation.CustomerQuotationDtos.CustomerQuotationDto;
@@ -226,6 +227,42 @@ public class DepositNoticeService {
             TicketEventKind.DEPOSIT_NOTICE_ISSUED,
             s.status(), s.status(),
             "เอกสาร " + docNumber + " ออกแล้ว");
+
+        // GLA-32 (owner decision, 2026-09-19): account@glr.co.th is notified at exactly this one
+        // sales-pipeline moment — issuing (or re-issuing) a deposit notice is when account gets
+        // work (watch for the payment, then confirm it). Deliberately called DIRECTLY inside this
+        // @Transactional method, never wrapped in this class's own afterCommit helper
+        // (renderAfterCommit just above uses one, for the PDF/XLSX render only): notifyByRole's
+        // own mail dispatch already defers itself to after-commit inside SalesNotificationMailRouter
+        // via AfterCommit.run, and a SECOND TransactionSynchronization registered from inside that
+        // first callback is silently dropped by Spring 7 -- the in-app row would still land but the
+        // email never would. See NotificationRepository/SalesNotificationMailRouter/AfterCommit's
+        // own Javadoc, and the 2026-09-15 DealQuotationService.submitDraftRow incident this exact
+        // trap already caused once.
+        //
+        // isRevision reads s.paymentStatus() captured ABOVE, before advancePaymentStatus mutates the
+        // row -- by the paymentTrackReady guard above it is exactly CUSTOMER_CONFIRMED (first issue)
+        // or DEPOSIT_NOTICE_ISSUED (a revision re-issue, PaymentTrack's one legal self-loop), so this
+        // is a cheap, already-in-hand signal rather than a second query.
+        boolean isRevision = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
+        // Opus review (2026-09-19), two fixes:
+        //  1. Same "ไม่ระบุลูกค้า" fallback TicketService#notifySalesManagerOfRepDeclaration uses
+        //     (~line 1130) -- a deposit notice's customerName CAN be blank (see resolveCustomerHeader
+        //     / createDraft's own comments on the new pricing-request chain), and a raw blank in the
+        //     sentence reads as a rendering bug rather than "no name on file".
+        //  2. Account matches this notice against a BANK TRANSFER, which is the deposit PLUS 7% VAT
+        //     (doc.totalPayable()) -- not the pre-VAT depositAmount alone. Both figures come straight
+        //     off the `doc` snapshot fetched by requireDraft() above the precondition checks, which
+        //     docs.issue() does not touch (it only writes doc_number/status/issued_by/updated_at), so
+        //     this is exactly what DepositNoticeRenderer prints as "ขอรับเงินมัดจำ"/"รวมเป็นเงินที่
+        //     ต้องชำระ" -- no new arithmetic. The title (TICKET_EVENT_TITLES' DEPOSIT_NOTICE_ISSUED
+        //     entry) already ends "รอยืนยันรับชำระ", so the message itself does not repeat it.
+        String accountCustomerName = blankToNull(doc.customerName()) == null
+            ? "ไม่ระบุลูกค้า" : doc.customerName().trim();
+        notifications.notifyByRole("account", doc.ticketId(), TicketEventKind.DEPOSIT_NOTICE_ISSUED,
+            "ออกใบแจ้งรับมัดจำ " + docNumber + (isRevision ? " (ฉบับแก้ไข)" : "") + " แล้ว ดีล " + s.code()
+                + " ลูกค้า " + accountCustomerName + " ยอดมัดจำ " + ThaiText.money(doc.depositAmount()) + " บาท"
+                + " (ยอดชำระรวม VAT " + ThaiText.money(doc.totalPayable()) + " บาท)");
 
         return docs.findById(docId).orElseThrow();
     }
