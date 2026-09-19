@@ -166,6 +166,7 @@ export const api = {
     types: () => apiRequest(API_ROUTES.specialMoney.types),
     create: (payload) => apiRequest(API_ROUTES.specialMoney.create, { method: 'POST', body: payload }),
     approve: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.approve(id), { method: 'POST', body: payload }),
+    approvalPreview: (id) => apiRequest(API_ROUTES.specialMoney.approvalPreview(id)),
     reject: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.cancel(id), { method: 'POST', body: payload }),
     attachments: (id) => apiRequest(API_ROUTES.specialMoney.attachments(id)),

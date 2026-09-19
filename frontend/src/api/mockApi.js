@@ -8801,6 +8801,38 @@ export const api = {
       fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
+    // Mirrors SpecialMoneyService.approvalPreview(): 404 (missing) -> CEO-only 403 -> 409 unless
+    // still SUBMITTED/MANAGER_APPROVED. Same MESSAGES as approve() above, but NOT the same order:
+    // approve() checks status BEFORE role (a non-CEO caller on an already-decided row gets 409
+    // there, since the role check is nested inside the "still SUBMITTED/MANAGER_APPROVED" branch),
+    // while this method checks role before status, matching the real
+    // SpecialMoneyService#approvalPreview's own 404 -> requireCeo -> 409 ordering exactly (see its
+    // Javadoc for why: id-exists, then may-you-act-on-it, then is-it-still-actionable).
+    //
+    // eligibleAmount/payrollMonth come back null: the real ceiling is computed by
+    // SpecialMoneyService#computeApprovalCeiling, which re-runs SpecialMoneyPolicyEvaluator against
+    // eligibility/usage/policy-amounts/excluded-provinces snapshots this mock does not model (see
+    // CLAUDE.md's "Mock API contract" section -- welfare/payroll math is deliberately NOT
+    // reimplemented here, a mirrored algorithm is not independent evidence). `null` is the honest
+    // "not available in mock mode" signal; ApproveSpecialMoneyDialog.jsx must treat a null
+    // eligibleAmount exactly like a failed/absent preview and show no ceiling UI.
+    async approvalPreview(id) {
+      const user = requireSession();
+      const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
+      if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
+      if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
+      if (!['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
+        fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
+      }
+      return delay({
+        preview: {
+          requestedAmount: request.requestedAmount,
+          eligibleAmount: null,
+          payrollMonth: null,
+        },
+      });
+    },
+
     async reject(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));

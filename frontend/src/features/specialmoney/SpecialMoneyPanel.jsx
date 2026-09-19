@@ -431,6 +431,13 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       // date window, and a mutation (approve/reject/cancel/create) must refresh both.
       queryClient.invalidateQueries({ queryKey: ['specialMoney', 'list'] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.specialMoneyUsage(usageEmployeeId, new Date().getFullYear()) }),
+      // Prefix-invalidate every open/soon-to-open approve dialog's ceiling preview too: approving
+      // request A changes the usage-derived ceiling of every OTHER request from the same
+      // employee/type (see SpecialMoneyService#computeApprovalCeiling), and the dialog's own
+      // staleTime: 0 / refetchOnMount: 'always' only refetch on a fresh MOUNT -- an already-open
+      // dialog for a different request would otherwise keep showing the ceiling from before this
+      // mutation ran.
+      queryClient.invalidateQueries({ queryKey: ['specialMoney', 'approvalPreview'] }),
     ]);
   }
 

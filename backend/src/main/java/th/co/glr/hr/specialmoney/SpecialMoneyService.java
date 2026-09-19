@@ -190,6 +190,41 @@ public class SpecialMoneyService {
     }
 
     /**
+     * Read-only preview of the ceiling {@link #ceoApproveFrom} would enforce for this request IF
+     * EVALUATED RIGHT NOW, so the CEO's approve dialog can show it before submitting a decision.
+     * Computed via the exact same {@link #computeApprovalCeiling} the approval itself uses -- this
+     * method never duplicates that calculation, only reads its result at PREVIEW time. That keeps
+     * "what the dialog shows" and "what the server enforces" using identical logic, but it is not a
+     * promise the two numbers stay equal: usage, the payroll cutoff/roll-forward, and policy
+     * amounts can all change in the (usually short) gap between this call and the CEO actually
+     * submitting {@link #ceoApproveFrom} -- most commonly, another of the same employee's requests
+     * gets decided in between. {@link #ceoApproveFrom} always re-evaluates the ceiling fresh at
+     * approval time regardless of what this method returned earlier, and is the sole authority; its
+     * own 400 remains the backstop a caller must still handle.
+     *
+     * <p>Deliberately does not call {@link #requireEvidence}: this is informational only, no write
+     * happens, and a CEO should be able to see the ceiling before evidence is attached, not be
+     * blocked from previewing it. Nor does it write an audit row -- nothing changed.
+     *
+     * <p>404 (missing row) is checked before {@link #requireCeo} (403) is checked before the 409
+     * status guard, matching the order a caller would naturally learn these facts in: whether the
+     * id exists at all, then whether they may act on it, then whether it is still actionable.
+     */
+    public SpecialMoneyApprovalPreviewDto approvalPreview(long id, UserPrincipal user) {
+        SpecialMoneyRequestDto existing = requireRequest(id);
+        requireCeo(user);
+        SpecialMoneyStatus status = parseStatus(existing.status());
+        if (status != SpecialMoneyStatus.SUBMITTED && status != SpecialMoneyStatus.MANAGER_APPROVED) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
+        }
+
+        LocalDate today = LocalDate.now(BUSINESS_ZONE);
+        ApprovalCeiling ceiling = computeApprovalCeiling(existing, today);
+        return new SpecialMoneyApprovalPreviewDto(
+            existing.requestedAmount(), ceiling.eligibleAmount(), ceiling.payrollMonth());
+    }
+
+    /**
      * The CEO's approval — the only approval welfare has.
      *
      * <p>{@code from == SUBMITTED} is the live route for every request. {@code from ==
@@ -214,63 +249,17 @@ public class SpecialMoneyService {
             : existing.requestedAmount();
         String capOverrideReason = request == null ? null : blankToNull(request.capOverrideReason());
 
-        SpecialMoneyType type = parseType(existing.requestType());
+        // approvedOn used to be a second, separate `LocalDate.now(BUSINESS_ZONE)` call made later in
+        // this method; folded into `today` since both name the same instant and a request evaluated
+        // across a real midnight boundary should not see two different "todays". `today` is also fed
+        // into computeApprovalCeiling below, so the ceiling preview (GET /approval-preview) and this
+        // approval always evaluate against the same "now".
         LocalDate today = LocalDate.now(BUSINESS_ZONE);
 
-        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
-        // deliberate: payroll writes a processed period once, so a request landing in a closed month
-        // would be approved and then never paid.
-        //
-        // Computed HERE, before the usage/cap recheck below, so the recheck can key the annual-cap
-        // lookup on THIS row's own payrollMonth (see usageYear's Javadoc) rather than on
-        // existing.eventDate()'s year, which the employee supplied and does not bound. approvedOn
-        // used to be a second, separate `LocalDate.now(BUSINESS_ZONE)` call made later in this
-        // method; folded into `today` since both name the same instant and a request evaluated
-        // across a real midnight boundary should not see two different "todays".
-        int cutoffDay = appProperties.getSpecialMoney().getPayrollCutoffDay();
-        LocalDate payrollMonth = today.getDayOfMonth() <= cutoffDay
-            ? today.withDayOfMonth(1)
-            : today.plusMonths(1).withDayOfMonth(1);
-        while (repository.payrollMonthProcessed(payrollMonth)) {
-            payrollMonth = payrollMonth.plusMonths(1);
-        }
+        ApprovalCeiling ceiling = computeApprovalCeiling(existing, today);
+        LocalDate payrollMonth = ceiling.payrollMonth();
 
-        EmployeeEligibilitySnapshot eligibility = repository.findEligibility(existing.employeeId(), today)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
-        // The AUTHORITATIVE cap-year check (see usageYear's Javadoc): the year this approval's own
-        // payrollMonth falls in, never existing.eventDate()'s year.
-        UsageSnapshot usage = repository.findUsage(existing.employeeId(), usageYear(payrollMonth));
-        PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
-        Set<String> excludedProvinces = repository.findExcludedProvinces();
-
-        // Re-run the evaluator to learn the policy ceiling for this type/employee.
-        //
-        // The recheck is built from what the EMPLOYEE asked for, not from the CEO's chosen amount.
-        // Substituting the CEO's figure -- as this did until 2026-08-03 -- made the guard below
-        // structurally dead for every uncapped type: UNIFORM_NEW_STAFF, TRAVEL_LODGING, TRAINING
-        // and OTHER all return `requestedAmount` as their eligible amount, so feeding in the
-        // approved amount made eligibleAmount == approvedAmount and the comparison could never be
-        // true. A CEO could approve ฿50,000 against a ฿5,000 request and never be asked why.
-        //
-        // Reading from the original request makes the ceiling mean "the cap, or failing a cap, what
-        // was actually requested" -- so approving MORE than the policy allows, or more than the
-        // employee asked for, both now require a written reason.
-        //
-        // We deliberately do not gate on the recheck's eligibility violations (e.g.
-        // once-per-lifetime): this request is itself counted in "usage" (which spans SUBMITTED,
-        // MANAGER_APPROVED and APPROVED alike) and would otherwise trip its own guard.
-        SubmitSpecialMoneyRequest recheckRequest = new SubmitSpecialMoneyRequest(
-            existing.employeeId(),
-            existing.eventDate(),
-            existing.eventEndDate(),
-            existing.receiptDate(),
-            existing.quantity(),
-            existing.requestedAmount(),
-            existing.reason(),
-            existing.detail());
-        PolicyDecision recheck = evaluator.evaluate(type, recheckRequest, eligibility, usage, amounts, excludedProvinces);
-
-        boolean exceedsCap = approvedAmount.compareTo(recheck.eligibleAmount()) > 0;
+        boolean exceedsCap = approvedAmount.compareTo(ceiling.eligibleAmount()) > 0;
         if (exceedsCap && capOverrideReason == null) {
             throw new ApiException(
                 HttpStatus.BAD_REQUEST,
@@ -295,6 +284,77 @@ public class SpecialMoneyService {
             after);
         notifyCeoApproved(after);
         return after;
+    }
+
+    /**
+     * The payroll month and policy ceiling for an EXISTING request, evaluated as of {@code today}.
+     * The single source of truth for both {@link #ceoApproveFrom} (which enforces it) and
+     * {@link #approvalPreview} (which only displays it) -- extracted so the two can never compute a
+     * different answer for the same row at the same instant.
+     *
+     * <p>Behaviour is copied verbatim from what {@link #ceoApproveFrom} did inline before this
+     * extraction: the 25th-of-month cutoff, rolling forward past an already-PROCESSED month, the
+     * AUTHORITATIVE cap-year lookup keyed on the resulting {@code payrollMonth} (never {@code
+     * existing.eventDate()}'s year -- see {@link #usageYear}'s Javadoc), and the evaluator recheck
+     * built from the ORIGINAL request rather than any CEO-chosen amount (see the long comment this
+     * method inherited, now below). This is payroll-adjacent money code: the refactor must not
+     * change what either caller observes.
+     */
+    private ApprovalCeiling computeApprovalCeiling(SpecialMoneyRequestDto existing, LocalDate today) {
+        SpecialMoneyType type = parseType(existing.requestType());
+
+        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
+        // deliberate: payroll writes a processed period once, so a request landing in a closed month
+        // would be approved and then never paid.
+        int cutoffDay = appProperties.getSpecialMoney().getPayrollCutoffDay();
+        LocalDate payrollMonth = today.getDayOfMonth() <= cutoffDay
+            ? today.withDayOfMonth(1)
+            : today.plusMonths(1).withDayOfMonth(1);
+        while (repository.payrollMonthProcessed(payrollMonth)) {
+            payrollMonth = payrollMonth.plusMonths(1);
+        }
+
+        EmployeeEligibilitySnapshot eligibility = repository.findEligibility(existing.employeeId(), today)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
+        // The AUTHORITATIVE cap-year check (see usageYear's Javadoc): the year this approval's own
+        // payrollMonth falls in, never existing.eventDate()'s year.
+        UsageSnapshot usage = repository.findUsage(existing.employeeId(), usageYear(payrollMonth));
+        PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
+        Set<String> excludedProvinces = repository.findExcludedProvinces();
+
+        // Re-run the evaluator to learn the policy ceiling for this type/employee.
+        //
+        // The recheck is built from what the EMPLOYEE asked for, not from any CEO-chosen amount.
+        // Substituting a CEO-supplied figure -- as ceoApproveFrom did until 2026-08-03 -- made the
+        // cap guard structurally dead for every uncapped type: UNIFORM_NEW_STAFF, TRAVEL_LODGING,
+        // TRAINING and OTHER all return `requestedAmount` as their eligible amount, so feeding in the
+        // approved amount made eligibleAmount == approvedAmount and the comparison could never be
+        // true. A CEO could approve ฿50,000 against a ฿5,000 request and never be asked why.
+        //
+        // Reading from the original request makes the ceiling mean "the cap, or failing a cap, what
+        // was actually requested" -- so approving MORE than the policy allows, or more than the
+        // employee asked for, both require a written reason.
+        //
+        // We deliberately do not gate on the recheck's eligibility violations (e.g.
+        // once-per-lifetime): this request is itself counted in "usage" (which spans SUBMITTED,
+        // MANAGER_APPROVED and APPROVED alike) and would otherwise trip its own guard.
+        SubmitSpecialMoneyRequest recheckRequest = new SubmitSpecialMoneyRequest(
+            existing.employeeId(),
+            existing.eventDate(),
+            existing.eventEndDate(),
+            existing.receiptDate(),
+            existing.quantity(),
+            existing.requestedAmount(),
+            existing.reason(),
+            existing.detail());
+        PolicyDecision recheck = evaluator.evaluate(type, recheckRequest, eligibility, usage, amounts, excludedProvinces);
+
+        return new ApprovalCeiling(payrollMonth, recheck.eligibleAmount());
+    }
+
+    /** {@link #computeApprovalCeiling}'s result: the payroll month a fresh approval would land in
+     * right now, and the policy ceiling it would be checked against. */
+    private record ApprovalCeiling(LocalDate payrollMonth, BigDecimal eligibleAmount) {
     }
 
     @Transactional

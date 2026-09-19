@@ -96,6 +96,9 @@ export const queryKeys = {
   // .../{id}/attachments endpoint, same shape as taxAllowanceAttachments above. None existed
   // before this: AttachmentList.jsx is the first caller of api.specialMoney.attachments().
   specialMoneyAttachments: (id) => ['specialMoney', 'attachments', id ?? ''],
+  // CEO approve dialog's ceiling preview (GET .../approval-preview) -- keyed on the request id so
+  // opening a different row's dialog re-fetches rather than reusing a stale ceiling.
+  specialMoneyApprovalPreview: (id) => ['specialMoney', 'approvalPreview', id ?? ''],
   // ticketDetail/ticketAttachments are for slice B (TicketDetailPage) — defined
   // now so the key module is stable across both slices; only ticketList is used here.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
