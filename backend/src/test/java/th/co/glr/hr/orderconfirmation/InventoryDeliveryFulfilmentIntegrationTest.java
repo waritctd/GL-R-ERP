@@ -320,10 +320,14 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         // ── Hard constraint, wrong-way-round: deliver only PART of the 15, and confirm the deal
         //    is NOT marked delivered while an open quantity remains ─────────────────────────
+        // V184: completeDelivery/recordPartialDelivery's gate (canWriteDelivery) transferred to
+        // {ceo, owning-rep} only -- salesActor (the deal owner, see the fixture below), not
+        // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself; this file is
+        // about quantity reconciliation, not authz.
         TicketDto afterPartial = ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", "ส่งบางส่วน",
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemId, new BigDecimal("9"))), null),
-            importActor);
+            salesActor);
         assertThat(afterPartial.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
         // Must NOT have auto-advanced to DELIVERED — 6 of the reconciled 15 units are still open.
         assertThat(afterPartial.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
@@ -331,7 +335,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // completeDelivery ships exactly the remaining 6 (15 - 9), computed against the
         // RECONCILED qty — and only THEN does the deal reach DELIVERED.
         TicketDto afterComplete = ticketService.completeDelivery(deal.ticketId,
-            new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), importActor);
+            new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(afterComplete.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         assertThat(afterComplete.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
         assertThat(afterComplete.items().get(0).qtyDelivered()).isEqualByComparingTo("15");
@@ -360,10 +364,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("4"), null))),
             importActor);
 
-        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
         assertThatThrownBy(() -> ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest("ส่งซ้ำ", null), importActor))
+            deal.ticketId, new CompleteDeliveryRequest("ส่งซ้ำ", null), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
@@ -406,7 +410,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemId, new BigDecimal("6"))), null),
-            importActor);
+            salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
 
         // A revision now asks for only 3 — below the 6 already physically delivered. It is refused
@@ -487,7 +491,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
                 new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
             importActor);
         TicketDto delivered = ticketService.completeDelivery(
-            deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), importActor);
+            deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
         // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
         // balance used to make permanently unreachable.
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -528,7 +532,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemBId, new BigDecimal("2"))), null),
-            importActor);
+            salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
 
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(

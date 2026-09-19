@@ -295,6 +295,21 @@ const SERVER_ONLY = {
   'GET /api/import-requests/{}/file':
     'Prints a stored form from ITS OWN snapshot, so an issued document keeps saying what it said '
     + 'when it was signed even if the deal is later edited.',
+  'POST /api/import-requests/{}/advance-step':
+    'Advances an ISSUED row\'s per-factory progress by one step (V184, GLA-100/S12-S17) -- import/CEO '
+    + 'only. Built backend-first alongside the per-factory migration; no screen calls it yet.',
+  'POST /api/import-requests/{}/lead-time':
+    'Sets an ISSUED row\'s lead time (V184, owner decision 09-18 #2) -- import/CEO only, the '
+    + 'post-issue counterpart to PATCH .../import-requests/{}\'s leadTimeMinDays/MaxDays body '
+    + 'fields (the DRAFT-stage edit). Built backend-first; no screen calls it yet.',
+  'PATCH /api/import-requests/{}/email-draft':
+    'Edits the drafted order-email (owner decision 09-18 #3 §B) -- owning rep/CEO/import, while '
+    + 'not yet marked sent. Built backend-first alongside REVIEW ROUND 1\'s second pass; PR-B '
+    + '(import-request-per-factory-PLAN.md §C) wires the UI. No screen calls it yet.',
+  'POST /api/import-requests/{}/mark-email-sent':
+    'Records that a human sent the drafted order-email BY HAND -- this system never sends mail '
+    + 'itself. Idempotent: a second call 409s. Built backend-first, same as email-draft above; no '
+    + 'screen calls it yet.',
   'PUT /api/tickets/{}/required-by-note':
     'Sets the deal-level "กำหนดวันที่ต้องการของ". The one route in this family that belongs to SALES '
     + '(deal owner or CEO) rather than import, gated from DealStage.ORDER_RECEIVED onward.',

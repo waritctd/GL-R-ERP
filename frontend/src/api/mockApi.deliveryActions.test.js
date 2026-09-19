@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
 // Pins mockApi's RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY advertisement to the SAME predicate
-// the real service uses: TicketService#canRecordDelivery -> canWriteDelivery ->
-// isFulfilmentOrOwningRep = FULFILMENT_ROLES {import, ceo} ∪ (SALES_ROLES {"sales"} ∧ deal owner).
+// the real service uses: TicketService#canRecordDelivery -> canWriteDelivery = CEO ∪
+// (SALES_ROLES {"sales"} ∧ deal owner). import is DELIBERATELY absent (REVIEW ROUND 1, S2,
+// 2026-09-18) — see requireOwningRepOrCeo in mockApi.js for why.
 //
 // Why this file exists at all: stages 13-14 moved to Sales in #818 (backend) but the mock kept
 // gating the ADVERTISEMENT to ['import','ceo'], so a sales rep following the new "บันทึกส่งมอบ"
@@ -11,6 +12,14 @@ import { api } from './mockApi.js';
 // accepted them. That is the "mock omits what the feature keys on" shape CLAUDE.md warns about:
 // every existing delivery test stubs `availableActions` directly (see TicketDetailPage.test.jsx),
 // so nothing drove the mock's own gate and the drift was invisible.
+//
+// REVIEW ROUND 1, S2 (2026-09-18) correction: a SECOND owner decision (V184, ported from
+// Yang.Pongburit's origin/feat/per-factory-import-tracking commit 83f4fa78) went further than
+// #818's additive widening and made ส่งมอบสินค้า a TRANSFER — import no longer writes delivery at
+// all; TicketService#canWriteDelivery dropped it. This file's "still advertises them to import"
+// case below used to pin the #818-era (additive) behaviour, which the mock had drifted back INTO
+// matching by accident (requireFulfilmentOrOwningRep still admitted import) — i.e. the mock was
+// MORE permissive than the real, already-transferred gate. Rewritten to pin the CURRENT rule.
 //
 // NOT authz evidence about production — CLAUDE.md is explicit that mock authz is never
 // authoritative. The real gate is proven by DeliveryAuthzIntegrationTest against real Postgres.
@@ -34,8 +43,8 @@ describe('mockApi tickets.actions — delivery advertisement mirrors canWriteDel
       .toEqual(DELIVERY_ACTIONS);
   });
 
-  it('still advertises them to import — #818 was additive, not a transfer', async () => {
-    expect(await deliveryActionsFor({ role: 'import' })).toEqual(DELIVERY_ACTIONS);
+  it('does NOT advertise them to import — the 2026-08-17/V184 ruling was a TRANSFER to Sales, not an addition', async () => {
+    expect(await deliveryActionsFor({ role: 'import' })).toEqual([]);
   });
 
   // The two that matter (wrong-way-round): a green suite is worthless if it only ever asserts

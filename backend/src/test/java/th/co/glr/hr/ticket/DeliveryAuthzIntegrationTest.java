@@ -31,15 +31,16 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 /**
  * WHO may record a delivery — stages 13–14 (ส่งมอบสินค้า).
  *
- * <p><b>The change under test.</b> Owner ruling 2026-08-17: stage 12 (PROCUREMENT) belongs to
- * Import, stages 13–14 belong to Sales. {@code recordPartialDelivery}/{@code completeDelivery} were
- * gated {@code requireRole(actor, FULFILMENT_ROLES)} = {import, ceo}, so the deal's own rep could
- * not record that goods went out. The gate is now {@link TicketService}'s
- * {@code canWriteDelivery} — import/CEO, or the {@code sales} rep who owns the deal.
- *
- * <p><b>Additive, and that is asserted.</b> Import and CEO KEEP access; the owning rep gains it.
- * Half the cases below exist to prove nothing was taken away, because a refusal-only suite would
- * pass just as happily if the change had been a transfer.
+ * <p><b>The change under test — now a TRANSFER, not the additive widening this file originally
+ * pinned.</b> Owner ruling 2026-08-17 first WIDENED the old {@code requireRole(actor,
+ * FULFILMENT_ROLES)} = {import, ceo} gate additively, giving the deal's own rep access alongside
+ * import/CEO. A second owner decision (2026-09, V184, ported from Yang.Pongburit's
+ * {@code origin/feat/per-factory-import-tracking} commit 83f4fa78) went further and made it a
+ * TRANSFER: import now owns only the import axis (per-factory PROCUREMENT, {@code
+ * ImportRequestService}), and stages 13–14 belong to Sales alone. The gate is {@link
+ * TicketService}'s {@code canWriteDelivery} — CEO, or the {@code sales} rep who owns the deal.
+ * Import is NO LONGER in it. This file used to assert the opposite (import keeps access); the
+ * cases below were rewritten in place rather than silently left green on stale assumptions.
  *
  * <p><b>Written wrong-way-round.</b> The tests that matter are the refusals, and each re-reads
  * {@code sales.ticket_item.qty_delivered} out of Postgres afterwards to prove nothing moved.
@@ -53,10 +54,12 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * not record that goods went out. Without the test below that distinction is just a comment.
  *
  * <p>Per CLAUDE.md this is the required real-DB evidence: a mocked {@link TicketRepository} would
- * pass while the {@code UPDATE} did something else. Mirrors {@link StockDeclarationAuthzIntegrationTest},
- * which pins the identical predicate for {@code reserveStock} — the two share
- * {@code isFulfilmentOrOwningRep}, so a mutation to that one expression should turn cases red in
- * BOTH classes.
+ * pass while the {@code UPDATE} did something else. {@link StockDeclarationAuthzIntegrationTest}
+ * pins the SIBLING predicate for {@code reserveStock}/{@code canDeclareStockCoverage} —
+ * deliberately NOT the same expression as {@code canWriteDelivery} any more (see that method's own
+ * Javadoc: {@code isFulfilmentOrOwningRep} still admits import for stock-coverage declaration,
+ * which this transfer does not touch), so a mutation to one must NOT be expected to turn the other
+ * class red.
  *
  * <p>Note the suite-wide trap on {@link AbstractPostgresIntegrationTest}: services are hand-wired
  * with {@code new}, so {@code @Transactional} is inert and no rollback is exercised. The "unmoved"
@@ -192,9 +195,68 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
     }
 
-    // ── the grants: these prove it is a WIDENING, not a transfer ─────────────────────────────
+    /**
+     * The 2026-09/V184 transfer's own case, written wrong-way-round like every refusal above: import
+     * used to KEEP delivery access under the additive 2026-08-17 widening (this test used to assert
+     * exactly that, under the name {@code import_stillRecordsDelivery_theChangeIsAdditive}) — the
+     * later transfer took it away. If this ever goes green again the transfer has silently reverted
+     * to the additive reading, which is a different decision from the one the owner made.
+     */
+    @Test
+    void import_noLongerRecordsDelivery_theChangeIsATransferToSales_notAnAddition() {
+        long ticketId = deliverableDeal();
+        long itemId = onlyItemId(ticketId);
 
-    /** The new capability, and the point of the change. */
+        assertThatThrownBy(() -> ticketService.recordPartialDelivery(
+                ticketId, deliver(itemId, "2.00"), importUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
+    }
+
+    /**
+     * REVIEW ROUND 1, S2: the mutation refusal above proves import cannot ACT — this proves the
+     * action is not even ADVERTISED to them, so a mock or a stale frontend cache can never offer a
+     * button that instantly 403s. {@code TicketService#actions} and {@code #canRecordDelivery} are
+     * required to read off the SAME {@code canWriteDelivery} predicate (see that method's own
+     * Javadoc), so this is the same guard as the refusal above, observed from the other side.
+     */
+    @Test
+    void import_recordDeliveryActionsAreNotAdvertised() {
+        long ticketId = deliverableDeal();
+
+        List<String> importActions = ticketService.actions(ticketId, importUser).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action)
+            .toList();
+
+        assertThat(importActions).doesNotContain("RECORD_PARTIAL_DELIVERY", "COMPLETE_DELIVERY");
+
+        // The owning rep and CEO — the ones the mutation gate DOES admit — must see them, so this
+        // is a real ownership-scoped assertion, not a permanently-hidden action nobody ever sees.
+        List<String> ownerActions = ticketService.actions(ticketId, owner).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action)
+            .toList();
+        assertThat(ownerActions).contains("RECORD_PARTIAL_DELIVERY", "COMPLETE_DELIVERY");
+    }
+
+    /** completeDelivery carries its own gate, so import's refusal needs its own case too. */
+    @Test
+    void completeDelivery_import_isRefused_theChangeIsATransferToSales_notAnAddition() {
+        long ticketId = deliverableDeal();
+        long itemId = onlyItemId(ticketId);
+
+        assertThatThrownBy(() -> ticketService.completeDelivery(
+                ticketId, new CompleteDeliveryRequest(null, null), importUser))
+            .isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+
+        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("0.00");
+    }
+
+    // ── the grants: these prove the owning rep and CEO keep/gain access ──────────────────────
+
+    /** The new capability, and the point of the original 2026-08-17 widening. */
     @Test
     void dealOwner_recordsDelivery_andTheQuantityLands() {
         long ticketId = deliverableDeal();
@@ -215,20 +277,6 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(qtyDelivered(itemId)).isEqualByComparingTo("10.00");
         assertThat(tickets.findById(ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
-    }
-
-    /**
-     * Import KEEPS it. If this ever goes red the change has silently become a transfer, which is a
-     * different decision from the one the owner made.
-     */
-    @Test
-    void import_stillRecordsDelivery_theChangeIsAdditive() {
-        long ticketId = deliverableDeal();
-        long itemId = onlyItemId(ticketId);
-
-        ticketService.recordPartialDelivery(ticketId, deliver(itemId, "2.00"), importUser);
-
-        assertThat(qtyDelivered(itemId)).isEqualByComparingTo("2.00");
     }
 
     @Test

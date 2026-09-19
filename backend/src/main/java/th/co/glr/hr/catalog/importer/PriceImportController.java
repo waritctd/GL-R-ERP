@@ -58,12 +58,13 @@ public class PriceImportController {
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
-        return svc.createFactory(name, body.get("country"), body.get("defaultCurrency"),
-            body.get("email"), body.get("unit"));
+        return svc.createFactory(name, body.get("country"), body.get("countryOther"),
+            body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
     /** Country is REQUIRED and validated — see {@code PriceImportService#createFactory}'s javadoc
-     * for the 500 this replaces. */
+     * for the 500 this replaces. {@code countryOther} (V184) follows the same {@code 'ZZ'}-pairing
+     * rule — see {@code PriceImportService#requireValidCountryOther}. */
     @PutMapping("/factories/{factoryId}")
     Map<String, Object> updateFactory(
         @PathVariable long factoryId,
@@ -74,8 +75,8 @@ public class PriceImportController {
         String name = body.get("name");
         if (name == null || name.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
-        return svc.updateFactory(factoryId, name, body.get("country"), body.get("defaultCurrency"),
-            body.get("email"), body.get("unit"));
+        return svc.updateFactory(factoryId, name, body.get("country"), body.get("countryOther"),
+            body.get("defaultCurrency"), body.get("email"), body.get("unit"));
     }
 
     /** Backs the factory editor's country select, so a typo/unseeded free-text country can no

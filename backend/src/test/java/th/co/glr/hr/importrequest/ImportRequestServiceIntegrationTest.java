@@ -3,6 +3,7 @@ package th.co.glr.hr.importrequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -10,9 +11,21 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import th.co.glr.hr.attachment.FileStorageService;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.customer.ContactRepository;
+import th.co.glr.hr.customer.CustomerRepository;
+import th.co.glr.hr.factory.FactoryConfigRepository;
+import th.co.glr.hr.notification.NotificationRepository;
+import th.co.glr.hr.notification.SalesNotificationMailer;
+import th.co.glr.hr.pricingrequest.PricingRequestRepository;
+import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.ticket.QuotationRenderer;
+import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketService;
 
 /**
  * Proves the ใบขอซื้อ actually assembles from a real deal, through the real SQL.
@@ -39,9 +52,27 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
 
     @BeforeEach
     void wireRealCollaborators() {
+        // V184 widened the constructor to 6 args (factories/tickets/ticketService, for the STORED
+        // per-factory path this class does not exercise) — the PREVIEW path under test here
+        // (render/brands/pageCount) is untouched by that migration, see ImportRequestService's own
+        // Javadoc, so these three collaborators are wired but never actually invoked by this class.
+        TicketRepository tickets = new TicketRepository(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        CustomerRepository customers = new CustomerRepository(jdbc);
+        ObjectMapper objectMapper = new ObjectMapper();
+        FileStorageService fileStorage = new FileStorageService("/tmp/glr-ir-preview-test-uploads");
+        PricingRequestService pricingRequestService = new PricingRequestService(
+            new PricingRequestRepository(jdbc), tickets, notifications, objectMapper,
+            new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
+        EmployeeAuthRepository auth = new EmployeeAuthRepository(jdbc);
+        TicketService ticketService = new TicketService(tickets, notifications, objectMapper, customers,
+            new QuotationRenderer(), pricingRequestService, auth);
+
         service = new ImportRequestService(new ImportRequestQueryRepository(jdbc),
                                            new ImportRequestRenderer(),
-                                           new ImportRequestRepository(jdbc));
+                                           new ImportRequestRepository(jdbc),
+                                           new FactoryConfigRepository(jdbc),
+                                           tickets, ticketService);
 
         long employeeId = insertEmployee("IRSVC");
         importUser  = principal(employeeId, "import");

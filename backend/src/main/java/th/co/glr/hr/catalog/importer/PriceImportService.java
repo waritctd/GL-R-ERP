@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.catalog.ProductPriceInput;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import org.springframework.http.HttpStatus;
 
@@ -570,13 +571,15 @@ public class PriceImportService {
         // (see FactoryConfigRepository's class javadoc) — surfaced here too so the factory-list UI
         // that this endpoint feeds can show and edit them without a second round trip.
         return jdbc.query(
-            "SELECT factory_id, name, country, default_currency, email, unit FROM price_catalog.factories ORDER BY name",
+            "SELECT factory_id, name, country, country_other, default_currency, email, unit"
+                + " FROM price_catalog.factories ORDER BY name",
             Map.of(),
             (rs, i) -> {
                 Map<String, Object> m = new HashMap<>();
                 m.put("factoryId",       rs.getLong("factory_id"));
                 m.put("name",            rs.getString("name"));
                 m.put("country",         rs.getString("country"));
+                m.put("countryOther",    rs.getString("country_other"));
                 m.put("defaultCurrency", rs.getString("default_currency"));
                 m.put("email",           rs.getString("email"));
                 m.put("unit",            rs.getString("unit"));
@@ -650,17 +653,20 @@ public class PriceImportService {
      * ApiExceptionHandler.handleDataAccess} turned into a bare 500 — "cannot add a factory" with no
      * useful message. Country is now REQUIRED and validated against {@code price_catalog.country}
      * up front ({@link #requireValidCountry}), so a bad value is a clean Thai 400 instead. Also now
-     * accepts the optional {@code email}/{@code unit} RFQ fields V163 added to this table.
+     * accepts the optional {@code email}/{@code unit} RFQ fields V163 added to this table, and (V184,
+     * owner decision 09-18) {@code countryOther} — required when {@code country} is {@code 'ZZ'}
+     * (อื่นๆ), forbidden otherwise; see {@link #requireValidCountryOther}.
      */
     @Transactional
-    public Map<String, Object> createFactory(String name, String country, String defaultCurrency,
-                                             String email, String unit) {
+    public Map<String, Object> createFactory(String name, String country, String countryOther,
+                                             String defaultCurrency, String email, String unit) {
         if (name == null || name.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
         }
         String trimmedName = name.strip();
         String cur = normalizeCurrency(defaultCurrency);
         String cty = requireValidCountry(country);
+        String ctyOther = requireValidCountryOther(cty, countryOther);
         String em = blankToNull(email);
         requireMaxLength(em, 200, "อีเมล");
         String normalizedUnit = blankToNull(unit);
@@ -669,7 +675,7 @@ public class PriceImportService {
 
         long factoryId;
         try {
-            factoryId = factoryConfigs.create(trimmedName, cty, cur, em, un);
+            factoryId = factoryConfigs.create(trimmedName, cty, ctyOther, cur, em, un);
         } catch (DuplicateKeyException e) {
             throw new ApiException(HttpStatus.CONFLICT, "มีโรงงานชื่อนี้อยู่แล้ว: " + trimmedName);
         }
@@ -685,6 +691,7 @@ public class PriceImportService {
         m.put("factoryId",       factoryId);
         m.put("name",            trimmedName);
         m.put("country",         cty);
+        m.put("countryOther",    ctyOther);
         m.put("defaultCurrency", cur);
         m.put("email",           em);
         m.put("unit",            un);
@@ -692,19 +699,37 @@ public class PriceImportService {
     }
 
     /**
-     * Updates name/country/currency/email/unit on an existing factory. 404 if {@code factoryId} is
-     * unknown, 400 on an invalid country (same rule as {@link #createFactory}), 409 on a duplicate
-     * name (the UNIQUE constraint on {@code price_catalog.factories.name}) rather than a 500.
+     * Updates name/country/currency/email/unit/countryOther on an existing factory. 404 if {@code
+     * factoryId} is unknown, 400 on an invalid country or countryOther pairing (same rules as {@link
+     * #createFactory}), 409 on a duplicate name (the UNIQUE constraint on {@code
+     * price_catalog.factories.name}) rather than a 500.
      */
     @Transactional
-    public Map<String, Object> updateFactory(long factoryId, String name, String country, String defaultCurrency,
-                                             String email, String unit) {
+    public Map<String, Object> updateFactory(long factoryId, String name, String country, String countryOther,
+                                             String defaultCurrency, String email, String unit) {
         if (name == null || name.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ชื่อโรงงานห้ามว่าง");
         }
+        FactoryConfigDto existing = factoryConfigs.findById(factoryId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบโรงงาน id=" + factoryId));
         String trimmedName = name.strip();
         String cur = normalizeCurrency(defaultCurrency);
         String cty = requireValidCountry(country);
+        // REVIEW ROUND 1, S6: when the caller sends NO countryOther and the country is UNCHANGED
+        // from what is already stored, keep the stored value rather than re-validating a blank one
+        // as if the caller meant to clear it. Without this, a ZZ (อื่นๆ) factory could never be
+        // edited from today's UI at all: the current country picker has no text input for
+        // countryOther yet (PR-B adds it), so every edit request from it omits the field, and
+        // requireValidCountryOther would otherwise refuse every such request with "กรุณาระบุชื่อ
+        // ประเทศเมื่อเลือก อื่นๆ" even though the row already has one on file. A caller that DOES
+        // send a countryOther (present, even blank-to-clear) or that CHANGES the country still goes
+        // through the normal validation below — this only fills in what was silently omitted.
+        String ctyOther;
+        if (blankToNull(countryOther) == null && "ZZ".equals(cty) && cty.equals(existing.country())) {
+            ctyOther = existing.countryOther();
+        } else {
+            ctyOther = requireValidCountryOther(cty, countryOther);
+        }
         String em = blankToNull(email);
         requireMaxLength(em, 200, "อีเมล");
         String normalizedUnit = blankToNull(unit);
@@ -716,7 +741,7 @@ public class PriceImportService {
         }
         int updated;
         try {
-            updated = factoryConfigs.update(factoryId, trimmedName, cty, cur, em, un);
+            updated = factoryConfigs.update(factoryId, trimmedName, cty, ctyOther, cur, em, un);
         } catch (DuplicateKeyException e) {
             throw new ApiException(HttpStatus.CONFLICT, "มีโรงงานชื่อนี้อยู่แล้ว: " + trimmedName);
         }
@@ -728,6 +753,7 @@ public class PriceImportService {
         m.put("factoryId",       factoryId);
         m.put("name",            trimmedName);
         m.put("country",         cty);
+        m.put("countryOther",    ctyOther);
         m.put("defaultCurrency", cur);
         m.put("email",           em);
         m.put("unit",            un);
@@ -760,6 +786,29 @@ public class PriceImportService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบรหัสประเทศนี้: " + code);
         }
         return code;
+    }
+
+    /**
+     * V184 / owner decision 09-18: {@code 'ZZ'} (อื่นๆ) REQUIRES a typed {@code countryOther} — a
+     * human said "I don't know the real code, but here is what I mean" — and every other country
+     * FORBIDS one, so a stray value from a stale form field cannot silently attach to a real
+     * country. Mirrors {@link th.co.glr.hr.importrequest.ImportRequestService
+     * #requireValidNewFactoryCountry}'s identical rule for the ใบขอซื้อ auto-create path, and backs
+     * {@code price_catalog.factories}' own paired CHECK constraints (V184) with a clean Thai 400
+     * instead of a raw DB error.
+     *
+     * @param validatedCountryCode already validated/upper-cased by {@link #requireValidCountry}.
+     */
+    private String requireValidCountryOther(String validatedCountryCode, String countryOther) {
+        String other = blankToNull(countryOther);
+        if ("ZZ".equals(validatedCountryCode) && other == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุชื่อประเทศเมื่อเลือก อื่นๆ");
+        }
+        if (!"ZZ".equals(validatedCountryCode) && other != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุชื่อประเทศเพิ่มเติมได้เฉพาะเมื่อเลือก อื่นๆ เท่านั้น");
+        }
+        requireMaxLength(other, 100, "ชื่อประเทศ (อื่นๆ)");
+        return other;
     }
 
     /**

@@ -230,6 +230,11 @@ export const WASTAGE_PERCENT_PRESETS = [0, 5, 10];
 
 // ประเทศต้นทาง select + its default lead-time range (min/max days), editable per line. Mirrors
 // the plan's "อิตาลี/สเปน/จีน/ไทย-สต็อก/อื่นๆ" list exactly, in that order.
+//
+// Mirrored (NOT shared) by backend/src/main/java/th/co/glr/hr/importrequest/LeadTimeDefaults.java,
+// which autofills the same four ranges onto a per-factory ใบขอซื้อ DRAFT (V184, owner decision
+// 09-18 #2). Two independent copies of the same numbers, one per runtime -- there is no guard
+// against them drifting apart; see that class's own Javadoc.
 export const ORIGIN_COUNTRY_OPTIONS = [
   { code: 'อิตาลี', label: 'อิตาลี', leadTimeMinDays: 75, leadTimeMaxDays: 90 },
   { code: 'สเปน', label: 'สเปน', leadTimeMinDays: 75, leadTimeMaxDays: 90 },

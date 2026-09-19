@@ -1211,6 +1211,34 @@ public class TicketRepository {
         return purchaseOrderRollup(ticketId).live() > 0;
     }
 
+    /**
+     * Whether this deal has at least one ISSUED row in the per-factory {@code sales.import_request}
+     * aggregate (V184) — the same refuse-don't-delegate guard {@link #hasLivePurchaseOrders} provides
+     * for the (dormant) PO path, used by {@code TicketService#markIrSent}/{@code #markShipping}/
+     * {@code #markGoodsReceived} to refuse a ticket-level click that cannot say which factory it
+     * concerns once the deal is actually tracked per-factory.
+     */
+    public boolean hasLiveImportRequests(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.import_request WHERE ticket_id = :ticketId AND status = 'ISSUED'
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
+     * Locks {@code sales.ticket}'s own row {@code FOR UPDATE} for the remainder of the caller's
+     * transaction. Used by {@code ImportRequestService#advanceStep} before its own "is every factory
+     * now RECEIVED" re-check, so two concurrent "last factory reached RECEIVED" advances on the same
+     * deal serialize instead of both reading a stale pre-rollup state and both firing {@code
+     * TicketService#applyImportRequestRollup}.
+     */
+    public void lockTicketForUpdate(long ticketId) {
+        jdbc.query("SELECT 1 FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
+            Map.of("id", ticketId), (rs, n) -> 0);
+    }
+
     public void updateSalesStage(long ticketId, String stage) {
         jdbc.update(
             "UPDATE sales.ticket SET sales_stage = :s, stage_updated_at = now() WHERE ticket_id = :id",
