@@ -113,86 +113,83 @@ function defaultForm(employeeId = '') {
   };
 }
 
-function specialMoneyFormSchema({ requireEmployeeId }) {
-  return z.object({
-    employeeId: z.string(),
-    requestType: z.string().min(1, 'กรุณาเลือกประเภทคำขอ'),
-    eventDate: z.string(),
-    eventEndDate: z.string(),
-    receiptDate: z.string(),
-    province: z.string(),
-    role: z.string(),
-    relation: z.string(),
-    uniformMode: z.string(),
-    shirtCount: z.string(),
-    trouserCount: z.string(),
-    needsBackSupport: z.boolean().optional(),
-    requestedAmountInput: z.string(),
-    reason: z.string().min(1, 'กรุณาระบุเหตุผล/รายละเอียด'),
-  }).superRefine((data, context) => {
-    if (requireEmployeeId && !data.employeeId) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['employeeId'], message: 'กรุณาเลือกพนักงาน' });
+// employeeId is always the caller's own (there is no on-behalf picker -- see the พนักงาน field
+// below), so there is nothing to validate about it here.
+const specialMoneyFormSchema = z.object({
+  employeeId: z.string(),
+  requestType: z.string().min(1, 'กรุณาเลือกประเภทคำขอ'),
+  eventDate: z.string(),
+  eventEndDate: z.string(),
+  receiptDate: z.string(),
+  province: z.string(),
+  role: z.string(),
+  relation: z.string(),
+  uniformMode: z.string(),
+  shirtCount: z.string(),
+  trouserCount: z.string(),
+  needsBackSupport: z.boolean().optional(),
+  requestedAmountInput: z.string(),
+  reason: z.string().min(1, 'กรุณาระบุเหตุผล/รายละเอียด'),
+}).superRefine((data, context) => {
+  if (!data.requestType) return;
+  if (['TRAVEL_PER_DIEM', 'TRAVEL_LODGING'].includes(data.requestType)) {
+    if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เริ่มเดินทาง' });
+    if (!data.eventEndDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventEndDate'], message: 'กรุณาเลือกวันที่สิ้นสุด' });
+    if (data.eventDate && data.eventEndDate && data.eventEndDate < data.eventDate) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventEndDate'], message: 'วันที่สิ้นสุดต้องอยู่หลังวันที่เริ่ม' });
     }
-    if (!data.requestType) return;
-    if (['TRAVEL_PER_DIEM', 'TRAVEL_LODGING'].includes(data.requestType)) {
-      if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เริ่มเดินทาง' });
-      if (!data.eventEndDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventEndDate'], message: 'กรุณาเลือกวันที่สิ้นสุด' });
-      if (data.eventDate && data.eventEndDate && data.eventEndDate < data.eventDate) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventEndDate'], message: 'วันที่สิ้นสุดต้องอยู่หลังวันที่เริ่ม' });
-      }
-      if (!data.province) context.addIssue({ code: z.ZodIssueCode.custom, path: ['province'], message: 'กรุณาเลือกจังหวัดปลายทาง' });
-      if (data.requestType === 'TRAVEL_PER_DIEM' && !data.role) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['role'], message: 'กรุณาเลือกบทบาท' });
-      }
-      if (data.requestType === 'TRAVEL_LODGING' && !(Number(data.requestedAmountInput) > 0)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
-      }
-    } else if (data.requestType === 'MEDICAL') {
-      if (!data.receiptDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['receiptDate'], message: 'กรุณาเลือกวันที่ใบเสร็จ' });
-      if (!(Number(data.requestedAmountInput) > 0)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
-      }
-    } else if (AID_TYPES.includes(data.requestType)) {
-      if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เกิดเหตุการณ์' });
-      if (data.requestType === 'AID_FUNERAL' && !data.relation) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['relation'], message: 'กรุณาเลือกความสัมพันธ์กับผู้เสียชีวิต' });
-      }
-    } else if (UNIFORM_TYPES.includes(data.requestType)) {
-      if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เบิก' });
-      // Receipt date is only checked by evaluateUniformAnnual on the SELF_BUY route -- the
-      // TAILORED route reads no receipt date at all. Requiring it unconditionally (as before)
-      // made the tailored route the RuleCard itself advertises impossible to file.
-      if (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'SELF_BUY' && !data.receiptDate) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['receiptDate'], message: 'กรุณาเลือกวันที่ใบเสร็จ' });
-      }
-      // Piece count is checked in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual's own comment:
-      // "The 4-piece limit is the document's, not the self-buy route's"), but
-      // UNIFORM_PREPROBATION_KIT's evaluator never reads shirtCount/trouserCount at all -- the
-      // kit's piece counts are fixed by policy, not chosen by the requester.
-      if (data.requestType !== 'UNIFORM_PREPROBATION_KIT') {
-        const pieces = Number(data.shirtCount || 0) + Number(data.trouserCount || 0);
-        if (pieces <= 0) {
-          context.addIssue({ code: z.ZodIssueCode.custom, path: ['shirtCount'], message: 'กรุณาระบุจำนวนชิ้นอย่างน้อย 1 ชิ้น' });
-        }
-      }
-      // Manual amount entry: UNIFORM_NEW_STAFF and UNIFORM_PREPROBATION_KIT always (neither is
-      // priced from shirt/trouser rates); UNIFORM_ANNUAL only on the TAILORED route (SELF_BUY's
-      // amount is fully computed from the per-piece rates, same as before).
-      const needsManualAmount = data.requestType === 'UNIFORM_NEW_STAFF'
-        || data.requestType === 'UNIFORM_PREPROBATION_KIT'
-        || (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'TAILORED');
-      if (needsManualAmount && !(Number(data.requestedAmountInput) > 0)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
-      }
-    } else {
-      // TRAINING / OTHER
-      if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่' });
-      if (!(Number(data.requestedAmountInput) > 0)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
+    if (!data.province) context.addIssue({ code: z.ZodIssueCode.custom, path: ['province'], message: 'กรุณาเลือกจังหวัดปลายทาง' });
+    if (data.requestType === 'TRAVEL_PER_DIEM' && !data.role) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['role'], message: 'กรุณาเลือกบทบาท' });
+    }
+    if (data.requestType === 'TRAVEL_LODGING' && !(Number(data.requestedAmountInput) > 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
+    }
+  } else if (data.requestType === 'MEDICAL') {
+    if (!data.receiptDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['receiptDate'], message: 'กรุณาเลือกวันที่ใบเสร็จ' });
+    if (!(Number(data.requestedAmountInput) > 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
+    }
+  } else if (AID_TYPES.includes(data.requestType)) {
+    if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เกิดเหตุการณ์' });
+    if (data.requestType === 'AID_FUNERAL' && !data.relation) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['relation'], message: 'กรุณาเลือกความสัมพันธ์กับผู้เสียชีวิต' });
+    }
+  } else if (UNIFORM_TYPES.includes(data.requestType)) {
+    if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เบิก' });
+    // Receipt date is only checked by evaluateUniformAnnual on the SELF_BUY route -- the
+    // TAILORED route reads no receipt date at all. Requiring it unconditionally (as before)
+    // made the tailored route the RuleCard itself advertises impossible to file.
+    if (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'SELF_BUY' && !data.receiptDate) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['receiptDate'], message: 'กรุณาเลือกวันที่ใบเสร็จ' });
+    }
+    // Piece count is checked in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual's own comment:
+    // "The 4-piece limit is the document's, not the self-buy route's"), but
+    // UNIFORM_PREPROBATION_KIT's evaluator never reads shirtCount/trouserCount at all -- the
+    // kit's piece counts are fixed by policy, not chosen by the requester.
+    if (data.requestType !== 'UNIFORM_PREPROBATION_KIT') {
+      const pieces = Number(data.shirtCount || 0) + Number(data.trouserCount || 0);
+      if (pieces <= 0) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ['shirtCount'], message: 'กรุณาระบุจำนวนชิ้นอย่างน้อย 1 ชิ้น' });
       }
     }
-  });
-}
+    // Manual amount entry: UNIFORM_NEW_STAFF and UNIFORM_PREPROBATION_KIT always (neither is
+    // priced from shirt/trouser rates); UNIFORM_ANNUAL only on the TAILORED route (SELF_BUY's
+    // amount is fully computed from the per-piece rates, same as before).
+    const needsManualAmount = data.requestType === 'UNIFORM_NEW_STAFF'
+      || data.requestType === 'UNIFORM_PREPROBATION_KIT'
+      || (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'TAILORED');
+    if (needsManualAmount && !(Number(data.requestedAmountInput) > 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
+    }
+  } else {
+    // TRAINING / OTHER
+    if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่' });
+    if (!(Number(data.requestedAmountInput) > 0)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestedAmountInput'], message: 'กรุณาระบุจำนวนเงิน' });
+    }
+  }
+});
 
 function formatDate(value) {
   if (!value) return '-';
@@ -354,16 +351,6 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     if (typesQuery.error) showToast('error', typesQuery.error.message || 'โหลดประเภทคำขอไม่สำเร็จ');
   }, [typesQuery.error, showToast]);
 
-  const submitEmployeeOptions = useMemo(
-    () => employeeOptions.filter((employee) => employee.self || employee.directReport),
-    [employeeOptions],
-  );
-  const hasMultipleSubmitOptions = submitEmployeeOptions.length > 1;
-  const formSchema = useMemo(
-    () => specialMoneyFormSchema({ requireEmployeeId: hasMultipleSubmitOptions }),
-    [hasMultipleSubmitOptions],
-  );
-
   const {
     register,
     handleSubmit,
@@ -373,7 +360,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     control,
     formState: { errors },
   } = useForm({
-    resolver: zodResolver(formSchema),
+    resolver: zodResolver(specialMoneyFormSchema),
     defaultValues: defaultForm(currentEmployee?.id || user.employeeId || ''),
     mode: 'onChange',
     reValidateMode: 'onChange',
@@ -395,8 +382,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     if (!employeesQuery.data) return;
     const currentEmployeeId = getValues('employeeId');
     const nextEmployeeId = currentEmployeeId
-      || submitEmployeeOptions.find((employee) => employee.self)?.employeeId
-      || submitEmployeeOptions[0]?.employeeId
+      || employeeOptions.find((employee) => employee.self)?.employeeId
       || '';
     if (nextEmployeeId === currentEmployeeId) return;
     setValue('employeeId', String(nextEmployeeId), { shouldValidate: true });
@@ -404,7 +390,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   }, [employeesQuery.data]);
 
   // The entitlement panel is scoped to whichever employee the form is currently submitting for
-  // (self by default) -- "showing entitlement before intent" (plan's layer A).
+  // (always self) -- "showing entitlement before intent" (plan's layer A).
   const usageEmployeeId = selectedEmployeeId ? Number(selectedEmployeeId) : (currentEmployee?.id || user.employeeId || null);
   const usageQuery = useQuery({
     queryKey: queryKeys.specialMoneyUsage(usageEmployeeId, new Date().getFullYear()),
@@ -627,20 +613,24 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   function canCeoApprove(request) {
     return user.role === 'ceo' && ['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status);
   }
-  // Mirrors SpecialMoneyService.cancel(): only the employee or whoever filed on
-  // their behalf, and only while SUBMITTED -- no manager-cancel path here,
-  // unlike overtime.
-  // Mirrors SpecialMoneyService.requireCanAttach(): the requester only, while still SUBMITTED.
+  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only
+  // while SUBMITTED -- no manager-cancel path here, unlike overtime. The old "or whoever filed on
+  // their behalf" (requested_by_id) disjunct was removed in Java 2026-08-10, so a legacy
+  // on-behalf filer (e.g. hr/ceo recorded as requestedBy on a row filed before that ruling) sees
+  // no buttons here rather than buttons that would 403.
+  function isOwnerOnSubmittedRequest(request) {
+    // A user with no employee record owns nothing -- without this, Number(null) === Number(null)
+    // would match a row whose employeeId is also missing.
+    if (user.employeeId == null) return false;
+    return request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
+  }
+
   function canAttach(request) {
-    const isEmployee = Number(request.employeeId) === Number(user.employeeId);
-    const isRequester = request.requestedById != null && Number(request.requestedById) === Number(user.employeeId);
-    return request.status === 'SUBMITTED' && (isEmployee || isRequester);
+    return isOwnerOnSubmittedRequest(request);
   }
 
   function canCancel(request) {
-    const isEmployee = Number(request.employeeId) === Number(user.employeeId);
-    const isRequester = request.requestedById != null && Number(request.requestedById) === Number(user.employeeId);
-    return request.status === 'SUBMITTED' && (isEmployee || isRequester);
+    return isOwnerOnSubmittedRequest(request);
   }
   function cancel(id) {
     setConfirmState({ kind: 'cancel', id });
@@ -756,22 +746,13 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       <Panel title="ยื่นคำขอเงินสวัสดิการ">
         <SafeForm onSubmit={handleSubmit(submitSpecialMoney)} noValidate>
           <FormGrid>
-            {hasMultipleSubmitOptions ? (
-              <FormField label="พนักงาน" htmlFor="smr-employee" error={errors.employeeId?.message}>
-                <select id="smr-employee" {...register('employeeId')} required>
-                  <option value="">เลือกพนักงาน</option>
-                  {submitEmployeeOptions.map((employee) => (
-                    <option key={employee.employeeId} value={employee.employeeId}>
-                      {employee.employeeName} · {employee.employeeCode}{employee.directReport ? ' · ลูกทีม' : ''}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-            ) : (
-              <FormField label="พนักงาน" htmlFor="smr-employee-display">
-                <input id="smr-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
-              </FormField>
-            )}
+            {/* Welfare is filed for yourself, by yourself -- every role, no exception (mirrors
+                SpecialMoneyService.resolveTargetEmployee, which refuses any target but the
+                caller). hr/ceo's GET /employees still returns the full roster, but only the
+                self entry is ever submittable, so there is no picker -- just the caller's name. */}
+            <FormField label="พนักงาน" htmlFor="smr-employee-display">
+              <input id="smr-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
+            </FormField>
   
             <div className={formGridSpan2}>
               {/* TypePicker replaces the flat 12-option <select> (plan §"Type grouping"). The
