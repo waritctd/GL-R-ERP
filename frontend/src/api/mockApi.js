@@ -4958,35 +4958,28 @@ function specialMoneyType(requestType) {
   return SPECIAL_MONEY_TYPES.find((item) => item.requestType === requestType) || null;
 }
 
-// Mirrors SpecialMoneyService.managesEmployee(): ฝ่าย manager sharing the employee's division,
-// self excluded. reports_to is deliberately NOT a branch (dropped with the division-only rule).
-//
-// NOTE THE NAME IS NOW A MISNOMER IN ONE DIRECTION: this grants NO approval rights. Welfare is
-// CEO-only, so a manager passing this can only file on a team member's behalf and read their
-// requests and quota. Kept separate from canReviewOvertime on purpose -- these encode distinct
-// Java classes whose rules have now genuinely diverged, and merging them would re-couple them.
-function canReviewSpecialMoney(user, employeeId) {
-  if (!user.employeeId || employeeId === user.employeeId) return false;
-  const employee = findEmployee(employeeId);
-  return Boolean(dashboardManager(user)
-    && dashboardDivisionId(user) != null
-    && dashboardDivisionId(user) === employee.divisionId);
-}
-
+// Mirrors SpecialMoneyService's class Javadoc (owner ruling, 2026-08-10) and
+// SpecialMoneyService.canAccessEmployee (~line 519): "a view-all role, or your own row", full
+// stop. There is deliberately NO managesEmployee/canReviewSpecialMoney concept left in the Java --
+// it used to grant a ฝ่าย manager a division-wide read plus submit-on-behalf, and BOTH are gone.
+// A manager passing neither disjunct here gets nothing: no read of a report's request/usage/
+// evidence, and no on-behalf create (see specialMoney.create() below, which mirrors
+// resolveTargetEmployee's unconditional self-only refusal). SpecialMoneyScopeIntegrationTest
+// pins this two-disjunct shape; a re-added manager branch here would silently reopen every read
+// path this helper backs (list/usage/attachments) at once.
 function canViewAllSpecialMoney(user) {
   return ['hr', 'ceo'].includes(user.role);
 }
 
 function canAccessSpecialMoneyEmployee(user, employeeId) {
-  return canViewAllSpecialMoney(user)
-    || employeeId === user.employeeId
-    || canReviewSpecialMoney(user, employeeId);
+  return canViewAllSpecialMoney(user) || employeeId === user.employeeId;
 }
 
 // Mirrors AttendanceCorrectionService: CEO-only, single stage, NO manager routing at all (unlike
-// overtime's manager -> CEO pipeline and unlike specialMoney's manager-can-file-on-behalf-but-not-
-// approve shape). Submit is always self-only -- there is no employeeId-on-behalf branch anywhere
-// in this feature, so there is nothing here for a manager (or HR) to be granted.
+// overtime's manager -> CEO pipeline, and unlike specialMoney's own read scope, which is at least
+// "hr/ceo see everyone" -- this feature's canViewAll is CEO alone, no hr carve-out). Submit is
+// always self-only -- there is no employeeId-on-behalf branch anywhere in this feature, so there
+// is nothing here for a manager (or HR) to be granted.
 function canViewAllAttendanceCorrection(user) {
   return user.role === 'ceo';
 }
@@ -8298,8 +8291,8 @@ export const api = {
   // Mirrors AttendanceCorrectionController + AttendanceCorrectionService
   // (attendance/correction/) -- an employee who missed a clock-in/clock-out scan requests the
   // correct time; CEO approves or rejects. NO manager stage at all (simpler than overtime's
-  // manager -> CEO pipeline and simpler than specialMoney's "manager can file on behalf" shape --
-  // submit here is always self-only). Approving in the real backend also writes a
+  // manager -> CEO pipeline; unlike specialMoney, this feature's canViewAll is CEO alone, with no
+  // hr carve-out -- submit here is always self-only). Approving in the real backend also writes a
   // hr.attendance_punch row and flips hr.attendance_daily.is_manual_override; this mock does NOT
   // reimplement that write (there is no mock attendance_daily table to write into) -- it only
   // flips status/reviewer fields, same as every other request-review mock in this file. Never
@@ -8423,41 +8416,42 @@ export const api = {
 
   // Mirrors SpecialMoneyController + SpecialMoneyService (specialmoney/). Approval is CEO-only in
   // a SINGLE stage for every employee -- unlike overtime, which keeps a manager -> CEO pipeline
-  // wherever the employee's ฝ่าย has a ผู้จัดการ. canReviewSpecialMoney therefore gates only
-  // read-scoping and submit-on-behalf here, never approval. cancel is
-  // stricter: only the employee or the person who filed on their behalf, and
-  // only while still SUBMITTED (no manager-cancel across every active status
-  // the way overtime allows). This mock does NOT reimplement the full policy
-  // cap/eligibility engine (SpecialMoneyPolicyEvaluator) -- it approximates
-  // authorization and status transitions faithfully, but `create` accepts
-  // whatever requestedAmount the caller sends without recomputing/clamping it
-  // against the policy caps. That enforcement is Java-only; never treat a mock
-  // "successful" submit as proof the real cap logic was exercised.
+  // wherever the employee's ฝ่าย has a ผู้จัดการ. Welfare is confidential to each employee (owner
+  // ruling, 2026-08-10): hr/ceo see and file-filter across everyone (canViewAllSpecialMoney);
+  // everyone else -- a ฝ่าย manager included -- gets exactly their own row, on every read path
+  // AND on create. There is no on-behalf submission and no manager-cancel/manager-attach: cancel
+  // and addAttachment below are the employee-only, SUBMITTED-only shape of
+  // SpecialMoneyService.cancel()/requireCanAttach(), with no `requestedById` disjunct -- that
+  // disjunct matched only a legacy on-behalf row, and the Java service can no longer produce one
+  // (see resolveTargetEmployee). This mock does NOT reimplement the full policy cap/eligibility
+  // engine (SpecialMoneyPolicyEvaluator) -- it approximates authorization and status transitions
+  // faithfully, but `create` accepts whatever requestedAmount the caller sends without
+  // recomputing/clamping it against the policy caps. That enforcement is Java-only; never treat a
+  // mock "successful" submit as proof the real cap logic was exercised.
   specialMoney: {
+    // Mirrors SpecialMoneyRepository.findEmployeeOptions (~line 486): includeAll (hr/ceo) is a
+    // LIST FILTER roster, not an on-behalf picker -- they cannot submit for anyone but themselves
+    // either (see create() below). Everyone else gets exactly themselves.
+    // `directReport` is ALWAYS false, on every row, for every caller -- see
+    // SpecialMoneyEmployeeOption.java's Javadoc: welfare has no submit-on-behalf, so no option is
+    // ever flagged as one, even in the hr/ceo roster. Sorted by employeeCode, matching the
+    // repository's `ORDER BY e.employee_code`.
     async employees() {
       const user = requireSession();
       const includeAll = canViewAllSpecialMoney(user);
-      const isManager = dashboardManager(user);
-      const managerDivisionId = isManager ? dashboardDivisionId(user) : null;
       const rows = db.employees
         .filter((employee) => employee.active)
-        .filter((employee) => includeAll
-          || employee.id === user.employeeId
-          || managerIdForEmployee(employee) === user.employeeId
-          || (managerDivisionId != null && employee.divisionId === managerDivisionId))
-        .map((employee) => {
-          const self = employee.id === user.employeeId;
-          const directReport = managerIdForEmployee(employee) === user.employeeId
-            || (managerDivisionId != null && employee.divisionId === managerDivisionId && !self);
-          return {
-            employeeId: employee.id,
-            employeeCode: employee.code,
-            employeeName: employee.nameTh,
-            departmentName: employee.departmentTh,
-            self,
-            directReport,
-          };
-        });
+        .filter((employee) => includeAll || employee.id === user.employeeId)
+        .slice()
+        .sort((a, b) => pgAsc(a.code, b.code))
+        .map((employee) => ({
+          employeeId: employee.id,
+          employeeCode: employee.code,
+          employeeName: employee.nameTh,
+          departmentName: employee.departmentTh,
+          self: employee.id === user.employeeId,
+          directReport: false,
+        }));
       return delay({ employees: rows });
     },
 
@@ -8537,7 +8531,10 @@ export const api = {
       const includeAll = canViewAllSpecialMoney(user);
       if (!includeAll) {
         if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        list = list.filter((item) => item.employeeId === user.employeeId || canReviewSpecialMoney(user, item.employeeId));
+        // Own rows only -- no manager branch. Mirrors SpecialMoneyService.list(): a non-view-all
+        // caller's ownEmployeeId is the sole scope, never a division-wide read (see this
+        // namespace's header comment and canAccessSpecialMoneyEmployee's).
+        list = list.filter((item) => item.employeeId === user.employeeId);
       }
 
       // Asia/Bangkok, not `new Date().toISOString()`: the backend reads the business zone, and UTC
@@ -8573,10 +8570,12 @@ export const api = {
       const actorEmployeeId = user.employeeId;
       if (!actorEmployeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const employeeId = payload.employeeId ? Number(payload.employeeId) : actorEmployeeId;
-      // Filing on another employee's behalf is manager-only, not HR -- mirrors
-      // SpecialMoneyService.resolveTargetEmployee(), which has no hr/admin
-      // bypass ("Employees can only submit their own special-money requests").
-      if (employeeId !== actorEmployeeId && !canReviewSpecialMoney(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // Welfare is filed for yourself, by yourself -- EVERY role, no exception (owner ruling,
+      // 2026-08-10). Mirrors SpecialMoneyService.resolveTargetEmployee() exactly: there is no
+      // manager-on-behalf branch and no hr/ceo bypass, because the request body itself (event
+      // date, reason, the type-specific detail) IS the confidential content. Message text matches
+      // the Java exception verbatim.
+      if (employeeId !== actorEmployeeId) fail('พนักงานสามารถยื่นคำขอเงินพิเศษให้ตนเองเท่านั้น', 403);
       findEmployee(employeeId);
       const type = specialMoneyType(payload.requestType);
       if (!type) fail('ประเภทคำขอเงินพิเศษไม่ถูกต้อง', 400);
@@ -8633,9 +8632,12 @@ export const api = {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
-      const isEmployee = request.employeeId === user.employeeId;
-      const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
-      if (!isEmployee && !isRequester) fail('เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้', 403);
+      // The employee the claim belongs to, and nobody else. Mirrors
+      // SpecialMoneyService.requireCanAttach(): the old "or whoever filed it" (requestedById)
+      // disjunct is gone -- with on-behalf submission removed, requestedById can no longer differ
+      // from employeeId on any row this mock can create, and on a legacy row it let a ฝ่าย manager
+      // slip documents into a colleague's confidential claim.
+      if (request.employeeId !== user.employeeId) fail('เฉพาะผู้ยื่นคำขอเท่านั้นที่แนบเอกสารได้', 403);
       if (request.status !== 'SUBMITTED') {
         fail('แนบเอกสารได้เฉพาะคำขอที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
       }
@@ -8705,17 +8707,17 @@ export const api = {
       fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
-    // Stricter than overtime.cancel: only the employee themselves or whoever
-    // filed on their behalf (requestedById), and only while still SUBMITTED --
-    // mirrors SpecialMoneyService.cancel(), which has no manager-cancel path
-    // for MANAGER_APPROVED/APPROVED the way OvertimeService does.
+    // Stricter than overtime.cancel: only the employee themselves, and only while still
+    // SUBMITTED -- mirrors SpecialMoneyService.cancel(), which (a) has no manager-cancel path for
+    // MANAGER_APPROVED/APPROVED the way OvertimeService does, and (b) no longer honours "or
+    // whoever filed it" (requestedById) either: that disjunct matched only a legacy on-behalf row,
+    // where it let a manager cancel a colleague's claim and be handed the full DTO back -- a read
+    // of exactly the confidential row this rule exists to close.
     async cancel(id, payload = {}) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
-      const isEmployee = request.employeeId === user.employeeId;
-      const isRequester = request.requestedById != null && request.requestedById === user.employeeId;
-      if (!isEmployee && !isRequester) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (request.employeeId !== user.employeeId) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (request.status !== 'SUBMITTED') fail('ยกเลิกได้เฉพาะคำขอเงินพิเศษที่ยังไม่ได้รับการพิจารณาเท่านั้น', 409);
       const now = new Date().toISOString();
       request.status = 'CANCELLED';

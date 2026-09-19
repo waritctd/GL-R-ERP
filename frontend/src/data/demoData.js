@@ -269,6 +269,15 @@ export function createDemoDatabase() {
     // CEO/sales_manager only) are never observable locally. Owns tickets
     // 16-18 and their own DRAFT/SUBMITTED pricing requests — see demoSales.js.
     { id: 12, email: 'sales2@glr.co.th', password: 'demo1234', name: 'คุณอรุณี ขายเก่ง', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
+    // GLA-46: a login for employees[9] (id 10, WHL, reports to the warehouse manager same as
+    // employees[8]/id 9 above), so mockApi.specialMoneyScope.test.js can log in as the OWNER of
+    // its legacy on-behalf seed row (buildDemoSpecialMoneyRequests id 13) and prove the employee
+    // can still attach/cancel their own confidential row even though the row's requestedById is
+    // the manager who filed it before the 2026-08-10 ruling. Placed last and kept role: 'employee'
+    // on purpose: api.auth.login({ role: 'employee' }) does `db.users.find(...)`, which returns
+    // the FIRST matching row, so this entry never changes what loginReport()/role:'employee' logs
+    // in as elsewhere (still id 4 / employees[8]) — it is reachable only by its own email.
+    { id: 13, email: employees[9].email, password: 'demo1234', name: employees[9].nameTh, role: 'employee', employeeId: employees[9].id, active: true, createdAt: iso(2025, 2, 11) },
   ];
 
   const tickets = [

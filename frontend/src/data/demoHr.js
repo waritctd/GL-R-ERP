@@ -663,6 +663,30 @@ export function buildDemoSpecialMoneyRequests(employees) {
       managerApprovedBy: employees[0].id, managerApprovedAt: now,
       reviewedById: employees[0].id, reviewedAt: now,
     }),
+    // GLA-46: ONE legacy on-behalf row -- requestedById !== employeeId, the exact shape
+    // submit-on-behalf used to produce before the 2026-08-10 confidentiality ruling removed it
+    // (SpecialMoneyService.resolveTargetEmployee is now unconditionally self-only). Every other
+    // row above is self-filed (requestedById === employeeId), so without this one
+    // mockApi.specialMoneyScope.test.js could only prove the `requestedById` disjunct was DELETED
+    // from cancel()/addAttachment() by reading the code, never by exercising it -- see that file's
+    // header. Mirrors the Java IT's parkAsLegacyOnBehalfRow (SpecialMoneyScopeIntegrationTest's
+    // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow): employeeId is employees[9] (id 10,
+    // WHL, reports to the same warehouse manager as employees[8]/id 9, but NOT employees[8]
+    // itself, which every other test in that file already owns), requestedById is
+    // employees[5].id (id 6, the warehouse ผู้จัดการฝ่าย, warehouse.manager@glr.co.th) -- a manager
+    // who could legitimately have filed for an in-division report under the old rule. Nothing
+    // back-fills requested_by_id, so a database can hold rows exactly like this (production held
+    // none as of 2026-09-19 -- 2 welfare rows in total, both self-filed). employees[9] has no other seed row above, so no frequency-cap
+    // collision is possible.
+    row({
+      id: 13, employeeId: employees[9].id, requestType: 'AID_FUNERAL',
+      eventDate: '2026-07-01', quantity: 1,
+      requestedAmount: 5000, payrollBucket: 'AID',
+      reason: 'เงินช่วยเหลืองานศพบิดา', status: 'SUBMITTED',
+      // Dated before the ruling: Java has refused on-behalf submission since 2026-08-10, so a
+      // real row of this shape can only carry an earlier requested_at.
+      requestedById: employees[5].id, requestedAt: '2026-07-02T09:00:00.000Z',
+    }),
   ];
 }
 
