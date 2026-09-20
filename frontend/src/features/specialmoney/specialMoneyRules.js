@@ -217,6 +217,16 @@ export function formatThaiMonthYear(date) {
 }
 
 /**
+ * th-TH, no decimals — shared by SpecialMoneyPanel.jsx (every money figure on that panel; several
+ * tests pin the exact string, e.g. '฿1,200') and ApproveSpecialMoneyDialog.jsx (the request
+ * summary's "ยอดที่ขอเบิก ฿X"). Not utils/format.js's own `formatMoney`, which uses en-US with 2
+ * decimals for payroll-style figures — this panel's amounts have always rendered the other way.
+ */
+export function formatMoney(value) {
+  return `฿${Number(value || 0).toLocaleString('th-TH')}`;
+}
+
+/**
  * Evidence document expected per type. Moved here (was a SpecialMoneyPanel.jsx-local
  * function) so RuleCard.jsx and SpecialMoneyPanel.jsx share one copy — both need it, and a
  * second copy is exactly how the panel's own "หลักฐานประกอบ" hint and the rule card's

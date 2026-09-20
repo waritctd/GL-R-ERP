@@ -17,6 +17,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   pendingApproverText, specialMoneyStatusLabel as statusInfo, SPECIAL_MONEY_STATUSES,
 } from '../../utils/format.js';
+import { ApproveSpecialMoneyDialog } from './ApproveSpecialMoneyDialog.jsx';
 import { AttachmentList } from './AttachmentList.jsx';
 import { EntitlementPanel } from './EntitlementPanel.jsx';
 import { RuleCard } from './RuleCard.jsx';
@@ -28,6 +29,7 @@ import {
   UNIFORM_TYPES,
   estimateAmount,
   evidenceLabel,
+  formatMoney,
   formatThaiMonthYear,
   payrollCutoffInfo,
 } from './specialMoneyRules.js';
@@ -196,13 +198,6 @@ function formatDate(value) {
   const date = new Date(`${value}T00:00:00+07:00`);
   if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'Asia/Bangkok' }).format(date);
-}
-
-// th-TH, no decimals — kept local (not utils/format.js's `formatMoney`, which uses en-US with 2
-// decimals for payroll-style figures) because the estimate readout and request-list amounts here
-// have always rendered this way; several tests pin the exact string (e.g. '฿1,200').
-function formatMoney(value) {
-  return `฿${Number(value || 0).toLocaleString('th-TH')}`;
 }
 
 // Submit errors arrive from the real backend as ONE 400 string with every policy violation the
@@ -517,12 +512,22 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (id) => api.specialMoney.approve(id, {}).then((response) => response.request),
+    // This `api.specialMoney.approve(` call must stay on one line: apiSurface.js's
+    // componentCalledMethods() regex only recognises `api.<ns>.<method>(` written contiguous, and
+    // a line break before `.approve(` made this one call invisible to it. Confirmed the hard way --
+    // wrapping it is exactly what flipped serverContract.test.js's reachability scan to report this
+    // endpoint UI-unreachable.
+    mutationFn: ({ id, approvedAmount, capOverrideReason }) => api.specialMoney.approve(
+      id, { approvedAmount, capOverrideReason },
+    ).then((response) => response.request),
     onSuccess: () => {
       showToast('success', 'อนุมัติคำขอแล้ว');
       setConfirmState(null);
       invalidateSpecialMoney();
     },
+    // The dialog itself catches this rejection (it awaits confirmApprove's returned promise) and
+    // renders error.message inline, keeping the entered amount/reason on screen -- this toast is
+    // in addition to that, not instead of it (see ApproveSpecialMoneyDialog.jsx's own comment).
     onError: (error) => showToast('error', error.message || 'อนุมัติไม่สำเร็จ'),
   });
 
@@ -593,11 +598,17 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     createMutation.mutate(payload);
   }
 
-  function approve(id) {
-    setConfirmState({ kind: 'approve', id });
+  // Carries the whole request (not just its id): ApproveSpecialMoneyDialog needs
+  // requestedAmount/employeeName/requestType to pre-fill the amount field and render its summary,
+  // and the review queue row already has the full object in hand -- looking it back up by id from
+  // reviewQueueQuery.data would just be a roundabout way to recover what the caller already had.
+  function approve(request) {
+    setConfirmState({ kind: 'approve', request });
   }
-  function confirmApprove() {
-    approveMutation.mutate(confirmState.id);
+  // Returns the mutation's promise so the dialog can await it and catch a rejection locally,
+  // rendering error.message inline instead of only a toast (see approveMutation.onError above).
+  function confirmApprove(approvedAmount, capOverrideReason) {
+    return approveMutation.mutateAsync({ id: confirmState.request.id, approvedAmount, capOverrideReason });
   }
   function reject(id) {
     setConfirmState({ kind: 'reject', id });
@@ -691,7 +702,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                         disabled={saving || blockedByEvidence}
                         title="CEO อนุมัติ"
                         aria-label="CEO อนุมัติ"
-                        onClick={() => approve(request.id)}
+                        onClick={() => approve(request)}
                       >
                         <Icon name="check" size={14} />
                         อนุมัติ
@@ -1205,11 +1216,13 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         </div>
       </Panel>
 
-      <ConfirmDialog
+      <ApproveSpecialMoneyDialog
         open={confirmState?.kind === 'approve'}
-        title="ยืนยันการอนุมัติ"
-        message="ยืนยันการอนุมัติคำขอเงินสวัสดิการนี้?"
-        confirmLabel="อนุมัติ"
+        request={confirmState?.kind === 'approve' ? confirmState.request : null}
+        typeLabel={confirmState?.kind === 'approve'
+          ? (typeOptions.find((item) => item.requestType === confirmState.request.requestType)?.thaiLabel
+            || confirmState.request.requestType)
+          : ''}
         busy={saving}
         onConfirm={confirmApprove}
         onCancel={() => setConfirmState(null)}
