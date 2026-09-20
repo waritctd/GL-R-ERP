@@ -2605,7 +2605,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           (Phase 3 Slice S4). */}
 
       {remainingInvoiceDialogOpen ? (
-        <RemainingInvoiceDialog ticketId={ticketId} onClose={() => setRemainingInvoiceDialogOpen(false)} />
+        // R4 (GLA-99 step 2 review-round-1): mirrors RemainingInvoiceService's own write gate —
+        // sales role + this deal's own owner, see DealDocumentRegister.jsx's identical predicate.
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner}
+          onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
 
       <ConfirmDialog

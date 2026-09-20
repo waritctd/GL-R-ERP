@@ -46,7 +46,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         editItems: vi.fn(),
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
-        downloadRemainingInvoice: vi.fn(),
         remainingInvoiceOptions: vi.fn(),
         // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
         listActivities: vi.fn(),
@@ -107,6 +106,20 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         preview: vi.fn(),
         downloadXlsx: vi.fn(),
         downloadPdf: vi.fn(),
+        noteTemplates: vi.fn(),
+      },
+      // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — RemainingInvoiceDialog
+      // always checks this first, so an undefined namespace would throw before it ever reaches
+      // the stateless preview (tickets.remainingInvoiceOptions) these tests exercise. Defaults to
+      // "no live document yet", matching every fixture below (none seeds a stored row).
+      storedRemainingInvoices: {
+        listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
+        createDraft: vi.fn(),
+        update: vi.fn(),
+        issue: vi.fn(),
+        revise: vi.fn(),
+        deleteDraft: vi.fn(),
+        download: vi.fn(),
       },
       // The items table converts a foreign-currency factory price to baht. Mocked because an
       // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
@@ -3328,8 +3341,8 @@ describe('TicketDetailPage', () => {
       const button = await screen.findByRole('button', { name: 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ' });
       fireEvent.click(button);
 
+      // The button only ever opens the dialog — it never downloads directly.
       expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
-      expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
     });
   });
 
