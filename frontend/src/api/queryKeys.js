@@ -141,6 +141,10 @@ export const queryKeys = {
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
   remainingInvoiceOptions: (ticketId, quotationId) => ['remainingInvoice', 'options', ticketId, quotationId ?? null],
+  // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — DRAFT/ISSUED/SUPERSEDED rows
+  // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill
+  // source a new draft snapshots from.
+  storedRemainingInvoices: (ticketId) => ['remainingInvoice', 'stored', ticketId],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor, owner 2026-09-11). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id — see

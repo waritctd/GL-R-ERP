@@ -105,6 +105,12 @@ export function DealDocumentRegister({
   // Mirrors DepositNoticeService#requireTicketViewer via salesViewScope's own `depositNotice`
   // section id (see header comment) — governs BOTH the deposit notice and the remaining invoice.
   const canViewDepositAndInvoice = Boolean(sections?.depositNotice);
+  // R4 (GLA-99 step 2 review-round-1): the remaining invoice's own WRITE gate — mirrors
+  // RemainingInvoiceService#requireDepositNoticeIssueGate / mockApi's
+  // requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO
+  // carve-out). UI-only convenience for RemainingInvoiceDialog's own button visibility — the
+  // backend gate above is what actually enforces this.
+  const canWriteRemainingInvoice = user?.role === 'sales' && user?.id === summary?.createdById;
 
   const eligiblePricingRequests = useMemo(
     () => (canViewQuotations ? pricingRequests.filter((pr) => canViewCustomerQuotation(user, pr)) : []),
@@ -342,7 +348,8 @@ export function DealDocumentRegister({
       ) : null}
 
       {remainingInvoiceDialogOpen ? (
-        <RemainingInvoiceDialog ticketId={ticketId} onClose={() => setRemainingInvoiceDialogOpen(false)} />
+        <RemainingInvoiceDialog ticketId={ticketId} canWrite={canWriteRemainingInvoice}
+          onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
     </Panel>
   );

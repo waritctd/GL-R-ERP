@@ -171,23 +171,13 @@ export const API_ROUTES = {
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
     // `quotationId` (optional): live-preview a specific qualifying quotation — see
-    // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc.
+    // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc. The sibling
+    // `remainingInvoiceFile` stateless download route builder was REMOVED here (owner ruling O1,
+    // GLA-99 step 2 review-round-1, 2026-09-20) along with the backend route it built a URL for —
+    // GET /api/tickets/{ticketId}/remaining-invoice/file. Only an ISSUED/SUPERSEDED STORED
+    // remaining invoice is downloadable now, via `storedRemainingInvoices.file` below.
     remainingInvoiceOptions: (ticketId, quotationId) =>
       `/api/tickets/${ticketId}/remaining-invoice/options${quotationId != null ? `?quotationId=${quotationId}` : ''}`,
-    // params: { reference?, depositReference?, issueDate?, noteIds?, quotationId? } — every key
-    // optional; a key present with an empty string means "leave that field blank" (NOT the same
-    // as omitting it, which means "use the default"). See DepositNoticeController's own
-    // query-param Javadoc.
-    remainingInvoiceFile: (ticketId, params = {}) => {
-      const qs = new URLSearchParams();
-      if (params.reference !== undefined) qs.set('reference', params.reference ?? '');
-      if (params.depositReference !== undefined) qs.set('depositReference', params.depositReference ?? '');
-      if (params.issueDate !== undefined) qs.set('issueDate', params.issueDate ?? '');
-      if (params.noteIds !== undefined) qs.set('noteIds', (params.noteIds ?? []).join(','));
-      if (params.quotationId !== undefined && params.quotationId !== null) qs.set('quotationId', params.quotationId);
-      const query = qs.toString();
-      return `/api/tickets/${ticketId}/remaining-invoice/file${query ? `?${query}` : ''}`;
-    },
   },
   // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
   // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —
@@ -225,6 +215,24 @@ export const API_ROUTES = {
     // else (including omitted) downloads the internal copy. See ImportRequestController#storedFile.
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
+  },
+  // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
+  // GLA-99 step 2). One row per (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on
+  // the shared sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>).
+  // The pre-existing STATELESS preview route (depositNotices.remainingInvoiceOptions above) is
+  // unchanged and stays in place as the prefill source a new draft snapshots from — its own
+  // stateless .../file sibling route is GONE (owner ruling O1, GLA-99 step 2 review-round-1,
+  // 2026-09-20; see remainingInvoiceOptions' own comment above); only an ISSUED/SUPERSEDED STORED
+  // document is downloadable now, via `file` below. Authorisation is entirely
+  // DepositNoticeService's own issue-deposit-notice gate (write) / requireTicketViewer (read)
+  // reused verbatim — see RemainingInvoiceService's own Javadoc. These methods carry no gate of
+  // their own.
+  storedRemainingInvoices: {
+    forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
+    get: (id) => `/api/remaining-invoices/${id}`,
+    issue: (id) => `/api/remaining-invoices/${id}/issue`,
+    revise: (id) => `/api/remaining-invoices/${id}/revise`,
+    file: (id) => `/api/remaining-invoices/${id}/file`,
   },
   catalog: {
     search: (q) => `/api/catalog${q ? `?q=${encodeURIComponent(q)}` : ''}`,

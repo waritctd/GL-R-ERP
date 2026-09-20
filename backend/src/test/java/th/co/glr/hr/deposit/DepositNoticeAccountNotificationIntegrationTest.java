@@ -105,6 +105,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
     private UserPrincipal salesActor;
     private UserPrincipal importActor;
     private UserPrincipal ceoActor;
+    private UserPrincipal accountActor;
 
     private static final String FACTORY = "Factory Account Notice A";
 
@@ -166,6 +167,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         salesActor = actor(salesRepId, "sales");
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
+        accountActor = actor(accountEmployeeId, "account");
 
         // Setup noise (submit/pickup/approve/etc. below all raise their own real mail) must not
         // leak into a test's own assertions.
@@ -363,7 +365,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(rowsAfterIssue).isEqualTo(1);
         mailer.sent.clear();
 
-        ticketService.confirmDepositPaid(fixture.ticketId(), ceoActor);
+        // GLA-118 (owner ruling 2026-09-17): confirmDepositPaid is account-only now — the CEO
+        // fallback this used to exercise is gone, so this drives it as account instead.
+        ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
 
         assertThat(countAccountNotificationRows())
             .as("confirmDepositPaid is explicitly NOT one of the notify moments this branch adds")

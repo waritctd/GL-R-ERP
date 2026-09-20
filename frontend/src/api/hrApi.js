@@ -428,23 +428,10 @@ export const api = {
     // quotationOptions/defaultQuotationId Javadoc.
     remainingInvoiceOptions: (id, quotationId) =>
       apiRequest(API_ROUTES.depositNotices.remainingInvoiceOptions(id, quotationId)),
-    // params (all optional): { reference, depositReference, issueDate, noteIds, quotationId } —
-    // see routes.js's own remainingInvoiceFile Javadoc for the "omitted vs empty" semantics a
-    // bare call (no params) still needs to keep working with server defaults.
-    //
-    // Surfaces the backend's own Thai message on failure (e.g. a 409 "ยอดหลังหักมัดจำติดลบ...")
-    // instead of a generic English string — same res.json()-then-fallback pattern
-    // several other blob downloads' error paths in this file already use (see e.g.
-    // leave.downloadAttachment/downloadMyReport/downloadTeamReport above — NOT
-    // leave.downloadPolicyDocument, which still throws the older generic 'Download failed').
-    downloadRemainingInvoice: async (id, params) => {
-      const res = await fetch(API_ROUTES.depositNotices.remainingInvoiceFile(id, params), { credentials: 'include' });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');
-      }
-      return res.blob();
-    },
+    // downloadRemainingInvoice (the stateless GET .../remaining-invoice/file download) was
+    // REMOVED here (owner ruling O1, GLA-99 step 2 review-round-1, 2026-09-20) along with its
+    // backend route — RemainingInvoiceDialog now downloads through storedRemainingInvoices.file
+    // instead, an ISSUED/SUPERSEDED document's own frozen snapshot.
     confirmCustomer: (id) => apiRequest(API_ROUTES.tickets.action(id, 'confirm-customer'), { method: 'POST' }),
     confirmDepositPaid: (id) => apiRequest(API_ROUTES.tickets.action(id, 'deposit-paid'), { method: 'POST' }),
     issueImportRequest: (id) => apiRequest(API_ROUTES.tickets.action(id, 'import-request'), { method: 'POST' }),
@@ -496,6 +483,30 @@ export const api = {
     },
     listByTicket: (ticketId) => apiRequest(API_ROUTES.tickets.listDocs(ticketId)),
     createDraft: (ticketId, payload) => apiRequest(API_ROUTES.tickets.createDocDraft(ticketId), { method: 'POST', body: payload }),
+  },
+  // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
+  // GLA-99 step 2). DRAFT -> ISSUED -> SUPERSEDED. `createDraft`'s `quotationId` is optional
+  // (RemainingInvoiceDraftRequest) — omit to snapshot the newest qualifying quotation, same
+  // default the stateless preview (`tickets.remainingInvoiceOptions`) already uses. Authorisation
+  // is enforced entirely in RemainingInvoiceService — these methods carry no gate of their own.
+  storedRemainingInvoices: {
+    listForTicket: (ticketId) => apiRequest(API_ROUTES.storedRemainingInvoices.forTicket(ticketId)),
+    createDraft: (ticketId, payload) =>
+      apiRequest(API_ROUTES.storedRemainingInvoices.forTicket(ticketId), { method: 'POST', body: payload }),
+    get: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id)),
+    update: (id, payload) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id), { method: 'PUT', body: payload }),
+    issue: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.issue(id), { method: 'POST' }),
+    revise: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.revise(id), { method: 'POST' }),
+    deleteDraft: (id) => apiRequest(API_ROUTES.storedRemainingInvoices.get(id), { method: 'DELETE' }),
+    // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above.
+    download: async (id) => {
+      const res = await fetch(API_ROUTES.storedRemainingInvoices.file(id), { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือไม่สำเร็จ');
+      }
+      return res.blob();
+    },
   },
   // Mirrors ImportRequestController's SINGULAR (preview) routes. Import/CEO only, enforced in
   // ImportRequestService — these methods carry no gate of their own and must not be read as one.

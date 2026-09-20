@@ -22,7 +22,7 @@ function bypassesNotice(policy) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
 }
 
-const STEP_ROLE_TH = { sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี', ceo: 'CEO' };
+const STEP_ROLE_TH = { sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี', ceo: 'CEO', sales_manager: 'ผู้จัดการฝ่ายขาย' };
 
 function StepRoleTag({ owners, viewerRole }) {
   const mine = owners.includes(viewerRole);
@@ -58,9 +58,13 @@ function pickAcceptedPricingRequest(pricingRequests = []) {
  * docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): one
  * role-shaped section walking the deposit lifecycle as three ordered,
  * explicitly-owned steps —
- *   1. นโยบายมัดจำ (account/CEO): required/waived/not-required/credit.
+ *   1. นโยบายมัดจำ (sales, the OWNING rep only, or sales_manager as a backup — GLA-118,
+ *      owner ruling 2026-09-20 part B; the original 2026-09-17 ruling was owner-only, was
+ *      account/CEO before that): required/waived/not-required/credit. account/ceo
+ *      keep read access to the current policy, just not the write.
  *   2. ใบแจ้งยอดมัดจำ (sales): create the draft, then issue/preview/download.
- *   3. รับชำระมัดจำ (account): confirm payment once the notice is issued.
+ *   3. รับชำระมัดจำ (account only — GLA-118 dropped the CEO fallback here too): confirm
+ *      payment once the notice is issued.
  *
  * Replaces the deposit-policy control that lived in DealStagePanel and the
  * scattered "ออกใบแจ้งยอดมัดจำ"/"ดูใบแจ้งยอดมัดจำ"/"ยืนยันรับมัดจำ" bits that
@@ -88,7 +92,6 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const role = user?.role;
   const isOwner = user?.id === summary?.createdById;
   const isSales = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
 
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 
@@ -196,7 +199,13 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
     setPolicyOpen(true);
   }
 
-  const canSetPolicy = hasAction('WAIVE_DEPOSIT');
+  // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup (owner
+  // ruling 2026-09-20, part B) — not account, not ceo, not any other sales rep.
+  // `hasAction('WAIVE_DEPOSIT')` already reflects this (both the real backend and mockApi.js only
+  // advertise it to the owner/sales_manager now, and only while the payment track hasn't passed
+  // Rule 4's cutoff), but the role/ownership check is kept here too, defense-in-depth, so this
+  // control can never render editable off a stale/misconfigured availableActions response.
+  const canSetPolicy = hasAction('WAIVE_DEPOSIT') && (role === 'sales_manager' || (isSales && isOwner));
   const canCreateNotice = pr != null && canCreateDepositNoticeFromQuotation(user, pr);
   const canManageThisNotice = isSales && isOwner;
   // Legacy dual-track creation path (ticket.confirmCustomer → ISSUE_DEPOSIT_NOTICE),
@@ -205,7 +214,10 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
   const legacyNoticeEligible = !doc && !canCreateNotice
     && hasAction('ISSUE_DEPOSIT_NOTICE') && st === 'quotation_issued' && ps === 'CUSTOMER_CONFIRMED'
     && canManageThisNotice;
-  const canConfirmPaid = hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && isAccount;
+  // GLA-118: confirm-deposit is account ONLY now — the CEO fallback isAccount still carries
+  // (canConfirmPayments = ['account','ceo'], which still governs /finance visibility) is deliberately
+  // not used here; every payment-recording action is account only now (2026-09-20 ruling). `role === 'account'` mirrors DEPOSIT_CONFIRM_ROLES.
+  const canConfirmPaid = hasAction('DEPOSIT_PAID') && st === 'quotation_issued' && ps === 'DEPOSIT_NOTICE_ISSUED' && role === 'account';
   const alreadyPaid = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ps);
 
   return (
@@ -217,7 +229,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
             <div className="flex items-center gap-2">
               <StepNumber no={1} />
               <strong className="text-sm">นโยบายมัดจำ</strong>
-              <StepRoleTag owners={['account', 'ceo']} viewerRole={role} />
+              {/* GLA-118: owning sales rep, or sales_manager as a backup — not account/ceo. */}
+              <StepRoleTag owners={['sales', 'sales_manager']} viewerRole={role} />
             </div>
             <StatusBadge tone={policyLabel.tone}>{policyLabel.label}</StatusBadge>
           </div>
@@ -338,7 +351,8 @@ export function DealDepositPanel({ user, ticketId, summary, availableActions = [
           <div className="flex items-center gap-2">
             <StepNumber no={3} />
             <strong className="text-sm">รับชำระมัดจำ</strong>
-            <StepRoleTag owners={['account', 'ceo']} viewerRole={role} />
+            {/* GLA-118: account only now, the CEO fallback is gone. */}
+            <StepRoleTag owners={['account']} viewerRole={role} />
           </div>
           {skipsNotice ? (
             <p className="text-xs text-text-muted">

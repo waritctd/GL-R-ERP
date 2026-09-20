@@ -61,7 +61,27 @@ public class TicketService {
     // manager-or-CEO, and the more granular per-item control has no reason to be MORE restrictive.
     private static final Set<String> ITEM_WEIGHT_ROLES = Set.of("sales_manager", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
+    // NOTE: the CEO fallback here still governs SET_BILLING (and read access generally) — it does
+    // NOT govern payment recording or deposit confirmation any more; see PAYMENT_RECORD_ROLES and
+    // DEPOSIT_CONFIRM_ROLES below, both of which deliberately do NOT reuse this constant.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
+    // GLA-118 (owner ruling 2026-09-17): ยืนยันรับมัดจำ (confirmDepositPaid) is account ONLY —
+    // the CEO fallback ACCOUNT_ROLES still grants SET_BILLING (and read access generally) but is
+    // deliberately NOT extended here. Its own constant rather than reusing ACCOUNT_ROLES, so a
+    // future widening of ACCOUNT_ROLES cannot silently re-grant this one back to the CEO. Also NOT
+    // the same literal object as CLOSE_CONFIRM_ROLES or PAYMENT_RECORD_ROLES below even though all
+    // three happen to read Set.of("account") today — each constant exists for an unrelated reason
+    // (see each one's own Javadoc) and all must be free to diverge independently.
+    private static final Set<String> DEPOSIT_CONFIRM_ROLES = Set.of("account");
+    // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — RECORD_PAYMENT (deposit
+    // or balance receipts alike, see recordPaymentInternal's PAYMENT_RECEIPT_KINDS) and
+    // FINAL_PAYMENT (confirmFinalPayment, which either calls recordPaymentInternal directly or
+    // advances payment_status straight to FULLY_PAID when nothing is outstanding) — is account
+    // ONLY. The CEO fallback ACCOUNT_ROLES is deliberately NOT extended here, same reasoning as
+    // DEPOSIT_CONFIRM_ROLES: a future widening of ACCOUNT_ROLES must not silently re-grant payment
+    // recording to the CEO. Every other role (sales/sales_manager/import, including the owning
+    // rep) is refused too — recording money received was never a sales-side action.
+    private static final Set<String> PAYMENT_RECORD_ROLES = Set.of("account");
     // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
     // the CEO signs the second half (verifyClose), so letting them sign the first half
     // too would collapse a two-signature gate into one person. Same reasoning as
@@ -766,7 +786,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
+        // ACCOUNT_ROLES (which would still let the CEO through).
+        requireRole(actor, DEPOSIT_CONFIRM_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1466,7 +1488,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1496,7 +1520,9 @@ public class TicketService {
 
     @Transactional
     public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         return recordPaymentInternal(ticketId, request, actor);
     }
 
@@ -1513,7 +1539,10 @@ public class TicketService {
     }
 
     private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118 (owner ruling 2026-09-20, part A): account only, re-checked here even though
+        // every caller (recordPayment, confirmFinalPayment, confirmDepositPaid) already checks its
+        // own role — see PAYMENT_RECORD_ROLES's own Javadoc.
+        requireRole(actor, PAYMENT_RECORD_ROLES);
         if (request == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุข้อมูลรับชำระเงิน");
         }
@@ -2294,9 +2323,13 @@ public class TicketService {
         if (reason == null || reason.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลนโยบายมัดจำ");
         }
-        requireRole(actor, ACCOUNT_ROLES);
+        // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
+        // (owner ruling 2026-09-20, part B — see canSetDepositPolicy's own Javadoc). This used to
+        // be ACCOUNT_ROLES (account or CEO); account, ceo and every non-owning sales rep are still
+        // refused.
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
+        requireDepositPolicyWriteAccess(s, actor);
         // Rule 4 (payment-track state machine): once a deposit invoice has actually been issued
         // (or paid, or further), waiving the deposit policy after the fact is no longer a policy
         // change a rep/account can make retroactively — the customer already has a real document
@@ -2348,6 +2381,39 @@ public class TicketService {
 
     private void requireQuotationWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
         if (!canManageQuotation(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    /**
+     * GLA-118: who may write {@code sales.ticket.deposit_policy} — the OWNING sales rep, OR
+     * {@code sales_manager} as a backup (owner ruling 2026-09-20, part B; the original 2026-09-17
+     * ruling was owner-only, see git history). Narrower than the old gate ({@code ACCOUNT_ROLES} —
+     * {@code account}/{@code ceo}): account, ceo and every non-owning sales rep are still refused.
+     * account/ceo keep READ access (the summary field is never hidden), just not the write.
+     *
+     * <p>The {@code sales_manager} clause is reused VERBATIM from {@link #requireDealOwnership} /
+     * {@link #canDealOwnership} — a bare {@code "sales_manager".equals(role)} check with no
+     * team/division scoping, so this grant is global across every sales_manager, not limited to
+     * whichever team owns the deal. Do not invent a narrower team-scoped variant here; if
+     * sales_manager scoping is ever tightened, it must happen in the one shared clause, not here.
+     *
+     * <p>Single decision shared by {@link #waiveDeposit}'s write gate and (together with the
+     * Rule-4 {@code paymentStatus} check) {@link #addPolicyActions}'s {@code WAIVE_DEPOSIT}
+     * advertisement. The two are NOT quite the same predicate any more: the advertisement also
+     * requires {@code paymentStatus} to still be null/{@code CUSTOMER_CONFIRMED}, because once a
+     * deposit notice exists {@link #waiveDeposit} 409s (Rule 4) rather than 403s — advertising the
+     * action there would offer a button that dies on click, the same "never offer a dead action"
+     * discipline {@link #canIssueImportRequest} documents for its own 409 case.
+     */
+    private boolean canSetDepositPolicy(TicketSummaryDto s, UserPrincipal actor) {
+        String role = actor.role();
+        return (SALES_ROLES.contains(role) && s.createdById() == actor.id())
+            || "sales_manager".equals(role);
+    }
+
+    private void requireDepositPolicyWriteAccess(TicketSummaryDto s, UserPrincipal actor) {
+        if (!canSetDepositPolicy(s, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -2634,7 +2700,8 @@ public class TicketService {
         // surfaced these anyway.
         if (canConfirmCustomer(s, actor)) actions.add(new TicketActionDto("CONFIRM_CUSTOMER", "payment", "ลูกค้ายืนยัน"));
         if (canCreateDepositNotice(s, actor)) actions.add(new TicketActionDto("ISSUE_DEPOSIT_NOTICE", "doc", "ออกใบแจ้งมัดจำ"));
-        if (ACCOUNT_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
+        // GLA-118: account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc.
+        if (DEPOSIT_CONFIRM_ROLES.contains(actor.role()) && "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             actions.add(new TicketActionDto("DEPOSIT_PAID", "payment", "รับมัดจำ"));
         }
         if (canRecordPayment(s, actor)) {
@@ -2678,7 +2745,9 @@ public class TicketService {
                 List.of("source", "lines")));
             actions.add(new TicketActionDto("COMPLETE_DELIVERY", "fulfillment", "ส่งมอบครบ"));
         }
-        if (ACCOUNT_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        if (PAYMENT_RECORD_ROLES.contains(actor.role()) && canConfirmFinalPaymentNow(s)) {
             actions.add(new TicketActionDto("FINAL_PAYMENT", "payment", "รับเงินครบ"));
         }
         if (canConfirmClose(s, actor)) {
@@ -2749,7 +2818,13 @@ public class TicketService {
             actions.add(new TicketActionDto("SET_ENTRY_CHANNEL", "policy", "ตั้งค่า entry channel",
                 entryChannelIsStated(s) ? List.of("value", "note") : List.of("value")));
         }
-        if (ACCOUNT_ROLES.contains(actor.role())) {
+        // GLA-118: owning sales rep or sales_manager — see canSetDepositPolicy's own Javadoc. Also
+        // gated on paymentStatus, matching Rule 4: once a deposit notice has actually been issued
+        // (or paid, or further), waiveDeposit 409s instead of writing, so advertising the action
+        // past that point would offer a button that dies on click.
+        boolean depositWaivableNow = s.paymentStatus() == null
+            || PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus());
+        if (canSetDepositPolicy(s, actor) && depositWaivableNow) {
             actions.add(new TicketActionDto("WAIVE_DEPOSIT", "policy", "นโยบายมัดจำ", List.of("policy", "reason")));
         }
     }
@@ -2789,7 +2864,9 @@ public class TicketService {
     }
 
     private boolean canRecordPayment(TicketSummaryDto s, UserPrincipal actor) {
-        return ACCOUNT_ROLES.contains(actor.role())
+        // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
+        // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
+        return PAYMENT_RECORD_ROLES.contains(actor.role())
             && s.amountPayable() != null
             && s.amountPayable().signum() > 0
             && !PaymentStage.FULLY_PAID.equals(s.paymentStage());
