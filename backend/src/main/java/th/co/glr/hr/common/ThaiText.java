@@ -119,6 +119,130 @@ public final class ThaiText {
             : String.format(Locale.US, "%,.2f", scaled);
     }
 
+    // ── Thai baht-text (GLA-99 step 3, ใบวางบิล) ──────────────────────────────────────────────
+
+    private static final String[] THAI_DIGITS = {
+        "ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"
+    };
+    // Index = place within a 6-digit group: 0=หน่วย (ones), 1=สิบ, 2=ร้อย, 3=พัน, 4=หมื่น, 5=แสน.
+    private static final String[] THAI_PLACES = { "", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน" };
+
+    /**
+     * The amount in Thai baht-text, e.g. {@code หนึ่งแสนสองหมื่นหกพันเก้าร้อยเจ็ดสิบเจ็ดบาทยี่สิบสตางค์}
+     * for 126,977.20 or {@code ศูนย์บาทถ้วน} for zero -- the string a ใบวางบิล (billing note, GLA-99
+     * step 3) prints under its total, matching the style the owner's own reference form
+     * ({@code ฟอร์มใบวางบิล.xls}) reads via its {@code _xlfn.BAHTTEXT} formula cell. Computed in Java
+     * rather than left as a spreadsheet formula so the printed text is correct regardless of which
+     * program later opens/recalculates the file -- the same reasoning every other renderer in this
+     * codebase already applies to computed display text (e.g. {@link #date(LocalDate)} itself).
+     *
+     * <p>Two irregular readings this implements: the ones digit reads {@code เอ็ด} instead of
+     * {@code หนึ่ง} whenever the number being read is not simply {@code 1} on its own (11 =
+     * {@code สิบเอ็ด}, 101 = {@code หนึ่งร้อยเอ็ด}, 1,000,001 = {@code หนึ่งล้านเอ็ด}, 11,000,000 =
+     * {@code สิบเอ็ดล้าน} -- decided by whether anything has already been written before that final
+     * digit is reached, checked once globally so it is correct both WITHIN a six-digit group and
+     * ACROSS a ล้าน group boundary -- F1's own fix, GLA-99 step 3 round 1 review: the ones-digit
+     * check used to also require being in the number's OWN final group, so a non-final group's own
+     * ones digit -- e.g. the "11" of 11,000,000 -- always read หนึ่ง instead of เอ็ด); the tens
+     * digit drops its own {@code หนึ่ง} prefix ({@code สิบ}, never {@code หนึ่งสิบ}) and reads
+     * {@code ยี่สิบ} instead of {@code สองสิบ}. Magnitudes at or above one million are chunked into
+     * groups of six digits, each read the same way and followed by AS MANY {@code ล้าน} as the
+     * group's own magnitude level above the base group calls for (one for 10^6..10^11, two for
+     * 10^12..10^17, and so on -- also fixed by F1: a group two or more levels up used to get only
+     * one {@code ล้าน} regardless, dropping one whenever an intervening group was entirely zero,
+     * e.g. 1,000,000,000,000 read {@code หนึ่งล้าน} instead of {@code หนึ่งล้านล้าน}) -- the standard
+     * Thai reading for large numbers (never expected in practice for a billing note, but not
+     * artificially capped either).
+     *
+     * @return {@code "-"} for a {@code null} amount. A negative amount is read with a leading
+     *     {@code ลบ}, though a billing note's own total is never negative in practice.
+     */
+    public static String bahtText(BigDecimal amount) {
+        if (amount == null) {
+            return "-";
+        }
+        BigDecimal scaled = amount.abs().setScale(2, RoundingMode.HALF_UP);
+        long wholeBaht = scaled.longValue();
+        int satang = scaled.subtract(BigDecimal.valueOf(wholeBaht))
+            .movePointRight(2).setScale(0, RoundingMode.HALF_UP).intValueExact();
+
+        StringBuilder sb = new StringBuilder();
+        if (amount.signum() < 0) {
+            sb.append("ลบ");
+        }
+        sb.append(readNumber(wholeBaht)).append("บาท");
+        if (satang == 0) {
+            sb.append("ถ้วน");
+        } else {
+            // Satang is its own two-digit group (0-99) -- the ones-digit เอ็ด rule still applies
+            // relative to satang's OWN reading (e.g. 21 สตางค์ = ยี่สิบเอ็ดสตางค์), independent of
+            // whatever came before "บาท".
+            sb.append(readNumber(satang)).append("สตางค์");
+        }
+        return sb.toString();
+    }
+
+    /** Reads a non-negative whole number, chunked into groups of six digits. Each group above the
+     * base (rightmost) one is followed by AS MANY {@code ล้าน} as its own magnitude level calls for
+     * -- {@code numChunks - 1 - chunk} of them, so a group representing 10^12 (two levels above the
+     * base) gets {@code ล้านล้าน}, not one {@code ล้าน} regardless of how far above the base it
+     * sits (F1's own fix -- see {@link #bahtText}'s own Javadoc) -- shared by the baht and satang
+     * halves of {@link #bahtText}. */
+    private static String readNumber(long value) {
+        if (value == 0) {
+            return THAI_DIGITS[0];
+        }
+        String digits = Long.toString(value);
+        int totalLen = digits.length();
+        int numChunks = (totalLen + 5) / 6;
+        // Left-pad to a whole number of 6-digit chunks so each chunk can be sliced uniformly.
+        String padded = "0".repeat(numChunks * 6 - totalLen) + digits;
+
+        StringBuilder sb = new StringBuilder();
+        for (int chunk = 0; chunk < numChunks; chunk++) {
+            String group = padded.substring(chunk * 6, chunk * 6 + 6);
+            appendGroup(sb, group);
+            if (group.chars().anyMatch(ch -> ch != '0')) {
+                // 0 for the base (rightmost) group -- "ล้าน".repeat(0) is "", so this is a no-op
+                // there without needing a separate isLastChunk guard.
+                sb.append("ล้าน".repeat(numChunks - 1 - chunk));
+            }
+        }
+        return sb.toString();
+    }
+
+    /** Appends one 6-digit group's reading onto {@code sb}. The เอ็ด rule ({@link #bahtText}'s own
+     * Javadoc) checks "has anything already been written [anywhere in {@code sb} so far]" for the
+     * group's OWN ones digit -- correct both within this group (e.g. the "1" after "สิบ" in
+     * 11's own group) and across a ล้าน boundary (e.g. the "1" after a preceding group's own
+     * "...ล้าน", as in 1,000,001), because {@code sb} already carries everything read before this
+     * point either way. F1's own fix: this used to only apply within the number's OWN FINAL group,
+     * so a non-final group's ones digit (e.g. the second "1" of 11,000,000's own "000011" group)
+     * always read หนึ่ง instead of เอ็ด. */
+    private static void appendGroup(StringBuilder sb, String group) {
+        for (int i = 0; i < 6; i++) {
+            int digit = group.charAt(i) - '0';
+            if (digit == 0) {
+                continue;
+            }
+            int place = 5 - i; // 0=ones .. 5=แสน, matching THAI_PLACES
+            if (place == 0) {
+                sb.append(digit == 1 && sb.length() > 0 ? "เอ็ด" : THAI_DIGITS[digit]);
+            } else if (place == 1) {
+                // Tens place: never "หนึ่งสิบ", and "2" reads "ยี่สิบ" not "สองสิบ".
+                if (digit == 1) {
+                    sb.append(THAI_PLACES[1]);
+                } else if (digit == 2) {
+                    sb.append("ยี่").append(THAI_PLACES[1]);
+                } else {
+                    sb.append(THAI_DIGITS[digit]).append(THAI_PLACES[1]);
+                }
+            } else {
+                sb.append(THAI_DIGITS[digit]).append(THAI_PLACES[place]);
+            }
+        }
+    }
+
     /**
      * A duration in whole hours plus leftover minutes -- {@code 3 ชม.} for exactly 180 minutes,
      * {@code 3 ชม. 30 นาที} for 210, {@code 45 นาที} for anything under an hour.

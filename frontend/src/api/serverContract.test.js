@@ -300,6 +300,41 @@ const SERVER_ONLY = {
     'DiscountApprovalService.listPending — a CEO-wide queue across all quotations, not needed for '
     + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
     + 'built backend-first; wire it up if a cross-deal CEO queue view is ever requested.',
+
+  // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer landed on this
+  // branch; the /finance ใบวางบิล tab that calls these eleven routes is step 4, a separate branch
+  // not yet merged. BillingNoteService/BillingNoteController/BillingNoteRenderer are already
+  // covered by BillingNoteServiceIntegrationTest (real Postgres, including the wrong-way-round
+  // authz suite) and BillingNoteRendererTest. Delete this whole block once step 4's screen calls
+  // these through hrApi.js.
+  'GET /api/customers/{}/billing-note-candidates':
+    'BillingNoteService.candidates — the customer-level outstanding-documents picker step 4\'s '
+    + 'ใบวางบิล tab will call before creating a draft. Backend-first; no screen yet.',
+  'GET /api/customers/{}/billing-notes':
+    'BillingNoteService.list — per-customer billing note history. Backend-first; no screen yet.',
+  'POST /api/customers/{}/billing-notes':
+    'BillingNoteService.createDraft. Backend-first; no screen yet.',
+  'GET /api/billing-notes/{}':
+    'BillingNoteService.get. Backend-first; no screen yet.',
+  'PUT /api/billing-notes/{}':
+    'BillingNoteService.updateDraft. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/issue':
+    'BillingNoteService.issue — mints the AR_GLR number. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/revise':
+    'BillingNoteService.revise — prepares a correction DRAFT. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/cancel':
+    'BillingNoteService.cancel — voids an ISSUED note and releases its lines for re-billing. '
+    + 'Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/mark-received':
+    'BillingNoteService.markReceived — records ผู้รับวางบิล/วันนัดชำระเงิน after the customer '
+    + 'signs on paper. Backend-first; no screen yet.',
+  'POST /api/billing-notes/{}/mark-settled':
+    'BillingNoteService.markSettled — owner ruling C1: the only caller-triggered settlement path, '
+    + 'for an all-MANUAL note (e.g. ค่าขนส่ง) that can never auto-settle. Backend-first; no screen yet.',
+  'DELETE /api/billing-notes/{}':
+    'BillingNoteService.deleteDraft. Backend-first; no screen yet.',
+  'GET /api/billing-notes/{}/file':
+    'BillingNoteService.file — downloads the rendered .xls. Backend-first; no screen yet.',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

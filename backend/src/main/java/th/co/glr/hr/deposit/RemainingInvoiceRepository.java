@@ -285,18 +285,14 @@ public class RemainingInvoiceRepository {
      * sales.document_sequence} (doc_type {@code 'AR_GLR'}) — mechanism identical to {@code
      * DepositNoticeRepository#nextDocNumber}/{@code ImportRequestRepository#nextDocNumber}. Must be
      * called INSIDE the issuing transaction so a refused issue rolls the number back rather than
-     * burning it (the same property those two methods document). */
+     * burning it (the same property those two methods document).
+     *
+     * <p>Delegates to {@link th.co.glr.hr.common.ArGlrSequence} (GLA-99 step 3) — the shared home
+     * this method's own body moved to once {@code sales.billing_note} (V189) became a second
+     * caller of the exact same {@code AR_GLR} sequence. Kept as a thin wrapper, not inlined at every
+     * call site, so {@link RemainingInvoiceService} and its tests need no change. */
     public String nextDocNumber(int yearTh) {
-        jdbc.update("""
-            INSERT INTO sales.document_sequence (doc_type, year_th, last_seq)
-            VALUES ('AR_GLR', :y, 0) ON CONFLICT DO NOTHING
-            """, Map.of("y", yearTh));
-        Integer seq = jdbc.queryForObject("""
-            UPDATE sales.document_sequence SET last_seq = last_seq + 1
-             WHERE doc_type = 'AR_GLR' AND year_th = :y
-            RETURNING last_seq
-            """, Map.of("y", yearTh), Integer.class);
-        return String.format("GLR%02d%05d", yearTh % 100, seq);
+        return th.co.glr.hr.common.ArGlrSequence.next(jdbc, yearTh);
     }
 
 }
