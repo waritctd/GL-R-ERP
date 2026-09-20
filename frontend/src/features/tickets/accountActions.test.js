@@ -160,6 +160,45 @@ describe('nextAccountAction', () => {
     const t = ticket({ status: 'document_issued', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 });
     expect(nextAccountAction(t).key).toBe('confirmCloseReady');
   });
+
+  // GLA-118 (owner ruling 2026-09-20, part A): recording a payment — confirmDeposit/
+  // confirmFinalPayment — is account only now, no CEO fallback. The CEO still reaches /finance
+  // (canConfirmPayments is unchanged), so the worklist must stop offering those two CTAs to
+  // anyone but account, or it hands the CEO a button the server now refuses with 403.
+  describe('viewerRole (GLA-118 part A: CEO no longer records payments)', () => {
+    it('deposit-notice-issued: ceo gets no CTA (no other step applies), account still gets ยืนยันรับมัดจำ', () => {
+      const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
+      expect(nextAccountAction(t, 'ceo')).toBeNull();
+      expect(nextAccountAction(t, 'account').key).toBe('confirmDeposit');
+    });
+
+    it('awaiting-final-payment: ceo gets no CTA, account still gets รับชำระส่วนที่เหลือ', () => {
+      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' });
+      expect(nextAccountAction(t, 'ceo')).toBeNull();
+      expect(nextAccountAction(t, 'account').key).toBe('confirmFinalPayment');
+    });
+
+    it('omitting viewerRole entirely keeps the pre-existing (account-assumed) behaviour', () => {
+      // workState.js calls nextAccountAction(deal) with no second argument, but only inside a
+      // `role === 'account'` branch — this pins that the one-argument call site still resolves
+      // exactly as before, so that caller needs no change.
+      const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
+      expect(nextAccountAction(t).key).toBe('confirmDeposit');
+    });
+
+    it('overdue chase (a link to the ticket, not a payment submission) is unaffected by role', () => {
+      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', overdue: true, amountOutstanding: 5000 });
+      expect(nextAccountAction(t, 'ceo').key).toBe('chaseOverdue');
+    });
+
+    it('the commission-recording step (unrelated to payment recording) is unaffected by role', () => {
+      const t = ticket({
+        id: 42, paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED',
+        amountOutstanding: 0, salesStage: 'CLOSED_PAID', closeConfirmedAt: '2026-07-20T00:00:00.000Z',
+      });
+      expect(nextAccountAction(t, 'ceo').key).toBe('recordInvoiceCommission');
+    });
+  });
 });
 
 describe('accountMoneyBucket', () => {

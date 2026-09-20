@@ -569,6 +569,19 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/price-import/staging/{}',
   'GET /api/pricing-costings/{}',
   'GET /api/pricing-decisions/{}',
+  // GET /api/remaining-invoices/{} joined this list with the STORED remaining invoice aggregate
+  // (V188, GLA-99 step 2): RemainingInvoiceDialog reads the full list per ticket
+  // (storedRemainingInvoices.listForTicket, GET .../tickets/{}/remaining-invoices) and every
+  // mutation already returns its own full row, so this single-row-by-id GET has no screen that
+  // needs it separately — same reasoning as GET /api/deposit-notices/{} and
+  // GET /api/import-requests/{} just above/below. storedRemainingInvoices.get stays in hrApi.js
+  // as a faithful mirror of RemainingInvoiceController#get for completeness/future callers.
+  'GET /api/remaining-invoices/{}',
+  // GET /api/tickets/{}/remaining-invoice/file — REMOVED entirely (owner ruling O1, GLA-99 step 2
+  // review-round-1, 2026-09-20), along with DepositNoticeService#getRemainingInvoiceXlsx and
+  // hrApi's own downloadRemainingInvoice. This entry used to document it as "kept but
+  // unreachable"; that reasoning no longer applies now that the route itself is gone, not merely
+  // uncalled from the UI, so the entry is gone too rather than left stale.
   'PATCH /api/profile-requests/{}',
   'POST /api/attendance/cards/backfill',
   'POST /api/commissions',

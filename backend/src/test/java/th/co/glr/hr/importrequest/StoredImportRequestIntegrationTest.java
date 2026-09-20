@@ -785,7 +785,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         ImportRequestDto issued = service.issue(id, null, owner);
 
         assertThatThrownBy(() -> service.advanceStep(id, new AdvanceImportStepRequest(
-                ImportRequestStep.ORDERED, LocalDate.now().plusDays(1), null), importUser))
+                ImportRequestStep.ORDERED, LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(1), null), importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThatThrownBy(() -> service.advanceStep(id, new AdvanceImportStepRequest(

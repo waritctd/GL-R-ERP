@@ -173,11 +173,12 @@ class DepositNoticeServiceTest {
         assertForbidden(() -> service.getById(99L, importActor));
     }
 
-    @Test
-    void downloadRemainingInvoice_importDenied() {
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        assertForbidden(() -> service.getRemainingInvoiceXlsx(10L, importActor, null, null, null, null));
-    }
+    // downloadRemainingInvoice_importDenied removed (O1, GLA-99 step 2 review-round-1): the
+    // stateless GET .../remaining-invoice/file endpoint and DepositNoticeService#getRemainingInvoiceXlsx
+    // it called are gone — every write/read path now goes through RemainingInvoiceService, whose
+    // own viewer gate is proven forbidden-for-import by RemainingInvoiceServiceIntegrationTest
+    // #read_import_isRefused_onIssuedDocument (real DB). remainingInvoiceOptions_importDenied below
+    // still pins requireTicketViewer's import-denial on the surviving stateless /options preview.
 
     @Test
     void remainingInvoiceOptions_importDenied() {
@@ -218,18 +219,18 @@ class DepositNoticeServiceTest {
             null, new BigDecimal("299.99"), BigDecimal.ZERO, new BigDecimal("299.99"));
         when(quotationRepo.findByTicket(10L)).thenReturn(
             List.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        RemainingInvoiceDto doc = captor.getValue();
-        assertThat(doc.items()).hasSize(1);
-        assertThat(doc.items().get(0).amount()).isEqualByComparingTo("299.99");
-        assertThat(doc.items().get(0).netUnitPrice()).isEqualByComparingTo("100");
+        // O1 (GLA-99 step 2 review-round-1): getRemainingInvoiceXlsx is gone — asserted via the
+        // SAME package-private resolveRemainingInvoiceSnapshot RemainingInvoiceService itself
+        // freezes off of, so this still pins resolveRemainingInvoice's own item-sourcing logic.
+        DepositNoticeService.RemainingInvoiceSnapshot snap =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner);
+        DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
+        assertThat(resolved.items()).hasSize(1);
+        assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("299.99");
+        assertThat(resolved.items().get(0).netUnitPrice()).isEqualByComparingTo("100");
         // Bypass policy -> no deduction row, depositAmount is zero.
-        assertThat(doc.depositAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(resolved.depositAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test
@@ -248,15 +249,11 @@ class DepositNoticeServiceTest {
             null, null, BigDecimal.ZERO, null); // lineSubtotal = null
         when(quotationRepo.findByTicket(10L)).thenReturn(
             List.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        RemainingInvoiceDto doc = captor.getValue();
-        assertThat(doc.items()).hasSize(1);
-        assertThat(doc.items().get(0).amount()).isEqualByComparingTo("100.01");
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.items()).hasSize(1);
+        assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("100.01");
     }
 
     @Test
@@ -326,43 +323,34 @@ class DepositNoticeServiceTest {
             .contains("AI2600145", "GLRD69001", "");
     }
 
-    @Test
-    void remainingInvoiceXlsx_explicitParamsPassThroughToRenderer() throws Exception {
-        // Bypass policy: isolates the param-passthrough behaviour under test from the deposit-
-        // matching rules (their own dedicated tests below).
-        stubTicketWithDepositPolicy(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", DepositPolicy.WAIVED);
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
-            quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
-                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
-
-        LocalDate customDate = LocalDate.of(2026, 9, 1);
-        service.getRemainingInvoiceXlsx(10L, owner, "PO-9999", "", customDate, List.of());
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        RemainingInvoiceDto doc = captor.getValue();
-        assertThat(doc.reference()).isEqualTo("PO-9999");
-        assertThat(doc.depositReference()).isEqualTo(""); // explicitly cleared, not the default
-        assertThat(doc.issueDate()).isEqualTo(customDate);
-        assertThat(doc.notes()).isEmpty(); // present-but-empty noteIds -> no notes
-    }
+    // remainingInvoiceXlsx_explicitParamsPassThroughToRenderer removed (O1): reference/deposit-
+    // reference/issueDate/notes pass-through was the deleted stateless /file endpoint's own query-
+    // param semantics, which has no successor — RemainingInvoiceService's createDraft/updateDraft
+    // own field-override semantics (req.reference()/req.depositReference()/req.docDate()/
+    // req.notes(), each falling back to a resolved/existing default when omitted) are exercised by
+    // RemainingInvoiceServiceIntegrationTest instead.
 
     @Test
-    void remainingInvoiceXlsx_overCapacityThrowsConflictWithoutTruncating() throws Exception {
+    void createDraft_overCapacityThrowsConflict_viaRemainingInvoiceServicesOwnGate() {
+        // O1 successor for the deleted remainingInvoiceXlsx_overCapacityThrowsConflictWithoutTruncating:
+        // capacity is no longer enforced by DepositNoticeService#getRemainingInvoiceXlsx (gone) —
+        // it is RemainingInvoiceService#createDraft's own requireCapacity gate now (see that
+        // class), exercised here through the SAME resolveRemainingInvoiceSnapshot content this
+        // file's other fixtures already drive.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        // A single accepted quotation is enough to qualify (matched via reference below) — under
-        // ruling D11, items/capacity are driven by the MATCHED NOTICE's own items, not the
-        // quotation's, so the quotation itself does not need MAX_ITEM_ROWS entries any more.
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(quotation(1L, 10L, "ACCEPTED", 1,
             List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE", BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
         // A deposit row too -> MAX_ITEM_ROWS notice items + 1 deposit row = one over capacity.
         List<DepositNoticeItemDto> noticeItems = depositNoticeItems(RemainingInvoiceRenderer.MAX_ITEM_ROWS);
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, new BigDecimal("40"), noticeItems)));
+        RemainingInvoiceRepository storedMock = mock(RemainingInvoiceRepository.class);
+        when(storedMock.findByTicket(10L)).thenReturn(List.of());
+        RemainingInvoiceService remainingInvoiceService =
+            new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer);
 
-        assertConflict(() -> service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null));
-        verify(remainingRenderer, never()).toXlsx(any());
+        assertConflict(() -> remainingInvoiceService.createDraft(10L, null, owner));
+        verify(storedMock, never()).replaceItems(anyLong(), any());
     }
 
     @Test
@@ -387,8 +375,15 @@ class DepositNoticeServiceTest {
         // stubTicket's items are always List.of() (no legacy approved_price), and both repos are
         // unstubbed (Mockito default: empty list) -> nothing this document could possibly price.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        assertConflict(() -> service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null));
-        verify(remainingRenderer, never()).toXlsx(any());
+        // O1: getRemainingInvoiceXlsx is gone; this exact "truly nothing to price" terminal case
+        // (no accepted quotation at all -> resolveLegacy -> no issued notice AND no legacy
+        // approved_price items either) is the ONE branch resolveRemainingInvoice/resolveLegacy
+        // itself still throws 409 for, regardless of caller — see resolveLegacy's own Javadoc.
+        // Every OTHER blocking case (negative net, empty matched-notice snapshot, deposit>items)
+        // reports via blockingReason instead (see the sibling tests converted to
+        // resolveRemainingInvoiceSnapshot elsewhere in this file), which only createDraft/
+        // getRemainingInvoiceXlsx (now gone) used to turn into a 409.
+        assertConflict(() -> service.resolveRemainingInvoiceSnapshot(10L, null, owner));
     }
 
     @Test
@@ -397,14 +392,11 @@ class DepositNoticeServiceTest {
             "Factory", new BigDecimal("2"), null, null, null, null, null, new BigDecimal("150"), "THB",
             0, null, null, null, "PIECE", null, null);
         stubTicketWithItems(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", List.of(approvedItem));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        assertThat(captor.getValue().items()).hasSize(1);
-        assertThat(captor.getValue().items().get(0).amount()).isEqualByComparingTo("300"); // 150*2
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.items()).hasSize(1);
+        assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("300"); // 150*2
     }
 
     // ── Owner ruling A-D: quotation selection, subtotal match, negative-net refusal ─────────
@@ -432,18 +424,15 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69002", "QT-2026-2", new BigDecimal("20"), new BigDecimal("5"),
                 List.of(matchedNoticeItem))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        assertThat(captor.getValue().items()).hasSize(1);
-        assertThat(captor.getValue().items().get(0).description()).isEqualTo("From matched notice");
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.items()).hasSize(1);
+        assertThat(resolved.items().get(0).description()).isEqualTo("From matched notice");
         // reference still identifies WHICH quotation was chosen (the buyer's, not the designer's) —
         // that selection logic is unchanged by D11, only the item/deduction SOURCE is.
-        assertThat(captor.getValue().reference()).isEqualTo("QT-2026-2");
-        assertThat(captor.getValue().depositAmount()).isEqualByComparingTo("5");
+        assertThat(resolved.defaultReference()).isEqualTo("QT-2026-2");
+        assertThat(resolved.depositAmount()).isEqualByComparingTo("5");
     }
 
     @Test
@@ -493,11 +482,11 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, BigDecimal.ZERO, depositNoticeItems(1))));
 
-        assertThatThrownBy(() -> service.getRemainingInvoiceXlsx(
-                10L, owner, null, null, null, null, 999L))
+        // O1: getRemainingInvoiceXlsx is gone; the 400 gate lives in resolveRemainingInvoice
+        // itself (shared by every caller, including resolveRemainingInvoiceSnapshot below).
+        assertThatThrownBy(() -> service.resolveRemainingInvoiceSnapshot(10L, 999L, owner))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
-        verify(remainingRenderer, never()).toXlsx(any());
     }
 
     /** Finding 1 (Opus review, mutation coverage gap): findQualifyingQuotations gates on
@@ -552,16 +541,10 @@ class DepositNoticeServiceTest {
         assertThat(options.itemCount()).isZero();
     }
 
-    @Test
-    void remainingInvoiceXlsx_acceptedQuotationWithoutIssuedNoticeThrowsConflict() throws Exception {
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
-            quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
-                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-
-        assertConflict(() -> service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null));
-        verify(remainingRenderer, never()).toXlsx(any());
-    }
+    // remainingInvoiceXlsx_acceptedQuotationWithoutIssuedNoticeThrowsConflict removed (O1):
+    // duplicate of remainingInvoiceOptions_acceptedQuotationWithoutIssuedNoticeIsBlockedUnderRequiredPolicy
+    // above, which pins the identical fixture's blockingReason via the surviving /options entry
+    // point — resolveRemainingInvoice never actually throws for this case (see that method).
 
     @Test
     void remainingInvoiceXlsx_bypassPolicyQualifiesAcceptedQuotationWithoutNoticeAndNoDeductionRow() throws Exception {
@@ -569,13 +552,10 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
                 BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        assertThat(captor.getValue().depositAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.depositAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     // ── Ruling D11 (2026-09-17): items/deduction come from the matched deposit notice's OWN
@@ -618,22 +598,20 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", new BigDecimal("99"), new BigDecimal("5"),
                 List.of(noticeItem))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null); // must not throw
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        assertThat(captor.getValue().items()).hasSize(1);
-        assertThat(captor.getValue().items().get(0).description()).isEqualTo("Notice item");
-        assertThat(captor.getValue().items().get(0).amount()).isEqualByComparingTo("99");
+        DepositNoticeService.ResolvedRemainingInvoice resolved = // must not throw
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.blockingReason()).isNull();
+        assertThat(resolved.items()).hasSize(1);
+        assertThat(resolved.items().get(0).description()).isEqualTo("Notice item");
+        assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("99");
     }
 
     /** Proves the D11 ruling's "no caching" property end to end: the SAME quotation/notice pairing
      * is read twice, but the second read simulates the notice having been edited/re-issued at a
      * different amount in between (a fresh {@code docs.findByTicket} stub, exactly like a new DB
      * read would return) — the remaining invoice on that NEXT read must reflect the edit, not the
-     * first read's cached figures, because {@code getRemainingInvoiceXlsx}/{@code
+     * first read's cached figures, because {@code resolveRemainingInvoiceSnapshot}/{@code
      * getRemainingInvoiceOptions} recompute everything fresh from the repositories on every call
      * (see this section's own "stateless by owner decision" header comment). */
     @Test
@@ -642,7 +620,6 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("Quotation item", BigDecimal.ONE,
                 "PER_PIECE", BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
         DepositNoticeItemDto firstVersionItem = new DepositNoticeItemDto(
             1L, 1, "Before edit", BigDecimal.ONE, "แผ่น",
@@ -651,12 +628,11 @@ class DepositNoticeServiceTest {
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.ZERO, new BigDecimal("5"),
                 List.of(firstVersionItem))));
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-        ArgumentCaptor<RemainingInvoiceDto> firstCaptor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(firstCaptor.capture());
-        assertThat(firstCaptor.getValue().items().get(0).description()).isEqualTo("Before edit");
-        assertThat(firstCaptor.getValue().items().get(0).amount()).isEqualByComparingTo("50");
-        assertThat(firstCaptor.getValue().depositAmount()).isEqualByComparingTo("5");
+        DepositNoticeService.ResolvedRemainingInvoice first =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(first.items().get(0).description()).isEqualTo("Before edit");
+        assertThat(first.items().get(0).amount()).isEqualByComparingTo("50");
+        assertThat(first.depositAmount()).isEqualByComparingTo("5");
 
         // The notice was edited/re-issued: a fresh version with a different item and deposit
         // amount, still matching the same quotation's reference. No cache to invalidate — the
@@ -668,13 +644,11 @@ class DepositNoticeServiceTest {
             issuedNotice(6L, 10L, 2, "GLRD69002", "QT-2026-1", BigDecimal.ZERO, new BigDecimal("12"),
                 List.of(secondVersionItem))));
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-        ArgumentCaptor<RemainingInvoiceDto> secondCaptor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer, org.mockito.Mockito.times(2)).toXlsx(secondCaptor.capture());
-        RemainingInvoiceDto secondCall = secondCaptor.getAllValues().get(1);
-        assertThat(secondCall.items().get(0).description()).isEqualTo("After edit");
-        assertThat(secondCall.items().get(0).amount()).isEqualByComparingTo("80");
-        assertThat(secondCall.depositAmount()).isEqualByComparingTo("12");
+        DepositNoticeService.ResolvedRemainingInvoice second =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(second.items().get(0).description()).isEqualTo("After edit");
+        assertThat(second.items().get(0).amount()).isEqualByComparingTo("80");
+        assertThat(second.depositAmount()).isEqualByComparingTo("12");
     }
 
     @Test
@@ -696,21 +670,9 @@ class DepositNoticeServiceTest {
         assertThat(options.blockingReason()).contains("ติดลบ");
     }
 
-    @Test
-    void remainingInvoiceXlsx_depositGreaterThanItemsThrowsConflict() throws Exception {
-        stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
-            quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
-                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
-            1L, 1, "From notice", BigDecimal.ONE, "แผ่น", BigDecimal.TEN, null, BigDecimal.TEN, BigDecimal.TEN);
-        when(docs.findByTicket(10L)).thenReturn(List.of(
-            issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, new BigDecimal("15"),
-                List.of(noticeItem))));
-
-        assertConflict(() -> service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null));
-        verify(remainingRenderer, never()).toXlsx(any());
-    }
+    // remainingInvoiceXlsx_depositGreaterThanItemsThrowsConflict removed (O1): duplicate of
+    // remainingInvoiceOptions_depositGreaterThanItemsIsBlocked above (identical fixture, same
+    // blockingReason assertion) — resolveRemainingInvoice never throws for this case itself.
 
     @Test
     void remainingInvoiceXlsx_netEqualsZeroIsAllowed() throws Exception {
@@ -725,11 +687,10 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, BigDecimal.TEN,
                 List.of(noticeItem))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null); // must not throw
-
-        verify(remainingRenderer).toXlsx(any());
+        DepositNoticeService.ResolvedRemainingInvoice resolved = // must not block
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.blockingReason()).isNull();
     }
 
     // ── D11 finding 1 (2026-09-18): the matched notice's own discountLabel is authored in the
@@ -758,13 +719,10 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", new BigDecimal("568.30"), new BigDecimal("5"),
                 List.of(noticeItem))));
-        when(remainingRenderer.toXlsx(any())).thenReturn(new byte[]{1});
 
-        service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null);
-
-        ArgumentCaptor<RemainingInvoiceDto> captor = ArgumentCaptor.forClass(RemainingInvoiceDto.class);
-        verify(remainingRenderer).toXlsx(captor.capture());
-        assertThat(captor.getValue().items().get(0).discountLabel()).isEqualTo("ลด 43.17");
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.items().get(0).discountLabel()).isEqualTo("ลด 43.17");
     }
 
     // ── D11 finding 2 (2026-09-18): once a quotation is matched to a notice, that notice's own
@@ -805,12 +763,14 @@ class DepositNoticeServiceTest {
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of())));
 
-        assertThatThrownBy(() -> service.getRemainingInvoiceXlsx(10L, owner, null, null, null, null))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("ไม่มีรายการสินค้า");
-            });
-        verify(remainingRenderer, never()).toXlsx(any());
+        // O1: resolveRemainingInvoice itself never throws (RemainingInvoiceService#createDraft is
+        // what turns a non-null blockingReason into the 409 today) — the emptiness guard itself,
+        // which this test pins, is proven by the blockingReason being set at all (never silently
+        // falling through to a fabricated zero-total render).
+        DepositNoticeService.ResolvedRemainingInvoice resolved =
+            service.resolveRemainingInvoiceSnapshot(10L, null, owner).resolved();
+        assertThat(resolved.blockingReason()).isNotNull().contains("ไม่มีรายการสินค้า");
+        assertThat(resolved.items()).isEmpty();
     }
 
     // Legacy-fallback overload: reference "REF-1" never matches any of this file's "QT-2026-N"

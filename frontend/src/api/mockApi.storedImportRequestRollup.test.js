@@ -143,13 +143,15 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
     async () => {
       const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
 
-      // Bypass the deposit-ready gate the cheap way: CEO sets a bypass policy, matching the
-      // owner-approved "no deposit required" path — this test is about the ROLLUP, not the
-      // payment gate (that is S4, covered separately below).
-      await api.auth.login({ role: 'ceo' });
+      // Bypass the deposit-ready gate the cheap way: the owning rep sets a bypass policy,
+      // matching the owner-approved "no deposit required" path — this test is about the ROLLUP,
+      // not the payment gate (that is S4, covered separately below).
+      // GLA-118 (owner ruling 2026-09-17): deposit policy is set by the OWNING sales rep only now
+      // — driveTwoFactoryTicketToOrderReceived already leaves the session logged in as 'sales'
+      // (the ticket's creator, since login({role}) always resolves the same seed user for a
+      // given role), so this used to switch to 'ceo' for the call and is no longer allowed to.
       await api.tickets.setDepositPolicy(ticketId, { policy: 'NOT_REQUIRED', reason: 'ทดสอบ S3' });
 
-      await api.auth.login({ role: 'sales' });
       const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
       expect(drafts).toHaveLength(2); // Panaria SpA + REFIN.
       const panariaDraft = drafts.find((r) => r.factoryName === 'Panaria SpA');
@@ -195,10 +197,10 @@ describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTL
     // CUSTOMER_CONFIRMED — setting a bypass policy on TOP of that is exactly the "bypass-policy
     // deal that has actually reached CUSTOMER_CONFIRMED" case TicketService
     // #requireImportRequestIssuable's own Javadoc describes as the only one that may issue.
-    await api.auth.login({ role: 'ceo' });
+    // GLA-118: deposit policy is set by the OWNING sales rep only now -- see the matching note in
+    // the S3 test above for why this no longer switches to 'ceo' first.
     await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ทดสอบ S4' });
 
-    await api.auth.login({ role: 'sales' });
     const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
     const draft = drafts[0];
     const { importRequest: issued } = await api.storedImportRequests.issue(draft.id, {});

@@ -2270,6 +2270,38 @@ function requireOwningRepOrCeo(ticket) {
   return user;
 }
 
+// Mirrors DepositNoticeService#requireDepositNoticeIssueGate (backend, GLA-99 step 2) — EXACTLY
+// the predicate that gates issuing a deposit notice (sales-role + ticket ownership), reused
+// verbatim by storedRemainingInvoices' own create/update/issue/revise/delete gate. Deliberately
+// narrower than requireOwningRepOrCeo just above (which also admits ceo) — the real gate has no
+// CEO carve-out for this document, see RemainingInvoiceService's own Javadoc on the backend.
+function requireRemainingInvoiceWriteGate(ticket) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!owns) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+/**
+ * GLA-118: mirrors TicketService.canSetDepositPolicy exactly — the OWNING sales rep, OR
+ * sales_manager as a backup (owner ruling 2026-09-20, part B; the original 2026-09-17 ruling was
+ * owner-only, see git history). The sales_manager clause is copied VERBATIM from
+ * mockCanDealOwnership (`user?.role === 'sales_manager'`) — the same bare, global check
+ * TicketService.requireDealOwnership/canDealOwnership use, no team/division scoping — so this is
+ * deliberately NOT a call to mockCanDealOwnership itself (which also admits ceo, and this gate must
+ * not). Deliberately NOT requireOwningRepOrCeo above (which also admits ceo) and NOT
+ * hasRole('account', 'ceo') (the old gate, still used for other account actions in this file) — a
+ * mock more permissive than TicketService#waiveDeposit here would be the dangerous direction
+ * CLAUDE.md warns about. account/ceo keep read access to depositPolicy (the field is never hidden
+ * from them), just not this write.
+ */
+function requireDepositPolicyOwner(ticket) {
+  const user = requireSession();
+  const owns = user.role === 'sales' && ticket?.createdById === user.id;
+  if (!owns && user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
 function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -2304,6 +2336,48 @@ function requireDealEntry() {
 
 let mockImportRequestSeq = 1;
 const mockImportRequests = []; // ImportRequestDto-shaped rows, each carrying its own `items` array.
+
+// ── The STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188, GLA-99 step 2) ─────────────────────────────
+// One row per (deal, issued document). Mirrors th.co.glr.hr.deposit.RemainingInvoiceService's
+// lifecycle/numbering shape (DRAFT -> ISSUED -> SUPERSEDED, base_number carried across a revision,
+// only the "-<version>" suffix moving) and its exact authz reuse (requireRemainingInvoiceWriteGate
+// above / requireDepositNoticeViewer below). Per CLAUDE.md's mock-contract rule, this does NOT
+// reproduce the real resolveRemainingInvoice pipeline's content rules (quotation qualification,
+// D11 item/deduction sourcing from a matched deposit notice, the negative-net refusal) — it reuses
+// the SAME simplified, explicitly-non-faithful item computation the stateless
+// remainingInvoiceOptions mock method already uses (see that method's own header comment), so a
+// caller cannot observe two different "preview" numbers under mock mode.
+let mockRemainingInvoiceSeq = 1;
+const mockRemainingInvoices = []; // RemainingInvoiceDocumentDto-shaped rows, each with its own `items`.
+const mockArGlrSeqByYear = {}; // mirrors sales.document_sequence WHERE doc_type = 'AR_GLR', keyed by Thai year.
+
+function findStoredRemainingInvoiceRaw(id) {
+  const row = mockRemainingInvoices.find((r) => r.id === Number(id));
+  if (!row) fail('ไม่พบใบแจ้งหนี้ส่วนที่เหลือนี้', 404);
+  return row;
+}
+
+/** Same simplified computation remainingInvoiceOptions already uses (approved ticket items, no
+ * deposit-notice matching) — kept identical rather than reinvented, so a draft's own snapshot and
+ * the stateless preview never show two different numbers for the same deal under mock mode. NOT
+ * evidence for the real D11/negative-net rules — see this section's own header comment. */
+function mockRemainingInvoiceSnapshot(ticket) {
+  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+  const items = priceItems.map((it, idx) => {
+    const desc = [it.brand, it.model, it.color, it.texture, it.size].filter(Boolean).join(' ');
+    const qty = Number(it.qty) || 0;
+    const unitPrice = Number(it.approvedPrice) || 0;
+    const amount = Math.round(unitPrice * qty * 100) / 100;
+    return { seq: idx + 1, description: desc || 'รายการสินค้า', qty, unit: 'แผ่น',
+      unitPrice, discountLabel: null, netUnitPrice: unitPrice, amount };
+  });
+  const itemsTotal = Math.round(items.reduce((sum, it) => sum + it.amount, 0) * 100) / 100;
+  const depositDeduction = 0;
+  const netAmount = Math.round((itemsTotal - depositDeduction) * 100) / 100;
+  const vatAmount = Math.round(netAmount * 0.07 * 100) / 100;
+  const grandTotal = Math.round((netAmount + vatAmount) * 100) / 100;
+  return { items, itemsTotal, depositDeduction, netAmount, vatAmount, grandTotal };
+}
 
 // Mirrors th.co.glr.hr.importrequest.ImportRequestStep — same codes, same order, same Thai labels.
 const MOCK_IMPORT_REQUEST_STEPS = ['CONTACTED', 'ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS', 'RECEIVED'];
@@ -3586,27 +3660,27 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
 }
 
 // ── Remaining invoice XLSX (demo placeholder) — real file from RemainingInvoiceRenderer.java ─
-async function buildMockRemainingInvoiceXlsx(ticketId) {
-  const ticket = findTicketRaw(Number(ticketId));
-  if (!ticket) fail('ไม่พบดีลนี้', 404);
-
-  const today = new Date();
-  const thaiYear2 = String(today.getFullYear() + 543).slice(-2);
-  const docNumber = `GLR${thaiYear2}${String(ticketId).padStart(3, '0')}`;
-  const firstQ = (ticket.quotations ?? [])[0];
-  const priceItems = ticket.items.filter((it) => it.approvedPrice != null);
+//
+// Nit fix (Opus review, GLA-99 step 2 review-round-1, 2026-09-20): this used to be
+// `buildMockRemainingInvoiceXlsx(ticketId)`, which RECOMPUTED a placeholder fresh from the
+// ticket's own CURRENT data on every download — for a STORED row (DRAFT/ISSUED/SUPERSEDED) that
+// is exactly the bug RemainingInvoiceService's own "frozen snapshot" design exists to prevent
+// (see that class's own Javadoc): an ISSUED document's downloaded content must reflect what was
+// actually issued, not whatever the deal looks like today, and its docNumber must be the row's
+// own MINTED number, not a re-derived legacy-format placeholder. This version renders from the
+// STORED row's own snapshot fields instead, honestly mirroring what the real
+// RemainingInvoiceService#file does (render the frozen snapshot, never recompute).
+function buildMockRemainingInvoiceXlsxFromRow(row) {
   const lines = [
-    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${docNumber}`,
-    `วันที่: ${mockThaiDate(today)}`,
-    `ลูกค้า: ${ticket.customerName ?? ''}`,
-    ...(firstQ ? [`อ้างอิง: ${firstQ.number}`] : []),
-    ...(ticket.projectName ? [`Project: ${ticket.projectName}`] : []),
+    `ใบแจ้งหนี้ส่วนที่เหลือ  เลขที่ ${row.docNumber ?? '(ร่าง)'}`,
+    `วันที่: ${row.docDate ? mockThaiDate(new Date(row.docDate)) : ''}`,
+    `ลูกค้า: ${row.customerName ?? ''}`,
+    ...(row.reference ? [`อ้างอิง: ${row.reference}`] : []),
+    ...(row.projectName ? [`Project: ${row.projectName}`] : []),
     '',
-    ...priceItems.map((it, i) => {
-      const qty = Number(it.qty) || 0;
-      return `${i + 1}. ${mockItemDesc(it)} — ${qty} ${it.rawUnit ?? 'แผ่น'} × ${Number(it.approvedPrice) || 0}`;
-    }),
-    `หัก  มัดจำ${firstQ ? '  ' + firstQ.number : ''}`,
+    ...(row.items ?? []).map((it, i) =>
+      `${i + 1}. ${it.description} — ${it.qty ?? ''} ${it.unit ?? 'แผ่น'} × ${it.unitPrice ?? ''}`),
+    ...(row.depositDeduction ? [`หัก  มัดจำ${row.depositReference ? '  ' + row.depositReference : ''}`] : []),
   ];
   return mockDocPlaceholderBlob(lines);
 }
@@ -6724,7 +6798,10 @@ export const api = {
     },
 
     async recordPayment(id, payload) {
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+      // Mirrors TicketService's new PAYMENT_RECORD_ROLES, for every receipt kind (deposit,
+      // balance, ...) alike. This used to be hasRole('account', 'ceo').
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       recordPaymentForTicket(ticket, user, payload ?? {});
@@ -6822,9 +6899,14 @@ export const api = {
         // through the PricingRequest chain instead (api.pricingRequests.*).
         if (owner && ticket.status === 'quotation_issued' && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')) add('CONFIRM_CUSTOMER', 'payment', 'ลูกค้ายืนยัน');
         if (owner && ticket.status === 'quotation_issued' && ticket.paymentStatus === 'CUSTOMER_CONFIRMED' && !depositBypassesNotice(ticket)) add('ISSUE_DEPOSIT_NOTICE', 'doc', 'ออกใบแจ้งมัดจำ');
-        if (['account', 'ceo'].includes(user.role) && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
+        // GLA-118: account only -- the CEO fallback is gone for DEPOSIT_PAID (owner ruling
+        // 2026-09-17, DEPOSIT_CONFIRM_ROLES) AND, as of 2026-09-20 part A, for RECORD_PAYMENT/
+        // FINAL_PAYMENT too (PAYMENT_RECORD_ROLES) -- recording ANY payment is account-only now.
+        // SET_BILLING below is the one payment-adjacent action that DID keep the CEO fallback
+        // (['account','ceo'], unchanged) -- it sets billing/due dates, it never records money.
+        if (user.role === 'account' && ticket.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') add('DEPOSIT_PAID', 'payment', 'รับมัดจำ');
         const paymentFields = derivePaymentFields(ticket);
-        if (['account', 'ceo'].includes(user.role) && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
+        if (user.role === 'account' && paymentFields.amountPayable > 0 && paymentFields.paymentStage !== 'FULLY_PAID') {
           add('RECORD_PAYMENT', 'payment', 'บันทึกรับชำระเงิน', { requiredFields: ['kind', 'amount'] });
         }
         if (['account', 'ceo'].includes(user.role)) add('SET_BILLING', 'payment', 'ตั้งค่าการวางบิล', { requiredFields: ['dueDate'] });
@@ -6869,7 +6951,9 @@ export const api = {
         }
         const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
           || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-        if (['account', 'ceo'].includes(user.role) && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
+        // GLA-118 (owner ruling 2026-09-20, part A): account only -- see the PAYMENT_RECORD_ROLES
+        // comment above RECORD_PAYMENT. This used to be ['account', 'ceo'].
+        if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
         // Three-party close: account confirms, CEO verifies. Sales is not involved.
         let closeReady = true;
         try { requireClosePrerequisites(ticket); } catch { closeReady = false; }
@@ -6904,7 +6988,21 @@ export const api = {
             requiredFields: mockEntryChannelIsStated(ticket) ? ['value', 'note'] : ['value'],
           });
         }
-        if (['account', 'ceo'].includes(user.role)) add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+        // GLA-118: the OWNING sales rep, or sales_manager as a backup (owner ruling 2026-09-20,
+        // part B) -- not account, not ceo, not any other sales rep. Mirrors
+        // TicketService.canSetDepositPolicy exactly: deliberately `owner || user.role ===
+        // 'sales_manager'` here, NOT `dealOwner` (which also admits ceo, see MARK_LOST/
+        // SET_TENDER_REQUIREMENT/SET_ENTRY_CHANNEL above) -- the ruling text is explicit that
+        // deposit policy is narrower than the usual "deal ownership" grant.
+        //
+        // Review fix: also gated on paymentStatus, matching Rule 4 -- once a deposit notice has
+        // actually been issued (or paid, or further), setDepositPolicy 409s instead of writing
+        // (see the Rule 4 check just above in this file's setDepositPolicy), so advertising the
+        // action past that point would offer a button that dies on click.
+        const depositWaivableNow = ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED';
+        if ((owner || user.role === 'sales_manager') && depositWaivableNow) {
+          add('WAIVE_DEPOSIT', 'policy', 'นโยบายมัดจำ', { requiredFields: ['policy', 'reason'] });
+        }
       } else if (['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle) && dealOwner) {
         add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
         if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
@@ -7260,21 +7358,11 @@ export const api = {
       });
     },
 
-    async downloadRemainingInvoice(id, params) {
-      // Mirrors DepositNoticeService.getRemainingInvoiceXlsx: read gate first — and,
-      // per Phase B, that gate now denies import outright (a financial document).
-      const { ticket } = requireDepositNoticeViewer(id);
-      if (ticket.status !== 'quotation_issued') fail('ต้องออกใบเสนอราคาแล้วก่อนจึงจะดำเนินการขั้นตอนนี้ได้', 409);
-      const qs = new URLSearchParams();
-      if (params?.reference !== undefined) qs.set('reference', params.reference ?? '');
-      if (params?.depositReference !== undefined) qs.set('depositReference', params.depositReference ?? '');
-      if (params?.issueDate !== undefined) qs.set('issueDate', params.issueDate ?? '');
-      if (params?.noteIds !== undefined) qs.set('noteIds', (params.noteIds ?? []).join(','));
-      if (params?.quotationId !== undefined && params?.quotationId !== null) qs.set('quotationId', params.quotationId);
-      const query = qs.toString();
-      const blob = await tryBackendBlob(`/api/tickets/${id}/remaining-invoice/file${query ? `?${query}` : ''}`);
-      return blob ?? buildMockRemainingInvoiceXlsx(Number(id));
-    },
+    // downloadRemainingInvoice (the stateless GET .../remaining-invoice/file mock) was REMOVED
+    // here (owner ruling O1, GLA-99 step 2 review-round-1, 2026-09-20), mirroring the same
+    // removal on hrApi.js/the real backend — RemainingInvoiceDialog now downloads through
+    // storedRemainingInvoices.download instead, which renders from a STORED row's own frozen
+    // snapshot (see buildMockRemainingInvoiceXlsxFromRow below).
 
     async confirmCustomer(id) {
       const user = hasRole('sales');
@@ -7298,9 +7386,11 @@ export const api = {
     //  that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     async confirmDepositPaid(id) {
-      // Money receipts are confirmed by ฝ่ายบัญชี (CEO fallback) — mirrors
-      // TicketService.ACCOUNT_ROLES.
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-17): account only now — the CEO fallback is gone. Mirrors
+      // TicketService's DEPOSIT_CONFIRM_ROLES. RECORD_PAYMENT/FINAL_PAYMENT are account-only too
+      // (PAYMENT_RECORD_ROLES, owner ruling 2026-09-20); ACCOUNT_ROLES (['account','ceo']) now only
+      // covers SET_BILLING and similar non-payment actions.
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (ticket.paymentStatus !== 'DEPOSIT_NOTICE_ISSUED') fail('ต้องออกใบแจ้งรับมัดจำก่อนจึงจะยืนยันรับชำระมัดจำได้', 409);
@@ -7393,8 +7483,11 @@ export const api = {
     },
 
     async confirmFinalPayment(id) {
-      // Mirrors TicketService.ACCOUNT_ROLES (ฝ่ายบัญชี + CEO fallback).
-      const user = hasRole('account', 'ceo');
+      // GLA-118 (owner ruling 2026-09-20, part A): account only now — the CEO fallback is gone.
+      // Mirrors TicketService's new PAYMENT_RECORD_ROLES (confirmFinalPayment is a payment-
+      // recording entry point too, whether or not it ends up calling recordPaymentInternal). This
+      // used to be hasRole('account', 'ceo') (TicketService.ACCOUNT_ROLES).
+      const user = hasRole('account');
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
@@ -7540,11 +7633,19 @@ export const api = {
     },
 
     async setDepositPolicy(id, payload) {
-      const user = hasRole('account', 'ceo');
-      const ticket = findTicketRaw(Number(id));
-      requireActive(ticket);
       if (!['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(payload.policy)) fail(`ไม่รองรับนโยบายยกเว้นมัดจำ '${payload.policy}'`, 400);
       if (!(payload.reason || '').trim()) fail('ต้องระบุเหตุผลนโยบายมัดจำ', 400);
+      const ticket = findTicketRaw(Number(id));
+      requireActive(ticket);
+      // GLA-118 (owner rulings 2026-09-17/20): the OWNING sales rep or a sales_manager — not account, not ceo.
+      // See requireDepositPolicyOwner's own Javadoc-style comment above.
+      const user = requireDepositPolicyOwner(ticket);
+      // Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued
+      // (payment track past CUSTOMER_CONFIRMED), the policy can't be waived after the fact — that
+      // is a credit note, not a policy change. Same position as Java: after the owner check.
+      if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+        fail('ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย', 409);
+      }
       ticket.depositPolicy = payload.policy;
       ticket.depositPolicyReason = payload.reason.trim();
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -8539,6 +8640,22 @@ export const api = {
   // faithfully, but `create` accepts whatever requestedAmount the caller sends without
   // recomputing/clamping it against the policy caps. That enforcement is Java-only; never treat a
   // mock "successful" submit as proof the real cap logic was exercised.
+  //
+  // approve()'s cap-override-reason guard (below) is only PARTLY mirrored. Java refuses with 400
+  // when `approvedAmount > recheck.eligibleAmount()` and no reason is given
+  // (SpecialMoneyService.ceoApproveFrom); the mock has no PolicyAmounts/UsageSnapshot to run
+  // SpecialMoneyPolicyEvaluator, so it compares against `requestedAmount` instead. That is wrong in
+  // BOTH directions, because submit stores requestedAmount unclamped and eligibleAmount is the
+  // policy figure (FIXED_AID's flat cap, PER_DIEM_RATE's rate * days, UNIFORM_ANNUAL SELF_BUY's
+  // per-piece rates, UNIFORM_PREPROBATION_KIT's kit total, MEDICAL's remaining balance):
+  //   - eligible > requested: Java accepts an amount between the two with no reason; the mock
+  //     demands one. Stricter than Java -- the safe direction.
+  //   - eligible < requested (a request above the cap): Java demands a reason for anything above
+  //     the cap -- INCLUDING approving exactly requestedAmount, the UI's default -- while the mock
+  //     accepts it with no reason. MORE PERMISSIVE than Java -- the dangerous direction. A green
+  //     mock approve of an over-cap request is evidence of nothing; verify on the real stack.
+  // Closing this would mean reimplementing the evaluator's per-type cap maths here, which the Mock
+  // API contract in CLAUDE.md asks us not to do.
   specialMoney: {
     // Mirrors SpecialMoneyRepository.findEmployeeOptions (~line 486): includeAll (hr/ceo) is a
     // LIST FILTER roster, not an on-behalf picker -- they cannot submit for anyone but themselves
@@ -8786,9 +8903,29 @@ export const api = {
         if (typeMeta?.evidenceRequired && specialMoneyAttachmentsFor(request.id).length === 0) {
           fail(`คำขอประเภท ${typeMeta.thaiLabel} ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้`, 400);
         }
+
+        const approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
+        // Mirrors SpecialMoneyService.blankToNull: trim, then treat "" as absent.
+        const trimmedCapOverrideReason = typeof payload.capOverrideReason === 'string'
+          ? payload.capOverrideReason.trim()
+          : '';
+        const capOverrideReason = trimmedCapOverrideReason === '' ? null : trimmedCapOverrideReason;
+        // Mirrors SpecialMoneyService.ceoApproveFrom's post-evidence guard (~line 272-278):
+        // `approvedAmount > recheck.eligibleAmount()` with a blank/missing capOverrideReason ->
+        // 400, checked in the same order as Java (after the CEO-role and evidence checks, before
+        // the row is mutated). The mock approximates `eligibleAmount` with `requestedAmount` --
+        // see this namespace's header comment: that is stricter than Java
+        // for some rows and MORE permissive for over-cap ones.
+        if (approvedAmount > request.requestedAmount && !capOverrideReason) {
+          fail(
+            'ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก',
+            400,
+          );
+        }
+
         request.status = 'APPROVED';
-        request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
-        request.capOverrideReason = payload.capOverrideReason || null;
+        request.approvedAmount = approvedAmount;
+        request.capOverrideReason = capOverrideReason;
         request.payrollMonth = specialMoneyPayrollMonth();
         request.ceoApprovedBy = user.employeeId;
         request.ceoApprovedAt = now;
@@ -11498,6 +11635,198 @@ export const api = {
       if (blob) return blob;
       const html = mockPreviewHtml(buildMockDoc(rawDoc));
       return new Blob([html], { type: 'text/html;charset=utf-8' });
+    },
+  },
+
+  // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
+  // GLA-99 step 2). See this file's own "STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate" header comment
+  // (near mockRemainingInvoices) for what is and is not mirrored faithfully.
+  storedRemainingInvoices: {
+    async createDraft(ticketId, payload = {}) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = requireRemainingInvoiceWriteGate(ticket);
+      requireActive(ticket);
+      if (ticket.status !== 'quotation_issued') {
+        fail('ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะดีลที่อยู่ในสถานะ quotation_issued เท่านั้น', 409);
+      }
+      const quotationId = payload.quotationId ?? null;
+      const alreadyLive = mockRemainingInvoices.some((r) => r.ticketId === ticket.id
+        && (r.status === 'DRAFT' || r.status === 'ISSUED')
+        && (r.customerQuotationId ?? null) === quotationId);
+      if (alreadyLive) {
+        fail('ดีลนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว', 409);
+      }
+      // P6 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20): O2's CROSS-chain rule was
+      // missing here — mirrors RemainingInvoiceService#createDraft's own anotherDraftLive check.
+      // ONE live remaining invoice per DEAL, not per chain: a DRAFT for a DIFFERENT quotation
+      // chain also blocks a new draft, even though an ISSUED sibling of a different chain is fine
+      // (that is the "new chain replaces the old one" flow issue() below implements).
+      const anotherDraftLive = mockRemainingInvoices.some((r) => r.ticketId === ticket.id
+        && r.status === 'DRAFT' && (r.customerQuotationId ?? null) !== quotationId);
+      if (anotherDraftLive) {
+        fail('ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
+      }
+      const snap = mockRemainingInvoiceSnapshot(ticket);
+      const firstQ = (ticket.quotations ?? [])[0];
+      const notes = payload.notes ?? mockNoteTemplates.filter((t) => t.defaultSelected).map((t) => t.text);
+      const now = new Date().toISOString();
+      const id = mockRemainingInvoiceSeq++;
+      mockRemainingInvoices.push({
+        id, ticketId: ticket.id, customerQuotationId: quotationId, depositNoticeId: null,
+        baseNumber: null, version: 1, docNumber: null, status: 'DRAFT', supersededById: null,
+        reference: payload.reference ?? (firstQ ? firstQ.number : null),
+        depositReference: payload.depositReference ?? null,
+        docDate: payload.docDate ?? now.slice(0, 10),
+        notes,
+        customerName: ticket.customerName ?? null, customerTaxId: null, customerBranch: null,
+        customerAddress: null, projectName: ticket.projectName ?? null,
+        itemsTotal: snap.itemsTotal, depositDeduction: snap.depositDeduction, netAmount: snap.netAmount,
+        vatAmount: snap.vatAmount, grandTotal: snap.grandTotal,
+        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        issuedById: null, issuedByName: null, issuedAt: null,
+        items: snap.items.map((it, i) => ({ id: `${id}-${i + 1}`, remainingInvoiceId: id, ...it })),
+      });
+      return delay({ remainingInvoice: structuredClone(mockRemainingInvoices.find((r) => r.id === id)) });
+    },
+
+    async listForTicket(ticketId) {
+      const { ticket } = requireDepositNoticeViewer(ticketId);
+      return delay({
+        remainingInvoices: structuredClone(mockRemainingInvoices
+          .filter((r) => r.ticketId === ticket.id)
+          .sort((a, b) => (a.baseNumber ?? '').localeCompare(b.baseNumber ?? '') || a.version - b.version)),
+      });
+    },
+
+    async get(id) {
+      const row = findStoredRemainingInvoiceRaw(id);
+      requireDepositNoticeViewer(row.ticketId);
+      return delay({ remainingInvoice: structuredClone(row) });
+    },
+
+    // PATCH: an absent field is left alone. Re-snapshots items/money from the ticket's OWN current
+    // data every call — mirrors RemainingInvoiceService#updateDraft's "re-snapshot from source"
+    // step (never re-selects a different source quotation mid-edit).
+    async update(id, payload = {}) {
+      const row = findStoredRemainingInvoiceRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireRemainingInvoiceWriteGate(ticket);
+      if (row.status !== 'DRAFT') fail('ใบแจ้งหนี้ส่วนที่เหลือนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      const snap = mockRemainingInvoiceSnapshot(ticket);
+      row.items = snap.items.map((it, i) => ({ id: `${row.id}-${i + 1}`, remainingInvoiceId: row.id, ...it }));
+      row.itemsTotal = snap.itemsTotal; row.depositDeduction = snap.depositDeduction;
+      row.netAmount = snap.netAmount; row.vatAmount = snap.vatAmount; row.grandTotal = snap.grandTotal;
+      if (payload.reference != null) row.reference = payload.reference;
+      if (payload.depositReference != null) row.depositReference = payload.depositReference;
+      if (payload.docDate != null) row.docDate = payload.docDate;
+      if (payload.notes != null) row.notes = payload.notes;
+      row.updatedAt = new Date().toISOString();
+      return delay({ remainingInvoice: structuredClone(row) });
+    },
+
+    // DRAFT -> ISSUED: mints/carries base_number the same way the real
+    // RemainingInvoiceService#issue does (see this file's mockArGlrSeqByYear comment) — a
+    // revision's issue keeps the predecessor's base_number and only bumps version.
+    async issue(id) {
+      const row = findStoredRemainingInvoiceRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      const user = requireRemainingInvoiceWriteGate(ticket);
+      requireActive(ticket);
+      if (row.status !== 'DRAFT') fail('ใบแจ้งหนี้ส่วนที่เหลือนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      if (!row.items.length) fail('ใบแจ้งหนี้ส่วนที่เหลือยังไม่มีรายการสินค้า', 409);
+
+      const predecessor = mockRemainingInvoices.find((r) => r.ticketId === row.ticketId
+        && (r.customerQuotationId ?? null) === (row.customerQuotationId ?? null) && r.status === 'ISSUED');
+      let baseNumber;
+      let version;
+      if (predecessor) {
+        baseNumber = predecessor.baseNumber;
+        version = predecessor.version + 1;
+      } else {
+        const thaiYear = new Date().getFullYear() + 543;
+        mockArGlrSeqByYear[thaiYear] = (mockArGlrSeqByYear[thaiYear] ?? 0) + 1;
+        baseNumber = `GLR${String(thaiYear).slice(-2)}${String(mockArGlrSeqByYear[thaiYear]).padStart(5, '0')}`;
+        version = 1;
+      }
+      // P6/O2 (GLA-99 step 2 review-round-2): supersede EVERY other currently-ISSUED remaining
+      // invoice on this ticket, whatever chain it belongs to — mirrors
+      // RemainingInvoiceService#issue's own cross-chain supersede pass. This also catches the
+      // same-chain `predecessor` above (it is ISSUED and not `row` itself), so no separate branch
+      // is needed for that case any more.
+      for (const sibling of mockRemainingInvoices) {
+        if (sibling.id !== row.id && sibling.ticketId === row.ticketId && sibling.status === 'ISSUED') {
+          sibling.status = 'SUPERSEDED';
+          sibling.supersededById = row.id;
+        }
+      }
+      row.baseNumber = baseNumber;
+      row.version = version;
+      row.docNumber = `${baseNumber}-${version}`;
+      row.status = 'ISSUED';
+      row.issuedById = user.id;
+      row.issuedByName = user.name;
+      row.issuedAt = new Date().toISOString();
+      row.updatedAt = row.issuedAt;
+      pushEvent(ticket, user, 'DOCUMENT_ISSUED', ticket.status, ticket.status,
+        `ใบแจ้งหนี้ส่วนที่เหลือ ${row.docNumber} ออกแล้ว`);
+      return delay({ remainingInvoice: structuredClone(row) });
+    },
+
+    // Prepares a correction: a new DRAFT copying the ISSUED row's body/items verbatim — mirrors
+    // RemainingInvoiceService#revise (not a live re-snapshot; call update() afterwards for that).
+    async revise(id) {
+      const issued = findStoredRemainingInvoiceRaw(id);
+      const ticket = findTicketRaw(issued.ticketId);
+      const user = requireRemainingInvoiceWriteGate(ticket);
+      requireActive(ticket);
+      if (issued.status !== 'ISSUED') {
+        fail('ออกฉบับแก้ไขได้เฉพาะใบแจ้งหนี้ส่วนที่เหลือที่ออกเลขแล้ว', 409);
+      }
+      const hasLiveDraft = mockRemainingInvoices.some((r) => r.ticketId === issued.ticketId
+        && r.status === 'DRAFT' && (r.customerQuotationId ?? null) === (issued.customerQuotationId ?? null));
+      if (hasLiveDraft) {
+        fail('มีร่างฉบับแก้ไขของใบแจ้งหนี้ส่วนที่เหลือนี้อยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน', 409);
+      }
+      // P3/P6 parity (GLA-99 step 2 review-round-2): a DRAFT for a DIFFERENT chain also blocks
+      // revise() — mirrors RemainingInvoiceService#revise's own cross-chain refusal (O2: one live
+      // DRAFT per DEAL, not per chain).
+      const anotherChainDraftLive = mockRemainingInvoices.some((r) => r.ticketId === issued.ticketId
+        && r.status === 'DRAFT' && (r.customerQuotationId ?? null) !== (issued.customerQuotationId ?? null));
+      if (anotherChainDraftLive) {
+        fail('ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
+      }
+      const now = new Date().toISOString();
+      const newId = mockRemainingInvoiceSeq++;
+      const clone = structuredClone(issued);
+      mockRemainingInvoices.push({
+        ...clone,
+        id: newId, baseNumber: null, version: 1, docNumber: null, status: 'DRAFT', supersededById: null,
+        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        issuedById: null, issuedByName: null, issuedAt: null,
+        items: clone.items.map((it, i) => ({ ...it, id: `${newId}-${i + 1}`, remainingInvoiceId: newId })),
+      });
+      return delay({ remainingInvoice: structuredClone(mockRemainingInvoices.find((r) => r.id === newId)) });
+    },
+
+    async deleteDraft(id) {
+      const row = findStoredRemainingInvoiceRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireRemainingInvoiceWriteGate(ticket);
+      if (row.status !== 'DRAFT') {
+        fail('ลบได้เฉพาะใบแจ้งหนี้ส่วนที่เหลือที่ยังไม่ออกเลข (DRAFT)', 409);
+      }
+      mockRemainingInvoices.splice(mockRemainingInvoices.indexOf(row), 1);
+      return delay({ deleted: true });
+    },
+
+    // Binary, so it goes through fetch directly — same shape as storedImportRequests.download
+    // above. Renders from THIS row's own stored snapshot (buildMockRemainingInvoiceXlsxFromRow),
+    // never recomputed from the ticket's current state — see that function's own header comment.
+    async download(id) {
+      const row = findStoredRemainingInvoiceRaw(id);
+      requireDepositNoticeViewer(row.ticketId);
+      const blob = await tryBackendBlob(`/api/remaining-invoices/${id}/file`);
+      return blob ?? buildMockRemainingInvoiceXlsxFromRow(row);
     },
   },
 

@@ -15,7 +15,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
-        downloadRemainingInvoice: vi.fn(),
         remainingInvoiceOptions: vi.fn(),
       },
       pricingRequests: {
@@ -27,6 +26,19 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listByTicket: vi.fn(),
         downloadXlsx: vi.fn(),
         downloadPdf: vi.fn(),
+        noteTemplates: vi.fn(),
+      },
+      // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — RemainingInvoiceDialog
+      // checks this before it ever reaches the stateless preview these tests exercise. Defaults
+      // to "no live document yet", matching every fixture below.
+      storedRemainingInvoices: {
+        listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
+        createDraft: vi.fn(),
+        update: vi.fn(),
+        issue: vi.fn(),
+        revise: vi.fn(),
+        deleteDraft: vi.fn(),
+        download: vi.fn(),
       },
       attachments: {
         fileUrl: (id) => `#mock-file-${id}`,
@@ -261,9 +273,10 @@ describe('DealDocumentRegister', () => {
     const section = within(await screen.findByTestId('register-deposit-and-invoice'));
     fireEvent.click(section.getByRole('button', { name: 'Excel' }));
 
+    // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state
+    // rather than the create-flow options preview — either way, the register itself never
+    // downloads directly; it only ever opens the dialog.
     expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
-    // The dialog itself calls the options endpoint — the register never downloads directly.
-    expect(api.tickets.downloadRemainingInvoice).not.toHaveBeenCalled();
   });
 
   // A from-stock deal never writes GOODS_RECEIVED (import-axis only), so the old gate left this row

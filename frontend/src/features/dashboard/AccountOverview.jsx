@@ -116,8 +116,11 @@ export function AccountOverview({ user, employee, showToast }) {
   }, [allTickets]);
 
   const worklist = useMemo(() => {
+    // GLA-118 (owner ruling 2026-09-20, part A): pass the viewer's role so the CEO (who reaches
+    // this page too) never gets offered confirmDeposit/confirmFinalPayment — those are account
+    // only now, no CEO fallback. See nextAccountAction's own `viewerRole` Javadoc.
     const rows = allTickets
-      .map((ticket) => ({ ticket, action: nextAccountAction(ticket) }))
+      .map((ticket) => ({ ticket, action: nextAccountAction(ticket, user?.role) }))
       .filter((row) => row.action != null);
     // Overdue-first, then earliest due date, then largest balance.
     return rows.sort((a, b) => {
@@ -127,7 +130,7 @@ export function AccountOverview({ user, employee, showToast }) {
       if (dueA !== dueB) return dueA - dueB;
       return rowAmount(b.ticket) - rowAmount(a.ticket);
     });
-  }, [allTickets]);
+  }, [allTickets, user?.role]);
 
   const monthSummary = useMemo(() => {
     const monthStart = startOfMonth();

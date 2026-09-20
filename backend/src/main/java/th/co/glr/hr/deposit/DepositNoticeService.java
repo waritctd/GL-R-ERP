@@ -113,8 +113,9 @@ public class DepositNoticeService {
         // convention on the frontend) and, for projectName, the ticket summary itself. A caller-
         // supplied non-blank value always wins; a null customerId (never linked to a customer
         // master row) safely leaves these fields blank rather than throwing. Shared with
-        // getRemainingInvoiceOptions/getRemainingInvoiceXlsx below (resolveCustomerHeader) so the
-        // two documents can never source a customer's address/tax id differently.
+        // getRemainingInvoiceOptions below and RemainingInvoiceService's own stored snapshot
+        // (resolveCustomerHeader) so no remaining-invoice document can ever source a customer's
+        // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
         var effective = new DepositNoticeDraftRequest(
@@ -339,15 +340,37 @@ public class DepositNoticeService {
     // snapshot the same way, so this ruling brings the two paths onto one shared item-sourcing
     // convention instead of two.
 
-    private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
+    // Package-private (not private): reused as-is by RemainingInvoiceService for the STORED
+    // remaining-invoice snapshot's own VAT line (GLA-99 step 2, 2026-09-20) — one constant, never
+    // two copies that could silently disagree.
+    static final BigDecimal VAT_RATE = new BigDecimal("0.07");
+
+    /** One money bundle: net (items total minus the deposit deduction), VAT at {@link #VAT_RATE},
+     * and the VAT-inclusive grand total — every rounding step {@code setScale(2, HALF_UP)}, exactly
+     * as {@link #getRemainingInvoiceOptions} always computed it inline. P5 (Opus review, GLA-99
+     * step 2 review-round-2, 2026-09-20): extracted so {@code RemainingInvoiceService}'s own
+     * createDraft/updateDraft/issue stop carrying THREE separately-copied repetitions of these same
+     * three lines — one formula, called four times (this class's own preview, plus those three),
+     * never four chances for the copies to drift apart. Package-private (not private) for that
+     * reuse. */
+    record RemainingInvoiceMoney(BigDecimal netAmount, BigDecimal vatAmount, BigDecimal grandTotal) {}
+
+    RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount) {
+        BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal vatAmount = netAmount.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal grandTotal = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
+        return new RemainingInvoiceMoney(netAmount, vatAmount, grandTotal);
+    }
 
     /** Prefill + preview for the download dialog. Never throws for an over-capacity item list, a
      * negative net amount, or a not-yet-issued deposit notice — those are all reported via
      * {@code blockingReason} (and itemCount/maxItems for capacity), so
      * the dialog can render a clear refusal instead of a failed round trip. DOES throw
-     * (404/403/409) for the same gates {@link #getRemainingInvoiceXlsx} enforces: viewer role,
-     * ticket status, and "no priceable source at all" — a preview for a deal with nothing to
-     * preview is not useful, and hiding that behind zeros would misinform the caller. */
+     * (404/403/409) for the same gates {@link RemainingInvoiceService#createDraft}/{@link
+     * RemainingInvoiceService#updateDraft}/{@link RemainingInvoiceService#issue} enforce (via this
+     * class's own {@link #resolveRemainingInvoiceSnapshot}): viewer role, ticket status, and "no
+     * priceable source at all" — a preview for a deal with nothing to preview is not useful, and
+     * hiding that behind zeros would misinform the caller. */
     public RemainingInvoiceOptionsDto getRemainingInvoiceOptions(long ticketId, UserPrincipal actor) {
         return getRemainingInvoiceOptions(ticketId, null, actor);
     }
@@ -357,7 +380,8 @@ public class DepositNoticeService {
      * quotations; {@code null} previews the newest qualifying quotation, i.e. {@code
      * defaultQuotationId}). Never allows previewing another ticket's quotation — an id outside
      * this ticket's own qualifying set is refused with 400, the same as {@link
-     * #getRemainingInvoiceXlsx}'s own {@code quotationId} gate. */
+     * #resolveRemainingInvoiceSnapshot}'s own {@code quotationId} gate (used by {@link
+     * RemainingInvoiceService}'s create/update/issue). */
     public RemainingInvoiceOptionsDto getRemainingInvoiceOptions(long ticketId, Long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
@@ -372,15 +396,18 @@ public class DepositNoticeService {
         BigDecimal depositAmount = resolved.depositAmount();
         int depositRowCount = depositAmount.compareTo(BigDecimal.ZERO) != 0 ? 1 : 0;
         BigDecimal itemsTotal = sumAmounts(items);
-        BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal vatAmount = netAmount.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal totalPayable = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
+        RemainingInvoiceMoney money = computeRemainingInvoiceMoney(itemsTotal, depositAmount);
+        BigDecimal netAmount = money.netAmount();
+        BigDecimal vatAmount = money.vatAmount();
+        BigDecimal totalPayable = money.grandTotal();
 
         // Notes-capacity pre-check (finding 2c): only the DEFAULT note selection is knowable here
         // (this endpoint takes no noteIds — the dialog lets the caller customise notes only right
         // before download), so this can only warn about the prefill the dialog will start from.
         // A caller who then picks a different, still-too-long set gets the authoritative 409 from
-        // getRemainingInvoiceXlsx itself (surfaced to the user — see hrApi.js's error-message fix).
+        // RemainingInvoiceService's own requireNotesCapacity at create/update/issue time (surfaced
+        // to the user — see hrApi.js's error-message fix). That check used to live in this class's
+        // own getRemainingInvoiceXlsx; it moved to RemainingInvoiceService with O1's removal below.
         String blockingReason = resolved.blockingReason();
         if (blockingReason == null) {
             List<String> defaultNotes = resolveNotes(null);
@@ -414,87 +441,50 @@ public class DepositNoticeService {
         );
     }
 
-    /**
-     * Extended (branch fix): {@code reference}/{@code depositReference}/{@code issueDate}/
-     * {@code noteIds} are ALL optional — a bare call with every one {@code null} reproduces the
-     * dialog's own defaults exactly (owner decision: a one-click download with no params must
-     * keep working). Semantics live at the controller boundary: {@code null} = "use the default",
-     * a non-null-but-blank {@code reference}/{@code depositReference} = "leave that cell blank",
-     * and {@code noteIds} present-but-empty = "no notes" — see DepositNoticeController.
-     */
-    public byte[] getRemainingInvoiceXlsx(long ticketId, UserPrincipal actor,
-            String reference, String depositReference, LocalDate issueDate, List<Long> noteIds) {
-        return getRemainingInvoiceXlsx(ticketId, actor, reference, depositReference, issueDate, noteIds, null);
-    }
+    // getRemainingInvoiceXlsx (both overloads) REMOVED (owner ruling O1, GLA-99 step 2
+    // review-round-1, 2026-09-20): it backed the stateless GET .../remaining-invoice/file route,
+    // which is gone — only an ISSUED/SUPERSEDED STORED remaining invoice is downloadable now, via
+    // RemainingInvoiceService#file, which renders a FROZEN snapshot rather than recomputing this
+    // same resolution live on every call. That method's capacity/notes-capacity/negative-net
+    // enforcement moved to RemainingInvoiceService#createDraft/updateDraft/issue's own gates
+    // (requireCapacity/requireNotesCapacity) — resolveRemainingInvoice itself, below, never threw
+    // for those; it always reported them via blockingReason, which is what this method used to
+    // convert into a 409 for capacity/negative-net and which createDraft/updateDraft now convert
+    // instead. getRemainingInvoiceOptions above is UNCHANGED and remains the live preview this
+    // class's callers (and RemainingInvoiceService's own resolveRemainingInvoiceSnapshot) still
+    // route through.
 
-    /** Same as the 6-arg overload, plus {@code quotationId} (owner ruling — see this section's own
-     * header comment): optional when exactly one quotation qualifies, REQUIRED-in-effect when
-     * several do (an unset id silently picks the newest, which the dialog always shows as
-     * {@code defaultQuotationId} so this is never a surprise). An id outside this ticket's own
-     * qualifying set — including any other ticket's quotation id — is refused with 400. */
-    public byte[] getRemainingInvoiceXlsx(long ticketId, UserPrincipal actor,
-            String reference, String depositReference, LocalDate issueDate, List<Long> noteIds, Long quotationId) {
+    /** One resolved snapshot bundle, package-private, reused verbatim by RemainingInvoiceService's
+     * createDraft/updateDraft/issue (GLA-99 step 2, 2026-09-20) to freeze a STORED remaining
+     * invoice off the exact same resolution + customer-header lookup {@link
+     * #getRemainingInvoiceOptions} already uses — so the stored document can never compute its
+     * content differently than the stateless preview did. {@code ticketSummary} is handed back
+     * because both the resolution and the header lookup need it and re-fetching it a second time
+     * in the caller would risk reading a different row between the two (a benign race, but an
+     * avoidable one). */
+    record RemainingInvoiceSnapshot(TicketSummaryDto ticketSummary, CustomerHeaderInfo header,
+                                    ResolvedRemainingInvoice resolved) {}
+
+    RemainingInvoiceSnapshot resolveRemainingInvoiceSnapshot(long ticketId, Long quotationId, UserPrincipal actor) {
         TicketDto ticket = requireTicketViewer(ticketId, actor);
         TicketSummaryDto s = ticket.summary();
         requireQuotationIssuedForRemainingInvoice(s);
-
         List<CustomerQuotationDto> quotationCandidates = quotations.findByTicket(ticketId);
         List<DepositNoticeDto> notices = docs.findByTicket(ticketId);
         ResolvedRemainingInvoice resolved = resolveRemainingInvoice(
             ticketId, ticket, s, quotationId, quotationCandidates, notices);
-        if (resolved.blockingReason() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
-        }
-
-        List<RemainingInvoiceItemDto> items = resolved.items();
-        BigDecimal depositAmount = resolved.depositAmount();
-        int depositRowCount = depositAmount.compareTo(BigDecimal.ZERO) != 0 ? 1 : 0;
-        if (items.size() + depositRowCount > RemainingInvoiceRenderer.MAX_ITEM_ROWS) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ใบแจ้งหนี้ส่วนที่เหลือมีรายการ " + items.size() + " รายการ"
-                + (depositRowCount > 0 ? " บวกแถวหักมัดจำ" : "")
-                + " เกินความจุของแบบฟอร์ม (สูงสุด " + RemainingInvoiceRenderer.MAX_ITEM_ROWS + " แถว)"
-                + " กรุณารวมรายการหรือออกเอกสารหลายฉบับ");
-        }
-
         CustomerHeaderInfo header = resolveCustomerHeader(s, null, null, null);
-        String effectiveReference = reference != null ? reference : resolved.defaultReference();
-        String effectiveDepositReference = depositReference != null ? depositReference : resolved.defaultDepositReference();
-        LocalDate effectiveIssueDate = issueDate != null ? issueDate : bangkokToday();
-        List<String> effectiveNotes = resolveNotes(noteIds);
-        // Notes-capacity gate (finding 2c): refuse rather than silently clip. Uses the SAME
-        // wrapNotes the renderer itself lays the หมายเหตุ block out with, so this check and the
-        // actual render can never disagree about what fits.
-        if (RemainingInvoiceRenderer.wrapNotes(effectiveNotes).size() > RemainingInvoiceRenderer.MAX_NOTE_LINES) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "หมายเหตุที่เลือกยาวเกินพื้นที่ในแบบฟอร์ม (สูงสุด " + RemainingInvoiceRenderer.MAX_NOTE_LINES
-                + " บรรทัด) กรุณาลดจำนวนหรือย่อข้อความหมายเหตุ");
-        }
+        return new RemainingInvoiceSnapshot(s, header, resolved);
+    }
 
-        RemainingInvoiceDto doc = new RemainingInvoiceDto(
-            buildRemainingInvoiceDocNumber(ticketId),
-            effectiveIssueDate,
-            effectiveReference,
-            effectiveDepositReference,
-            nullSafe(s.customerName()),
-            header.branch(),
-            // B8 = address ONLY for the remaining invoice (finding 2d) — B7 already shows the
-            // branch in parens via customerHeaderLine, so folding it into the address too (the
-            // way header.address()/createDraft does for the deposit notice — deliberately
-            // UNCHANGED, see resolveCustomerHeader's own Javadoc) printed the branch twice.
-            nullSafe(header.addressOnly()),
-            nullSafe(header.taxId()),
-            nullSafe(header.projectName()),
-            depositAmount,
-            effectiveNotes,
-            items
-        );
-
-        try {
-            return remainingRenderer.toXlsx(doc);
-        } catch (Exception e) {
-            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "สร้างไฟล์ Excel ไม่สำเร็จ: " + e.getMessage());
-        }
+    /** Package-private — EXACTLY the predicate {@link #issue} uses to gate issuing a deposit
+     * notice (role check + ticket-ownership check), reused verbatim by RemainingInvoiceService for
+     * its own create/update/issue/revise/delete gate (owner ruling 2026-09-20, GLA-99 step 2): "one
+     * predicate, not a copied role set" — a caller who can issue a deposit notice on this ticket,
+     * and no one else, can also write this ticket's remaining invoice. */
+    void requireDepositNoticeIssueGate(long ticketId, UserPrincipal actor) {
+        requireRole(actor, SALES_ROLES);
+        requireTicketOwner(ticketId, actor);
     }
 
     private void requireQuotationIssuedForRemainingInvoice(TicketSummaryDto s) {
@@ -517,17 +507,23 @@ public class DepositNoticeService {
     /**
      * One resolved bundle: the priced items, the deposit amount/reference defaults, both dialog
      * suggestion lists, the quotation-picker options, and (when the deal cannot be safely priced
-     * right now) a human {@code blockingReason} — computed together so
-     * {@link #getRemainingInvoiceOptions} and {@link #getRemainingInvoiceXlsx} can never disagree
-     * on what "the default"/"the block" is. {@code blockingReason != null} means {@code items}/
-     * {@code depositAmount} are NOT safe to render (empty/zero) — {@link #getRemainingInvoiceXlsx}
-     * turns it straight into a 409; {@link #getRemainingInvoiceOptions} surfaces it as-is so the
+     * right now) a human {@code blockingReason} — computed together so this class's own {@link
+     * #getRemainingInvoiceOptions} and {@code RemainingInvoiceService}'s create/update/issue (via
+     * {@link #resolveRemainingInvoiceSnapshot}) can never disagree on what "the default"/"the
+     * block" is. {@code blockingReason != null} means {@code items}/{@code depositAmount} are NOT
+     * safe to render (empty/zero) — {@code RemainingInvoiceService}'s own create/update/issue turn
+     * it straight into a 409; {@link #getRemainingInvoiceOptions} surfaces it as-is so the
      * dialog can disable the download button instead of failing a round trip. The one exception is
      * the negative-net case (rule C): items/depositAmount ARE both individually valid there — it
      * is only their difference that is wrong — so both are still returned alongside the reason, to
      * give the dialog something to explain the block with.
      */
-    private record ResolvedRemainingInvoice(
+    // Package-private (not private) — reused verbatim by RemainingInvoiceService (GLA-99 step 2)
+    // to snapshot a STORED remaining invoice off the exact same resolution this stateless preview
+    // already uses. matchedDepositNoticeId (new field, this branch) is the deposit_notice_id FK a
+    // stored row snapshots for traceability — null when items were quotation-sourced (bypass
+    // policy) or there is no accepted quotation at all with nothing to match.
+    record ResolvedRemainingInvoice(
         List<RemainingInvoiceItemDto> items,
         BigDecimal depositAmount,
         String defaultReference,
@@ -536,7 +532,8 @@ public class DepositNoticeService {
         List<RemainingInvoiceOptionsDto.ReferenceOption> depositReferenceOptions,
         List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions,
         Long defaultQuotationId,
-        String blockingReason
+        String blockingReason,
+        Long matchedDepositNoticeId
     ) {}
 
     /** One quotation this ticket's remaining invoice COULD be sourced from, paired with the
@@ -567,7 +564,8 @@ public class DepositNoticeService {
     }
 
     /**
-     * The single entry point both getRemainingInvoiceOptions and getRemainingInvoiceXlsx route
+     * The single entry point both this class's own getRemainingInvoiceOptions and
+     * RemainingInvoiceService's create/update/issue (via resolveRemainingInvoiceSnapshot) route
      * through. Resolution order:
      * <ol>
      *   <li>a caller-supplied {@code quotationId} always wins, but MUST be one of this ticket's
@@ -582,7 +580,9 @@ public class DepositNoticeService {
      *       pricing-request chain and never had a CustomerQuotation at all.</li>
      * </ol>
      */
-    private ResolvedRemainingInvoice resolveRemainingInvoice(long ticketId, TicketDto ticket, TicketSummaryDto s,
+    // Package-private (not private) — RemainingInvoiceService's own resolveRemainingInvoiceSnapshot
+    // wrapper below calls this directly (GLA-99 step 2).
+    ResolvedRemainingInvoice resolveRemainingInvoice(long ticketId, TicketDto ticket, TicketSummaryDto s,
             Long quotationId, List<CustomerQuotationDto> quotationCandidates, List<DepositNoticeDto> notices) {
         List<QualifyingQuotation> qualifying = findQualifyingQuotations(quotationCandidates, notices, s.depositPolicy());
         List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions = qualifying.size() > 1
@@ -666,12 +666,14 @@ public class DepositNoticeService {
                 buildQuotationReferenceOptions(quotationCandidates).referenceOptions(), null, List.of(),
                 quotationOptions, defaultQuotationId,
                 "ยอดหลังหักมัดจำติดลบ (ยอดสินค้า " + fmt(itemsTotal) + " น้อยกว่ายอดมัดจำ " + fmt(depositAmount)
-                    + " บาท) กรุณาตรวจสอบใบแจ้งยอดมัดจำหรือใบเสนอราคา " + q.number());
+                    + " บาท) กรุณาตรวจสอบใบแจ้งยอดมัดจำหรือใบเสนอราคา " + q.number(),
+                matched != null ? matched.id() : null);
         }
 
         return new ResolvedRemainingInvoice(items, depositAmount, q.number(),
             buildQuotationReferenceOptions(quotationCandidates).referenceOptions(),
-            defaultDepositReference, depositReferenceOptions, quotationOptions, defaultQuotationId, null);
+            defaultDepositReference, depositReferenceOptions, quotationOptions, defaultQuotationId, null,
+            matched != null ? matched.id() : null);
     }
 
     /** Pre-PCR-chain back-compat only — reached exclusively when the ticket has NO accepted
@@ -699,7 +701,8 @@ public class DepositNoticeService {
         if (itemsTotal.subtract(depositAmount).compareTo(BigDecimal.ZERO) < 0) {
             return new ResolvedRemainingInvoice(items, depositAmount, null, List.of(), null, List.of(),
                 List.of(), null,
-                "ยอดหลังหักมัดจำติดลบ (ยอดสินค้า " + fmt(itemsTotal) + " น้อยกว่ายอดมัดจำ " + fmt(depositAmount) + " บาท)");
+                "ยอดหลังหักมัดจำติดลบ (ยอดสินค้า " + fmt(itemsTotal) + " น้อยกว่ายอดมัดจำ " + fmt(depositAmount) + " บาท)",
+                latestIssued != null ? latestIssued.id() : null);
         }
         String defaultDepositReference = null;
         List<RemainingInvoiceOptionsDto.ReferenceOption> depositReferenceOptions = List.of();
@@ -709,12 +712,13 @@ public class DepositNoticeService {
             depositReferenceOptions = refs.options();
         }
         return new ResolvedRemainingInvoice(items, depositAmount, null, List.of(),
-            defaultDepositReference, depositReferenceOptions, List.of(), null, null);
+            defaultDepositReference, depositReferenceOptions, List.of(), null, null,
+            latestIssued != null ? latestIssued.id() : null);
     }
 
     private ResolvedRemainingInvoice blocked(String reason) {
         return new ResolvedRemainingInvoice(List.of(), BigDecimal.ZERO, null, List.of(), null, List.of(),
-            List.of(), null, reason);
+            List.of(), null, reason, null);
     }
 
     /** Same as {@link #blocked}, but also carries the quotation-picker options through — used when
@@ -725,7 +729,7 @@ public class DepositNoticeService {
     private ResolvedRemainingInvoice blockedWithOptions(String reason,
             List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions, Long defaultQuotationId) {
         return new ResolvedRemainingInvoice(List.of(), BigDecimal.ZERO, null, List.of(), null, List.of(),
-            quotationOptions, defaultQuotationId, reason);
+            quotationOptions, defaultQuotationId, reason, null);
     }
 
     private String quotationLabel(CustomerQuotationDto q) {
@@ -910,8 +914,8 @@ public class DepositNoticeService {
      * not free text). Never truncates — {@code sales.document_note_template} currently seeds
      * THREE rows (V16), not five/six, and the caller may select any subset; whether the selection
      * FITS the template's 6-line หมายเหตุ block is decided by {@link RemainingInvoiceRenderer#wrapNotes}
-     * at the call site (getRemainingInvoiceXlsx/getRemainingInvoiceOptions), which refuses rather
-     * than silently clips. */
+     * at the call site (this class's own getRemainingInvoiceOptions, and RemainingInvoiceService's
+     * requireNotesCapacity for the stored document), which refuses rather than silently clips. */
     private List<String> resolveNotes(List<Long> noteIds) {
         List<DocumentNoteTemplateDto> templates = docs.findNoteTemplates();
         if (noteIds == null) {
@@ -1045,7 +1049,8 @@ public class DepositNoticeService {
      * Phase 1 lifecycle gate (mirrors TicketService.requireActive): deposit-notice
      * mutations advance the payment track, so a paused/terminal deal blocks them.
      */
-    private void requireActiveLifecycle(TicketSummaryDto summary) {
+    // Package-private (not private) — reused as-is by RemainingInvoiceService (GLA-99 step 2).
+    void requireActiveLifecycle(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
@@ -1072,7 +1077,9 @@ public class DepositNoticeService {
      * so every read here (list/get/preview/download/remaining-invoice) is off-limits,
      * matching salesViewScope.js hiding the whole "depositNotice" section from import.
      */
-    private TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
+    // Package-private (not private) — "the existing requireTicketViewer" RemainingInvoiceService's
+    // read/list/download gate reuses directly (owner ruling 2026-09-20, GLA-99 step 2).
+    TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
@@ -1112,19 +1119,24 @@ public class DepositNoticeService {
      * WITHOUT the branch folded in (B7 already shows it in parens) — {@code address} itself stays
      * exactly as createDraft has always built it (address+branch joined), since that document's
      * behaviour predates this branch and must not change. */
-    private record CustomerHeaderInfo(String taxId, String address, String addressOnly, String branch, String projectName) {}
+    // Package-private (not private) — reused by RemainingInvoiceService's own customer snapshot
+    // (GLA-99 step 2).
+    record CustomerHeaderInfo(String taxId, String address, String addressOnly, String branch, String projectName) {}
 
     /**
      * Single source of truth for "where does a document's customer header come from", used by
-     * both createDraft (deposit notice) and getRemainingInvoiceOptions/getRemainingInvoiceXlsx
-     * (remaining invoice) — extracted from createDraft's own pre-existing inline logic so the two
-     * documents can never source a customer's address/tax id/branch differently. A caller-supplied
+     * createDraft (deposit notice), getRemainingInvoiceOptions (remaining invoice preview), and
+     * RemainingInvoiceService's own stored snapshot (remaining invoice, via
+     * resolveRemainingInvoiceSnapshot) — extracted from createDraft's own pre-existing inline logic
+     * so no remaining-invoice document can ever source a customer's address/tax id/branch
+     * differently. A caller-supplied
      * non-blank {@code reqTaxId}/{@code reqAddress}/{@code reqProjectName} always wins (createDraft
      * is the only caller that ever passes one — the remaining-invoice methods pass all-null,
      * meaning "always resolve from the customer master"); a null {@code customerId} (never linked
      * to a customer master row) safely leaves these fields blank rather than throwing.
      */
-    private CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
+    // Package-private (not private) — see resolveRemainingInvoiceSnapshot above (GLA-99 step 2).
+    CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
             String reqTaxId, String reqAddress, String reqProjectName) {
         String customerTaxId = blankToNull(reqTaxId);
         String customerAddress = blankToNull(reqAddress);
