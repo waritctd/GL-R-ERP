@@ -81,6 +81,7 @@ export const API_ROUTES = {
     usage: '/api/special-money/usage',
     types: '/api/special-money/types',
     approve: (id) => `/api/special-money/${id}/approve`,
+    approvalPreview: (id) => `/api/special-money/${id}/approval-preview`,
     reject: (id) => `/api/special-money/${id}/reject`,
     cancel: (id) => `/api/special-money/${id}/cancel`,
     attachments: (id) => `/api/special-money/${id}/attachments`,

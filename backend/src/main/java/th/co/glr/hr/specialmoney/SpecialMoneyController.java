@@ -28,6 +28,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyApprovalPreviewResponse;
 import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyAttachmentResponse;
 import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyAttachmentsResponse;
 import th.co.glr.hr.specialmoney.SpecialMoneyResponses.SpecialMoneyDetailResponse;
@@ -99,6 +100,18 @@ public class SpecialMoneyController {
             HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new SpecialMoneyDetailResponse(specialMoneyService.approve(id, request, user));
+    }
+
+    /**
+     * The ceiling the CEO's approve dialog previews before submitting a decision -- read-only, so it
+     * is a {@code GET} rather than sitting alongside {@code /approve}. Authorization (CEO-only) and
+     * the 409-if-already-decided guard live in {@link SpecialMoneyService#approvalPreview}, same as
+     * every other authz decision in this controller.
+     */
+    @GetMapping("/{id}/approval-preview")
+    SpecialMoneyApprovalPreviewResponse approvalPreview(@PathVariable long id, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return new SpecialMoneyApprovalPreviewResponse(specialMoneyService.approvalPreview(id, user));
     }
 
     @PostMapping("/{id}/reject")
