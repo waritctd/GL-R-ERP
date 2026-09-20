@@ -220,6 +220,22 @@ public class TicketRepository {
         }
     }
 
+    /** Ticket ownership (created_by) for a BATCH of ticket ids in ONE query — used by {@code
+     * BillingNoteService#list} to check a `sales` rep's own ownership across every ticket
+     * referenced by a whole customer's worth of billing notes, instead of one {@link #findById}
+     * (a heavy join-everything load) per referenced ticket per note (review nit, GLA-99 step 3
+     * round 2). Missing ids are simply absent from the returned map, never an error. */
+    public Map<Long, Long> findCreatedByIds(java.util.Collection<Long> ticketIds) {
+        if (ticketIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> byId = new java.util.HashMap<>();
+        jdbc.query("SELECT ticket_id, created_by FROM sales.ticket WHERE ticket_id IN (:ids)",
+            Map.of("ids", ticketIds),
+            rs -> { byId.put(rs.getLong("ticket_id"), rs.getLong("created_by")); });
+        return byId;
+    }
+
     public Optional<TicketDto> findById(long id) {
         Optional<TicketSummaryDto> summary = findSummaryById(id);
         if (summary.isEmpty()) return Optional.empty();

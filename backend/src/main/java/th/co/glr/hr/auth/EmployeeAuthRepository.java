@@ -109,6 +109,31 @@ public class EmployeeAuthRepository {
         return Boolean.TRUE.equals(granted);
     }
 
+    /**
+     * Whether this employee holds the {@code hr.employee.can_issue_billing_note} grant (GLA-99
+     * step 3, V189, owner ruling 2026-09-19) — the per-employee capability that lets a caller in
+     * ANY role create/update/issue/revise/cancel/mark-received a ใบวางบิล (billing note) without
+     * being handed the {@code account} role wholesale. Same shape and same discipline as {@link
+     * #canCreateQuotation}/{@link #isAdmin}: a live read against {@code hr.employee}, restricted to
+     * active rows, decided fresh on every call rather than trusted from the session principal.
+     *
+     * <p>Named holders on record (2026-09-19 read-only check, see the GLA-99 design-rulings memory):
+     * วิมลรัตน์ (role {@code sales}), จินตนา (role {@code sales_manager}), ปรางค์เนตร (role
+     * {@code sales}), ภิญญดา (role {@code employee}, QC&amp;ISO) — none holds {@code account}, so
+     * the grant must genuinely work for a plain {@code employee} row, not merely widen an existing
+     * sales-shaped gate. {@link th.co.glr.hr.billing.BillingNoteService} is the caller; see its own
+     * Javadoc for the full write/read gate this grant participates in.
+     */
+    public boolean canIssueBillingNote(long employeeId) {
+        Boolean granted = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM hr.employee
+                 WHERE employee_id = :id AND is_active AND can_issue_billing_note
+            )
+            """, Map.of("id", employeeId), Boolean.class);
+        return Boolean.TRUE.equals(granted);
+    }
+
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""
