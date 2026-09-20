@@ -160,6 +160,11 @@ public class DealQuotationService {
     // and new (this class's own) create paths for the same pricing request. Same setter-injection
     // device as the two fields above, for the same reason.
     private th.co.glr.hr.customerquotation.CustomerQuotationRepository customerQuotations;
+    // GLA-123 slice S2 — issuing a PRICING_REQUEST-origin quotation must advance the deal's sales
+    // stage the SAME way CustomerQuotationService#issue already does (Rule 7: reuse the existing
+    // transition, not a second path). Same setter-injection device as the three fields above, for
+    // the identical reason (13 existing hand-wired test constructors must keep compiling).
+    private th.co.glr.hr.ticket.TicketService ticketService;
 
     private final List<String> bankBlockLines;
 
@@ -210,6 +215,16 @@ public class DealQuotationService {
         this.pricingRequests = pricingRequests;
         this.pricingDecisions = pricingDecisions;
         this.customerQuotations = customerQuotations;
+    }
+
+    /** GLA-123 slice S2 — see {@link #ticketService}'s own Javadoc for why this is setter- rather
+     * than constructor-injected. {@code required = false} so a hand-wired test that never
+     * exercises {@link #approveAndIssuePricingRequestOrigin} is unaffected either way (that path
+     * already null-guards, mirroring {@link #createFromPricingRequest}'s own guard on
+     * {@link #pricingRequests}). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void wireTicketService(th.co.glr.hr.ticket.TicketService ticketService) {
+        this.ticketService = ticketService;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -284,8 +299,8 @@ public class DealQuotationService {
     // CustomerQuotationService#create (read 2026-09-19): sales-only, the owning rep only, deal
     // ACTIVE, pricing request APPROVED_FOR_QUOTATION, an APPROVED decision. Owner ruling revised
     // 2026-09-19: sales MAY edit price after create (see DealQuotationDto#priceModeChangedFromCeo
-    // and DealQuotationItemDto#priceChangedFromCeo) — there is no server-side lock, only a
-    // CEO-re-approval flag that S2's dual approval will read.
+    // and DealQuotationItemDto#priceChangedFromCeo) — there is no server-side lock, only the
+    // CEO-required-when-changed gate #requireCeoApprovalIfChanged reads at approval time.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
@@ -327,7 +342,20 @@ public class DealQuotationService {
         if (customerQuotations != null) {
             customerQuotations.lockPricingRequest(pricingRequestId);
         }
-        if (!PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status())) {
+        // MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): a
+        // PRICING_REQUEST-origin quotation that EXPIRED (D5) used to be a permanent dead end — the
+        // pricing request stays QUOTATION_ISSUED forever (nothing rolls it back), so this original
+        // status check refused every re-create attempt with no way forward. Owner ruling: sales
+        // may write a FRESH quotation from the SAME approved decision once the existing one has
+        // expired — the expired document stays as an audit record, never revived/revised.
+        // Widened to tolerate QUOTATION_ISSUED here at the STATUS level only — this branch does
+        // NOT itself guarantee "no live quotation exists" (a live ISSUED-but-not-yet-expired
+        // document also leaves the PR at QUOTATION_ISSUED); that is enforced once, unconditionally,
+        // by #hasLivePricingRequestQuotation just below the idempotent-DRAFT check, which is the
+        // ONE place "no second live quotation" is actually decided for BOTH branches.
+        boolean prReadyForFirstQuotation = PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status());
+        boolean prReadyForReplacementAfterExpiry = PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status());
+        if (!prReadyForFirstQuotation && !prReadyForReplacementAfterExpiry) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: " + summary.status() + ")");
         }
@@ -361,6 +389,23 @@ public class DealQuotationService {
         if (existingDraftId.isPresent()) {
             return requireQuotation(existingDraftId.get());
         }
+        // MAJOR-3 fix (owner ruling, 2026-09-20) — genuine gap found while implementing the expiry
+        // escape hatch, NOT pre-existing: before S2, submit/approve/issue were refused for this
+        // origin entirely, so a PRICING_REQUEST-origin row could only ever be DRAFT or CANCELLED —
+        // the idempotent-DRAFT check above was therefore the WHOLE of "one live quotation per
+        // request" in practice. S2 makes PENDING_APPROVAL/ISSUED reachable, and PR status stays
+        // APPROVED_FOR_QUOTATION for the ENTIRE PENDING_APPROVAL window (it only moves to
+        // QUOTATION_ISSUED at actual issue) — so, unguarded, a rep could call this a second time
+        // while their own first quotation sat PENDING_APPROVAL and mint a SECOND live one on the
+        // same request, past the DRAFT check above (which only ever sees DRAFT). This is the ONE
+        // explicit guardrail the owner ruling asks to keep unconditionally ("Do not allow a second
+        // LIVE quotation: the existing rule stays") — checked HERE, after the DRAFT check (so an
+        // open DRAFT still replays idempotently, unchanged), catching the one live-but-non-DRAFT
+        // case that check cannot: PENDING_APPROVAL or (not yet expired) ISSUED.
+        if (quotations.hasLivePricingRequestQuotation(pricingRequestId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้มีใบเสนอราคาที่ยังไม่หมดอายุอยู่แล้ว ไม่สามารถสร้างใบเสนอราคาใหม่ซ้ำได้");
+        }
 
         Map<Long, PricingRequestItemDto> prItemsById = new java.util.HashMap<>();
         for (PricingRequestItemDto pri : pricingRequests.findItems(pricingRequestId)) {
@@ -390,7 +435,35 @@ public class DealQuotationService {
         // the quotation afterwards, exactly like every other draft header field.
         Integer creditDays = "CREDIT".equals(summary.paymentTermMode()) ? summary.creditDays() : null;
 
-        String number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
+        // MAJOR-3 fix (owner ruling, 2026-09-20) — re-creating after an expiry continues the SAME
+        // {base}-{n} number family (owner's explicit preference: "it is a later version of the
+        // same offer"), rather than minting an unrelated fresh base number. Falls back to a fresh
+        // number when there is nothing to continue (first-ever creation, or the pricing request's
+        // only prior quotation was on the OLD customerquotation engine, which this origin's own
+        // #findLatestForPricingRequest cannot see by construction). NOT wired through
+        // parentQuotationId/createRevision — this is a genuinely NEW, independent create (D12
+        // keeps createRevision/createReorder refused for this origin), so no revision-chain
+        // linkage or ancestor-supersede behaviour is implied; only the printed NUMBER continues.
+        //
+        // Review fix (2026-09-20): uses #nextRevisionNo (MAX across every row that EVER existed
+        // under this base, widened to include this origin — see that method's own Javadoc) rather
+        // than the naive {@code latest.revisionNo() + 1} — the identical latent duplicate-key risk
+        // M3 documented for createRevision applies here too (D9: "the version never restarts"), so
+        // reusing the SAME, already-hardened method is more robust than re-deriving the number by
+        // hand a second time.
+        String number;
+        int revisionNo;
+        Optional<Long> latestId = prReadyForReplacementAfterExpiry
+            ? quotations.findLatestForPricingRequest(pricingRequestId) : Optional.empty();
+        if (latestId.isPresent()) {
+            DealQuotationDto latest = requireQuotation(latestId.get());
+            String base = th.co.glr.hr.ticket.QuotationNumbering.baseNumber(latest.number(), latest.revisionNo());
+            revisionNo = quotations.nextRevisionNo(summary.ticketId(), base);
+            number = th.co.glr.hr.ticket.QuotationNumbering.revisionNumber(base, revisionNo);
+        } else {
+            revisionNo = 1;
+            number = DealQuotationRepository.revisionNumber(quotations.nextQuotationCode(), 1);
+        }
         long id = quotations.insertDraft(new InsertDraftParams(
             summary.ticketId(), number, actor.id(), ticket.createdById(),
             customerSnap.name(), customerSnap.address(), customerSnap.taxId(), customerSnap.phone(),
@@ -405,7 +478,7 @@ public class DealQuotationService {
             decision.priceMode(), WastageCalculator.DOCUMENT_LANGUAGE_TH, "THB",
             summary.printedByDisplayId(), summary.salesRepDisplayId(),
             summary.omitContactHonorific(), null,
-            subtotal, null, 1, null, items,
+            subtotal, null, revisionNo, null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
             summary.id(), decision.id()));
 
@@ -941,20 +1014,24 @@ public class DealQuotationService {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * GLA-123 slice S1: the dual-approval flow (sales_manager + CEO, R6/D13) that actually moves a
-     * PRICING_REQUEST-origin quotation through submit → approve/reject → issue is S2's job. This
-     * is the ONE check every entry point into that status machine calls FIRST — submit (the sole
-     * gate every later transition depends on, since approve/reject/issue/createRevision/
-     * createReorder all require a status only submit/approve can reach), and, for defence in
-     * depth (so this class does not rely on "PENDING_APPROVAL/APPROVED are unreachable for this
-     * origin because submit refuses first" as the ONLY thing stopping it), approve/reject/
-     * createRevision/createReorder as well — see each call site's own comment. A DEAL_DIRECT
-     * quotation is completely unaffected; this is a pure no-op for it.
+     * GLA-123 slice S2: submit/approve/reject are now LIVE for a PRICING_REQUEST-origin quotation
+     * — {@link #submit} shares its compare-and-set with DEAL_DIRECT outright, and {@link #approve}
+     * branches to {@link #approveAndIssuePricingRequestOrigin} only for its OWN extra issue hooks
+     * (its own underlying compare-and-set is the SAME shared {@code DealQuotationRepository
+     * #approve} DEAL_DIRECT uses); {@link #reject} is now fully shared, no branch at all. None of
+     * the three calls this guard. What remains refused for this origin, and what this guard now
+     * exists FOR, is a revision of an ISSUED document ({@link #createRevision}) and a
+     * สั่งเหมือนเดิม clone ({@link #createReorder}) — both explicitly S3 territory (D12: "a
+     * revision of an ACCEPTED quotation is S3's territory"), not yet meaningful here since this
+     * origin has no customer-outcome/acceptance step at all until S3 lands (the owner's expiry
+     * escape hatch, {@link #createFromPricingRequest}, is a deliberately SEPARATE mechanism — a
+     * brand-new, independent create, not a revision of the expired row). A DEAL_DIRECT quotation
+     * is completely unaffected; this is a pure no-op for it.
      */
     private void requireStatusMachineEnabled(DealQuotationDto quotation) {
         if ("PRICING_REQUEST".equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยังไม่เปิดใช้งานการอนุมัติใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป");
+                "ยังไม่เปิดใช้งานการทำฉบับแก้ไข/สั่งเหมือนเดิมสำหรับใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป");
         }
     }
 
@@ -962,7 +1039,9 @@ public class DealQuotationService {
     public DealQuotationDto submit(long id, UserPrincipal actor) {
         DealQuotationDto quotation = requireQuotation(id);
         requireEditAccessForQuotation(actor, quotation);
-        requireStatusMachineEnabled(quotation);
+        // GLA-123 slice S2: submit is now LIVE for BOTH origins — every validation below (item
+        // completeness, ผู้สั่งซื้อ, payment term, validity date) is origin-agnostic and applies
+        // unchanged; only approve/reject/issue diverge (see #approve/#reject's own origin branch).
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
@@ -994,6 +1073,23 @@ public class DealQuotationService {
             && quotation.validityUntil().isBefore(LocalDate.now(BANGKOK))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ยืนราคาผ่านไปแล้ว");
         }
+        // MAJOR-4 fix (Opus re-review, 2026-09-20) — a PRICING_REQUEST-origin quotation MUST carry
+        // a validity (whichever the engine's own validityMode uses) before submit, or D5's expiry
+        // sweep (DealQuotationRepository#expireOverdueQuotations, scoped to
+        // `validity_date IS NOT NULL`) silently never reaches it once issued — an ISSUED document
+        // with no validity_date lives forever, defeating the whole rule with no error anywhere.
+        // DEAL_DIRECT is DELIBERATELY untouched here (that origin never expires by design, D5, so
+        // it has no equivalent requirement — `validityDays` stays optional for it, same as before
+        // this fix). Checked at submit, not create/update, matching this method's own "create/
+        // update permissive, submit strict" convention used by every other gate in this block.
+        if ("PRICING_REQUEST".equals(quotation.origin())) {
+            boolean hasValidity = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+                ? quotation.validityUntil() != null
+                : quotation.validityDays() != null;
+            if (!hasValidity) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุระยะเวลายืนราคาก่อนส่งขออนุมัติ");
+            }
+        }
         // Item completeness rule, re-checked over the STORED rows: create/update already enforce
         // this on write (#buildItem), but a row can predate this rule (created before this
         // migration of behaviour) or a stale client could in principle bypass the write-time
@@ -1014,7 +1110,20 @@ public class DealQuotationService {
         // race against) an un-submitted intermediate child, exactly as if the rep had called
         // #createRevision then #submit on the result by hand. A first-ever submit (approval_note
         // is null -- never yet decided on) is untouched: same row, same number, as always.
-        if (QuotationStatus.DRAFT.equals(quotation.docStatus()) && quotation.approvalNote() != null) {
+        //
+        // GLA-123 slice S2: deliberately EXCLUDED for a PRICING_REQUEST-origin row, even though it
+        // too can carry a prior rejection reason (reject is fully shared with DEAL_DIRECT now —
+        // one approver, one decision — and returns to DRAFT with a reason exactly the same way).
+        // A resubmit after ตีกลับ on THIS origin reuses the SAME row/number — no revision is minted — because
+        // #insertRevisionCopyOf/#requireNoOpenRevision/#supersede below are all scoped to
+        // {@code origin = 'DEAL_DIRECT'} in the repository, and createRevision/createReorder stay
+        // refused outright for this origin (see #requireStatusMachineEnabled's own Javadoc, D12 —
+        // a revision of an ACCEPTED quotation is S3's territory). Forking that machinery to also
+        // understand a PRICING_REQUEST lineage is out of S2's scope; "ตีกลับ → sales fixes it →
+        // resubmits the SAME document" is exactly what R9 asks for, so this is not a regression,
+        // just a narrower rule than DEAL_DIRECT's.
+        if (QuotationStatus.DRAFT.equals(quotation.docStatus()) && quotation.approvalNote() != null
+                && !"PRICING_REQUEST".equals(quotation.origin())) {
             return submitAsRevisionOfRejected(quotation, actor);
         }
         return submitDraftRow(id, actor);
@@ -1156,10 +1265,16 @@ public class DealQuotationService {
     public DealQuotationDto approve(long id, ApproveRequest request, UserPrincipal actor) {
         requireApproveAccess(actor);
         DealQuotationDto quotation = requireQuotation(id);
-        // GLA-123 slice S1, defence in depth: unreachable today (PENDING_APPROVAL is itself
-        // unreachable for this origin since #submit already refuses it), but explicit rather than
-        // relying on that alone — see #requireStatusMachineEnabled's own Javadoc.
-        requireStatusMachineEnabled(quotation);
+        // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): a
+        // PRICING_REQUEST-origin quotation still branches out — the compare-and-set below IS
+        // shared with it now (DealQuotationRepository#approve widened its own origin predicate),
+        // but the ADDITIONAL issue hooks (PR status transition, stage advance, PR event) and the
+        // CEO-required-when-changed gate are unique to this origin, so the branch stays.
+        // requireStatusMachineEnabled is NOT called on this branch (it would always refuse it);
+        // that guard now covers only createRevision/createReorder for this origin.
+        if ("PRICING_REQUEST".equals(quotation.origin())) {
+            return approveAndIssuePricingRequestOrigin(quotation, request, actor);
+        }
         // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
         // time -- approve() now ALSO sweeps every other currently-APPROVED sibling on this ticket
         // (see below). Locks the ticket BEFORE the compare-and-set below (not merely before the
@@ -1278,8 +1393,10 @@ public class DealQuotationService {
         // status-machine method here (approve/submit/cancel/update all call requireQuotation
         // first).
         DealQuotationDto quotation = requireQuotation(id);
-        // GLA-123 slice S1, defence in depth — see #requireStatusMachineEnabled's own Javadoc.
-        requireStatusMachineEnabled(quotation);
+        // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): reject is
+        // fully shared across both origins now — one approver, one decision, so there is nothing
+        // origin-specific left to branch on (DealQuotationRepository#reject's own WHERE clause was
+        // widened to accept PRICING_REQUEST alongside DEAL_DIRECT for exactly this reason).
         int rows = quotations.reject(id, actor.id(), request.reason());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงไม่สามารถตีกลับได้");
@@ -1290,6 +1407,153 @@ public class DealQuotationService {
         notifyRepAndCreator(rejected, TicketEventKind.DEAL_QUOTATION_REJECTED,
             "ใบเสนอราคา " + rejected.number() + " ไม่ได้รับอนุมัติ: " + request.reason());
         return rejected;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20 — this
+    // supersedes R6/D13 and everything built against them). Status machine, unchanged from
+    // DEAL_DIRECT's own except the terminal status's NAME:
+    //   DRAFT -> (submit) -> PENDING_APPROVAL -> (approve, by whoever may act) -> ISSUED
+    //                                          -> (reject+reason) -> DRAFT
+    //          -> (validity_date passes while ISSUED) -> EXPIRED (see #expireOverdueQuotations)
+    // ONE approval — by ผู้จัดการฝ่ายขาย OR the CEO — issues the document, and whoever approves is
+    // the signature that prints (reuses DealQuotationRepository#approve's existing single-shot
+    // compare-and-set AND its V175 approver-snapshot write verbatim — the SAME path DEAL_DIRECT
+    // uses, already tested there). The ONE thing this origin adds on top of that shared
+    // compare-and-set: the CEO's price authority survives sales's freedom to edit price after
+    // create (see DealQuotationDto#priceChangedFromCeo's own Javadoc) — see
+    // #requireCeoApprovalIfChanged below.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * The approve() branch for a PRICING_REQUEST-origin quotation. {@code actor}'s role is
+     * already known to be {@code sales_manager} or {@code ceo} ({@link #requireApproveAccess} ran
+     * before this was called).
+     */
+    private DealQuotationDto approveAndIssuePricingRequestOrigin(DealQuotationDto quotation, ApproveRequest request,
+                                                                  UserPrincipal actor) {
+        requireCeoApprovalIfChanged(quotation, actor);
+        if (pricingRequests == null || customerQuotations == null || ticketService == null) {
+            // Same defensive shape as #createFromPricingRequest's own guard — only reachable if a
+            // deployment wires this bean without the GLA-123 setter-injected dependencies.
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
+        }
+        long pricingRequestId = quotation.pricingRequestId();
+        // Same lock CustomerQuotationService#issue takes before its own compare-and-set — the PR
+        // (not just the ticket) is the shared resource two independent issue attempts on
+        // sibling/legacy quotations could otherwise race on. No ticket-level lock is needed here
+        // (unlike DEAL_DIRECT's own #approve): this origin has no "one live document per ticket"
+        // sweep to serialise — a single compare-and-set on THIS row is the whole invariant.
+        customerQuotations.lockPricingRequest(pricingRequestId);
+        PricingRequestSummaryDto summary = pricingRequests.findSummary(pricingRequestId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        // Same DATE-mode-with-special-pricing / DAYS-mode validity computation #approve already
+        // uses for DEAL_DIRECT — reused verbatim rather than forked so the two origins can never
+        // compute this differently by accident.
+        LocalDate approvalDate = LocalDate.now(BANGKOK);
+        LocalDate validityDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
+                && quotation.validityUntil() != null
+                && DealQuotationRenderAdapter.hasSpecialPricing(quotation)
+            ? quotation.validityUntil()
+            : (quotation.validityDays() != null ? approvalDate.plusDays(quotation.validityDays()) : null);
+        // The SAME repository method DEAL_DIRECT uses — its own CASE expression picks 'ISSUED'
+        // over 'APPROVED' for this origin, and its V175 snapshot INSERT freezes THIS actor's
+        // identity/signature as the printed approver, with no slot/second-approver concept at all.
+        int rows = quotations.approve(quotation.id(), actor.id(), blankToNull(request.note()), validityDate);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้");
+        }
+        DealQuotationDto issued = requireQuotation(quotation.id());
+        // Only the FIRST issue moves the pricing request — a re-issue (there is none for this
+        // origin yet; createRevision/createReorder both stay refused, see
+        // #requireStatusMachineEnabled) would be a no-op transition. The owner's expiry escape
+        // hatch (#createFromPricingRequest) is what lets a SECOND, independent quotation reach
+        // this method again with the PR already at QUOTATION_ISSUED — this guard is what makes
+        // that re-issue a no-op transition instead of an IllegalStateException. Mirrors
+        // CustomerQuotationService#issue's identical guard.
+        if (PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status())) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.APPROVED_FOR_QUOTATION,
+                PricingRequestStatus.QUOTATION_ISSUED, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+            }
+        }
+        // Rule 7 (shared with CustomerQuotationService#issue): reuse the SAME stage transition,
+        // not a second path. Forward-only and ACTIVE-deal-only — see
+        // TicketService#advanceStageForCustomerQuotationIssue/#autoAdvanceStage's own guards.
+        ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), summary.recipientType(), actor);
+        tickets.addEventWithDocument(issued.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
+            null, null, "อนุมัติและออกใบเสนอราคา " + issued.number(), RelatedDocumentType.QUOTATION, issued.id());
+        pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
+            PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED, summary.status(),
+            PricingRequestStatus.QUOTATION_ISSUED, "ออกใบเสนอราคา " + issued.number(), null);
+        // Parity with CustomerQuotationService#issue's own "customer notification" substitute:
+        // this system has no customer user account to notify in-app, so the closest equivalent is
+        // a CEO-visibility notification documenting the issuance. Redundant when the CEO IS the
+        // one approving, but kept unconditional for parity and because a sales_manager approval is
+        // the more common case, where the CEO genuinely was not just looking at this screen.
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
+            PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED, "ใบเสนอราคา " + issued.number() + " ถูกออกแล้ว");
+        notifyRepAndCreator(issued, TicketEventKind.DEAL_QUOTATION_APPROVED,
+            "ใบเสนอราคา " + issued.number() + " ได้รับอนุมัติและออกใบแล้ว");
+        return issued;
+    }
+
+    /**
+     * The CEO's price authority, kept alive after the dual-approval design was reversed (owner
+     * ruling, 2026-09-20): sales may still edit price after create (no server-side lock — see
+     * {@link DealQuotationDto#priceChangedFromCeo}'s own Javadoc), but if ANY line's price/
+     * discount or the header price mode now differs from the CEO's original decision, or any
+     * CEO-linked line was removed, then ONLY the CEO may approve — a sales_manager attempting it
+     * is refused outright, before any write.
+     *
+     * <p>Computed FRESH here from {@code quotation} (a {@link #requireQuotation} read, i.e.
+     * server truth, never client input) using the EXACT SAME fields the editor's own
+     * CEO-comparison UI reads ({@link DealQuotationDto#priceModeChangedFromCeo},
+     * {@link DealQuotationItemDto#priceChangedFromCeo}, {@link
+     * DealQuotationDto#itemsRemovedFromCeoCount}) — never a flag the client could send instead of
+     * a real comparison.
+     */
+    private void requireCeoApprovalIfChanged(DealQuotationDto quotation, UserPrincipal actor) {
+        if ("ceo".equals(actor.role())) {
+            return;
+        }
+        boolean changed = quotation.priceModeChangedFromCeo()
+            || quotation.items().stream().anyMatch(DealQuotationItemDto::priceChangedFromCeo)
+            || quotation.itemsRemovedFromCeoCount() > 0;
+        if (changed) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ");
+        }
+    }
+
+    /**
+     * Automatic expiry sweep for a PRICING_REQUEST-origin quotation (D5) — the counterpart
+     * {@code CustomerQuotationService#expireOverdueQuotations} already implements for the legacy
+     * chain, and the gap that class's own {@code expireOverdueQuotations} SQL comment used to name
+     * explicitly (now implemented here, and the design it names no longer exists either).
+     * Same shape: a single guarded UPDATE (via {@link DealQuotationRepository
+     * #expireOverdueQuotations}), one PR event + one CEO notification per quotation flipped,
+     * NEVER changes the pricing request's own status. A {@code DEAL_DIRECT} quotation never
+     * expires (D5) and this method never touches one — the repository query is scoped to
+     * {@code origin = 'PRICING_REQUEST'}. Wired into the SAME {@link QuotationExpiryWorker}
+     * {@code CustomerQuotationService}'s sweep already runs on, not a second scheduler.
+     */
+    @Transactional
+    public int expireOverdueQuotations() {
+        if (pricingRequests == null) {
+            return 0;
+        }
+        List<DealQuotationRepository.ExpiredQuotationRow> expired = quotations.expireOverdueQuotations();
+        for (DealQuotationRepository.ExpiredQuotationRow row : expired) {
+            pricingRequests.findSummary(row.pricingRequestId()).ifPresent(summary -> {
+                pricingRequests.addEvent(summary.id(), summary.ticketId(), null, "System (quotation expiry sweep)",
+                    PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, summary.status(), summary.status(),
+                    "ใบเสนอราคา " + row.number() + " หมดอายุ", null);
+                notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
+                    PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคา " + row.number() + " หมดอายุ");
+            });
+        }
+        return expired.size();
     }
 
     @Transactional
@@ -1657,7 +1921,12 @@ public class DealQuotationService {
      * approver had none on file then, so the document stays unsigned). The live read below is only
      * a defensive fallback for an approved row with no snapshot (V175's backfill, owner ruling
      * 2026-09-13 "Freeze them unsigned.", gives every pre-V175 approval one); a DRAFT/PENDING
-     * row has {@code approvedById == null} and so gets no signature either way. */
+     * row has {@code approvedById == null} and so gets no signature either way.
+     *
+     * <p>GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): this read
+     * is now shared verbatim by BOTH origins — whoever approves a PRICING_REQUEST-origin
+     * quotation freezes into the SAME single snapshot row DEAL_DIRECT's own {@code #approve}
+     * writes, so there is no origin branching left here at all. */
     private th.co.glr.hr.ticket.QuotationRenderModel toRenderModel(DealQuotationDto quotation) {
         byte[] signaturePng = null;
         String signatureMime = null;

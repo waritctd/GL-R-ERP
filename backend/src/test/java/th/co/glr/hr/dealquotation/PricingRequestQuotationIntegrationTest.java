@@ -430,36 +430,48 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Submit blocked (S2's job)
+    // Submit — LIVE as of S2 (GLA-123)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** M6 fix: asserts the SPECIFIC guard message from {@code
-     * DealQuotationService#requireStatusMachineEnabled}, not just the 409 status — a bare 409 could
-     * also come from an unrelated guard (e.g. the missing-contact check right below it in {@code
-     * submit}), so the message is what proves THIS guard is the one that actually fired.
-     * Mutation-checked: with {@code requireStatusMachineEnabled}'s call removed from {@code submit},
-     * this test alone goes red (the quotation instead advances past DRAFT, or a different guard's
-     * message shows up) while the rest of the suite stays green. */
+    /** GLA-123 slice S2: submit is now LIVE for this origin — {@code
+     * DealQuotationService#requireStatusMachineEnabled} no longer guards submit/approve/reject
+     * (it now covers only createRevision/createReorder, still refused here — D12, a revision of
+     * an ACCEPTED quotation is S3's territory). This test used to pin the S1-era 409 refusal by
+     * name (commit history: {@code submit_refusedForPricingRequestOrigin}); it now pins the
+     * opposite — see {@code DealQuotationPricingRequestApprovalIntegrationTest} for the FULL
+     * approval matrix (unchanged/changed x sales_manager/ceo, the CEO-required-when-changed gate,
+     * wrong-way-round refusals, issue hooks, expiry) that S2 actually ships. */
     @Test
-    void submit_refusedForPricingRequestOrigin() {
+    void submit_nowLiveForPricingRequestOrigin() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
-        assertThatThrownBy(() -> quotationService.submit(quotation.id(), salesActor))
-            .isInstanceOf(ApiException.class)
-            .extracting("status").isEqualTo(HttpStatus.CONFLICT);
-        assertThatThrownBy(() -> quotationService.submit(quotation.id(), salesActor))
-            .isInstanceOf(ApiException.class)
-            .hasMessage("ยังไม่เปิดใช้งานการอนุมัติใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป");
-        assertThat(quotationService.get(quotation.id(), salesActor).docStatus()).isEqualTo("DRAFT");
+        // MAJOR-4 fix (Opus re-review, 2026-09-20): submit now REQUIRES a validity — this
+        // fixture's synthetic pricing request carries no GLA-125 validityDays header term, so it
+        // must be set explicitly before submit, the same round trip
+        // #upsertRequestWithItems's other call sites in this file already use for a header edit.
+        List<ItemInput> items = quotation.items().stream().map(this::existingTileInput).toList();
+        DealQuotationDto withValidity = quotationService.update(quotation.id(),
+            new UpsertDealQuotationRequest(quotation.contactId(), quotation.deptCode(), quotation.unitCode(),
+                quotation.offerDate(), quotation.depositPercent(), quotation.remainderMode(), quotation.creditDays(),
+                30, quotation.validityMode(), quotation.validityUntil(),
+                quotation.customerNotes(), quotation.priceMode(), quotation.documentLanguage(), quotation.currency(),
+                quotation.printedByDisplayId(), quotation.salesRepDisplayId(), quotation.projectName(),
+                quotation.omitContactHonorific(), quotation.fullPaymentTerm(), items),
+            salesActor);
+        DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
+        assertThat(submitted.docStatus()).isEqualTo("PENDING_APPROVAL");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // findById-widening audit (coordinator follow-up, 2026-09-20): createRevision/createReorder
-    // require APPROVED, which is itself unreachable for this origin in S1 (submit refuses first),
-    // so both are ALREADY refused transitively — these tests pin that (and the explicit
-    // #requireStatusMachineEnabled guard added as defence in depth) rather than leaving it as an
-    // untested inference. cancel is the one status-machine method S1 deliberately WIDENS (owner
-    // ruling: a DRAFT is safe to cancel, mirrors DEAL_DIRECT exactly).
+    // GLA-123 slice S2 update: submit/approve/reject are now LIVE for this origin (see
+    // submit_nowLiveForPricingRequestOrigin above), but createRevision/createReorder remain
+    // explicitly refused by #requireStatusMachineEnabled (D12 — a revision of an ACCEPTED
+    // quotation is S3's territory; this origin has no customer-outcome/acceptance step yet).
+    // Doubly true in practice: this origin's own status machine skips APPROVED entirely
+    // (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo, never APPROVED as a
+    // resting state — see DealQuotationService#approveAndIssuePricingRequestOrigin), and both
+    // methods require APPROVED regardless. cancel is the one status-machine method this feature
+    // deliberately WIDENS (owner ruling: a DRAFT is safe to cancel, mirrors DEAL_DIRECT exactly).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -765,10 +777,11 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // (DealQuotationService#createFromPricingRequest) quotation. Fixed with a live-quotation
     // check in each create path, using the mirror-image repository methods
     // DealQuotationRepository#hasLivePricingRequestQuotation / CustomerQuotationRepository#hasLiveQuotation.
-    // New-form PRs cannot be ISSUED until S2 (submit is refused — see
-    // submit_refusedForPricingRequestOrigin above), which is an accepted gap: Phase 2 (CEO price
-    // mode) and this Phase 3 slice deploy together, so nothing in production can reach a
-    // NEW-only, un-issuable dead end mid-flow.
+    // This mutual-exclusivity guard is independent of the S1/S2 submit boundary (submit is now
+    // LIVE for this origin — see submit_nowLiveForPricingRequestOrigin above and
+    // DealQuotationPricingRequestApprovalIntegrationTest for the full flow) — it protects "one live
+    // quotation per PR, regardless of which engine wrote it" at CREATE time, before either
+    // engine's own status machine is even reachable.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test

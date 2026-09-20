@@ -15,9 +15,9 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
-  canApproveDealQuotation, canCancelDealQuotation, canCreateDealQuotation,
+  canApproveDealQuotation, canApproveDealQuotationNow, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
-  canReviseDealQuotation, canSubmitDealQuotation, canTransitionDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
@@ -35,8 +35,8 @@ import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.js
 import { QuotationContactPicker } from './QuotationContactPicker.jsx';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 import {
-  adjustmentInputFromRow, emptyAdjustment, emptyPlainItem, emptyQuotationItem, itemInputFromRow,
-  newItemClientId, QuotationItemRow, rowFromServerItem,
+  adjustmentInputFromRow, ceoOriginalPriceText, emptyAdjustment, emptyPlainItem, emptyQuotationItem,
+  itemInputFromRow, newItemClientId, QuotationItemRow, rowFromServerItem,
 } from './QuotationItemRow.jsx';
 import { QuotationPlainItemRow } from './QuotationPlainItemRow.jsx';
 import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
@@ -1422,13 +1422,15 @@ export function QuotationEditorPage({ user, showToast }) {
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม).
   const [reorderConfirmOpen, setReorderConfirmOpen] = useState(false);
-
   const approveMutation = useMutation({
-    mutationFn: () => api.dealQuotations.approve(id, {}),
+    mutationFn: (payload) => api.dealQuotations.approve(id, payload || {}),
     onSuccess: (res) => {
       queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
       queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      showToast('success', 'อนุมัติแล้ว');
+      // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE
+      // approval always issues a PRICING_REQUEST-origin quotation now (there is no second slot to
+      // wait on), same as DEAL_DIRECT's own APPROVED outcome — one message either way.
+      showToast('success', res.quotation.docStatus === 'ISSUED' ? 'อนุมัติและออกใบเสนอราคาแล้ว' : 'อนุมัติแล้ว');
       setApproveConfirmOpen(false);
     },
     // #M8: a 409 here means another approver already decided this quotation while this screen
@@ -1764,16 +1766,11 @@ export function QuotationEditorPage({ user, showToast }) {
                 </Button>
               </>
             ) : null}
-            {quotation && isPricingRequestOrigin && canEditDealQuotation(user, quotation)
-              && canTransitionDealQuotation(quotation.docStatus, 'PENDING_APPROVAL') ? (
-              // GLA-123 slice S1: the dual-approval flow that actually submits a
-              // PRICING_REQUEST-origin quotation is S2's job — DealQuotationService#submit
-              // refuses it server-side. Shown DISABLED (not hidden) so the rep sees WHY there is
-              // no submit button here, rather than wondering if the page is broken.
-              <Button variant="primary" disabled title="ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป">
-                ส่งขออนุมัติ
-              </Button>
-            ) : quotation && canSubmitDealQuotation(user, quotation) ? (
+            {quotation && canSubmitDealQuotation(user, quotation) ? (
+              // GLA-123 slice S2: submit is now LIVE for a PRICING_REQUEST-origin quotation too —
+              // canSubmitDealQuotation is origin-agnostic (edit access + DRAFT->PENDING_APPROVAL
+              // transition only), so the S1-era disabled placeholder button that used to sit here
+              // is GONE; this one button now serves both origins identically.
               <Button
                 variant="primary"
                 // #S2: disabled while ANY save is in flight (createMutation/updateMutation/
@@ -1787,11 +1784,27 @@ export function QuotationEditorPage({ user, showToast }) {
                 ส่งขออนุมัติ
               </Button>
             ) : null}
+            {/* GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20):
+                ONE action either way now — DEAL_DIRECT and PRICING_REQUEST both get a plain
+                approve/reject pair. ไม่อนุมัติ stays canDecideDealQuotation-gated for either
+                origin (either role may reject at any point while PENDING_APPROVAL). อนุมัติ is
+                further refused (hidden, not merely disabled — mirrors the 403 they'd otherwise
+                get) for a sales_manager once the quotation no longer matches the CEO's own
+                decision — canApproveDealQuotationNow is the one place that extra check lives; a
+                short inline note explains why the button is missing. */}
             {quotation && canDecideDealQuotation(user, quotation) ? (
               <>
                 <Button variant="danger" onClick={() => setRejectOpen(true)}>ไม่อนุมัติ</Button>
-                <Button variant="success" onClick={() => setApproveConfirmOpen(true)}>อนุมัติ</Button>
+                {canApproveDealQuotationNow(user, quotation) ? (
+                  <Button variant="success" onClick={() => setApproveConfirmOpen(true)}>อนุมัติ</Button>
+                ) : null}
               </>
+            ) : null}
+            {quotation && canDecideDealQuotation(user, quotation)
+                && !canApproveDealQuotationNow(user, quotation) ? (
+              <p className="m-0 basis-full text-xs text-text-muted">
+                มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ
+              </p>
             ) : null}
             {quotation && canReviseDealQuotation(user, quotation) ? (
               <Button variant="secondary" loading={reviseMutation.isPending} onClick={() => reviseMutation.mutate()}>สร้างฉบับแก้ไข</Button>
@@ -1816,6 +1829,10 @@ export function QuotationEditorPage({ user, showToast }) {
           <p className="m-0 mt-1">{quotation.approvalNote}</p>
         </div>
       ) : null}
+
+      {/* GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): there is
+          no second slot to show any more — one approver, same as a DEAL_DIRECT quotation, so this
+          origin no longer needs a status display DEAL_DIRECT doesn't also have. */}
 
       {/* GLA-74 part 1: makes the family readable — a clone shares its source's base number but
           carries NO parentQuotationId, so nothing else on this page would otherwise say "this is
@@ -2632,13 +2649,55 @@ export function QuotationEditorPage({ user, showToast }) {
           footer={(
             <>
               <Button variant="secondary" onClick={() => setApproveConfirmOpen(false)}>ยกเลิก</Button>
-              <Button variant="success" loading={approveMutation.isPending} onClick={() => approveMutation.mutate()}>ยืนยันอนุมัติ</Button>
+              <Button
+                variant="success"
+                loading={approveMutation.isPending}
+                onClick={() => approveMutation.mutate(undefined)}
+              >
+                ยืนยันอนุมัติ
+              </Button>
             </>
           )}
         >
           <p>
             อนุมัติใบเสนอราคา {quotation?.number} ยอดรวมทั้งสิ้น {formatQuotationMoney(quotation?.grandTotal, quotation?.currency)} ต้องการดำเนินการต่อหรือไม่
           </p>
+          {/* GLA-123 slice S2 — the whole point of "sales may change the price but the CEO must
+              approve": every changed line, the header mode change, and the removed-item count,
+              surfaced HERE at the moment of approval rather than left for the approver to notice
+              (or miss) while scrolling the item list. Only ever rendered for a PRICING_REQUEST
+              row; a DEAL_DIRECT approval sees none of this, unchanged from before S1/S2. */}
+          {isPricingRequestOrigin ? (
+            <div className="mt-3 flex flex-col gap-2 rounded-md border border-warning-border bg-warning/10 p-3 text-xs">
+              {quotation?.priceModeChangedFromCeo ? (
+                <p className="m-0 font-bold text-warning">
+                  เปลี่ยนวิธีกรอกราคาจาก CEO
+                  <span className="ml-1 font-normal text-text-muted">
+                    (CEO เลือก: {PRICE_MODE_OPTIONS.find((opt) => opt.code === quotation.ceoPriceMode)?.label ?? quotation.ceoPriceMode})
+                  </span>
+                </p>
+              ) : null}
+              {(quotation?.items ?? []).filter((item) => item.priceChangedFromCeo).map((item) => (
+                <p key={item.id} className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-bold text-warning">
+                  <span>{[item.brand, item.model, item.color, item.texture].filter(Boolean).join(' ') || `รายการ ${item.seq}`}</span>
+                  <span className="font-normal text-text-muted">
+                    {ceoOriginalPriceText(quotation.ceoPriceMode ?? quotation.priceMode, item, quotation.currency)}
+                  </span>
+                </p>
+              ))}
+              {quotation?.itemsRemovedFromCeoCount > 0 ? (
+                <p className="m-0 font-bold text-warning">
+                  ลบรายการที่ CEO อนุมัติ {quotation.itemsRemovedFromCeoCount} รายการ
+                </p>
+              ) : null}
+              {!quotation?.priceModeChangedFromCeo && !quotation?.itemsRemovedFromCeoCount
+                && !(quotation?.items ?? []).some((item) => item.priceChangedFromCeo) ? (
+                <p className="m-0 flex items-center gap-1.5 font-bold text-text-muted">
+                  <Icon name="check" size={12} /> ราคาทุกรายการตรงกับที่ CEO อนุมัติ ไม่มีการเปลี่ยนแปลง
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </Modal>
       ) : null}
 
