@@ -10,7 +10,7 @@ import {
   defaultLeadTimeForOrigin, formatQuotationMoney, lineTypeOf, originCountryFromCode,
   piecesPerSqmFromSqmPerPiece, sqmPerPieceFromPiecesPerSqm, isEnglishPerSqm, listPricePerSqmIncVat,
   sqmPerPieceFromSizeCm, sizeTextDiffersFromCatalogFaceSize,
-  roundToFullBoxDisabledReason, roundToFullBoxSummary,
+  roundToFullBoxDisabledReason, roundToFullBoxSummary, isTilePriceChangedFromCeoLocally,
 } from './quotationMeta.js';
 
 // ProductPriceDto's own price_unit for a linear-metre trim (V153: 561 real catalog rows). Its
@@ -1032,7 +1032,12 @@ export function QuotationItemRow({
             informational, not a disabled state. */}
         {!hidePricing && item.ceoNetUnitPrice != null ? (
           <div className="col-span-2 mobile:col-span-1">
-            {item.priceChangedFromCeo ? (
+            {/* Coordinator follow-up (2026-09-20): OR the server's own flag with a LOCAL
+                recomputation over the row's current (possibly unsaved) values, so the marker
+                flips amber the instant the rep types a differing price/discount instead of only
+                after autosave lands — see isTilePriceChangedFromCeoLocally's own Javadoc for why
+                OR (not replace) keeps the server flag authoritative post-save. */}
+            {item.priceChangedFromCeo || isTilePriceChangedFromCeoLocally(item, priceMode) ? (
               <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-warning-border bg-warning/10 px-3 py-2 text-2xs font-bold text-warning">
                 <span>เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ</span>
                 <span className="font-normal text-text-muted">{ceoOriginalPriceText(ceoPriceMode ?? priceMode, item, currency)}</span>

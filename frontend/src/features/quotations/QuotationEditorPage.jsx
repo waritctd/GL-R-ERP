@@ -1688,6 +1688,16 @@ export function QuotationEditorPage({ user, showToast }) {
   // provably unaffected: `isPricingRequestOrigin` is false for it, exactly like it always would
   // have been null/undefined before this field existed.
   const isPricingRequestOrigin = quotation?.origin === 'PRICING_REQUEST';
+  // Coordinator follow-up (2026-09-20) — LOCAL mirror of DealQuotationRepository#ceoPriceModeChanged
+  // (`ceoPriceMode != null && !ceoPriceMode.equals(currentPriceMode)`), compared against
+  // `docSettings.priceMode` (the document's CURRENT mode, which may itself be an unsaved local
+  // switch via changePriceMode) rather than the server's last-SAVED one. Same bug as the per-line
+  // marker below: switching price mode on a row that then fails validation never autosaves, so
+  // `quotation.priceModeChangedFromCeo` froze on the CEO's original mode while the header stayed
+  // silent about a switch the rep had already made. ORed with the server flag (never replaces
+  // it) so it stays authoritative once a save lands.
+  const priceModeChangedFromCeoLocally = isPricingRequestOrigin && quotation?.ceoPriceMode != null
+    && docSettings.priceMode !== quotation.ceoPriceMode;
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
   // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
   // existing-DRAFT paths, the one being picked right now on the inline-create path.
@@ -2027,7 +2037,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 price mode away from the CEO's original decision (DealQuotationDto
                 #priceModeChangedFromCeo). Every linked line already shows its own marker
                 (QuotationItemRow); this is the document-wide summary of the same fact. */}
-            {isPricingRequestOrigin && quotation?.priceModeChangedFromCeo ? (
+            {isPricingRequestOrigin && (quotation?.priceModeChangedFromCeo || priceModeChangedFromCeoLocally) ? (
               <p role="status" className="m-0 mt-3 rounded-md border border-warning-border bg-warning/10 p-3 text-xs font-bold text-warning">
                 เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ
                 <span className="ml-1 font-normal text-text-muted">

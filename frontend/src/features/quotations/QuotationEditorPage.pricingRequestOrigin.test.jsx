@@ -325,3 +325,84 @@ describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes 
     expect(screen.getByText('ราคาจาก CEO')).toBeTruthy();
   });
 });
+
+// Coordinator follow-up (2026-09-20): a rep opened a PRICING_REQUEST quotation, changed ส่วนลด
+// from 10 to 25, and the line kept showing "✓ ราคาจาก CEO" -- the badge for an UNCHANGED price --
+// right next to a number they had just changed. Root cause: the row had validation errors (the
+// demo item lacked ความหนา/แผ่น/ตร.ม./แผ่น/กล่อง), which blocks the 2s autosave debounce
+// (QuotationEditorPage gates it on `!hasValidationErrors`), and `priceChangedFromCeo` only ever
+// comes from the server -- so the marker was frozen at "unchanged" for as long as the row stayed
+// invalid. Fixed by ORing the server flag with `isTilePriceChangedFromCeoLocally` (quotationMeta.js),
+// a client-side mirror of DealQuotationRepository#priceChangedFromCeo evaluated against the row's
+// CURRENT (unsaved) values -- these tests pin that the marker now updates on every keystroke, with
+// NO save ever required or triggered.
+describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before any save lands', () => {
+  it('amber marker appears the instant ส่วนลด changes on a row with validation errors (autosave blocked), and clears on revert -- update is never called', async () => {
+    // thicknessMm: null reproduces the coordinator's exact repro (missing ความหนา) and blocks
+    // autosave regardless of the 2s debounce timing -- this test never advances timers or waits
+    // long enough for a real debounce to fire anyway, but the validation error makes the "blocked"
+    // half of the bug explicit rather than incidental.
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: pricingRequestDraft({ items: [linkedNetTileItem({ thicknessMm: null })] }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
+    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '25' } });
+    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
+    expect(screen.getByText('ราคา CEO: ฿83.00 · ส่วนลด 10%')).toBeTruthy();
+    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '10' } });
+    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
+    expect(screen.queryByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+  });
+
+  it('the SERVER flag stays authoritative after a save: even once the rep types the discount back to the CEO\'s own number (so the LOCAL comparison alone would read "unchanged"), a server response that still says priceChangedFromCeo keeps the amber marker showing', async () => {
+    // A COMPLETE row (no validation errors) this time -- บันทึกร่าง is itself disabled while any
+    // row has a blocking validation error, so exercising an actual save (as this test needs)
+    // requires a row that would pass validateQuotationItem, unlike the two tests above.
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: pricingRequestDraft({ items: [linkedNetTileItem({ discountPct: 25 })] }),
+    });
+    // Retyping 10 makes discountPct === ceoDiscountPct (10), so
+    // isTilePriceChangedFromCeoLocally alone would now read `false` for this row -- exactly the
+    // shape a rep undoing their own edit produces. The mocked save response nonetheless echoes
+    // priceChangedFromCeo: true (e.g. the document's price_mode itself differs from the CEO's on
+    // the server, a fact this row's local fields alone cannot see). The server flag must win:
+    // ORing it with the local computation can only ADD amber markers the local check would have
+    // missed, never let a local "looks fine now" hide one the server still asserts.
+    api.dealQuotations.update.mockResolvedValue({
+      quotation: pricingRequestDraft({
+        items: [linkedNetTileItem({ discountPct: 10, priceChangedFromCeo: true })],
+      }),
+    });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('ส่วนลด %'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
+    expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
+  });
+
+  it('header mode marker appears the instant the rep switches price mode locally, before any save', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
+    expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' }));
+    await waitFor(() => expect(screen.getByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
+    expect(screen.getByText(/CEO เลือก: ราคาตั้ง/)).toBeTruthy();
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }));
+    await waitFor(() => expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull());
+    expect(api.dealQuotations.update).not.toHaveBeenCalled();
+  });
+});
