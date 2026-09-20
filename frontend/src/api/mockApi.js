@@ -8640,6 +8640,22 @@ export const api = {
   // faithfully, but `create` accepts whatever requestedAmount the caller sends without
   // recomputing/clamping it against the policy caps. That enforcement is Java-only; never treat a
   // mock "successful" submit as proof the real cap logic was exercised.
+  //
+  // approve()'s cap-override-reason guard (below) is only PARTLY mirrored. Java refuses with 400
+  // when `approvedAmount > recheck.eligibleAmount()` and no reason is given
+  // (SpecialMoneyService.ceoApproveFrom); the mock has no PolicyAmounts/UsageSnapshot to run
+  // SpecialMoneyPolicyEvaluator, so it compares against `requestedAmount` instead. That is wrong in
+  // BOTH directions, because submit stores requestedAmount unclamped and eligibleAmount is the
+  // policy figure (FIXED_AID's flat cap, PER_DIEM_RATE's rate * days, UNIFORM_ANNUAL SELF_BUY's
+  // per-piece rates, UNIFORM_PREPROBATION_KIT's kit total, MEDICAL's remaining balance):
+  //   - eligible > requested: Java accepts an amount between the two with no reason; the mock
+  //     demands one. Stricter than Java -- the safe direction.
+  //   - eligible < requested (a request above the cap): Java demands a reason for anything above
+  //     the cap -- INCLUDING approving exactly requestedAmount, the UI's default -- while the mock
+  //     accepts it with no reason. MORE PERMISSIVE than Java -- the dangerous direction. A green
+  //     mock approve of an over-cap request is evidence of nothing; verify on the real stack.
+  // Closing this would mean reimplementing the evaluator's per-type cap maths here, which the Mock
+  // API contract in CLAUDE.md asks us not to do.
   specialMoney: {
     // Mirrors SpecialMoneyRepository.findEmployeeOptions (~line 486): includeAll (hr/ceo) is a
     // LIST FILTER roster, not an on-behalf picker -- they cannot submit for anyone but themselves
@@ -8887,9 +8903,29 @@ export const api = {
         if (typeMeta?.evidenceRequired && specialMoneyAttachmentsFor(request.id).length === 0) {
           fail(`คำขอประเภท ${typeMeta.thaiLabel} ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้`, 400);
         }
+
+        const approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
+        // Mirrors SpecialMoneyService.blankToNull: trim, then treat "" as absent.
+        const trimmedCapOverrideReason = typeof payload.capOverrideReason === 'string'
+          ? payload.capOverrideReason.trim()
+          : '';
+        const capOverrideReason = trimmedCapOverrideReason === '' ? null : trimmedCapOverrideReason;
+        // Mirrors SpecialMoneyService.ceoApproveFrom's post-evidence guard (~line 272-278):
+        // `approvedAmount > recheck.eligibleAmount()` with a blank/missing capOverrideReason ->
+        // 400, checked in the same order as Java (after the CEO-role and evidence checks, before
+        // the row is mutated). The mock approximates `eligibleAmount` with `requestedAmount` --
+        // see this namespace's header comment: that is stricter than Java
+        // for some rows and MORE permissive for over-cap ones.
+        if (approvedAmount > request.requestedAmount && !capOverrideReason) {
+          fail(
+            'ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก',
+            400,
+          );
+        }
+
         request.status = 'APPROVED';
-        request.approvedAmount = payload.approvedAmount != null ? Number(payload.approvedAmount) : request.requestedAmount;
-        request.capOverrideReason = payload.capOverrideReason || null;
+        request.approvedAmount = approvedAmount;
+        request.capOverrideReason = capOverrideReason;
         request.payrollMonth = specialMoneyPayrollMonth();
         request.ceoApprovedBy = user.employeeId;
         request.ceoApprovedAt = now;
