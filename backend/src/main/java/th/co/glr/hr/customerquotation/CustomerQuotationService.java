@@ -101,6 +101,12 @@ public class CustomerQuotationService {
     private final QuotationRenderer renderer;
     private final NotificationRepository notifications;
     private final DiscountApprovalRepository discountApprovals;
+    // GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity with the NEW
+    // (DealQuotationService#createFromPricingRequest) create path for the same pricing request.
+    // Setter-injected, not a constructor parameter, so every existing hand-wired
+    // `new CustomerQuotationService(...)` test call site (20 of them) keeps compiling unchanged —
+    // same device as DealQuotationService's own #wirePricingRequestDependencies.
+    private th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations;
 
     public CustomerQuotationService(CustomerQuotationRepository quotations, PricingRequestRepository pricingRequests,
                                     PricingDecisionRepository decisions, TicketRepository tickets,
@@ -116,6 +122,13 @@ public class CustomerQuotationService {
         this.renderer = renderer;
         this.notifications = notifications;
         this.discountApprovals = discountApprovals;
+    }
+
+    /** See {@link #dealQuotations}'s own Javadoc. {@code required = false} so a deployment (or a
+     * hand-wired test) that never exercises the M2 mutual-exclusivity check is unaffected. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
+        this.dealQuotations = dealQuotations;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -144,6 +157,13 @@ public class CustomerQuotationService {
         }
         PricingDecisionSalesViewDto salesView = decisions.findApprovedSalesView(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้"));
+        // GLA-123 slice S1 fix (Opus review M2, 2026-09-20): mutual exclusivity — refuse starting
+        // the OLD chain if the NEW one (DealQuotationService#createFromPricingRequest) already
+        // has a live quotation for this PR. Mirror image of that method's own check.
+        if (dealQuotations != null && dealQuotations.hasLivePricingRequestQuotation(pricingRequestId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้มีใบเสนอราคา (แบบใหม่) อยู่แล้ว ไม่สามารถสร้างใบเสนอราคาแบบเดิมซ้ำได้");
+        }
 
         List<NewItem> items = new ArrayList<>();
         for (PricingDecisionSalesItemDto item : salesView.items()) {

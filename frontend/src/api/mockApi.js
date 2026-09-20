@@ -5450,7 +5450,24 @@ function hasDealQuotationMockGrant(user) {
   return Boolean(user?.canCreateQuotation);
 }
 
-function requireDealQuotationViewAccess(ticket, user) {
+// MINOR fix (Opus review, 2026-09-20) — origin-aware, mirroring DealQuotationService
+// #requireViewAccess exactly: a PRICING_REQUEST-origin row uses the NARROWER
+// CustomerQuotationService-shaped gate (sales/sales_manager/ceo only — no account, no import, no
+// canCreateQuotation grant bypass), checked first; DEAL_DIRECT (the default, including the two
+// ticket-only call sites — create() and listForTicket() — that only ever act on DEAL_DIRECT rows
+// and so never pass an origin) keeps the broader existing rule untouched. Before this fix the mock
+// never looked at `origin` at all, so under VITE_USE_MOCKS=true an `import`/`account` user could
+// GET a PRICING_REQUEST quotation (every ceo* field included) and a canCreateQuotation grant
+// holder could write one — both 403 against the real Java service. This is the "mock MORE
+// permissive than production" shape CLAUDE.md names (#199); it does not make the mock authz
+// evidence — see the file header — it only stops the mock from actively lying in the dangerous
+// direction while devs/QA drive it.
+function requireDealQuotationViewAccess(ticket, user, origin = 'DEAL_DIRECT') {
+  if (origin === 'PRICING_REQUEST') {
+    if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    return;
+  }
   if (hasDealQuotationMockGrant(user)) return;
   if (!DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   if (user.role === 'sales' && ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -5460,7 +5477,18 @@ function requireDealQuotationViewAccess(ticket, user) {
 // owner), sales_manager (any deal), or a canCreateQuotation grant (any deal). Same
 // "owns = role check + createdById" shape as requireOwningRepOrCeo above, applied to a different
 // role set.
-function requireDealQuotationWriteAccess(ticket, user) {
+// MINOR fix (Opus review, 2026-09-20) — origin-aware, mirroring DealQuotationService
+// #requireEditAccessForQuotation: a PRICING_REQUEST row drops the canCreateQuotation grant bypass
+// entirely (EDIT_ROLES only — sales/sales_manager, no account/import/grant holder), matching the
+// MAJOR-3 fix on the real service. `origin` defaults to 'DEAL_DIRECT' for the same reason as
+// requireDealQuotationViewAccess above.
+function requireDealQuotationWriteAccess(ticket, user, origin = 'DEAL_DIRECT') {
+  if (origin === 'PRICING_REQUEST') {
+    if (!['sales', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    if (user.role === 'sales_manager') return; // any deal
+    if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    return;
+  }
   if (hasDealQuotationMockGrant(user)) return;
   const owns = user.role === 'sales' && ticket?.createdById === user.id;
   if (!(owns || user.role === 'sales_manager')) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -5471,13 +5499,23 @@ function requireDealQuotationWriteAccess(ticket, user) {
 // Two independent copies of this scope is precisely how a tab count ends up promising rows the
 // list then refuses to show. Mirrors DealQuotationService.list: sales is scoped to its own deals;
 // a canCreateQuotation grant sees everything, same as sales_manager (#H4).
+// MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket/#search/
+// #counts's own deliberate `origin = 'DEAL_DIRECT'` scoping (see
+// directDealSearch_doesNotIncludePricingRequestOriginRows on the backend IT): the DEAL_DIRECT-only
+// list/counts surface must never show a PRICING_REQUEST-origin row, which has its own separate
+// display surface (PricingRequestDetailPage's "ใบเสนอราคาลูกค้า" panel, M1).
+function isDealDirectOrigin(q) {
+  return (q.origin || 'DEAL_DIRECT') === 'DEAL_DIRECT';
+}
+
 function scopedDealQuotationsFor(user) {
   const grant = hasDealQuotationMockGrant(user);
   if (!grant && !DEAL_QUOTATION_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  const base = mockDealQuotations.filter(isDealDirectOrigin);
   if (!grant && user.role === 'sales') {
-    return mockDealQuotations.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
+    return base.filter((q) => db.tickets.find((t) => t.id === q.ticketId)?.createdById === user.id);
   }
-  return mockDealQuotations;
+  return base;
 }
 
 // V179 (owner feedback #4, 2026-09-14) -- ผู้พิมพ์/พนักงานขาย print-name override. Mirrors
@@ -5566,7 +5604,7 @@ function requireDealQuotationRowViewable(id) {
   const row = mockDealQuotations.find((q) => q.id === Number(id));
   if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
   const ticket = db.tickets.find((t) => t.id === row.ticketId);
-  requireDealQuotationViewAccess(ticket, user);
+  requireDealQuotationViewAccess(ticket, user, row.origin);
   return row;
 }
 
@@ -6190,10 +6228,49 @@ function dealQuotationTotals(items, documentLanguage = 'TH') {
 }
 
 function buildDealQuotationDto(row) {
+  // GLA-123 slice S1 — origin & the CEO-comparison flags, recomputed fresh on every read (never
+  // stored), mirroring DealQuotationRepository#mapQuotation/#mapItemColumns. A DEAL_DIRECT row
+  // (origin undefined on every pre-this-feature row) always reads as DEAL_DIRECT/unlinked.
+  const origin = row.origin || 'DEAL_DIRECT';
+  const decision = origin === 'PRICING_REQUEST' && row.pricingDecisionId != null
+    ? mockPricingDecisions.find((d) => d.id === row.pricingDecisionId) : null;
+  const ceoPriceMode = decision?.priceMode ?? null;
+  const pricingRequestRow = origin === 'PRICING_REQUEST' && row.pricingRequestId != null
+    ? mockPricingRequests.find((p) => p.id === row.pricingRequestId) : null;
   return {
     id: row.id,
     number: row.number,
     ticketId: row.ticketId,
+    origin,
+    pricingRequestId: origin === 'PRICING_REQUEST' ? (row.pricingRequestId ?? null) : null,
+    // Coordinator follow-up (2026-09-20) — mirrors DealQuotationRepository#baseSelect's own
+    // pricing_request join, for the editor's "สร้างจากคำขอราคา {code}" link.
+    pricingRequestCode: pricingRequestRow?.requestCode ?? null,
+    priceModeChangedFromCeo: ceoPriceMode != null && ceoPriceMode !== (row.priceMode || 'NET'),
+    ceoPriceMode,
+    // M4(c) fix (Opus review, 2026-09-20) — mirrors DealQuotationDto#itemsRemovedFromCeoCount
+    // (V190). Always 0 on a row that never had a CEO-linked line dropped.
+    itemsRemovedFromCeoCount: row.itemsRemovedFromCeoCount ?? 0,
+    // M4(d) fix (Opus review, 2026-09-20) — mirrors DealQuotationDto#removedCeoItems /
+    // DealQuotationRepository#findRemovedLinkedItems: every item of THIS row's own decision that
+    // is NOT currently linked to a live line, for the editor's "คืนรายการ" action. Empty for
+    // DEAL_DIRECT (no decision) or a PRICING_REQUEST row with nothing dropped.
+    removedCeoItems: (() => {
+      if (!decision) return [];
+      const linkedDecisionItemIds = new Set(
+        row.items.filter((it) => it.pricingDecisionItemId != null).map((it) => it.pricingDecisionItemId));
+      const pr = pricingRequestRow ?? mockPricingRequests.find((p) => p.id === row.pricingRequestId);
+      const priById = new Map((pr?.items ?? []).map((i) => [i.id, i]));
+      return decision.items
+        .filter((di) => !linkedDecisionItemIds.has(di.id))
+        .map((di) => {
+          const pri = priById.get(di.pricingRequestItemId) ?? {};
+          return {
+            pricingDecisionItemId: di.id, brand: pri.brand ?? null, model: pri.model ?? null,
+            color: pri.color ?? null, texture: pri.texture ?? null, sizeText: pri.size ?? null,
+          };
+        });
+    })(),
     docStatus: row.docStatus,
     revisionNo: row.revisionNo,
     parentQuotationId: row.parentQuotationId,
@@ -6282,9 +6359,41 @@ function buildDealQuotationDto(row) {
     // with no snapshot (seed rows approved before this mock tracked one).
     approverHasSignature: row.approverSignatureSnapshot
       ?? (row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById))),
-    items: row.items.map((item) => ({ ...item })),
+    items: row.items.map((item) => mockDealQuotationItemDto(item, decision, row.priceMode || 'NET')),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+/** GLA-123 slice S1 — one item's CEO-comparison fields, joined by the link the item was created
+ * with (pricingDecisionItemId) — mirrors DealQuotationRepository#priceChangedFromCeo. Unlinked
+ * (every DEAL_DIRECT item, and any PRICING_REQUEST extra row) always reads unchanged/null. */
+function mockDealQuotationItemDto(item, decision, currentPriceMode) {
+  const di = decision && item.pricingDecisionItemId != null
+    ? decision.items.find((d) => d.id === item.pricingDecisionItemId) : null;
+  if (!di) {
+    return {
+      ...item, priceChangedFromCeo: false,
+      ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null,
+      ceoDirectNetPrice: null, ceoNetUnitPrice: null,
+    };
+  }
+  const zeroIfNull = (v) => (v == null ? 0 : v);
+  let changed;
+  if (currentPriceMode === 'NET') {
+    changed = item.unitPrice !== di.listUnitPrice || zeroIfNull(item.discountPct) !== zeroIfNull(di.discountPct);
+  } else if (currentPriceMode === 'SPECIAL_SQM') {
+    changed = item.specialPriceSqm !== di.specialPriceSqm;
+  } else if (currentPriceMode === 'DIRECT_NET') {
+    changed = item.netUnitPrice !== di.directNetPrice;
+  } else {
+    changed = true;
+  }
+  return {
+    ...item, priceChangedFromCeo: changed,
+    ceoListUnitPrice: di.listUnitPrice ?? null, ceoDiscountPct: di.discountPct ?? null,
+    ceoSpecialPriceSqm: di.specialPriceSqm ?? null, ceoDirectNetPrice: di.directNetPrice ?? null,
+    ceoNetUnitPrice: di.netUnitPrice ?? null,
   };
 }
 
@@ -13152,6 +13261,12 @@ export const api = {
           pricingDecisionId: decision.id,
           currency: decision.currency,
           approvedAt: decision.approvedAt,
+          // GLA-123 slice S1 M2 fix, NARROWED by MINOR-1 (owner ruling, confirmed 2026-09-20,
+          // second re-review) — mirrors PricingDecisionSalesViewDto#newFormPricing (backend:
+          // PricingDecisionRepository#findApprovedSalesView). This used to be the CEO's own
+          // price_mode string; replaced with a plain boolean so this endpoint (also legitimately
+          // callable by import, for its own unrelated reason) never carries a price-shaped fact.
+          newFormPricing: decision.priceMode != null,
           items: decision.items.map((item) => ({
             pricingRequestItemId: item.pricingRequestItemId,
             brand: item.brand,
@@ -14270,8 +14385,10 @@ export const api = {
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
       requireDealQuotationViewAccess(ticket, user);
+      // MINOR fix (Opus review, 2026-09-20) — mirrors DealQuotationRepository#findByTicket's own
+      // deliberate DEAL_DIRECT-only scope; see isDealDirectOrigin's own comment.
       const items = mockDealQuotations
-        .filter((q) => q.ticketId === ticket.id)
+        .filter((q) => q.ticketId === ticket.id && isDealDirectOrigin(q))
         .sort((a, b) => b.id - a.id)
         .map(buildDealQuotationDto);
       return delay({ items });
@@ -14406,6 +14523,131 @@ export const api = {
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
+    // GLA-123 slice S1 (Phase 3, 2026-09-19) — "เขียนใบเสนอราคาจากคำขอราคา": creates a
+    // PRICING_REQUEST-origin row on this SAME array/DTO builder, prefilled from an approved
+    // pricing request's CEO-approved decision. Mirrors DealQuotationService
+    // #createFromPricingRequest. Gate mirrors createCustomerQuotation's (sales-only, owning rep
+    // only), NOT requireDealQuotationWriteAccess's broader EDIT_ROLES allowance — the two flows
+    // share the ENGINE, not the create authz.
+    async createFromPricingRequest(pricingRequestId) {
+      const user = hasRole('sales');
+      const pr = findPricingRequestRaw(pricingRequestId);
+      const ticket = db.tickets.find((t) => t.id === pr.ticketId);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (pr.status !== 'APPROVED_FOR_QUOTATION') {
+        fail(`คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: ${pr.status})`, 409);
+      }
+      const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
+      if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
+      if (!decision.priceMode) {
+        fail('คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', 409);
+      }
+      // Idempotent replay guard — same rule as DealQuotationRepository#findOpenDraftForPricingRequest.
+      const existingDraft = mockDealQuotations.find(
+        (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
+      if (existingDraft) return delay({ quotation: buildDealQuotationDto(existingDraft) });
+
+      const now = new Date().toISOString();
+      const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: pr.recipientContactId });
+      const itemsById = new Map((pr.items ?? []).map((i) => [i.id, i]));
+      const items = decision.items.map((di, index) => {
+        const pri = itemsById.get(di.pricingRequestItemId) ?? {};
+        // unitPrice ("ราคาตั้ง") is populated for EVERY mode, mirroring
+        // DealQuotationService#buildItemInputFromDecisionItem's own reasoning: list_unit_price is
+        // ALWAYS auto-calculated regardless of price_mode, and the direct-deal item builder here
+        // requires a positive unitPrice on every TILE row.
+        const unitPrice = decision.priceMode === 'NET' && di.manualSellingPricePerRequestedUnit != null
+          ? di.manualSellingPricePerRequestedUnit : di.listUnitPrice;
+        const input = {
+          locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
+          brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,
+          thicknessMm: pri.thicknessMm, sqmPerPiece: pri.sqmPerPiece, quantityMode: pri.quantityMode,
+          areaSqm: pri.areaSqm, piecesInput: pri.piecesInput, wastageMode: pri.wastageMode,
+          wastageValue: pri.wastageValue, piecesPerBox: pri.piecesPerBox, roundToFullBox: pri.roundToFullBox,
+          unitPrice, discountPct: decision.priceMode === 'NET' ? (di.discountPct ?? 0) : null,
+          specialPriceSqm: decision.priceMode === 'SPECIAL_SQM' ? di.specialPriceSqm : null,
+          directNetPrice: decision.priceMode === 'DIRECT_NET' ? di.directNetPrice : null,
+          originCountry: pri.originCountry, leadTimeMinDays: pri.leadTimeMinDays,
+          leadTimeMaxDays: pri.leadTimeMaxDays, itemNotes: pri.productDescription ?? null,
+        };
+        const built = buildDealQuotationItemRow(input, index, decision.priceMode, null, 'TH');
+        // The mock's own deal-quotation money math (computeDealQuotationLine) is a documented
+        // PLACEHOLDER, not a mirror of WastageCalculator (see that function's own header comment)
+        // — unlike pricing-decision math (computeMockCeoNetUnitPrice), which IS mirrored. Reusing
+        // buildDealQuotationItemRow above for its quantity/wastage/description derivation only,
+        // then overwriting the money fields with the DECISION's own already-computed, mirrored
+        // netUnitPrice, is what keeps "net === decision net" true in mock mode even though the
+        // underlying per-line formula the two call sites use is not the same implementation.
+        return {
+          ...built,
+          netUnitPrice: di.netUnitPrice,
+          lineAmount: round2(di.netUnitPrice * (built.piecesFinal ?? built.quantity ?? 0)),
+          pricingRequestItemId: di.pricingRequestItemId,
+          pricingDecisionItemId: di.id,
+        };
+      });
+      const row = {
+        id: mockDealQuotationSeq++,
+        number: quotationRevisionNumber(nextMockDealQuotationNumber(), 1),
+        ticketId: ticket.id,
+        origin: 'PRICING_REQUEST',
+        pricingRequestId: pr.id,
+        pricingDecisionId: decision.id,
+        docStatus: 'DRAFT',
+        revisionNo: 1,
+        parentQuotationId: null,
+        createdById: user.employeeId ?? null,
+        createdByName: user.name,
+        salesRepId: ticket.createdById,
+        salesRepName: ticket.createdByName,
+        salesRepPhone: mockSalesRepPhone(ticket.createdById),
+        submittedAt: null, submittedBy: null,
+        approvedById: null, approvedByName: null, approvedAt: null,
+        approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
+        quotationDate: now.slice(0, 10),
+        ...mockDealQuotationCustomerSnapshot(ticket),
+        ...contactSnapshot,
+        projectName: ticket.projectId ? (mockProjects.find((p) => p.id === ticket.projectId)?.name ?? null) : null,
+        deptCode: pr.deptCode ?? null,
+        unitCode: pr.unitCode ?? null,
+        offerDate: null,
+        // Deposit % keeps the engine default (unset); sales chooses it on the draft (GLA-123 ruling 2).
+        depositPercent: null, remainderMode: null,
+        creditDays: pr.paymentTermMode === 'CREDIT' ? pr.creditDays : null,
+        validityDays: pr.validityDays ?? null,
+        validityMode: 'DAYS', validityUntil: null, validityDate: null,
+        customerNotes: pr.note ?? null,
+        priceMode: decision.priceMode,
+        documentLanguage: 'TH', currency: 'THB',
+        printedByDisplayId: pr.printedByDisplayId ?? null,
+        salesRepDisplayId: pr.salesRepDisplayId ?? null,
+        omitContactHonorific: pr.omitContactHonorific ?? false,
+        fullPaymentTerm: null,
+        items,
+        createdAt: now, updatedAt: now,
+      };
+      mockDealQuotations.push(row);
+      pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status,
+        'สร้างร่างใบเสนอราคาลูกค้า (เครื่องมือใบเสนอราคาแบบ direct)');
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // M1 fix (Opus review, 2026-09-20) — read-only counterpart, mirrors
+    // DealQuotationService#findForPricingRequest: no create side effect, { quotation: null }
+    // (not a 404) when this PR has no new-engine quotation yet. In S1 the only reachable
+    // status is DRAFT (submit/etc are refused for this origin — see mock submit() below), so
+    // scoping to DRAFT here matches the real findOpenDraftForPricingRequest exactly.
+    async findForPricingRequest(pricingRequestId) {
+      const user = requireSession();
+      const pr = findPricingRequestRaw(pricingRequestId);
+      const row = mockDealQuotations.find(
+        (q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST' && q.docStatus === 'DRAFT');
+      if (!row) return delay({ quotation: null });
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      requireDealQuotationViewAccess(ticket, user, row.origin);
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
     // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of
     // items)"), DRAFT-only.
     async update(id, payload = {}) {
@@ -14413,11 +14655,60 @@ export const api = {
       const row = mockDealQuotations.find((q) => q.id === Number(id));
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationWriteAccess(ticket, user, row.origin);
       requireDealQuotationEditable(row);
+      // GLA-123 slice S1 (owner ruling 2026-09-19) — a PRICING_REQUEST-origin quotation's items
+      // come ENTIRELY from createFromPricingRequest; adding an extra row (of any line type) is
+      // refused for this origin in S1 — mirrors DealQuotationService#update's identical guard.
+      // Checked BEFORE buildDealQuotationItems so nothing is computed/persisted on a refusal.
+      let droppedLinkedCount = 0;
+      if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+        const currentIds = new Set(row.items.map((it) => it.id));
+        const hasNewRow = (payload.items ?? []).some((it) => it.id == null || !currentIds.has(Number(it.id)));
+        if (hasNewRow) {
+          fail('ใบเสนอราคาจากคำขอราคานี้เพิ่มรายการใหม่ไม่ได้ — กรุณาเพิ่มรายการที่คำขอราคาต้นทาง แล้วให้ CEO กำหนดราคา', 400);
+        }
+        // M4(a)/(b) fix (Opus review, 2026-09-20) — mirrors
+        // DealQuotationService#requireLinkedLineIdentityUnchanged: a CEO-linked line may have its
+        // quantity/เผื่อ edited, not its line type or product identity.
+        const byId = new Map(row.items.map((it) => [it.id, it]));
+        for (const input of payload.items ?? []) {
+          const stored = byId.get(Number(input.id));
+          if (!stored || stored.pricingDecisionItemId == null) continue;
+          const identityChanged = (input.lineType || 'TILE') !== 'TILE'
+            || (input.catalogPriceId ?? null) !== (stored.catalogPriceId ?? null)
+            || (input.productCode ?? null) !== (stored.productCode ?? null)
+            || (input.brand ?? null) !== (stored.brand ?? null)
+            || (input.model ?? null) !== (stored.model ?? null)
+            || (input.color ?? null) !== (stored.color ?? null)
+            || (input.texture ?? null) !== (stored.texture ?? null)
+            || (input.sizeText ?? null) !== (stored.sizeText ?? null)
+            || Number(input.thicknessMm ?? 0) !== Number(stored.thicknessMm ?? 0)
+            || Number(input.sqmPerPiece ?? 0) !== Number(stored.sqmPerPiece ?? 0)
+            || (input.piecesPerBox ?? null) !== (stored.piecesPerBox ?? null);
+          if (identityChanged) {
+            fail('แก้ไขชนิดหรือข้อมูลสินค้าของรายการที่ CEO อนุมัติไม่ได้ — หากต้องเปลี่ยนสินค้า กรุณาแก้ไขที่คำขอราคาต้นทางแล้วให้ CEO อนุมัติใหม่', 400);
+          }
+        }
+        // M4(c) — every LINKED item id not claimed by this payload is about to be dropped.
+        const claimedIds = new Set((payload.items ?? []).map((it) => Number(it.id)).filter((n) => !Number.isNaN(n)));
+        droppedLinkedCount = row.items.filter(
+          (it) => it.pricingDecisionItemId != null && !claimedIds.has(it.id)).length;
+      }
       const contactSnapshot = resolveDealQuotationContact(ticket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
+      // Carry the pricing-request/decision-item LINK forward across the save, keyed by the
+      // (stable) item id — the client payload has no field for either, so a link can only ever
+      // be established at createFromPricingRequest, never here. Mirrors
+      // DealQuotationService#update's own #withDecisionLink device.
+      const linkByItemId = new Map(row.items.map((it) => [it.id, {
+        pricingRequestItemId: it.pricingRequestItemId ?? null, pricingDecisionItemId: it.pricingDecisionItemId ?? null,
+      }]));
+      items.forEach((it) => {
+        const link = linkByItemId.get(it.id);
+        if (link?.pricingDecisionItemId != null) Object.assign(it, link);
+      });
       // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems),
       // same as DealQuotationService#update — a discount cleared on THIS save already refuses
       // DATE mode here, before anything is persisted.
@@ -14462,8 +14753,79 @@ export const api = {
         // exactly as they do against the real backend.
         projectName: blankToNullMock(payload.projectName),
         items,
+        // M4(c) fix (Opus review, 2026-09-20) — mirrors
+        // DealQuotationRepository#incrementItemsRemovedFromCeo's GREATEST(0, ...) floor.
+        itemsRemovedFromCeoCount: Math.max(0, (row.itemsRemovedFromCeoCount ?? 0) + droppedLinkedCount),
         updatedAt: new Date().toISOString(),
       });
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
+    // dropped, rebuilt fresh from the same approved decision item. Mirrors
+    // DealQuotationService#restoreRemovedItem.
+    async restoreRemovedItem(id, pricingDecisionItemId) {
+      const user = requireSession();
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      requireDealQuotationWriteAccess(ticket, user, row.origin);
+      requireDealQuotationEditable(row);
+      if ((row.origin || 'DEAL_DIRECT') !== 'PRICING_REQUEST' || row.pricingRequestId == null) {
+        fail('ใบเสนอราคานี้ไม่ได้มาจากคำขอราคา จึงไม่มีรายการให้คืน', 409);
+      }
+      const alreadyPresent = row.items.some((it) => it.pricingDecisionItemId === Number(pricingDecisionItemId));
+      if (alreadyPresent) fail('รายการนี้อยู่ในใบเสนอราคาอยู่แล้ว', 409);
+      const decision = mockPricingDecisions.find((d) => d.id === row.pricingDecisionId)
+        // NIT fix (Opus re-review, 2026-09-20): match through the quotation's OWN frozen
+        // pricingDecisionId, mirroring DealQuotationRepository#findPricingDecisionId — not "any
+        // APPROVED decision on this PR".
+        ?? mockPricingDecisions.find((d) => d.pricingRequestId === row.pricingRequestId && d.status === 'APPROVED');
+      // MINOR-2 fix (Opus re-review, 2026-09-20) — mirrors DealQuotationService#restoreRemovedItem:
+      // a restored line is built for the DOCUMENT's current price mode, but a decision item's
+      // price fields are only populated for the mode the CEO actually chose. Refuse rather than
+      // silently building an inconsistent row.
+      if (decision && decision.priceMode !== row.priceMode) {
+        fail(`คืนรายการไม่ได้ — เอกสารนี้เปลี่ยนวิธีกรอกราคาไปจาก CEO แล้ว (CEO เลือก: ${decision.priceMode}, `
+          + `ปัจจุบัน: ${row.priceMode}) กรุณาเปลี่ยนวิธีกรอกราคากลับก่อนจึงจะคืนรายการได้`, 409);
+      }
+      // MINOR-3 fix (Opus re-review, 2026-09-20) — the CEO's decision price is always THB; an
+      // EN/USD document has no valid conversion for it, mirroring this codebase's own TH<->EN
+      // switch rule (a language switch clears every typed price rather than carrying one
+      // currency's number into the other).
+      if ((row.documentLanguage || 'TH') !== 'TH') {
+        fail('คืนรายการไม่ได้ — ราคาที่ CEO อนุมัติเป็นเงินบาท กรุณาเปลี่ยนเอกสารกลับเป็นภาษาไทยก่อนจึงจะคืนรายการได้', 409);
+      }
+      const decisionItem = decision?.items.find((di) => di.id === Number(pricingDecisionItemId));
+      if (!decisionItem) fail('ไม่พบรายการนี้ในคำขอราคาต้นทาง', 404);
+      const pr = findPricingRequestRaw(row.pricingRequestId);
+      const pri = (pr.items ?? []).find((i) => i.id === decisionItem.pricingRequestItemId) ?? {};
+      const unitPrice = row.priceMode === 'NET' && decisionItem.manualSellingPricePerRequestedUnit != null
+        ? decisionItem.manualSellingPricePerRequestedUnit : decisionItem.listUnitPrice;
+      const input = {
+        locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
+        brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,
+        thicknessMm: pri.thicknessMm, sqmPerPiece: pri.sqmPerPiece, quantityMode: pri.quantityMode,
+        areaSqm: pri.areaSqm, piecesInput: pri.piecesInput, wastageMode: pri.wastageMode,
+        wastageValue: pri.wastageValue, piecesPerBox: pri.piecesPerBox, roundToFullBox: pri.roundToFullBox,
+        unitPrice, discountPct: row.priceMode === 'NET' ? (decisionItem.discountPct ?? 0) : null,
+        specialPriceSqm: row.priceMode === 'SPECIAL_SQM' ? decisionItem.specialPriceSqm : null,
+        directNetPrice: row.priceMode === 'DIRECT_NET' ? decisionItem.directNetPrice : null,
+        originCountry: pri.originCountry, leadTimeMinDays: pri.leadTimeMinDays,
+        leadTimeMaxDays: pri.leadTimeMaxDays, itemNotes: pri.productDescription ?? null,
+      };
+      const nextSeq = row.items.length + 1;
+      const built = buildDealQuotationItemRow(input, nextSeq - 1, row.priceMode, null, row.documentLanguage || 'TH');
+      const restored = {
+        ...built,
+        netUnitPrice: decisionItem.netUnitPrice,
+        lineAmount: round2(decisionItem.netUnitPrice * (built.piecesFinal ?? built.quantity ?? 0)),
+        pricingRequestItemId: decisionItem.pricingRequestItemId,
+        pricingDecisionItemId: decisionItem.id,
+      };
+      row.items = [...row.items, restored];
+      row.itemsRemovedFromCeoCount = Math.max(0, (row.itemsRemovedFromCeoCount ?? 0) - 1);
+      row.updatedAt = new Date().toISOString();
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
@@ -14485,7 +14847,13 @@ export const api = {
       const row = mockDealQuotations.find((q) => q.id === Number(id));
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationWriteAccess(ticket, user, row.origin);
+      // GLA-123 slice S1: the dual-approval flow (S2's job) that actually issues a
+      // PRICING_REQUEST-origin quotation does not exist yet -- mirrors
+      // DealQuotationService#submit's identical origin gate.
+      if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+        fail('ยังไม่เปิดใช้งานการอนุมัติใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป', 409);
+      }
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
@@ -14637,7 +15005,7 @@ export const api = {
       const parent = mockDealQuotations.find((q) => q.id === Number(id));
       if (!parent) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === parent.ticketId);
-      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationWriteAccess(ticket, user, parent.origin);
       if (parent.docStatus !== 'APPROVED') {
         fail('สร้างฉบับแก้ไขได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
       }
@@ -14666,7 +15034,7 @@ export const api = {
       const source = mockDealQuotations.find((q) => q.id === Number(id));
       if (!source) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === source.ticketId);
-      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationWriteAccess(ticket, user, source.origin);
       if (source.docStatus !== 'APPROVED') {
         fail('สร้างจากใบเดิมได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น', 409);
       }
@@ -14681,7 +15049,7 @@ export const api = {
       const row = mockDealQuotations.find((q) => q.id === Number(id));
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
-      requireDealQuotationWriteAccess(ticket, user);
+      requireDealQuotationWriteAccess(ticket, user, row.origin);
       if (!canTransitionDealQuotation(row.docStatus, 'CANCELLED')) {
         fail(`ยกเลิกไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }

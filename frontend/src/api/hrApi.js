@@ -1196,6 +1196,16 @@ export const api = {
     displayNameOptions: () => apiRequest(API_ROUTES.dealQuotations.displayNameOptions),
     get: (id) => apiRequest(API_ROUTES.dealQuotations.detail(id)),
     create: (ticketId, payload) => apiRequest(API_ROUTES.dealQuotations.create(ticketId), { method: 'POST', body: payload }),
+    // GLA-123 slice S1 — no request body: everything is derived server-side from the pricing
+    // request and its CEO-approved decision.
+    createFromPricingRequest: (pricingRequestId) => apiRequest(
+      API_ROUTES.dealQuotations.createFromPricingRequest(pricingRequestId), { method: 'POST' },
+    ),
+    // M1 fix (Opus review, 2026-09-20) — read-only, GET. { quotation: null } when this PR has no
+    // new-engine quotation yet (not a 404 — "none yet" is the normal state, not an error).
+    findForPricingRequest: (pricingRequestId) => apiRequest(
+      API_ROUTES.dealQuotations.findForPricingRequest(pricingRequestId),
+    ),
     update: (id, payload) => apiRequest(API_ROUTES.dealQuotations.detail(id), { method: 'PUT', body: payload }),
     // Stateless preview — same calc the server applies on save, run against one item input with
     // nothing persisted. Debounced 300ms by the editor; see QuotationEditorPage.jsx.
@@ -1212,6 +1222,11 @@ export const api = {
     // independent DRAFT. The source stays APPROVED; see DealQuotationService#createReorder.
     createReorder: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.reorders(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.cancel(id), { method: 'POST', body: payload }),
+    // M4(d) fix (Opus review, 2026-09-20) — no request body: everything is rebuilt server-side
+    // from the same approved decision item.
+    restoreRemovedItem: (id, pricingDecisionItemId) => apiRequest(
+      API_ROUTES.dealQuotations.restoreRemovedItem(id, pricingDecisionItemId), { method: 'POST' },
+    ),
     downloadPdf: async (id) => {
       const res = await fetch(API_ROUTES.dealQuotations.file(id, 'pdf'), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');

@@ -17,8 +17,8 @@ import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import {
   canApproveDealQuotation, canCancelDealQuotation, canCreateDealQuotation,
   canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
-  canReviseDealQuotation, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
-  availablePriceModes, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
+  canReviseDealQuotation, canSubmitDealQuotation, canTransitionDealQuotation, DEPOSIT_PERCENT_PRESETS,
+  availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
@@ -71,6 +71,20 @@ const EMPTY_ITEM_ERRORS = {};
 // Autosave debounce (owner ask 2026-09-10). Two seconds is long enough that it never fires
 // mid-word and short enough that a rep who closes the tab loses at most one field.
 export const AUTOSAVE_DELAY_MS = 2000;
+
+// MAJOR-2 fix (Opus re-review, 2026-09-20) — the SAME #H2 discipline CALCULATED_ITEM_FIELDS above
+// already applies to the calculate-line preview response, now applied to the SAVE response too
+// (mergeServerItemFields, below): pick ONLY fields no editable control on this page ever writes
+// to, so a save response landing while the rep is still typing can never clobber the edit. `id`
+// and the two link ids are identity, never user input; the six are the GLA-123 CEO-comparison
+// fields M5 exists to refresh without a reload. Deliberately NOT a superset of
+// CALCULATED_ITEM_FIELDS — those already refresh through the separate calculate-line preview
+// path, and merging them a second way here is scope this fix does not need.
+const SERVER_COMPUTED_ITEM_FIELDS = [
+  'id', 'pricingRequestItemId', 'pricingDecisionItemId',
+  'priceChangedFromCeo', 'ceoListUnitPrice', 'ceoDiscountPct', 'ceoSpecialPriceSqm',
+  'ceoDirectNetPrice', 'ceoNetUnitPrice',
+];
 
 function pickCalculatedFields(source) {
   const result = {};
@@ -1017,38 +1031,78 @@ export function QuotationEditorPage({ user, showToast }) {
     };
   }
 
-  /** #S3 (item ids): after ANY successful save, the server's response carries each item's
-   * (possibly newly-minted) `id`, in `seq` order — which is the order SENT (buildUpsertPayload
-   * sends non-adjustment rows then adjustments, and DealQuotationService prints/returns them in
-   * that same order). `sentClientIds[i]` is therefore the clientId of whatever row became
-   * `resItems[i]`. A length mismatch means something about the round trip is not what this
-   * function assumes (a concurrent edit that changed row COUNT, a malformed response) — skip
-   * adoption entirely rather than guess at a mapping that could assign the wrong id to the wrong
-   * row, which would be worse than not adopting at all.
+  /** #S3 (item ids) + M5 fix, MAJOR-2-corrected (Opus re-review, 2026-09-20): after ANY successful
+   * save, the server's response carries each item's (possibly newly-minted) `id` and the
+   * GLA-123 CEO-comparison fields (`priceChangedFromCeo`/`ceoListUnitPrice`/`ceoDiscountPct`/
+   * `ceoSpecialPriceSqm`/`ceoDirectNetPrice`/`ceoNetUnitPrice`) plus the link ids
+   * (`pricingRequestItemId`/`pricingDecisionItemId`) — in `seq` order, which is the order SENT
+   * (buildUpsertPayload sends non-adjustment rows then adjustments, and DealQuotationService
+   * prints/returns them in that same order). `sentClientIds[i]` is therefore the clientId of
+   * whatever row became `resItems[i]`. A length mismatch means something about the round trip is
+   * not what this function assumes (a concurrent edit that changed row COUNT, a malformed
+   * response) — skip merging entirely rather than guess at a mapping that could apply the wrong
+   * row's fields to the wrong row, which would be worse than not merging at all.
    *
-   * Raw `setItems`/`setAdjustments` — NOT `updateItem`/`updateAdjustment` — because adopting a
-   * server id is bookkeeping, not an edit: it must never bump editSeqRef (that would make a save
-   * that adopted ids look like it landed mid-edit and refuse to clear `dirty`) and must never touch
-   * `clientId` or `touchedRowIds`. Rows added after this request was sent (not in `sentClientIds`)
-   * are untouched; rows removed meanwhile are simply absent from `prev` and skipped. */
-  function adoptServerIds(sentClientIds, resItems) {
+   * M5's own bug: before the first fix, ONLY `id` was adopted here — every other server-computed
+   * field (most visibly the per-line CEO marker QuotationItemRow reads) stayed at whatever value
+   * it held from the INITIAL load (`rowFromServerItem`'s own `...item` spread, which only ever
+   * runs once per quotation — see the seeding effect's own "seeds local editable state ... exactly
+   * once" comment). A rep who edited a linked line's price, saved, then reverted it back to the
+   * CEO's own figure and saved AGAIN would still see the "changed" marker until a full page reload
+   * re-ran that seed — the save round-tripped a fresh copy, but nothing local ever read it.
+   *
+   * MAJOR-2 (Opus re-review): the FIRST fix for the bug above merged `{ ...it, ...server }` — the
+   * ENTIRE matched server item, including plain user-editable fields like `unitPrice`/
+   * `discountPct`. That clobbers an edit typed WHILE the save that produced `server` was still in
+   * flight: type 900, autosave fires, type 1234 before the response lands, resolve with the
+   * server's echo of 900 -> the field snaps back to 900 and 1234 is lost, even though `dirty`
+   * correctly stayed true and a second PUT was still scheduled (`editSeqRef.current === sentSeq`
+   * only ever gated clearing `dirty`, never gated this merge). This is NOT specific to the
+   * PRICING_REQUEST origin M5 was written for — it affects DEAL_DIRECT too, since every quotation
+   * saves through this same function.
+   *
+   * The fix is a WHITELIST (`SERVER_COMPUTED_ITEM_FIELDS` below), not a `sentSeq` gate: gating the
+   * whole merge on "no edit happened anywhere since this save was sent" would ALSO suppress the
+   * marker refresh for a row the rep never touched, just because they were mid-edit on some OTHER
+   * row or field when the response landed — a real cost for a race that, by definition, can only
+   * ever corrupt the SAME field it raced with. Restricting the merge to fields no editable control
+   * on this page ever writes to removes the race by construction, for every row, regardless of
+   * timing: the identity fields (`id`, the two link ids) and the CEO-comparison fields are safe to
+   * take from the server unconditionally, and nothing else is ever touched.
+   *
+   * Raw `setItems`/`setAdjustments` — NOT `updateItem`/`updateAdjustment` — because merging a save
+   * response is bookkeeping, not an edit: it must never bump editSeqRef (that would make a save
+   * that merged fields look like it landed mid-edit and refuse to clear `dirty`) and must never
+   * touch `clientId` or `touchedRowIds`. Rows added after this request was sent (not in
+   * `sentClientIds`) are untouched; rows removed meanwhile are simply absent from `prev` and
+   * skipped. */
+  function mergeServerItemFields(sentClientIds, resItems) {
     if (!Array.isArray(resItems) || resItems.length !== sentClientIds.length) return;
-    const idByClientId = new Map(sentClientIds.map((clientId, i) => [clientId, resItems[i].id]));
-    setItems((prev) => prev.map((it) => (
-      idByClientId.has(it.clientId) ? { ...it, id: idByClientId.get(it.clientId) } : it
-    )));
-    setAdjustments((prev) => prev.map((a) => (
-      idByClientId.has(a.clientId) ? { ...a, id: idByClientId.get(a.clientId) } : a
-    )));
+    const serverByClientId = new Map(sentClientIds.map((clientId, i) => [clientId, resItems[i]]));
+    const pickServerComputedFields = (server) => {
+      const patch = {};
+      for (const field of SERVER_COMPUTED_ITEM_FIELDS) {
+        if (field in server) patch[field] = server[field];
+      }
+      return patch;
+    };
+    setItems((prev) => prev.map((it) => {
+      const server = serverByClientId.get(it.clientId);
+      return server ? { ...it, ...pickServerComputedFields(server) } : it;
+    }));
+    setAdjustments((prev) => prev.map((a) => {
+      const server = serverByClientId.get(a.clientId);
+      return server ? { ...a, ...pickServerComputedFields(server) } : a;
+    }));
   }
 
   /** The one place autosave, manual บันทึกร่าง, and submit's pre-save all land after a successful
-   * PUT — adopt whatever ids the response minted, then clear `dirty` ONLY if no edit happened while
-   * this request was in flight (#S1: `editSeqRef.current === sentSeq`, captured by buildSaveRequest
-   * at send time). If the rep kept typing, `dirty` stays true so the NEXT autosave tick (or the
-   * next submit attempt) picks up what this request could not have known about. */
+   * PUT — merge whatever the response minted/computed, then clear `dirty` ONLY if no edit happened
+   * while this request was in flight (#S1: `editSeqRef.current === sentSeq`, captured by
+   * buildSaveRequest at send time). If the rep kept typing, `dirty` stays true so the NEXT autosave
+   * tick (or the next submit attempt) picks up what this request could not have known about. */
   function applySavedQuotation(quotation, sentSeq, sentClientIds) {
-    adoptServerIds(sentClientIds, quotation.items);
+    mergeServerItemFields(sentClientIds, quotation.items);
     if (editSeqRef.current === sentSeq) setDirty(false);
   }
 
@@ -1436,6 +1490,29 @@ export function QuotationEditorPage({ user, showToast }) {
     onError: (error) => showToast('error', error.message || 'สร้างจากใบเดิมไม่สำเร็จ'),
   });
 
+  /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
+   * dropped. Unlike updateMutation, this is not a save of the rep's own edits, so on success it
+   * re-seeds `groups`/`items` straight from the response (the SAME derivation the initial-load
+   * effect above uses — see that effect's own comment) rather than merging by clientId: the
+   * restored row has no local clientId to merge onto, it is a brand-new row the server just
+   * minted. `adjustments`/`terms`/`contact`/`docSettings` are untouched — a restore can never
+   * change any of those. */
+  const restoreItemMutation = useMutation({
+    mutationFn: (pricingDecisionItemId) => api.dealQuotations.restoreRemovedItem(id, pricingDecisionItemId),
+    onSuccess: (res) => {
+      queryClient.setQueryData(queryKeys.dealQuotationDetail(id), res.quotation);
+      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      const storedMode = res.quotation.priceMode || 'NET';
+      const rows = res.quotation.items.map((it) => rowFromServerItem(it, storedMode));
+      const rebuilt = locationGroupsFromItems(rows.filter((it) => lineTypeOf(it) !== LINE_TYPE_ADJUSTMENT));
+      setGroups(rebuilt.groups);
+      setItems(rebuilt.items);
+      setTouchedRowIds(new Set(res.quotation.items.map((it) => it.id)));
+      showToast('success', 'คืนรายการแล้ว');
+    },
+    onError: (error) => showToast('error', error.message || 'คืนรายการไม่สำเร็จ'),
+  });
+
   const cancelMutation = useMutation({
     mutationFn: () => api.dealQuotations.cancel(id, {}),
     onSuccess: (res) => {
@@ -1605,6 +1682,12 @@ export function QuotationEditorPage({ user, showToast }) {
   // intermediate override-resolved consts.
   const realSalesRepName = quotation?.salesRepName ?? ticket?.createdByName ?? (isInlineCreate ? user.name : null) ?? '-';
   const wasRejected = quotation?.docStatus === 'DRAFT' && Boolean(quotation?.approvalNote);
+  // GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the ONE branch point this
+  // whole feature adds to this editor. Every other read below keys off `quotation.origin`
+  // directly rather than introducing a second flag, so a DEAL_DIRECT document's rendering is
+  // provably unaffected: `isPricingRequestOrigin` is false for it, exactly like it always would
+  // have been null/undefined before this field existed.
+  const isPricingRequestOrigin = quotation?.origin === 'PRICING_REQUEST';
   const saving = createMutation.isPending || updateMutation.isPending || creatingDeal;
   // The customer whose contacts ผู้สั่งซื้อ may be chosen from: the deal's on the ?ticket= and
   // existing-DRAFT paths, the one being picked right now on the inline-create path.
@@ -1621,6 +1704,18 @@ export function QuotationEditorPage({ user, showToast }) {
         context={(
           <>
             {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+            {/* GLA-123 slice S1 — provenance link back to the pricing request this quotation was
+                created from (createFromPricingRequest). Falls back to the numeric id on a row
+                whose PR join came back null (should not happen in practice — every PRICING_REQUEST
+                row has one — but a broken link should degrade to SOMETHING clickable, not vanish). */}
+            {isPricingRequestOrigin && quotation.pricingRequestId ? (
+              <Link
+                to={`/pricing-requests/${quotation.pricingRequestId}`}
+                className="text-2xs font-bold text-link underline"
+              >
+                สร้างจากคำขอราคา {quotation.pricingRequestCode ?? `#${quotation.pricingRequestId}`}
+              </Link>
+            ) : null}
             {/* Autosave receipt (owner ask 2026-09-10). `role="status"` so it is announced once
                 rather than read as a live-updating alert; Bangkok local time, HH:mm, because that
                 is the clock the rep is looking at. */}
@@ -1659,7 +1754,16 @@ export function QuotationEditorPage({ user, showToast }) {
                 </Button>
               </>
             ) : null}
-            {quotation && canSubmitDealQuotation(user, quotation) ? (
+            {quotation && isPricingRequestOrigin && canEditDealQuotation(user, quotation)
+              && canTransitionDealQuotation(quotation.docStatus, 'PENDING_APPROVAL') ? (
+              // GLA-123 slice S1: the dual-approval flow that actually submits a
+              // PRICING_REQUEST-origin quotation is S2's job — DealQuotationService#submit
+              // refuses it server-side. Shown DISABLED (not hidden) so the rep sees WHY there is
+              // no submit button here, rather than wondering if the page is broken.
+              <Button variant="primary" disabled title="ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป">
+                ส่งขออนุมัติ
+              </Button>
+            ) : quotation && canSubmitDealQuotation(user, quotation) ? (
               <Button
                 variant="primary"
                 // #S2: disabled while ANY save is in flight (createMutation/updateMutation/
@@ -1919,6 +2023,47 @@ export function QuotationEditorPage({ user, showToast }) {
                 {settingsNotice}
               </p>
             ) : null}
+            {/* GLA-123 slice S1 — header marker when the rep has switched the whole document's
+                price mode away from the CEO's original decision (DealQuotationDto
+                #priceModeChangedFromCeo). Every linked line already shows its own marker
+                (QuotationItemRow); this is the document-wide summary of the same fact. */}
+            {isPricingRequestOrigin && quotation?.priceModeChangedFromCeo ? (
+              <p role="status" className="m-0 mt-3 rounded-md border border-warning-border bg-warning/10 p-3 text-xs font-bold text-warning">
+                เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ
+                <span className="ml-1 font-normal text-text-muted">
+                  (CEO เลือก: {PRICE_MODE_OPTIONS.find((opt) => opt.code === quotation.ceoPriceMode)?.label ?? quotation.ceoPriceMode})
+                </span>
+              </p>
+            ) : null}
+            {/* M4(c)/(d) fix (Opus review, 2026-09-20) — header marker + "คืนรายการ" when one or
+                more CEO-linked lines have been dropped from this document (DealQuotationDto
+                #itemsRemovedFromCeoCount/#removedCeoItems). Each listed line restores
+                INDEPENDENTLY — dropping was per-line, so restoring is too. */}
+            {isPricingRequestOrigin && quotation?.itemsRemovedFromCeoCount > 0 ? (
+              <div role="status" className="m-0 mt-3 flex flex-col gap-2 rounded-md border border-warning-border bg-warning/10 p-3 text-xs">
+                <p className="m-0 font-bold text-warning">
+                  ลบรายการที่ CEO อนุมัติ {quotation.itemsRemovedFromCeoCount} รายการ
+                </p>
+                {(quotation.removedCeoItems ?? []).map((removed) => (
+                  <div key={removed.pricingDecisionItemId} className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-text-muted">
+                      {[removed.brand, removed.model, removed.color, removed.texture, removed.sizeText]
+                        .filter(Boolean).join(' ')}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      loading={restoreItemMutation.isPending && restoreItemMutation.variables === removed.pricingDecisionItemId}
+                      disabled={restoreItemMutation.isPending}
+                      onClick={() => restoreItemMutation.mutate(removed.pricingDecisionItemId)}
+                    >
+                      คืนรายการ
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </Panel>
 
           {/* ── รายการสินค้า, grouped by ตำแหน่งติดตั้ง (owner feedback F1, 2026-09-10) ──────
@@ -1929,7 +2074,15 @@ export function QuotationEditorPage({ user, showToast }) {
               (see locationGroupsFromItems), so the editor is a preview of the page structure. */}
           <Panel
             title="รายการสินค้า"
-            actions={(
+            actions={isPricingRequestOrigin ? (
+              // GLA-123 slice S1 (owner ruling 2026-09-19): every item on a PRICING_REQUEST
+              // quotation comes from createFromPricingRequest — adding a new one (a new ตำแหน่ง,
+              // a new tile, or สินค้า/บริการอื่น) is refused server-side for this origin in S1
+              // (DealQuotationService#update). Extra items are typed and priced on the pricing
+              // request itself, a later slice — every "เพิ่ม…" action below is hidden rather than
+              // shown-then-refused.
+              <span className="text-2xs font-bold text-text-muted">เพิ่มรายการอื่นได้ที่คำขอราคา</span>
+            ) : (
               <Button variant="secondary" size="sm" onClick={addGroup}>
                 <Icon name="plus" size={14} />
                 เพิ่มตำแหน่ง
@@ -1965,22 +2118,28 @@ export function QuotationEditorPage({ user, showToast }) {
                           the item rows' selects force the page wide (see QuotationItemRow). */}
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="text-2xs font-bold text-text-muted">{groupItems.length} รายการ</span>
-                        <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
-                          <Icon name="plus" size={13} />
-                          เพิ่มรายการในตำแหน่งนี้
-                        </Button>
+                        {/* GLA-123 slice S1: hidden for this origin — see the Panel's own
+                            "เพิ่มรายการอื่นได้ที่คำขอราคา" note above. */}
+                        {!isPricingRequestOrigin ? (
+                          <Button variant="secondary" size="sm" onClick={() => addItem(group.groupId)}>
+                            <Icon name="plus" size={13} />
+                            เพิ่มรายการในตำแหน่งนี้
+                          </Button>
+                        ) : null}
                         {/* v3 S2: freight, consumables, a cut service, sanitary ware — a row with
                             none of the tile fields. Deliberately NOT worded "เพิ่มรายการ…": the
                             tile button above keeps that name, and this one says what it is for. */}
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          aria-label="เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้"
-                          onClick={() => addPlainItem(group.groupId)}
-                        >
-                          <Icon name="plus" size={13} />
-                          สินค้า/บริการอื่น
-                        </Button>
+                        {!isPricingRequestOrigin ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            aria-label="เพิ่มสินค้าหรือบริการอื่นในตำแหน่งนี้"
+                            onClick={() => addPlainItem(group.groupId)}
+                          >
+                            <Icon name="plus" size={13} />
+                            สินค้า/บริการอื่น
+                          </Button>
+                        ) : null}
                         {/* Only for an EMPTY group, and never for the last one standing — see
                             removeGroup. Removing a group that still holds items would delete
                             them, which this label does not say. */}
@@ -2025,6 +2184,7 @@ export function QuotationEditorPage({ user, showToast }) {
                           return (
                             <QuotationItemRow
                               priceMode={docSettings.priceMode}
+                              ceoPriceMode={quotation?.ceoPriceMode}
                               documentLanguage={docSettings.documentLanguage}
                               currency={currency}
                               key={item.clientId}
@@ -2042,6 +2202,7 @@ export function QuotationEditorPage({ user, showToast }) {
                               onRemove={() => removeItem(item.clientId)}
                               onMove={(targetGroupId) => moveItemToGroup(item.clientId, targetGroupId)}
                               onDuplicate={(targetGroupId) => duplicateItem(item.clientId, targetGroupId)}
+                              hideDuplicate={isPricingRequestOrigin}
                               onCatalogPicked={handleCatalogPicked}
                             />
                           );
@@ -2081,17 +2242,22 @@ export function QuotationEditorPage({ user, showToast }) {
                     })}
                   </ul>
                 ) : null}
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <Button variant="secondary" size="sm" disabled={items.length === 0} onClick={addAdjustment}>
-                    <Icon name="plus" size={13} />
-                    เพิ่มส่วนลดพิเศษ
-                  </Button>
-                  <span className="text-2xs text-text-muted">
-                    {items.length === 0
-                      ? 'เพิ่มรายการสินค้าก่อน จึงจะใส่ส่วนลดพิเศษได้'
-                      : 'คิดจากยอดรวมรายการข้างบนทั้งหมด และพิมพ์เป็นรายการสุดท้ายเสมอ'}
-                  </span>
-                </div>
+                {/* GLA-123 slice S1: hidden for this origin — ADJUSTMENT rows are an "extra
+                    item" too, refused server-side for PRICING_REQUEST the same as a TILE/PLAIN
+                    one (DealQuotationService#update). */}
+                {!isPricingRequestOrigin ? (
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <Button variant="secondary" size="sm" disabled={items.length === 0} onClick={addAdjustment}>
+                      <Icon name="plus" size={13} />
+                      เพิ่มส่วนลดพิเศษ
+                    </Button>
+                    <span className="text-2xs text-text-muted">
+                      {items.length === 0
+                        ? 'เพิ่มรายการสินค้าก่อน จึงจะใส่ส่วนลดพิเศษได้'
+                        : 'คิดจากยอดรวมรายการข้างบนทั้งหมด และพิมพ์เป็นรายการสุดท้ายเสมอ'}
+                    </span>
+                  </div>
+                ) : null}
               </section>
             </div>
           </Panel>

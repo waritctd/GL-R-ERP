@@ -173,6 +173,9 @@ export const queryKeys = {
   // Step 4: Customer Quotation Generation and Issuance.
   customerQuotations: (pricingRequestId) => ['pricingRequests', 'customerQuotations', pricingRequestId],
   customerQuotationDetail: (id) => ['customerQuotations', 'detail', id],
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20) — the NEW engine's counterpart of
+  // customerQuotations above, for the SAME "ใบเสนอราคาลูกค้า" panel.
+  dealQuotationForPricingRequest: (pricingRequestId) => ['pricingRequests', 'dealQuotationForPricingRequest', pricingRequestId],
   // CEO discount-approval workflow, Phase 2 (V155): per-line approval status for one quotation.
   discountApprovals: (quotationId) => ['customerQuotations', 'discountApprovals', quotationId],
   // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). A sibling key space to

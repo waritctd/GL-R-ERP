@@ -83,6 +83,12 @@ vi.mock('../../api/index.js', () => ({
     // fetches the same eligible-display-name list the direct-deal quotation editor uses.
     dealQuotations: {
       displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
+      // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20) — reset to "none yet" in the shared
+      // beforeEach below (mirrors getPricingDecisionSalesView's own per-test reset there), so
+      // every existing test in this file keeps seeing the SAME legacy-only panel state as before
+      // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
+      findForPricingRequest: vi.fn(),
+      createFromPricingRequest: vi.fn(),
     },
   },
 }));
@@ -264,6 +270,10 @@ function setApiDefaults() {
   api.pricingRequests.createCustomerChangeRevision.mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
   api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [] });
   api.pricingRequests.getPricingDecisionSalesView.mockRejectedValue(new Error('No approved pricing decision yet'));
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): reset every test back to "no new-engine
+  // quotation yet" — mockResolvedValue (not Once) leaks into later tests otherwise, exactly like
+  // getPricingDecisionSalesView above would without this same per-test reset.
+  api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: null });
   api.pricingRequests.startPricingDecision.mockResolvedValue({});
   api.pricingRequests.updatePricingDecision.mockResolvedValue({});
   api.pricingRequests.recalculatePricingDecisionCost.mockResolvedValue({});
@@ -2482,6 +2492,77 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       request.summary.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+
+  // GLA-123 slice S1 M2 fix (Opus review, 2026-09-20): mutual exclusivity means offering BOTH
+  // create buttons on a new-form (CEO price-mode) request just invites a wasted click on the
+  // now-redundant OLD path — server-side, starting it would either 409 (if the NEW quotation
+  // already exists) or itself block the NEW path from ever being started. A legacy decision
+  // (newFormPricing false) has no such redundancy, so it keeps offering both, exactly as before.
+  //
+  // MINOR-1 fix (owner ruling, confirmed 2026-09-20, second re-review): the fixture below used to
+  // pass `priceMode` — the field PricingDecisionSalesViewDto has SINCE replaced with the plain
+  // `newFormPricing` boolean (never leaks which pricing method the CEO chose, since this endpoint
+  // is also legitimately callable by import). Updated so this test still exercises the REAL
+  // signal the component reads, not a stale field name it would now silently ignore.
+  it('hides the old "สร้างร่างใบเสนอราคาลูกค้า" button once the decision is new-form, but keeps the new-engine button', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.getPricingDecisionSalesView.mockResolvedValue({
+      decision: buildSalesView({ newFormPricing: true }),
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await screen.findByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' });
+    expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
+  });
+
+  it('keeps offering BOTH create buttons for a legacy (pre-V187) decision that is not new-form', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.pricingRequests.getPricingDecisionSalesView.mockResolvedValue({
+      decision: buildSalesView({ newFormPricing: false }),
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await screen.findByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' });
+    expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' })).not.toBeNull();
+  });
+
+  // Coordinator repro (2026-09-20): clicking "เขียนใบเสนอราคาจากคำขอราคา" on a request whose
+  // ticket/PR carries no ผู้สั่งซื้อ (recipientContactId) 409s server-side with a clear Thai
+  // message, but nothing on screen showed it — no toast, no inline error, no navigation. This
+  // pins that the click surfaces the server's message via showToast('error', ...).
+  it('shows the server\'s error as a toast when create-from-PCR fails (e.g. missing ผู้สั่งซื้อ), instead of failing silently', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    const error = new Error('กรุณาระบุผู้สั่งซื้อ');
+    error.status = 400;
+    api.dealQuotations.createFromPricingRequest.mockRejectedValue(error);
+    const { showToast } = renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    const button = await screen.findByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุผู้สั่งซื้อ'));
+  });
+
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's quotation is displayed
+  // in this SAME "ใบเสนอราคาลูกค้า" panel (number/status/link), and — since one already exists —
+  // neither create button is offered (there is nothing left to create).
+  it('shows the new-engine quotation (number, status, link) once one exists, and hides both create buttons', async () => {
+    const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await screen.findByText('QT-2026-0099-1');
+    const link = screen.getByRole('link', { name: 'เปิดใบเสนอราคา' });
+    expect(link.getAttribute('href')).toBe('/quotations/9001');
+    expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' })).toBeNull();
   });
 
   it('does not offer the create button before APPROVED_FOR_QUOTATION, and never fetches the quotation list for a non-owning role', async () => {

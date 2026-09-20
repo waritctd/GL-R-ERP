@@ -662,6 +662,13 @@ public class PricingRequestService {
         // (sales.quotation_item), so superseding the decision cannot change what the customer was
         // quoted.
         requests.supersedeOpenPricingDecision(parent.id());
+        // MINOR fix (Opus review, 2026-09-20) — see supersedeOpenPricingRequestOriginDraft's own
+        // Javadoc for why this is a SEPARATE, narrower call from the decision supersede just
+        // above, and why it is safe alongside the "legacy ISSUED quotation stays live" ruling
+        // documented in the block comment above: this only ever touches an origin =
+        // 'PRICING_REQUEST' DRAFT, never the legacy (origin IS NULL) quotation that ruling
+        // protects.
+        requests.supersedeOpenPricingRequestOriginDraft(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
             request.revisionReason(), toRevisionMetadataJson(newId));

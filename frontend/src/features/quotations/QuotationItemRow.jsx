@@ -148,12 +148,39 @@ function PriceInputWithSuffix({ id, suffix, className, ...inputProps }) {
  * decides that itself. `error={errors.field}` on a FormField renders the red hint + wires
  * aria-invalid; `required` marks the label with `*`, matching the rest of the app.
  */
+/**
+ * GLA-123 slice S1 (coordinator follow-up, 2026-09-20) — the CEO's ORIGINAL price for this line,
+ * formatted per mode exactly as the owner specified: "ราคา CEO: ฿83.00 · ส่วนลด 10%" (NET),
+ * "ราคาพิเศษ CEO: ฿1,350.00/ตร.ม." (SPECIAL_SQM), "ราคาสุทธิ CEO: ฿74.70" (DIRECT_NET). Reads the
+ * `ceo*` fields the server joins onto a linked item (DealQuotationItemDto#ceoListUnitPrice etc.)
+ * — never re-derives them.
+ */
+function ceoOriginalPriceText(priceMode, item, currency) {
+  if (priceMode === 'SPECIAL_SQM') {
+    return `ราคาพิเศษ CEO: ${formatQuotationMoney(item.ceoSpecialPriceSqm, currency)}/ตร.ม.`;
+  }
+  if (priceMode === 'DIRECT_NET') {
+    return `ราคาสุทธิ CEO: ${formatQuotationMoney(item.ceoDirectNetPrice, currency)}`;
+  }
+  const discountPct = item.ceoDiscountPct ?? 0;
+  return `ราคา CEO: ${formatQuotationMoney(item.ceoListUnitPrice, currency)} · ส่วนลด ${discountPct}%`;
+}
+
 export function QuotationItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], recentPicks = [], onMove, onDuplicate, onCatalogPicked,
   // v3: the QUOTATION's tile price mode (one per document — see quotationMeta's PRICE_MODE_OPTIONS)
   // and its currency. Both default to the pre-v3 behaviour so an existing caller is unchanged.
   priceMode = 'NET', currency = 'THB',
+  // MINOR fix (Opus review, 2026-09-20): the CEO's ORIGINAL pricing_decision.price_mode
+  // (DealQuotationDto#ceoPriceMode, header-level, frozen at create) — DISTINCT from `priceMode`
+  // above, which is the document's CURRENT mode and can be switched by sales after create (see
+  // #priceModeChangedFromCeo). ceoOriginalPriceText must format against THIS, not `priceMode`: a
+  // rep who switches SPECIAL_SQM -> NET would otherwise have the marker read
+  // item.ceoSpecialPriceSqm (null — the CEO's own decision was NET) instead of the CEO's actual
+  // ceoListUnitPrice/ceoDiscountPct. Defaults to `priceMode` so a DEAL_DIRECT caller (no
+  // ceoPriceMode concept, and the marker never renders there anyway) is unaffected.
+  ceoPriceMode,
   // Owner decision 2026-09-13: the document's language — SPECIAL_SQM on English is a USD/ตร.ม. price
   // whose quantity is boxes × ตร.ม./กล่อง, so the row asks for that instead of a list price per piece.
   documentLanguage = 'TH',
@@ -180,6 +207,11 @@ export function QuotationItemRow({
   // check itself lives in quotationMeta's validateQuotationItem (requireOriginCountry option),
   // not in this component.
   requireOriginCountry = false,
+  // GLA-123 slice S1 (coordinator follow-up, 2026-09-20): a duplicated row has no server id, so
+  // the resulting save would be refused as a new row on a PRICING_REQUEST-origin quotation
+  // (DealQuotationService#update) — the control is hidden rather than left as a dead end.
+  // Defaults false, so DEAL_DIRECT's own rendering is unchanged.
+  hideDuplicate = false,
 }) {
   const perSqm = isEnglishPerSqm(priceMode, documentLanguage);
   // Thai SPECIAL_SQM only -- see PriceInputWithSuffix's own comment above for why this exists.
@@ -432,21 +464,25 @@ export function QuotationItemRow({
                   ))}
                 </select>
 
-                <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
-                <select
-                  id={`dup-${index}`}
-                  className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
-                  value=""
-                  onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
-                >
-                  <option value="">ทำซ้ำรายการ…</option>
-                  <option value={groupId}>ในตำแหน่งนี้</option>
-                  {moveTargets.map((group) => (
-                    <option key={group.groupId} value={group.groupId}>ไปยัง {group.label || UNLABELLED_LOCATION_TEXT}</option>
-                  ))}
-                </select>
+                {hideDuplicate ? null : (
+                  <>
+                    <label htmlFor={`dup-${index}`} className="sr-only">ทำซ้ำรายการ</label>
+                    <select
+                      id={`dup-${index}`}
+                      className="h-8 mobile:h-11 w-full min-w-0 py-0 text-2xs sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
+                      value=""
+                      onChange={(e) => { if (e.target.value) onDuplicate?.(e.target.value); }}
+                    >
+                      <option value="">ทำซ้ำรายการ…</option>
+                      <option value={groupId}>ในตำแหน่งนี้</option>
+                      {moveTargets.map((group) => (
+                        <option key={group.groupId} value={group.groupId}>ไปยัง {group.label || UNLABELLED_LOCATION_TEXT}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
               </>
-            ) : (
+            ) : hideDuplicate ? null : (
               // One location only: there is nowhere to move to and only one place to copy into,
               // so the duplicate degrades to a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
@@ -986,6 +1022,31 @@ export function QuotationItemRow({
               />
             </FormField>
           </>
+        ) : null}
+        {/* GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the CEO-comparison
+            marker for a PRICING_REQUEST-origin TILE row linked to a decision item. `item.
+            ceoNetUnitPrice` (from the server's LEFT JOIN, see DealQuotationRepository#mapItem
+            Columns) is non-null exactly on such a row — a DEAL_DIRECT row, or an unlinked
+            PRICING_REQUEST row, always reads it null and renders nothing here. Sales MAY edit
+            these fields (owner ruling revised 2026-09-19 — no server-side lock); this is
+            informational, not a disabled state. */}
+        {!hidePricing && item.ceoNetUnitPrice != null ? (
+          <div className="col-span-2 mobile:col-span-1">
+            {item.priceChangedFromCeo ? (
+              <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-md border border-warning-border bg-warning/10 px-3 py-2 text-2xs font-bold text-warning">
+                <span>เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ</span>
+                <span className="font-normal text-text-muted">{ceoOriginalPriceText(ceoPriceMode ?? priceMode, item, currency)}</span>
+              </p>
+            ) : (
+              <p className="m-0 flex items-center gap-1.5 text-2xs font-bold text-text-muted">
+                {/* NIT fix (Opus review, 2026-09-20): "lock" read as if the price were locked —
+                    it is not (sales may edit it freely, see this block's own ruling comment
+                    above), so a "check" (nothing to flag) reads correctly instead. */}
+                <Icon name="check" size={12} />
+                ราคาจาก CEO
+              </p>
+            )}
+          </div>
         ) : null}
         <FormField
           label="ประเทศต้นทาง"
