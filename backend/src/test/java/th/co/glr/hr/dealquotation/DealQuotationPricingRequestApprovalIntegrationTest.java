@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import org.apache.poi.hssf.usermodel.HSSFPicture;
@@ -428,7 +429,12 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         DealQuotationDto submitted = submittedQuotation();
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
-        assertThat(issued.validityDate()).isEqualTo(LocalDate.now().plusDays(30));
+        // Bare LocalDate.now() uses the JVM default zone. DealQuotationService computes the
+        // approval date (and so validityDate) with an explicit LocalDate.now(Asia/Bangkok) — see
+        // its own BANGKOK constant — so a CI runner whose default zone is UTC disagrees with this
+        // assertion for roughly the first 7 hours of each Bangkok day (already tomorrow in
+        // Bangkok, still today in UTC). Match the same zone the code under test actually uses.
+        assertThat(issued.validityDate()).isEqualTo(LocalDate.now(ZoneId.of("Asia/Bangkok")).plusDays(30));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
