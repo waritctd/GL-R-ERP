@@ -68,6 +68,13 @@ export const ANONYMOUS_ALLOWLIST = [
   // POST /api/attendance/punch — scanner devices authenticate with X-GLR-Agent-Token, not a
   // session, so the filter chain cannot gate it.
   '/api/attendance/punch',
+  // POST /api/auth/forgot-password, POST /api/auth/reset-password — the self-service password
+  // reset flow (V190). Both are anonymous by necessity, the same way login is: a caller who
+  // forgot their password by definition has no session, and the second call arrives from a link
+  // in an email, not from a browser that has ever authenticated. Enumeration safety and token
+  // validity are what actually gate these, not a session — see PasswordResetService.
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
   // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification
   // email, so there is no session to present and none can be obtained: Gmail and Outlook fetch an
   // image URL with no credentials, and Gmail proxies it besides. Anonymous by necessity, not by

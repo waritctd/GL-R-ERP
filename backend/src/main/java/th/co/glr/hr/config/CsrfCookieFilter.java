@@ -35,9 +35,14 @@ public class CsrfCookieFilter extends OncePerRequestFilter {
     static final String CSRF_HEADER_NAME = "X-XSRF-TOKEN";
 
     private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
-    // Login must succeed before the client has a token; CSRF on login itself is low impact.
+    // Login must succeed before the client has a token; CSRF on login itself is low impact. The
+    // same reasoning covers the two self-service forgot-password endpoints: a client landing
+    // fresh on /forgot-password, or arriving via an emailed /reset-password?token=... link, has
+    // made no prior /api/** call and so holds no CSRF cookie/header pair yet either.
     private static final Set<String> EXEMPT_PATHS = Set.of(
         "/api/auth/login",
+        "/api/auth/forgot-password",
+        "/api/auth/reset-password",
         "/api/attendance/punch"
     );
 
