@@ -126,15 +126,6 @@ export function LoginPage({ onLogin, loading, error }) {
                 className="pl-10"
               />
             </span>
-            <Button
-              type="button"
-              variant="text"
-              data-testid="login-forgot-password"
-              className="justify-self-end"
-              onClick={() => navigate('/forgot-password')}
-            >
-              ลืมรหัสผ่าน?
-            </Button>
           </label>
 
           {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]">{error}</div> : null}
@@ -142,6 +133,32 @@ export function LoginPage({ onLogin, loading, error }) {
           <Button type="submit" data-testid="login-submit" disabled={loading}>
             <Icon name="check" />
             เข้าสู่ระบบ
+          </Button>
+
+          {/* Bottom-of-card nav link, not inline with the password field: a plain-text
+              variant="text" Button (no box - see LoginPage's submit button above for the boxed
+              contrast), sized to match the field labels' own font-size token
+              (index.css's base `label` rule: font-size: var(--text-sm)) rather than a smaller
+              muted caption size, since this is a primary navigation option, not decoration - but
+              NOT bold: the label's font-weight:700 is what makes it read as a form caption, and
+              this is a link, not one. `!font-normal` (not plain `font-normal`) is required to win
+              against Button's own base `!font-bold`: cn()'s tailwind-merge only dedupes utilities
+              whose "important" modifier matches, so an unmarked `font-normal` is left stacked
+              alongside `!font-bold` rather than replacing it, and the `!important` rule always
+              wins regardless of source order. `self-end`: SafeForm is `flex flex-col`, whose
+              default `align-items: stretch` would otherwise stretch the button to the full card
+              width (centering the text within it via Button's own `justify-center`); `self-end`
+              overrides that for just this item so it shrinks to its own content width and sits at
+              the right edge - the same right alignment it had before moving here, when it used to
+              sit inside the password label's grid via `justify-self-end`. */}
+          <Button
+            type="button"
+            variant="text"
+            data-testid="login-forgot-password"
+            className="self-end !font-normal text-[length:var(--text-sm)]"
+            onClick={() => navigate('/forgot-password')}
+          >
+            ลืมรหัสผ่าน?
           </Button>
 
           {isMock && (

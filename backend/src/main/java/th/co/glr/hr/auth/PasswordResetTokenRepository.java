@@ -89,12 +89,30 @@ public class PasswordResetTokenRepository {
         }
     }
 
-    public void markUsed(long tokenId) {
-        jdbc.update("""
+    /**
+     * Atomically consumes the token — sets {@code used_at} ONLY if it is still unused — and
+     * reports whether THIS call was the one that consumed it. This is the guard against a
+     * concurrent double-redemption: {@code findValidByTokenHash} (read) and the caller's own
+     * {@code password_hash} write are separated by a slow BCrypt hash, hundreds of milliseconds
+     * wide, so two requests bearing the same valid token can both pass the read and race to
+     * "consume" it. Because the {@code WHERE used_at IS NULL} is evaluated by Postgres as part of
+     * the same atomic {@code UPDATE}, only one concurrent caller's statement can match the row —
+     * the other's {@code UPDATE} affects zero rows, and {@link PasswordResetService#resetPassword}
+     * treats that as the same invalid/expired-token rejection a normal miss gets, never touching
+     * {@code password_hash} for the loser. Plain {@code markUsed} (unconditional) is deliberately
+     * not offered alongside this — every caller needs the race-safe version.
+     *
+     * @return {@code true} if this call consumed the token (it was still unused), {@code false} if
+     *     it was already used (by a concurrent request or a prior one) and nothing changed.
+     */
+    public boolean markUsedIfUnused(long tokenId) {
+        int updated = jdbc.update("""
             UPDATE hr.password_reset_token
                SET used_at = now()
              WHERE id = :id
+               AND used_at IS NULL
             """, Map.of("id", tokenId));
+        return updated > 0;
     }
 
     public record OpenToken(long id, long employeeId) {

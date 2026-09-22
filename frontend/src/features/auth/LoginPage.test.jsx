@@ -143,4 +143,30 @@ describe('LoginPage forgot-password link', () => {
 
     expect(screen.getByText('forgot-password-page')).not.toBeNull();
   });
+
+  // Regression guard: the link used to be nested INSIDE the password <label>, which is invalid
+  // HTML (an interactive element inside a label) and, measured with dom-accessibility-api, gave
+  // the input the accessible name "รหัสผ่าน ลืมรหัสผ่าน?" instead of just "รหัสผ่าน" - the label's
+  // implicit text-content association swept up the link's own text too. getByLabelText resolves
+  // an element strictly by its OWN accessible name matching the query, so it only finds the
+  // password input here if that name is exactly "รหัสผ่าน" with nothing appended - a return of the
+  // bug (moving the link back inside the label, or reintroducing the label-wraps-button shape some
+  // other way) makes this throw "Unable to find a label with the text of: รหัสผ่าน" instead of
+  // silently passing.
+  it('does not pollute the password field\'s accessible name with the link text', () => {
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+    const byLabel = screen.getByLabelText('รหัสผ่าน');
+    expect(byLabel).toBe(screen.getByTestId('login-password'));
+  });
+
+  it('keeps the link as a sibling, not a descendant, of the password label', () => {
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+    const label = screen.getByText('รหัสผ่าน');
+    expect(label.tagName).toBe('LABEL');
+    // The link must not be inside the <label> element at all - nesting an interactive control
+    // inside a <label> is invalid HTML and is exactly what caused the accessible-name bug above.
+    expect(label.contains(screen.getByTestId('login-forgot-password'))).toBe(false);
+  });
 });
