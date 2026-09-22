@@ -4,6 +4,10 @@ export const API_ROUTES = {
     logout: '/api/auth/logout',
     me: '/api/auth/me',
     changePassword: '/api/auth/change-password',
+    // Self-service "forgot password" (ลืมรหัสผ่าน). Both anonymous - no session exists yet when
+    // either is called. Mirrors AuthController#forgotPassword / #resetPassword.
+    forgotPassword: '/api/auth/forgot-password',
+    resetPassword: '/api/auth/reset-password',
   },
   // Admin-only. Mirrors ActivityLogController.
   activityLog: {

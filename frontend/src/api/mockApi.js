@@ -480,6 +480,10 @@ db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
 let sessionUser = null;
+// Self-service forgot-password (ลืมรหัสผ่าน) — token -> { userId, expiresAt }. In-memory only, for
+// the life of the mock session; see auth.forgotPassword/resetPassword below for what this does
+// and does not mirror from the real backend.
+const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
 const mockCustomers = [
@@ -5676,6 +5680,47 @@ export const api = {
       user.password = payload.newPassword;
       user.mustChangePassword = false;
       return delay(authResponse(user));
+    },
+    // Mirrors AuthController#forgotPassword / PasswordResetService#forgotPassword — PLUMBING
+    // ONLY, not the real algorithm. The real backend generates a 32-byte SecureRandom token,
+    // stores only its SHA-256 hash (hr.password_reset_token, V190), and emails the raw token via
+    // NotificationEmailService with a real 30-minute TIMESTAMPTZ expiry and a DB-backed
+    // single-use/cooldown guard. None of that is reimplemented here — a mirrored security
+    // algorithm would be evidence about nothing (CLAUDE.md "mock API contract"). This just stores
+    // the token in the in-memory map below and logs what WOULD have been emailed, so
+    // /forgot-password -> /reset-password is clickable end-to-end under VITE_USE_MOCKS=true.
+    async forgotPassword(payload) {
+      const email = payload?.email?.trim().toLowerCase();
+      const user = db.users.find((item) => item.email.toLowerCase() === email && item.active);
+      // Same generic message whether or not the address matched — never reveal account
+      // existence via the response, mirroring the real endpoint's anti-enumeration contract.
+      const genericMessage = 'หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ';
+      if (user) {
+        const token = `mock-reset-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        passwordResetTokens.set(token, { userId: user.id, expiresAt: Date.now() + 30 * 60 * 1000 });
+        // Deliberate console log: this is the mock's stand-in for the real email, so a
+        // developer/QA session can copy the token straight out of devtools instead of needing a
+        // real mailbox. Never logged in a real deployment (mock-only file).
+        console.info(`[mockApi] would have emailed ${user.email} a reset link: /reset-password?token=${token}`);
+      }
+      return delay({ message: genericMessage });
+    },
+    // Mirrors AuthController#resetPassword / PasswordResetService#resetPassword — see
+    // forgotPassword's comment above for what is and is not mirrored here.
+    async resetPassword(payload) {
+      const entry = payload?.token ? passwordResetTokens.get(payload.token) : null;
+      if (!entry || entry.expiresAt < Date.now()) {
+        fail('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง', 400);
+      }
+      const user = db.users.find((item) => item.id === entry.userId);
+      if (!user) fail('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง', 400);
+      if (!payload?.newPassword || payload.newPassword.length < 8) {
+        fail('รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร', 400);
+      }
+      user.password = payload.newPassword;
+      user.mustChangePassword = false;
+      passwordResetTokens.delete(payload.token);
+      return delay({ message: 'ตั้งรหัสผ่านใหม่เรียบร้อยแล้ว กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่ของคุณ' });
     },
   },
   // Mirrors EmployeeController + EmployeeService (employee/).

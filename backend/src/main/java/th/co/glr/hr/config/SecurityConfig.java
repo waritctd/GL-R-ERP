@@ -30,6 +30,13 @@ public class SecurityConfig {
             .authorizeHttpRequests(authorize -> authorize
                 .requestMatchers(HttpMethod.OPTIONS, "/api/**").permitAll()          // CORS preflight (MVC CORS still enforces origins)
                 .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()      // no session yet; CSRF-exempt already
+                // Self-service forgot-password (ลืมรหัสผ่าน): both legs run before the caller has
+                // any session - a client landing fresh on /forgot-password, or arriving via an
+                // emailed /reset-password?token=... link, has made no prior /api/** call and holds
+                // no session cookie yet. Same reasoning as the login exemption above; CSRF-exempt
+                // already (see CsrfCookieFilter.EXEMPT_PATHS).
+                .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/attendance/punch").permitAll()// device X-GLR-Agent-Token; no session
                 .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll() // LB/probe health only; no other actuator endpoint
                 // Scoped to /brand/** deliberately, NOT the whole /api/public/** namespace: a

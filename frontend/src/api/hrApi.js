@@ -16,6 +16,13 @@ export const api = {
     logout: () => apiRequest(API_ROUTES.auth.logout, { method: 'POST' }),
     me: () => apiRequest(API_ROUTES.auth.me),
     changePassword: (payload) => apiRequest(API_ROUTES.auth.changePassword, { method: 'POST', body: payload }),
+    // Self-service "forgot password". Mirrors AuthController#forgotPassword: always resolves with
+    // the same generic { message } shape, whether or not the address matched an employee - never
+    // branch on this response to infer account existence.
+    forgotPassword: (payload) => apiRequest(API_ROUTES.auth.forgotPassword, { method: 'POST', body: payload }),
+    // Mirrors AuthController#resetPassword. Rejects (ApiError) with a Thai message when the token
+    // is missing/expired/already used, or when the new password equals the employee's own code.
+    resetPassword: (payload) => apiRequest(API_ROUTES.auth.resetPassword, { method: 'POST', body: payload }),
   },
   // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
   // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request —
