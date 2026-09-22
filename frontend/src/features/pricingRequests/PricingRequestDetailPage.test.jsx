@@ -89,6 +89,9 @@ vi.mock('../../api/index.js', () => ({
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
       createFromPricingRequest: vi.fn(),
+      // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
+      // pricingRequests.recordCustomerQuotationOutcome above.
+      recordOutcome: vi.fn(),
     },
   },
 }));
@@ -2748,6 +2751,72 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       issued.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+});
+
+// GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):
+// DealQuotationService#findForPricingRequest used to call the DRAFT-only
+// findOpenDraftForPricingRequest, so dealQuotationForPr was null for every status past DRAFT and
+// this whole panel (outcome-recording, the EXPIRED escape hatch) was unreachable in production —
+// even though these mock-driven tests already exercised the UI logic correctly, since they mock
+// the API response directly and never went through the real (buggy) backend query. These tests
+// pin the SAME UI behaviour per status the legacy "Step 5" describe block above pins for the old
+// engine, now for the new one, so a future regression on either query is caught here too.
+describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
+  function newEngineQuotation(overrides = {}) {
+    return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
+  }
+
+  it('ISSUED: offers the outcome-recording controls to the owning sales rep, and records ACCEPTED via dealQuotations.recordOutcome', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
+    fireEvent.click(acceptButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('ISSUED: never shows the outcome-recording controls to CEO or Import — read-only', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
+
+  it('ACCEPTED: hides the outcome-recording controls and shows the read-only outcome summary', async () => {
+    const accepted = newEngineQuotation({ docStatus: 'ACCEPTED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText(/ผลใบเสนอราคา/)).not.toBeNull();
+  });
+
+  it('EXPIRED: the outcome panel is gone and the expiry escape hatch renders instead', async () => {
+    const expired = newEngineQuotation({ docStatus: 'EXPIRED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: expired });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(expired.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
   });
 });
 

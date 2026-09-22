@@ -568,6 +568,9 @@ export const API_ROUTES = {
     submit: (id) => `/api/deal-quotations/${id}/submit`,
     approve: (id) => `/api/deal-quotations/${id}/approve`,
     reject: (id) => `/api/deal-quotations/${id}/reject`,
+    // GLA-123 slice S3 (R9) — records what the customer said about an ISSUED
+    // PRICING_REQUEST-origin quotation. Mirrors DealQuotationController#recordOutcome.
+    outcome: (id) => `/api/deal-quotations/${id}/outcome`,
     revisions: (id) => `/api/deal-quotations/${id}/revisions`,
     // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
     // independent DRAFT. Mirrors DealQuotationController#createReorder. Plural, sibling to

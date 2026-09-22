@@ -265,6 +265,48 @@ public class DealQuotationRepository {
     }
 
     /**
+     * GLA-123 slice S3 BLOCKER 2 fix (Opus review against real Postgres, 2026-09-23):
+     * {@code OrderConfirmationService#reconcileTicketItems} used to write {@code
+     * pricing_request_item.requested_qty} onto {@code sales.ticket_item.qty} unconditionally — the
+     * PR-AUTHORED quantity, never what the customer actually ACCEPTED. S1 explicitly lets sales
+     * edit a PRICING_REQUEST-origin quotation line's quantity/เผื่อ (excluded from {@code
+     * requireCeoApprovalIfChanged}, so it needs no CEO re-approval either), so a PR authored at 10
+     * pieces whose quotation line was edited to 25 before issue reconciled back down to 10 —
+     * proven live: stock reservation, delivery and "no open quantities" all ran on the wrong
+     * number.
+     *
+     * <p>This is the fix's read side: one row per quotation line on the pricing request's own
+     * ACCEPTED PRICING_REQUEST-origin quotation (there is at most one — R8), keyed by the {@code
+     * pricing_request_item_id} each TILE line is still linked to (S1 never lets a line lose that
+     * link — see {@link DealQuotationDtos.DealQuotationItemDto#priceChangedFromCeo}'s own family
+     * of fields, all keyed the same way), value = {@code quotation_item.qty} — the SAME column
+     * {@link #itemParams} writes from {@code NewItem#quantity()}, which is {@code piecesFinal} for
+     * a TILE row (the printed, wastage-and-edit-final piece count — see that field's own Javadoc).
+     * {@code OrderConfirmationService} prefers this map's value over the PR item's own {@code
+     * requestedQty} when a row exists for it, and falls back to the PR item's value otherwise
+     * (no accepted new-engine quotation at all — the legacy engine, which has NO quantity-edit
+     * capability on its own quotation items, so the PR item's value was always already correct
+     * there; or a PR item added after acceptance with no matching quotation line).
+     */
+    public Map<Long, java.math.BigDecimal> findAcceptedItemQuantitiesByPricingRequest(long pricingRequestId) {
+        List<Object[]> rows = jdbc.query("""
+            SELECT qi.pricing_request_item_id, qi.qty
+              FROM sales.quotation_item qi
+              JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
+             WHERE q.pricing_request_id = :pricingRequestId
+               AND q.origin = 'PRICING_REQUEST'
+               AND q.doc_status = 'ACCEPTED'
+               AND qi.pricing_request_item_id IS NOT NULL
+            """, Map.of("pricingRequestId", pricingRequestId),
+            (rs, rowNum) -> new Object[]{rs.getLong("pricing_request_item_id"), rs.getBigDecimal("qty")});
+        Map<Long, java.math.BigDecimal> result = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            result.put((Long) row[0], (java.math.BigDecimal) row[1]);
+        }
+        return result;
+    }
+
+    /**
      * M3 (found while testing the fix above): the next unused revision number for the chain
      * {@code baseNumber} belongs to — MAX(quotation_revision_no) across every row that has EVER
      * existed under this base (found by exact match on {@code baseNumber} itself, or the {@code
@@ -1005,6 +1047,57 @@ public class DealQuotationRepository {
                 .addValue("reason", reason));
     }
 
+    /**
+     * GLA-123 slice S3 (R9 — customer outcome): mirrors {@code
+     * CustomerQuotationRepository#recordOutcome} column-for-column (same compare-and-set FROM
+     * {@code ISSUED}, same outcome/note/actor/timestamp columns — {@code sales.quotation} is one
+     * shared table for both origins, V75 never scoped these columns to the legacy chain). Scoped
+     * to {@code origin = 'PRICING_REQUEST'} here purely as defense in depth: the service layer
+     * ({@code DealQuotationService#recordOutcome}) already refuses a {@code DEAL_DIRECT} row
+     * before this is ever reached (R10 — the direct quotation never joins the pipeline), so this
+     * WHERE clause should never be the thing that actually excludes a row in practice.
+     */
+    public int recordOutcome(long quotationId, String outcome, String outcomeNote, long actorId,
+                             String outcomeClientRequestId) {
+        return jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = :outcome,
+                   outcome_note = :outcomeNote,
+                   outcome_recorded_by = :actorId,
+                   outcome_recorded_at = now(),
+                   outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid),
+                   accepted_at = CASE WHEN :outcome = 'ACCEPTED' THEN now() ELSE accepted_at END,
+                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END,
+                   updated_at = now()
+             WHERE quotation_id = :id AND origin = 'PRICING_REQUEST' AND doc_status = 'ISSUED'
+            """,
+            new MapSqlParameterSource()
+                .addValue("id", quotationId)
+                .addValue("outcome", outcome)
+                .addValue("outcomeNote", outcomeNote)
+                .addValue("actorId", actorId)
+                .addValue("outcomeClientRequestId", outcomeClientRequestId));
+    }
+
+    /** Step 5's own idempotency lookup for this origin, mirrors {@code
+     * CustomerQuotationRepository#findIdByOutcomeClientRequestId} exactly — same
+     * {@code (issued_by, outcome_client_request_id)} partial-unique index from V75, which is
+     * table-wide (not origin-scoped), so this stays a safe replay check even though the WHERE
+     * clause below additionally narrows to this origin's own rows. */
+    public Optional<Long> findIdByOutcomeClientRequestId(long issuedBy, String outcomeClientRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT quotation_id FROM sales.quotation
+                 WHERE origin = 'PRICING_REQUEST' AND issued_by = :issuedBy
+                   AND outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid)
+                """, new MapSqlParameterSource().addValue("issuedBy", issuedBy)
+                    .addValue("outcomeClientRequestId", outcomeClientRequestId),
+                Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
     /** One quotation actually flipped ISSUED -> EXPIRED — same shape as
      * {@code CustomerQuotationRepository.ExpiredQuotationRow}. */
     public record ExpiredQuotationRow(long quotationId, long pricingRequestId, long ticketId, String number) {}
@@ -1189,9 +1282,13 @@ public class DealQuotationRepository {
     /** GLA-123 slice S1 — the ONE single-quotation-by-id read both origins share (widened from
      * {@code origin = 'DEAL_DIRECT'}): {@code DealQuotationService#requireQuotation} calls this
      * for get/update/submit/etc. on EITHER origin, so a PRICING_REQUEST row must be readable back
-     * the moment {@link #insertDraft} creates it — {@link #findByTicket}/{@link #search}/
-     * {@link #counts} (the DIRECT-deal LIST surfaces) stay {@code origin = 'DEAL_DIRECT'} only,
-     * deliberately, so those pages never start showing pipeline quotations by accident. */
+     * the moment {@link #insertDraft} creates it. {@link #search}/{@link #counts} (the DEAL_DIRECT
+     * APPROVER QUEUE, unrelated to what a deal's document register shows) still stay {@code origin
+     * = 'DEAL_DIRECT'} only, deliberately — that queue is about DEAL_DIRECT approvals
+     * specifically, not "what quotations exist for this ticket". {@link #findByTicket} used to be
+     * grouped with those two under the same "DIRECT-deal LIST surfaces, deliberately DEAL_DIRECT
+     * only" reasoning; see that method's own Javadoc for why that turned out to be wrong for IT
+     * specifically (GLA-123 item 8, S3 MAJOR 4 fix). */
     public Optional<DealQuotationDto> findById(long quotationId) {
         try {
             DealQuotationDto dto = jdbc.queryForObject(
@@ -1203,11 +1300,31 @@ public class DealQuotationRepository {
         }
     }
 
-    /** All revisions of a deal's direct quotations, newest first. */
+    /**
+     * Every quotation this DEAL carries on this engine, newest first — feeds {@code
+     * DealQuotationService#listForTicket}, which is what {@code GET /tickets/{id}/deal-quotations}
+     * serves, which is what the frontend's {@code DealDocumentRegister.jsx} (its
+     * {@code directQuotationsQuery}) and {@code DealDirectQuotationPanel.jsx} both call to decide
+     * whether a deal has ANY quotation to show at all.
+     *
+     * <p><b>GLA-123 slice S3 MAJOR 4 fix (Opus review against real Postgres, 2026-09-23):</b> this
+     * used to read {@code origin = 'DEAL_DIRECT'} only, grouped with {@link #search}/{@link
+     * #counts} under a single "DIRECT-deal LIST surfaces, deliberately DEAL_DIRECT only, so those
+     * pages never start showing pipeline quotations by accident" rationale. That reasoning does
+     * not hold for THIS method specifically: unlike the approver queue those two serve,
+     * {@code findByTicket} is the sole source for "does this deal have a quotation at all", and
+     * GLA-123 item 8 explicitly requires {@code DealDocumentRegister} to recognise the new origin.
+     * With the old scope, a deal whose only quotation was PRICING_REQUEST-origin showed
+     * "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" even with one ISSUED — reproduced against real Postgres.
+     * Widened to both origins, matching {@link #findById}'s own reasoning. {@link #search}/{@link
+     * #counts} are UNCHANGED (still DEAL_DIRECT-only) — they are the DEAL_DIRECT approver queue,
+     * not a "what exists for this ticket" read, and widening them was not asked for and is not
+     * needed to close this gap.
+     */
     public List<DealQuotationDto> findByTicket(long ticketId) {
         List<Long> ids = jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE ticket_id = :id AND origin = 'DEAL_DIRECT'
+             WHERE ticket_id = :id AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
              ORDER BY quotation_id DESC
             """, Map.of("id", ticketId), (rs, rowNum) -> rs.getLong("quotation_id"));
         return hydrate(ids);
@@ -1307,9 +1424,19 @@ public class DealQuotationRepository {
         if (ids.isEmpty()) {
             return List.of();
         }
+        // GLA-123 slice S3 MAJOR 4 fix, follow-up (Opus review against real Postgres, 2026-09-23):
+        // this filter used to be `origin = 'DEAL_DIRECT'` only — a SECOND, independent scope on
+        // top of the id list each caller already selected, and it silently re-dropped every
+        // PRICING_REQUEST id #findByTicket's own (now-widened) query passed in, so the "widen
+        // findByTicket" fix above did not actually work until this line was found and fixed too
+        // (caught by this slice's own #listForTicket_includesAPricingRequestOriginQuotation_...
+        // test going red against the real DB). Safe to widen for {@link #search}, the ONLY other
+        // caller: that method's own `ids` query already hard-scopes `q.origin = 'DEAL_DIRECT'`
+        // BEFORE calling this method (line ~1361), so its own ids list can never contain a
+        // PRICING_REQUEST id in the first place — widening this filter is a genuine no-op for it.
         Map<Long, List<DealQuotationItemDto>> itemsByQuotation = findItemsForQuotations(ids);
         List<DealQuotationDto> rows = jdbc.query(
-            baseSelect() + " WHERE q.quotation_id IN (:ids) AND q.origin = 'DEAL_DIRECT'",
+            baseSelect() + " WHERE q.quotation_id IN (:ids) AND q.origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')",
             Map.of("ids", ids),
             (rs, rowNum) -> mapQuotation(rs,
                 itemsByQuotation.getOrDefault(rs.getLong("quotation_id"), List.of())));

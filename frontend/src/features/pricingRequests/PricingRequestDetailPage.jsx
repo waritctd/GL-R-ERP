@@ -1204,6 +1204,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  // GLA-123 slice S3 (R9) — the SAME outcome action as recordQuotationOutcome above, on the
+  // NEW-engine (PRICING_REQUEST-origin) quotation instead of the legacy one. Shares
+  // outcomeNote/outcomeClientRequestId state with recordQuotationOutcome: M2 already guarantees a
+  // pricing request can never carry a live quotation on BOTH engines at once, so only one of the
+  // two outcome UI blocks below is ever rendered for a given request, and the two mutations never
+  // race over the same state.
+  const recordDealQuotationOutcome = useMutation({
+    mutationFn: ({ quotation, outcome }) => api.dealQuotations.recordOutcome(quotation.id, {
+      outcome,
+      customerNote: outcomeNote || null,
+      clientRequestId: outcomeClientRequestId,
+    }),
+    onSuccess: () => {
+      setOutcomeClientRequestId(generateClientRequestId());
+      setOutcomeNote('');
+      showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
   // Step 6: Deposit, Payment, and Order Confirmation.
   const confirmOrder = useMutation({
     mutationFn: () => api.pricingRequests.confirmOrder(pricingRequestId, {
@@ -2949,6 +2969,47 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   เปิดใบเสนอราคา
                 </Link>
               </div>
+            ) : null}
+
+            {/* GLA-123 slice S3 (R9) — the SAME outcome-recording action the legacy block below
+                offers (canRecordCustomerQuotationOutcome is origin-agnostic: sales + ticket owner,
+                docStatus === 'ISSUED'), now also reachable for the NEW engine's own quotation. R8
+                (only one finalized quotation per deal, across both คำขอราคา origins) is enforced
+                server-side by DealQuotationService#recordOutcome, not here. */}
+            {canRecordCustomerQuotationOutcome(user, summary, dealQuotationForPr) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
+                <textarea
+                  className="rounded border border-border p-2 text-sm"
+                  placeholder="หมายเหตุจากลูกค้า (ถ้ามี)"
+                  value={outcomeNote}
+                  onChange={(e) => setOutcomeNote(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'ACCEPTED' })}>
+                    ลูกค้ายอมรับ
+                  </Button>
+                  <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
+                    ลูกค้าปฏิเสธ
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
+                    ลูกค้าขอแก้ไข
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Read-only outcome summary — mirrors the legacy block's identical read-only
+                summary below (visible to everyone with view access, once the customer's response
+                has been recorded or the document moved past ISSUED for any other reason). */}
+            {dealQuotationForPr
+              && ['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED'].includes(dealQuotationForPr.docStatus) ? (
+              <p className="text-sm text-text-muted">
+                ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
+              </p>
             ) : null}
             {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"):
                 once the linked NEW-engine quotation has EXPIRED (D5), sales may write a FRESH one

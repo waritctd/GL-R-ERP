@@ -406,7 +406,33 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line
         // item is distinguishable from PR#1's): its own first-ever quotation, revision 1 — a
         // LOWER revision_no than PR#1's, but a HIGHER quotation_id (created strictly later).
-        long pr2Id = driveToQuotationAccepted(new BigDecimal("250.00"));
+        //
+        // GLA-123 slice S3 MAJOR 5 fix (Opus review, 2026-09-23): this used to call the shared
+        // driveToQuotationAccepted(rawUnitPrice) helper, which (in an earlier, now-reverted fix)
+        // superseded PR#1's own ACCEPTED row via raw SQL before accepting PR#2 through the real
+        // API — self-consistent, but it made THIS test vacuous: with only one ACCEPTED row ever
+        // existing, DepositNoticeService#createDraft's own "pick the newest accepted chain, not
+        // the higher revision_no" selection logic never had two real ACCEPTED candidates to
+        // discriminate between. R8 (recordOutcome's own guard) correctly refuses a second
+        // ACCEPTED through the real API while PR#1's is still live — no production caller can
+        // reach "two rows ACCEPTED at once" — but that DB shape is exactly what this test needs
+        // to prove createDraft's selection query is correct, independent of R8. So: drive PR#2 to
+        // ISSUED through the real API (unchanged), then flip it to ACCEPTED with a DIRECT SQL
+        // UPDATE — bypassing recordOutcome (and therefore R8) deliberately and explicitly. PR#1's
+        // own row is left untouched — genuinely still ACCEPTED, exactly as the test's own name
+        // ("PICKS the newer... not the one with the higher revision no") requires.
+        long pr2Id = driveToQuotationIssuedNotYetAccepted(new BigDecimal("250.00"));
+        CustomerQuotationDto pr2Issued = quotationRepository.findByPricingRequest(pr2Id).stream()
+            .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus())).findFirst().orElseThrow();
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
+            Map.of("id", pr2Issued.id()));
+        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
+        // QUOTATION_ACCEPTED) — confirmOrder gates on THIS column, not sales.quotation.doc_status,
+        // so the raw-SQL bypass above must carry that write too or confirmOrder below 409s.
+        jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
+            Map.of("id", pr2Id));
+        assertThat(pricingRequestService.get(pr2Id, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
         orderConfirmation.confirmOrder(pr2Id, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
         CustomerQuotationDto pr2Accepted = quotationRepository.findByPricingRequest(pr2Id).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus())).findFirst().orElseThrow();

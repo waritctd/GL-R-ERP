@@ -31,6 +31,7 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.PictureImage;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.PicturePlacementRequest;
+import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
@@ -190,6 +191,17 @@ public class DealQuotationController {
     Map<String, DealQuotationDto> createReorder(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation", quotations.createReorder(id, user));
+    }
+
+    /** GLA-123 slice S3 (R9) — records what the customer said about an ISSUED PRICING_REQUEST-origin
+     * quotation. Refused (409) for a DEAL_DIRECT row — see {@code DealQuotationService#recordOutcome}'s
+     * own Javadoc (R10, direct quotations never join this pipeline). */
+    @PostMapping("/deal-quotations/{id}/outcome")
+    Map<String, DealQuotationDto> recordOutcome(@PathVariable long id,
+                                                @Valid @RequestBody RecordOutcomeRequest request,
+                                                HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.recordOutcome(id, request, user));
     }
 
     @PostMapping("/deal-quotations/{id}/cancel")

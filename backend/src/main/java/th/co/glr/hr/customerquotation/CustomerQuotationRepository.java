@@ -109,11 +109,28 @@ public class CustomerQuotationRepository {
     }
 
     /** Step 5: recordOutcome's own idempotency lookup, mirrors {@link #findIdByIssueClientRequestId}. */
+    /**
+     * GLA-123 slice S3 MINOR fix (Opus review, 2026-09-23): now scoped {@code origin IS NULL},
+     * matching every OTHER query in this class ({@link #findById}/{@link #findByPricingRequest}/
+     * {@link #findByTicket}/{@code expireOverdueQuotations} all already exclude the new engine's
+     * rows explicitly). Before this fix, this was the one lookup in the class that stayed
+     * unscoped, which was a real asymmetry against {@code DealQuotationRepository
+     * #findIdByOutcomeClientRequestId}'s OWN {@code origin = 'PRICING_REQUEST'} scope: the SAME
+     * actor reusing a {@code clientRequestId} across the two {@code recordOutcome} endpoints could
+     * have this (unscoped) lookup silently replay-return a LEGACY row for a request that actually
+     * named a PRICING_REQUEST-origin quotation id — or, since V75's own {@code (issued_by,
+     * outcome_client_request_id)} partial unique index is table-wide, hit that constraint outright
+     * on the follow-up UPDATE once the lookup (wrongly) found nothing. Scoping this to {@code
+     * origin IS NULL} — rather than widening the new engine's lookup instead — matches this
+     * class's own established convention everywhere else, so a future reader finds ONE consistent
+     * rule, not two different scoping choices for the two sibling methods.
+     */
     public Optional<Long> findIdByOutcomeClientRequestId(long issuedBy, String outcomeClientRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
                 SELECT quotation_id FROM sales.quotation
                  WHERE issued_by = :issuedBy AND outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid)
+                   AND origin IS NULL
                 """, new MapSqlParameterSource().addValue("issuedBy", issuedBy)
                     .addValue("outcomeClientRequestId", outcomeClientRequestId),
                 Long.class));
@@ -466,7 +483,8 @@ public class CustomerQuotationRepository {
                    outcome_recorded_at = now(),
                    outcome_client_request_id = CAST(:outcomeClientRequestId AS uuid),
                    accepted_at = CASE WHEN :outcome = 'ACCEPTED' THEN now() ELSE accepted_at END,
-                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END
+                   rejected_at = CASE WHEN :outcome = 'REJECTED' THEN now() ELSE rejected_at END,
+                   updated_at = now()
              WHERE quotation_id = :id AND doc_status = 'ISSUED'
             """,
             new MapSqlParameterSource()

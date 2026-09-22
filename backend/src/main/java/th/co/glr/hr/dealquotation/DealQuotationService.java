@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -495,14 +496,26 @@ public class DealQuotationService {
      * quotation's number/status/link without going through {@code createFromPricingRequest}
      * (which would either mint one or just silently replay the idempotent existing draft — wrong
      * for a page that must not have create side effects on render). Returns empty when this PR
-     * has no PRICING_REQUEST-origin quotation yet — in S1 that can only ever be a DRAFT (every
-     * other status-machine transition is refused for this origin, see
-     * {@link #requireStatusMachineEnabled}), so {@code findOpenDraftForPricingRequest}'s
-     * DRAFT-only scope already covers every reachable case. Uses the same {@link
-     * #requireViewAccess} gate as {@code GET /deal-quotations/{id}} (M3) — narrower than
-     * DEAL_DIRECT's, no account, no quotation-grant bypass. */
+     * has no PRICING_REQUEST-origin quotation yet.
+     *
+     * <p><b>GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):</b>
+     * this used to call {@link DealQuotationRepository#findOpenDraftForPricingRequest}, whose
+     * DRAFT-only scope was correct back when S1 shipped (every other status-machine transition
+     * WAS refused for this origin at the time) but went stale the moment S2 made
+     * PENDING_APPROVAL/ISSUED reachable — and S3 adds ACCEPTED/REJECTED/REVISION_REQUESTED/
+     * EXPIRED on top. With the old call, this method returned {@code Optional.empty()} for EVERY
+     * quotation past DRAFT, so the frontend's {@code dealQuotationForPr} was null the instant a
+     * quotation was submitted — {@code canRecordCustomerQuotationOutcome} (which reads THIS
+     * value) could never see a live quotation, so the whole S3 outcome panel was unreachable, and
+     * S2's own EXPIRED-escape-hatch UI block (also keyed on this same value) was equally dead.
+     * Switched to {@link DealQuotationRepository#findLatestForPricingRequest}, which is already
+     * used by {@link #createFromPricingRequest}'s own expiry-escape-hatch numbering for the
+     * identical "current quotation regardless of status" need — reusing it here instead of a
+     * third status-scoped query. Uses the same {@link #requireViewAccess} gate as
+     * {@code GET /deal-quotations/{id}} (M3) — narrower than DEAL_DIRECT's, no account, no
+     * quotation-grant bypass. */
     public Optional<DealQuotationDto> findForPricingRequest(long pricingRequestId, UserPrincipal actor) {
-        Optional<Long> id = quotations.findOpenDraftForPricingRequest(pricingRequestId);
+        Optional<Long> id = quotations.findLatestForPricingRequest(pricingRequestId);
         if (id.isEmpty()) {
             return Optional.empty();
         }
@@ -1524,6 +1537,157 @@ public class DealQuotationService {
         if (changed) {
             throw new ApiException(HttpStatus.FORBIDDEN, "มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ");
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-123 slice S3 — Step 5 for a PRICING_REQUEST-origin quotation (R9): records what the
+    // customer said about an ISSUED document. Deliberately narrower than #requireEditAccessForQuotation
+    // (which also lets sales_manager act on ANY deal for edit/submit/cancel): this mirrors {@code
+    // CustomerQuotationService#recordOutcome}'s own gate EXACTLY — {@code SALES_ROLES = Set.of("sales")}
+    // there, i.e. sales_manager is NOT included, and only the ticket's OWNING rep may record an
+    // outcome, full stop. Read from that class directly (not assumed): its #requireEditAccess calls
+    // #requireRole(actor, SALES_ROLES) then #requireOwner, with no sales_manager/CEO carve-out
+    // anywhere in that path. The new engine's own EDIT_ROLES/APPROVE_ROLES sets are NOT reused here
+    // on purpose — recording a customer's outcome is a different action from editing or approving
+    // the document, and the legacy behaviour (the ONLY precedent that exists for this action) is
+    // sales-owner-only. R8 (one finalized quotation per deal, across BOTH คำขอราคา origins) is
+    // enforced via TicketRepository#hasAcceptedQuotation, called under TicketRepository
+    // #lockTicketForUpdate — the SAME ticket-row lock CustomerQuotationService#recordOutcome now
+    // also takes (see that method's own mirrored comment), so a legacy accept and a new-origin
+    // accept on the same ticket's sibling pricing requests fully serialise against each other
+    // regardless of which service instance issues the lock.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The only outcomes a client may record here — mirrors {@code
+     * CustomerQuotationService#RECORDABLE_OUTCOMES} exactly (EXPIRED is sweep-only). */
+    private static final Set<String> RECORDABLE_OUTCOMES =
+        Set.of(QuotationStatus.ACCEPTED, QuotationStatus.REJECTED, QuotationStatus.REVISION_REQUESTED);
+
+    /**
+     * R9 — records what the customer said about an ISSUED PRICING_REQUEST-origin quotation, and
+     * on ACCEPTED, transitions the pricing request {@code QUOTATION_ISSUED -> QUOTATION_ACCEPTED}
+     * exactly like {@code CustomerQuotationService#recordOutcome} does for the legacy chain —
+     * same event kind, same CEO notification, same "REJECTED/REVISION_REQUESTED do NOT change the
+     * pricing request's own status" rule. R8 (one finalized quotation per deal, across BOTH
+     * คำขอราคา origins) is the one thing genuinely NEW here: an ACCEPTED outcome is refused with
+     * 409 when {@code sales.quotation} already carries an ACCEPTED row for this TICKET under any
+     * origin (legacy {@code origin IS NULL} included) — see {@link
+     * TicketRepository#hasAcceptedQuotation}'s own Javadoc for why one origin-agnostic query over
+     * the shared table is the whole guard.
+     *
+     * <p>A {@code DEAL_DIRECT} row is refused outright (409) — R10: the direct quotation stays
+     * completely separate from the pipeline and has no customer-outcome concept at all.
+     */
+    @Transactional
+    public DealQuotationDto recordOutcome(long quotationId, DealQuotationRequests.RecordOutcomeRequest request,
+                                          UserPrincipal actor) {
+        if (QuotationStatus.EXPIRED.equals(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น");
+        }
+        if (request.outcome() == null || !RECORDABLE_OUTCOMES.contains(request.outcome())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "outcome ไม่ถูกต้อง");
+        }
+        DealQuotationDto quotation = requireQuotation(quotationId);
+        if (!"PRICING_REQUEST".equals(quotation.origin())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบเสนอราคาฉบับนี้ไม่ได้อยู่ในสายงานคำขอราคา จึงบันทึกผลลูกค้าด้วย endpoint นี้ไม่ได้");
+        }
+        if (pricingRequests == null) {
+            // Same defensive shape as #createFromPricingRequest/#approveAndIssuePricingRequestOrigin's
+            // own guard — only reachable if a deployment wires this bean without the GLA-123
+            // setter-injected dependencies.
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "ฟีเจอร์นี้ยังไม่พร้อมใช้งาน");
+        }
+        requireOutcomeAccess(actor, quotation);
+
+        // GLA-123 slice S3 MAJOR 3 fix (Opus review against real Postgres, 2026-09-23): this used
+        // to lock the ticket row FIRST, then the pricing-request advisory lock — the OPPOSITE
+        // order #approveAndIssuePricingRequestOrigin (and CustomerQuotationService#issue) take,
+        // and the opposite order this SAME method's own CustomerQuotationService#recordOutcome
+        // sibling now takes after its own MAJOR 3 fix. Reproduced as a real Postgres deadlock. The
+        // pricing-request advisory lock (borrowed via the existing setter-injected
+        // customerQuotations dependency, same as #approveAndIssuePricingRequestOrigin) is taken
+        // FIRST, THEN the ticket-row lock — matching every other path. R8 is unaffected: the
+        // hasAcceptedQuotation check below still runs with BOTH locks held, which is all it needs.
+        customerQuotations.lockPricingRequest(quotation.pricingRequestId());
+        tickets.lockTicketForUpdate(quotation.ticketId());
+
+        String outcomeClientRequestId = validateUuid(request.clientRequestId());
+        if (outcomeClientRequestId != null) {
+            Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
+            if (replay.isPresent()) {
+                return requireQuotation(replay.get());
+            }
+        }
+        DealQuotationDto fresh = requireQuotation(quotationId);
+        if (!QuotationStatus.ISSUED.equals(fresh.docStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
+        }
+        if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
+        }
+
+        int rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+            actor.id(), outcomeClientRequestId);
+        if (rows == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+        }
+
+        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        String eventKind = outcomeEventKind(request.outcome());
+        pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
+            eventKind, summary.status(), summary.status(),
+            "บันทึกผลใบเสนอราคาลูกค้า " + fresh.number() + ": " + request.outcome()
+                + (request.customerNote() != null && !request.customerNote().isBlank()
+                    ? " — " + request.customerNote().trim() : ""), null);
+        notifications.notifyByRoleForPricingRequest("ceo", summary.id(), eventKind,
+            "ใบเสนอราคาลูกค้า " + fresh.number() + " " + outcomeLabel(request.outcome()));
+
+        if (QuotationStatus.ACCEPTED.equals(request.outcome())
+                && PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status())) {
+            int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.QUOTATION_ISSUED,
+                PricingRequestStatus.QUOTATION_ACCEPTED, null, null);
+            if (transitioned == 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
+            }
+        }
+        return requireQuotation(quotationId);
+    }
+
+    /** Mirrors {@code CustomerQuotationService#requireEditAccess} for the outcome action
+     * SPECIFICALLY — see this section's own header comment for why {@link #EDIT_ROLES}/{@link
+     * #requireEditAccessForQuotation} (which also admits sales_manager on any deal) is NOT reused
+     * here. */
+    private void requireOutcomeAccess(UserPrincipal actor, DealQuotationDto quotation) {
+        if (!"sales".equals(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
+        if (ticket.createdById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    private String outcomeEventKind(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_ACCEPTED;
+            case QuotationStatus.REJECTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REJECTED;
+            case QuotationStatus.REVISION_REQUESTED -> PricingRequestEventKind.CUSTOMER_QUOTATION_REVISION_REQUESTED;
+            default -> throw new IllegalStateException("Unreachable — validated by RECORDABLE_OUTCOMES");
+        };
+    }
+
+    private String outcomeLabel(String outcome) {
+        return switch (outcome) {
+            case QuotationStatus.ACCEPTED -> "ลูกค้ายอมรับแล้ว";
+            case QuotationStatus.REJECTED -> "ถูกลูกค้าปฏิเสธ";
+            case QuotationStatus.REVISION_REQUESTED -> "ลูกค้าขอแก้ไข";
+            default -> "มีการอัปเดตผล";
+        };
     }
 
     /**
@@ -3145,6 +3309,20 @@ public class DealQuotationService {
 
     private String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    /** GLA-123 slice S3 — mirrors {@code CustomerQuotationService#validateUuid} exactly, needed
+     * here for the first time by {@link #recordOutcome}'s own {@code clientRequestId} replay
+     * guard (no other method on this class validates one today). */
+    private String validateUuid(String clientRequestId) {
+        if (clientRequestId == null || clientRequestId.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(clientRequestId.trim()).toString();
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "clientRequestId ต้องเป็น UUID ที่ถูกต้อง");
+        }
     }
 
     private BigDecimal money2(BigDecimal value) {

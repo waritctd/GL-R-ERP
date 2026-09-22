@@ -1217,6 +1217,13 @@ export const api = {
     submit: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.submit(id), { method: 'POST', body: payload }),
     approve: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.approve(id), { method: 'POST', body: payload }),
     reject: (id, payload) => apiRequest(API_ROUTES.dealQuotations.reject(id), { method: 'POST', body: payload }),
+    // GLA-123 slice S3 (R9) — records what the customer said about an ISSUED
+    // PRICING_REQUEST-origin quotation. `outcome` is one of ACCEPTED/REJECTED/REVISION_REQUESTED
+    // (mirrors CustomerQuotationController's identical legacy endpoint at
+    // pricingRequests.recordCustomerQuotationOutcome). ACCEPTED transitions the pricing request
+    // to QUOTATION_ACCEPTED; R8 (only one finalized quotation per deal, across both คำขอราคา
+    // origins) is enforced server-side, not here.
+    recordOutcome: (id, payload) => apiRequest(API_ROUTES.dealQuotations.outcome(id), { method: 'POST', body: payload }),
     createRevision: (id, payload = {}) => apiRequest(API_ROUTES.dealQuotations.revisions(id), { method: 'POST', body: payload }),
     // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
     // independent DRAFT. The source stays APPROVED; see DealQuotationService#createReorder.
