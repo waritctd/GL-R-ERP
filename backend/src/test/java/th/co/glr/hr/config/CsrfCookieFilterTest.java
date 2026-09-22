@@ -96,6 +96,35 @@ class CsrfCookieFilterTest {
         assertThat(chain.getRequest()).as("device punch is reachable without a session token").isNotNull();
     }
 
+    // Self-service forgot-password: same rationale as the login bootstrap exemption above - a
+    // client landing fresh on /forgot-password, or arriving via an emailed
+    // /reset-password?token=... link, has made no prior /api/** call and so holds no CSRF
+    // cookie/header pair yet either. See PasswordResetSecurityIntegrationTest (th.co.glr.hr.auth)
+    // for the heavier companion that proves this AND SecurityConfig's permitAll clear together
+    // through the real filter chain - this unit test isolates the CsrfCookieFilter half alone,
+    // same division of labour the login/punch tests above already establish.
+    @Test
+    void forgotPasswordPathIsExemptFromTheCheck() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/forgot-password");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).as("forgot-password is reachable without a prior token").isNotNull();
+    }
+
+    @Test
+    void resetPasswordPathIsExemptFromTheCheck() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/reset-password");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(chain.getRequest()).as("reset-password is reachable without a prior token").isNotNull();
+    }
+
     @Test
     void nonApiRequestsAreNotFilteredForCsrf() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/health");
