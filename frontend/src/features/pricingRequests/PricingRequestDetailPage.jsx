@@ -2950,6 +2950,32 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Link>
               </div>
             ) : null}
+            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"):
+                once the linked NEW-engine quotation has EXPIRED (D5), sales may write a FRESH one
+                from the SAME approved decision — DealQuotationService#createFromPricingRequest now
+                tolerates this specific case server-side (see that method's own comment). Gated on
+                canManageCustomerQuotation (sales + ticket owner, no PR-status check) rather than
+                canCreateCustomerQuotation, which requires pr.status === 'APPROVED_FOR_QUOTATION' —
+                a PR whose quotation has expired sits at QUOTATION_ISSUED instead (the backend
+                deliberately does not roll PR status back), so that stricter gate would incorrectly
+                hide this button in exactly the state it needs to appear. Reuses the SAME
+                createDealQuotationFromRequest mutation the first-ever create button below already
+                uses (same navigate-on-success behaviour), since the server-side call is identical
+                either way — only the PR's current state differs. */}
+            {dealQuotationForPr?.docStatus === 'EXPIRED' && canManageCustomerQuotation(user, summary) ? (
+              <div className="flex flex-col items-start gap-2">
+                <p className="m-0 text-sm text-warning">ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้</p>
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="self-start"
+                  onClick={() => createDealQuotationFromRequest.mutate()}
+                  disabled={createDealQuotationFromRequest.isPending}
+                >
+                  เขียนใบเสนอราคาใหม่จากคำขอราคา
+                </Button>
+              </div>
+            ) : null}
             {!dealQuotationForPr && !currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
               <div className="flex flex-wrap items-center gap-2">
                 {/* GLA-123 slice S1 M2 fix (Opus review, 2026-09-20), field narrowed by MINOR-1

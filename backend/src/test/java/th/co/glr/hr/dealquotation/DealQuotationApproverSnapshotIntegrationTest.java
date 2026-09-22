@@ -358,6 +358,11 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             assertThat(in).as(MIGRATION + " on the classpath").isNotNull();
             text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
+        // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): V191/V192
+        // (the dual-slot migrations, which had widened this table's key to (quotation_id, slot))
+        // were DELETED in the rework — the design reverted to the single-approval path this table
+        // was originally built for. V175's OWN file is executed here VERBATIM again, with no patch:
+        // its `ON CONFLICT (quotation_id)` target matches the CURRENT schema exactly once more.
         jdbc.getJdbcOperations().execute(text);
     }
 

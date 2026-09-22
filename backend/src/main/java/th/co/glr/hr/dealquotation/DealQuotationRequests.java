@@ -452,6 +452,9 @@ public final class DealQuotationRequests {
         @NotBlank @Pattern(regexp = "BELOW|BESIDE", message = "ต้องเป็น BELOW หรือ BESIDE") String placement
     ) {}
 
+    // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): the
+    // alsoApproveAsSalesManager checkbox is GONE — there is no second slot to fill on anyone's
+    // behalf any more. One approval, by whoever may act, issues the document.
     public record ApproveRequest(@Size(max = 2000) String note) {}
 
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}

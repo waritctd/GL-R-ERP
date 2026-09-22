@@ -155,7 +155,11 @@ function PriceInputWithSuffix({ id, suffix, className, ...inputProps }) {
  * `ceo*` fields the server joins onto a linked item (DealQuotationItemDto#ceoListUnitPrice etc.)
  * — never re-derives them.
  */
-function ceoOriginalPriceText(priceMode, item, currency) {
+// Exported (GLA-123 slice S2, coordinator follow-up) so the approve confirm dialog
+// (QuotationEditorPage.jsx) can render the SAME "CEO's original price" text for every
+// priceChangedFromCeo line prominently, in one place, rather than the rep/approver having to
+// scroll the item list to find each row's own inline marker — see that dialog's own comment.
+export function ceoOriginalPriceText(priceMode, item, currency) {
   if (priceMode === 'SPECIAL_SQM') {
     return `ราคาพิเศษ CEO: ${formatQuotationMoney(item.ceoSpecialPriceSqm, currency)}/ตร.ม.`;
   }
