@@ -188,7 +188,7 @@ public final class DealQuotationDtos {
          * null (coordinator follow-up, 2026-09-20). */
         String pricingRequestCode,
         /** GLA-123 slice S1 M4(c) fix (Opus review, 2026-09-20) — count of CEO-linked lines
-         * dropped from this quotation since creation (V190). Always 0 for a {@code DEAL_DIRECT}
+         * dropped from this quotation since creation (V191). Always 0 for a {@code DEAL_DIRECT}
          * row (the concept is meaningless there — no line is ever CEO-linked). Drives the
          * header-level "รายการที่ CEO อนุมัติถูกลบออก N รายการ" marker, the removal-side
          * counterpart of {@link #priceModeChangedFromCeo} above. */

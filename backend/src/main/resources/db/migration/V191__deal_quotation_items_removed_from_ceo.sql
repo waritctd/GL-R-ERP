@@ -3,11 +3,12 @@
 -- ("รายการที่ CEO อนุมัติถูกลบออก N รายการ") the same way per-line priceChangedFromCeo already
 -- flags a PRICE change.
 --
--- MIGRATION NUMBERING: per the lead session (2026-09-20), V188 and V189 are claimed by another
--- unmerged session (that session's V189 re-declares chk_event_kind) — do NOT use either. This
--- worktree's own next free number is V190, verified against
--- `ls backend/src/main/resources/db/migration` immediately before writing this file (tops out at
--- V187 in this worktree). Re-check before merge if other worktrees have advanced further.
+-- MIGRATION NUMBERING: renumbered V190 -> V191 on rebase (2026-09-23). V188
+-- (remaining-invoice document) and V189 (billing-note document, re-declares chk_event_kind) both
+-- merged to develop while this branch was open; an UNRELATED self-service forgot-password PR
+-- (#1024) then also merged and independently claimed V190 (password_reset_token) before this
+-- branch's own V190 could land, producing a genuine filename/version collision. V191 was verified
+-- free across every remote branch by two independent sessions before this rename.
 --
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 -- What this adds

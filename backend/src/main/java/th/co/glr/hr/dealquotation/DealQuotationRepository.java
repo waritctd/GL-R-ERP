@@ -193,10 +193,10 @@ public class DealQuotationRepository {
     }
 
     /** GLA-123 slice S1 M4(c)/(d) fix (Opus review, 2026-09-20) — moves {@code
-     * items_removed_from_ceo_count} (V190) by {@code delta}: {@code +1} per CEO-linked line
+     * items_removed_from_ceo_count} (V191) by {@code delta}: {@code +1} per CEO-linked line
      * dropped in {@link DealQuotationService#update}, {@code -1} per line restored by {@link
      * DealQuotationService#restoreRemovedItem}. {@code GREATEST(0, ...)} floors it at 0 so it can
-     * never go negative even under a race between two saves, matching V190's own CHECK
+     * never go negative even under a race between two saves, matching V191's own CHECK
      * constraint (a negative value here would otherwise 500 instead of just clamping). */
     public void incrementItemsRemovedFromCeo(long quotationId, int delta) {
         jdbc.update("""
@@ -1402,7 +1402,7 @@ public class DealQuotationRepository {
                    -- Coordinator follow-up (2026-09-20): the editor's "สร้างจากคำขอราคา {code}"
                    -- link needs the PR's human-readable code, not just its id.
                    pr.request_code AS pricing_request_code,
-                   -- GLA-123 slice S1 M4(c) (V190): count of CEO-linked lines dropped since
+                   -- GLA-123 slice S1 M4(c) (V191): count of CEO-linked lines dropped since
                    -- creation — see DealQuotationDtos#itemsRemovedFromCeoCount's own Javadoc.
                    q.items_removed_from_ceo_count
               FROM sales.quotation q

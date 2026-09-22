@@ -6249,7 +6249,7 @@ function buildDealQuotationDto(row) {
     priceModeChangedFromCeo: ceoPriceMode != null && ceoPriceMode !== (row.priceMode || 'NET'),
     ceoPriceMode,
     // M4(c) fix (Opus review, 2026-09-20) — mirrors DealQuotationDto#itemsRemovedFromCeoCount
-    // (V190). Always 0 on a row that never had a CEO-linked line dropped.
+    // (V191). Always 0 on a row that never had a CEO-linked line dropped.
     itemsRemovedFromCeoCount: row.itemsRemovedFromCeoCount ?? 0,
     // M4(d) fix (Opus review, 2026-09-20) — mirrors DealQuotationDto#removedCeoItems /
     // DealQuotationRepository#findRemovedLinkedItems: every item of THIS row's own decision that
