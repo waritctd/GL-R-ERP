@@ -122,10 +122,7 @@ public class AuthService {
         if (passwordEncoder.matches(request.newPassword(), employee.passwordHash())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม");
         }
-        if (hasText(employee.employeeCode())
-            && request.newPassword().equals(employee.employeeCode().trim())) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "รหัสผ่านใหม่ต้องไม่ใช่รหัสพนักงานของคุณ");
-        }
+        rejectEmployeeCodeAsNewPassword(request.newPassword(), employee);
 
         employees.updatePassword(employee.employeeId(), passwordEncoder.encode(request.newPassword()));
 
@@ -170,5 +167,19 @@ public class AuthService {
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    /**
+     * Rejects a new password that equals the employee's own {@code employeeCode} (trimmed) —
+     * shared with {@link PasswordResetService#resetPassword}, which needs the identical check but
+     * cannot replicate {@link #changePassword}'s "reject reusing the current password" rule above
+     * it (a self-service reset via a verified emailed link has no "current password" to compare
+     * against — the caller never supplies one). Package-private rather than duplicated: same Thai
+     * message, same trim-and-equals semantics, one place to change either.
+     */
+    static void rejectEmployeeCodeAsNewPassword(String newPassword, EmployeeLoginRecord employee) {
+        if (hasText(employee.employeeCode()) && newPassword.equals(employee.employeeCode().trim())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รหัสผ่านใหม่ต้องไม่ใช่รหัสพนักงานของคุณ");
+        }
     }
 }

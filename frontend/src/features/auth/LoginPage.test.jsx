@@ -3,9 +3,23 @@ import {
   afterEach, beforeEach, describe, expect, it, vi,
 } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { LoginPage } from './LoginPage.jsx';
 
 globalThis.React = React;
+
+// LoginPage now calls useNavigate() (the ลืมรหัสผ่าน? link), so every render needs a Router
+// context - same MemoryRouter pattern used elsewhere in this suite (e.g. CommissionPage's tests).
+function renderLoginPage(props) {
+  return render(
+    <MemoryRouter initialEntries={['/login']}>
+      <Routes>
+        <Route path="/login" element={<LoginPage {...props} />} />
+        <Route path="/forgot-password" element={<div>forgot-password-page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 // The demo row only renders under VITE_USE_MOCKS — it is a mock-mode affordance, never shipped to
 // a real login. Without this stub every case below fails on a missing button rather than on the
@@ -26,7 +40,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe('LoginPage demo quick-login', () => {
   it('sends a role for the personas that ARE a role', () => {
     const onLogin = vi.fn();
-    render(<LoginPage onLogin={onLogin} loading={false} error={null} />);
+    renderLoginPage({ onLogin, loading: false, error: null });
 
     fireEvent.click(screen.getByTestId('login-role-employee'));
 
@@ -35,7 +49,7 @@ describe('LoginPage demo quick-login', () => {
 
   it('sends real credentials for the division manager, which no role can select', () => {
     const onLogin = vi.fn();
-    render(<LoginPage onLogin={onLogin} loading={false} error={null} />);
+    renderLoginPage({ onLogin, loading: false, error: null });
 
     fireEvent.click(screen.getByTestId('login-role-division_manager'));
 
@@ -49,7 +63,7 @@ describe('LoginPage demo quick-login', () => {
 
   it('does not collapse the division manager onto the plain employee account', () => {
     const onLogin = vi.fn();
-    render(<LoginPage onLogin={onLogin} loading={false} error={null} />);
+    renderLoginPage({ onLogin, loading: false, error: null });
 
     fireEvent.click(screen.getByTestId('login-role-division_manager'));
 
@@ -73,7 +87,7 @@ describe('LoginPage demo quick-login', () => {
 describe('LoginPage credential submit', () => {
   it('trims surrounding whitespace off the email before submitting', () => {
     const onLogin = vi.fn();
-    render(<LoginPage onLogin={onLogin} loading={false} error={null} />);
+    renderLoginPage({ onLogin, loading: false, error: null });
 
     fireEvent.change(screen.getByTestId('login-email'), {
       target: { value: '  Suneesllim.1977@gmail.com  ' },
@@ -91,7 +105,7 @@ describe('LoginPage credential submit', () => {
 
   it('leaves the password exactly as typed, spaces included', () => {
     const onLogin = vi.fn();
-    render(<LoginPage onLogin={onLogin} loading={false} error={null} />);
+    renderLoginPage({ onLogin, loading: false, error: null });
 
     fireEvent.change(screen.getByTestId('login-email'), { target: { value: 'a@b.co' } });
     fireEvent.change(screen.getByTestId('login-password'), { target: { value: '  spaced pw  ' } });
@@ -102,7 +116,7 @@ describe('LoginPage credential submit', () => {
   });
 
   it('stops the phone keyboard editing the address behind the user', () => {
-    render(<LoginPage onLogin={vi.fn()} loading={false} error={null} />);
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
     const input = screen.getByTestId('login-email');
 
     // Without these a mobile keyboard capitalises the first letter and autocorrects the
@@ -111,5 +125,22 @@ describe('LoginPage credential submit', () => {
     expect(input.getAttribute('autocapitalize')).toBe('none');
     expect(input.getAttribute('autocorrect')).toBe('off');
     expect(input.getAttribute('spellcheck')).toBe('false');
+  });
+});
+
+// Self-service "forgot password" entry point (ลืมรหัสผ่าน?) — added near the password field.
+describe('LoginPage forgot-password link', () => {
+  it('is present on the login screen', () => {
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+    expect(screen.getByTestId('login-forgot-password')).not.toBeNull();
+  });
+
+  it('navigates to /forgot-password when clicked', () => {
+    renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+    fireEvent.click(screen.getByTestId('login-forgot-password'));
+
+    expect(screen.getByText('forgot-password-page')).not.toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PRODUCT_MARK, PRODUCT_PORTAL_LABEL } from '../../app/product.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -42,6 +43,7 @@ const quickAccounts = [
 export function LoginPage({ onLogin, loading, error }) {
   const [form, setForm] = useState({ email: '', password: '' });
   const isMock = import.meta.env.VITE_USE_MOCKS === 'true';
+  const navigate = useNavigate();
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -124,6 +126,15 @@ export function LoginPage({ onLogin, loading, error }) {
                 className="pl-10"
               />
             </span>
+            <Button
+              type="button"
+              variant="text"
+              data-testid="login-forgot-password"
+              className="justify-self-end"
+              onClick={() => navigate('/forgot-password')}
+            >
+              ลืมรหัสผ่าน?
+            </Button>
           </label>
 
           {error ? <div className="py-2.5 px-3 rounded-md bg-danger-bg text-danger-dark font-bold text-[length:var(--text-sm)]">{error}</div> : null}

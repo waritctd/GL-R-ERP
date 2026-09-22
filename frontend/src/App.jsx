@@ -1,10 +1,12 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from './api/index.js';
 import { AppShell } from './components/layout/AppShell.jsx';
 import { Toast } from './components/common/Toast.jsx';
 import { RouteFallback } from './components/common/RouteFallback.jsx';
 import { LoginPage } from './features/auth/LoginPage.jsx';
+import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage.jsx';
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
@@ -129,6 +131,7 @@ export function App() {
   const [loginError, setLoginError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast, showToast, dismissToast } = useToast();
   // A session that still owes a password change is confined by the backend to /api/auth/{me,
   // logout,change-password} (MustChangePasswordFilter) — every other endpoint 403s. useHrData's
@@ -235,9 +238,27 @@ export function App() {
   }
 
   if (!user) {
+    // Self-service forgot-password: /forgot-password and /reset-password are handled as
+    // alternate views WITHIN this logged-out branch, switched on the raw pathname, rather than
+    // as entries in the authenticated <Routes> tree below. App.jsx never routes /login itself
+    // through <Route> either (LoginPage is returned directly above) - these two follow the same
+    // shape rather than introducing a second, inconsistent way to gate a logged-out page.
+    let loggedOutView;
+    if (location.pathname === '/forgot-password') {
+      loggedOutView = <ForgotPasswordPage onNavigateToLogin={() => navigate('/login')} />;
+    } else if (location.pathname === '/reset-password') {
+      loggedOutView = (
+        <ResetPasswordPage
+          onNavigateToLogin={() => navigate('/login')}
+          onNavigateToForgotPassword={() => navigate('/forgot-password')}
+        />
+      );
+    } else {
+      loggedOutView = <LoginPage onLogin={handleLogin} loading={loading} error={loginError} />;
+    }
     return (
       <>
-        <LoginPage onLogin={handleLogin} loading={loading} error={loginError} />
+        {loggedOutView}
         <Toast toast={toast} onDismiss={dismissToast} />
       </>
     );
