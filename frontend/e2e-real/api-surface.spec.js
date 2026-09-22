@@ -113,7 +113,7 @@ test.describe('API surface', () => {
     ).toEqual([]);
   });
 
-  test('the three allowlisted endpoints really are anonymously reachable', async () => {
+  test('the five allowlisted endpoints really are anonymously reachable', async () => {
     // The complement of the sweep above. Silencing a sweep failure by appending a path to
     // ANONYMOUS_ALLOWLIST must not become a quiet way to drop a real endpoint out of the
     // authentication assertion — anything added there has to be justified here too.
@@ -125,6 +125,8 @@ test.describe('API surface', () => {
     expect(ANONYMOUS_ALLOWLIST).toEqual([
       '/api/auth/login',
       '/api/attendance/punch',
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
       '/api/public/brand/logo.png',
     ]);
 
@@ -153,6 +155,41 @@ test.describe('API surface', () => {
         punch.status(),
         'and it must still refuse an unauthenticated, empty punch'
       ).toBeGreaterThanOrEqual(400);
+
+      // Forgot-password: a real demo email → the exact enumeration-safe generic message
+      // (PasswordResetService.GENERIC_SENT_MESSAGE). Status alone would not separate a
+      // filter-chain 401 from a real 200, and a bare 200 would not separate this controller's
+      // response from any other endpoint's — the specific Thai copy can only come from
+      // PasswordResetService actually running.
+      const forgotPassword = await anon.post('/api/auth/forgot-password', {
+        data: { email: PERSONAS.hr.email },
+        failOnStatusCode: false,
+      });
+      expect(
+        forgotPassword.status(),
+        'POST /api/auth/forgot-password must be reachable without a session'
+      ).toBe(200);
+      expect(
+        (await forgotPassword.json()).message,
+        'and it must return the real enumeration-safe message, not just any 200'
+      ).toBe('หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ');
+
+      // Reset-password: a syntactically valid but bogus token. This is stronger proof than an
+      // empty-body 400 (which only proves @Valid ran) — a bogus-but-well-formed token must reach
+      // PasswordResetService's real DB lookup, find no match, and answer with its specific
+      // invalid/expired message. A filter-chain rejection would be 401 with no such body.
+      const resetPassword = await anon.post('/api/auth/reset-password', {
+        data: { token: 'e2e-surface-sweep-not-a-real-token', newPassword: 'SurfaceSweep123' },
+        failOnStatusCode: false,
+      });
+      expect(
+        resetPassword.status(),
+        'POST /api/auth/reset-password must be reachable without a session'
+      ).toBe(400);
+      expect(
+        (await resetPassword.json()).message,
+        'and it must return the real invalid/expired-token message, not just any 400'
+      ).toBe('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง');
 
       // Brand logo: the requester is a mail client rendering a notification email — Gmail's image
       // proxy fetches with no credentials and no way to obtain any — so it cannot be gated. A 200
