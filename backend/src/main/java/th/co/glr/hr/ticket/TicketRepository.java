@@ -870,7 +870,17 @@ public class TicketRepository {
                -- listing (th.co.glr.hr.dealquotation.DealQuotationRepository) and their own panel
                -- on the ticket-detail documents tab -- excluded here so they do not also show up
                -- in the legacy pricing-chain quotation list (DealLegacyQuotations.jsx).
-               AND q.origin IS DISTINCT FROM 'DEAL_DIRECT'
+               --
+               -- GLA-123 slice S1 fix (Opus review M1, 2026-09-20): narrowed from
+               -- `origin IS DISTINCT FROM 'DEAL_DIRECT'` to `origin IS NULL`. That expression
+               -- excluded DEAL_DIRECT but, being a negation, ALSO matched the NEW
+               -- 'PRICING_REQUEST' origin (neither NULL nor 'DEAL_DIRECT'), so those rows leaked
+               -- into this LEGACY list too -- DealLegacyQuotations.jsx renders a row's items as
+               -- unit_price x qty against LEGACY columns, which a PRICING_REQUEST row's TILE-shaped
+               -- data does not populate the same way, and a leaked DRAFT could become this ticket's
+               -- `latestQuotation`. PRICING_REQUEST rows now have their own surface (the ใบเสนอ
+               -- ราคาลูกค้า panel on PricingRequestDetailPage.jsx) — see that page's own comment.
+               AND q.origin IS NULL
              ORDER BY q.issued_at DESC, q.quotation_id DESC
             """,
             Map.of("id", ticketId),

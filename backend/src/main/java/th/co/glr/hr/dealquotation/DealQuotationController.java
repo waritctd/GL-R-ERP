@@ -63,10 +63,43 @@ public class DealQuotationController {
             .body(Map.of("quotation", quotations.create(ticketId, request, user)));
     }
 
+    /** GLA-123 slice S1 — "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin
+     * quotation prefilled from an APPROVED-FOR-QUOTATION pricing request's CEO-approved decision,
+     * on this SAME engine (not a new one — see {@link DealQuotationService
+     * #createFromPricingRequest}'s own Javadoc). No request body: everything comes from the
+     * pricing request and its decision.
+     *
+     * <p>Deliberately NOT {@code POST /pricing-requests/{id}/quotations} — that exact path is
+     * already {@code CustomerQuotationController#create} (the legacy path this feature sits
+     * beside, not inside; Spring refuses an ambiguous-mapping startup if both claim it). Named
+     * {@code deal-quotations} for consistency with every other route this engine already owns
+     * ({@code /tickets/{ticketId}/deal-quotations}, {@code /deal-quotations/{id}}, …). */
+    @PostMapping("/pricing-requests/{pricingRequestId}/deal-quotations")
+    ResponseEntity<Map<String, DealQuotationDto>> createFromPricingRequest(@PathVariable long pricingRequestId,
+                                                                            HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return ResponseEntity.status(HttpStatus.CREATED)
+            .body(Map.of("quotation", quotations.createFromPricingRequest(pricingRequestId, user)));
+    }
+
     @GetMapping("/tickets/{ticketId}/deal-quotations")
     Map<String, List<DealQuotationDto>> listForTicket(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("items", quotations.listForTicket(ticketId, user));
+    }
+
+    /** M1 fix (Opus review, 2026-09-20) — read-only, no create side effect (unlike {@code
+     * POST .../deal-quotations} above, which mints or idempotently replays one). Lets
+     * {@code PricingRequestDetailPage}'s "ใบเสนอราคาลูกค้า" panel show a NEW-engine quotation's
+     * number/status/link. {@code quotation: null} (200, not 404) when this PR has none yet — "no
+     * quotation" is the normal, expected state for most of a pricing request's lifetime, not an
+     * error. */
+    @GetMapping("/pricing-requests/{pricingRequestId}/deal-quotations")
+    Map<String, DealQuotationDto> findForPricingRequest(@PathVariable long pricingRequestId, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        Map<String, DealQuotationDto> body = new java.util.HashMap<>();
+        body.put("quotation", quotations.findForPricingRequest(pricingRequestId, user).orElse(null));
+        return body;
     }
 
     /** {@code needsRework=true} (owner feedback F5, 2026-09-10) narrows to the "แก้" bucket —
@@ -165,6 +198,18 @@ public class DealQuotationController {
                                          HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation", quotations.cancel(id, request != null ? request : new CancelRequest(null), user));
+    }
+
+    /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
+     * dropped. No request body other than which decision item to restore — everything else is
+     * rebuilt server-side from the same approved decision {@code createFromPricingRequest} itself
+     * reads from. */
+    @PostMapping("/deal-quotations/{id}/items/{pricingDecisionItemId}/restore")
+    Map<String, DealQuotationDto> restoreRemovedItem(@PathVariable long id,
+                                                       @PathVariable long pricingDecisionItemId,
+                                                       HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("quotation", quotations.restoreRemovedItem(id, pricingDecisionItemId, user));
     }
 
     @GetMapping("/deal-quotations/{id}/file")

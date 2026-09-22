@@ -116,7 +116,24 @@ public final class PricingDecisionDtos {
         long pricingDecisionId,
         String currency,
         Instant approvedAt,
-        List<PricingDecisionSalesItemDto> items
+        List<PricingDecisionSalesItemDto> items,
+        // GLA-123 slice S1 M2 fix (Opus review, 2026-09-20), NARROWED by MINOR-1 (owner ruling,
+        // confirmed 2026-09-20, second re-review): this field USED TO be the CEO's chosen pricing
+        // METHOD label itself (`String priceMode`, NET/SPECIAL_SQM/DIRECT_NET). That was still a
+        // price-shaped fact, and this endpoint is legitimately callable by `import` for an
+        // UNRELATED reason (PricingDecisionService.SALES_VIEW_ROLES — import needs the approved
+        // selling price for its own factory-costing workflow), so `import` was picking up the
+        // CEO's pricing method as a side effect of a field this feature added for a completely
+        // different caller (sales, deciding which create button to show). Narrowed to a plain
+        // boolean that leaks NOTHING about which method the CEO chose or any other price-shaped
+        // fact — "is this decision new-form" is the ONLY question
+        // PricingRequestDetailPage#createDealQuotationFromRequest's button-hiding logic actually
+        // needs answered (server gate: DealQuotationService#createFromPricingRequest refuses a
+        // legacy decision with 409 — see legacyDecision_refused409). Deliberately safe to return
+        // to EVERY SALES_VIEW_ROLES caller uniformly (sales/sales_manager/ceo/import alike) —
+        // exactly why a boolean was chosen over stripping the old string field for import only:
+        // one shape, no role-conditional stripping logic to keep correct on this one field.
+        boolean newFormPricing
     ) {}
 
     public record PricingDecisionSalesItemDto(

@@ -781,6 +781,22 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryFn: () => api.pricingRequests.listCustomerQuotations(pricingRequestId).then((r) => r.items ?? []),
     enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary),
   });
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20) — the NEW engine's counterpart of the query
+  // above, for the SAME "ใบเสนอราคาลูกค้า" panel below. Enabled-gate used to just be
+  // canViewCustomerQuotation (this comment used to say PRICING_REQUEST_VIEW_ROLES and
+  // CustomerQuotationService.VIEW_ROLES were "the exact same role set" — true when M3 shipped,
+  // no longer true since MAJOR-4/MINOR-1 (owner ruling, confirmed 2026-09-20, second re-review)
+  // removed import from PRICING_REQUEST_VIEW_ROLES specifically, leaving the LEGACY engine's own
+  // VIEW_ROLES — which canViewCustomerQuotation mirrors — untouched. `&& !isImport(user)` is what
+  // keeps this query from firing a call the server would now 403 for import: the backend gate is
+  // what actually enforces this either way, but there is no reason to let import's browser make a
+  // doomed request and surface a raw error where the panel should simply not query at all.
+  const dealQuotationForPrQuery = useQuery({
+    queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId),
+    queryFn: () => api.dealQuotations.findForPricingRequest(pricingRequestId).then((r) => r.quotation ?? null),
+    enabled: Number.isFinite(pricingRequestId) && canViewCustomerQuotation(user, detailQuery.data?.summary)
+      && !isImport(user),
+  });
 
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales-level supporting
   // attachments on the request itself — every viewer role can see the list (requireViewable's
@@ -1103,6 +1119,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
+  // GLA-123 slice S1 (Phase 3, 2026-09-19) — "เขียนใบเสนอราคาจากคำขอราคา": the direct-deal
+  // engine, prefilled from this request's CEO-approved decision. A legacy (pre-V187) decision is
+  // refused server-side with a clear Thai 409 — this button is offered whenever the request is
+  // otherwise eligible (canCreateCustomerQuotation's own gate), and the error surfaces as a toast
+  // rather than being hidden client-side, so a legacy request still tells the rep why instead of
+  // silently doing nothing.
+  const createDealQuotationFromRequest = useMutation({
+    mutationFn: () => api.dealQuotations.createFromPricingRequest(pricingRequestId),
+    onSuccess: (result) => {
+      const quotation = result?.quotation;
+      if (quotation?.id) navigate(`/quotations/${quotation.id}`);
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
   const saveQuotation = useActionMutation((quotation) => api.pricingRequests.updateCustomerQuotation(quotation.id, {
     paymentTerms: quotationHeaderDraft.paymentTerms ?? quotation.paymentTerms,
     leadTime: quotationHeaderDraft.leadTime ?? quotation.leadTime,
@@ -1312,6 +1342,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
     () => customerQuotations.find((q) => isCustomerQuotationEditable(q)) ?? [...customerQuotations].reverse()[0] ?? null,
     [customerQuotations],
   );
+  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's counterpart of
+  // currentCustomerQuotation above. M2's mutual exclusivity means these are never both LIVE at
+  // once, but a CANCELLED legacy quotation can coexist alongside a live new-engine one (or vice
+  // versa) — checking dealQuotationForPr first, and only falling back to the legacy quotation
+  // display when it is absent, is what keeps the panel showing "the one that matters" rather than
+  // a stale cancelled row.
+  const dealQuotationForPr = dealQuotationForPrQuery.data ?? null;
   // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
   // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
   // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
@@ -2879,7 +2916,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <Panel
           flush
           title="ใบเสนอราคาลูกค้า"
-          actions={currentCustomerQuotation ? (
+          actions={dealQuotationForPr ? (
+            (() => {
+              const status = quotationStatusLabel(dealQuotationForPr.docStatus);
+              return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+            })()
+          ) : currentCustomerQuotation ? (
             (() => {
               const status = quotationStatusLabel(currentCustomerQuotation.docStatus);
               return (
@@ -2891,18 +2933,66 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ) : null}
         >
           <div className="flex flex-col gap-3 p-4">
-            {!currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
-              <Button type="button" variant="primary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
-                สร้างร่างใบเสนอราคาลูกค้า
-              </Button>
+            {/* GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's quotation for
+                this request, shown in THIS SAME panel rather than a separate one — one pricing
+                request only ever carries one "ใบเสนอราคาลูกค้า" concept to a viewer regardless of
+                which engine wrote it, and M2 already guarantees the two chains cannot both be
+                live, so splitting them into two panels would just make a rep hunt for the right
+                one. number/status/link, matching what the legacy block below shows. */}
+            {dealQuotationForPr ? (
+              <div className="flex flex-col gap-1">
+                <div className="text-sm"><strong>เลขที่</strong> {dealQuotationForPr.number}</div>
+                <Link
+                  to={`/quotations/${dealQuotationForPr.id}`}
+                  className="self-start text-sm font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  เปิดใบเสนอราคา
+                </Link>
+              </div>
             ) : null}
-            {!currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
+            {!dealQuotationForPr && !currentCustomerQuotation && canCreateCustomerQuotation(user, summary) ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* GLA-123 slice S1 M2 fix (Opus review, 2026-09-20), field narrowed by MINOR-1
+                    (owner ruling, confirmed 2026-09-20, second re-review): the OLD button is
+                    hidden, not merely de-emphasized, once the request's decision is new-form
+                    (decisionSalesView.newFormPricing — V187) — the NEW engine
+                    (createFromPricingRequest) is the only path offered from here on, since the
+                    two paths are now server-side mutually exclusive (M2) and a new-form PR's
+                    quotation cannot be issued until S2 anyway, so steering everyone through the
+                    OLD button on a new-form PR would just mean a wasted click once S2 ships. A
+                    legacy decision (newFormPricing false) keeps BOTH buttons exactly as before —
+                    decisionSalesView is undefined until the query resolves, so this defaults to
+                    "still legacy-shaped" rather than flashing the new-only state first. This used
+                    to read the CEO's own price_mode string directly; MINOR-1 replaced that whole
+                    field with this plain boolean so the endpoint (also legitimately callable by
+                    import, for an unrelated reason) never carries a price-shaped fact at all —
+                    see PricingDecisionSalesViewDto#newFormPricing's own Javadoc. */}
+                {!decisionSalesView?.newFormPricing ? (
+                  <Button type="button" variant="secondary" className="self-start" onClick={() => createQuotation.mutate()} disabled={createQuotation.isPending}>
+                    สร้างร่างใบเสนอราคาลูกค้า
+                  </Button>
+                ) : null}
+                {/* GLA-123 slice S1 — the direct-deal engine, prefilled from the CEO's decision.
+                    Preferred path for a new-form (V185/V187) request; a legacy one gets a clear
+                    409 toast rather than this button being hidden. */}
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="self-start"
+                  onClick={() => createDealQuotationFromRequest.mutate()}
+                  disabled={createDealQuotationFromRequest.isPending}
+                >
+                  เขียนใบเสนอราคาจากคำขอราคา
+                </Button>
+              </div>
+            ) : null}
+            {!dealQuotationForPr && !currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
                 ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขาย (APPROVED_FOR_QUOTATION) ก่อนจึงจะสร้างได้
               </p>
             ) : null}
 
-            {currentCustomerQuotation ? (() => {
+            {!dealQuotationForPr && currentCustomerQuotation ? (() => {
               const quotation = currentCustomerQuotation;
               const quotationStatus = quotationStatusLabel(quotation.docStatus);
               const editable = isCustomerQuotationEditable(quotation) && canManageCustomerQuotation(user, summary);

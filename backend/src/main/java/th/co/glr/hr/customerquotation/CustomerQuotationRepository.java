@@ -497,6 +497,12 @@ public class CustomerQuotationRepository {
                SET doc_status = 'EXPIRED'
              WHERE doc_status = 'ISSUED'
                AND pricing_request_id IS NOT NULL
+               -- GLA-123 slice S1 (2026-09-19): PRICING_REQUEST-origin rows also set
+               -- pricing_request_id, but their own S2 dual-approval flow owns their expiry
+               -- (D5, not yet implemented) — origin IS NULL keeps this scoped to the LEGACY
+               -- (customerquotation/) chain this class has always owned, exactly like every other
+               -- query in this file now excludes the new origin explicitly.
+               AND origin IS NULL
                AND validity_date IS NOT NULL
                AND validity_date < CURRENT_DATE
             RETURNING quotation_id, pricing_request_id, ticket_id, number
@@ -507,7 +513,11 @@ public class CustomerQuotationRepository {
 
     public Optional<CustomerQuotationDto> findById(long quotationId) {
         try {
-            CustomerQuotationDto dto = jdbc.queryForObject(baseSelect() + " WHERE q.quotation_id = :id AND q.pricing_request_id IS NOT NULL",
+            // GLA-123 slice S1: origin IS NULL excludes the new PRICING_REQUEST-origin engine's
+            // rows, which also set pricing_request_id but live on DealQuotationRepository/Service
+            // instead — see that class's own origin filter for the mirror image of this exclusion.
+            CustomerQuotationDto dto = jdbc.queryForObject(
+                baseSelect() + " WHERE q.quotation_id = :id AND q.pricing_request_id IS NOT NULL AND q.origin IS NULL",
                 Map.of("id", quotationId), (rs, rowNum) -> mapQuotation(rs, findItems(quotationId)));
             return Optional.ofNullable(dto);
         } catch (EmptyResultDataAccessException e) {
@@ -515,10 +525,37 @@ public class CustomerQuotationRepository {
         }
     }
 
+    /** GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity: a PR must never
+     * carry BOTH a live legacy customer quotation and a live PRICING_REQUEST-origin one.
+     * "Live" = not CANCELLED/SUPERSEDED/EXPIRED (the same three terminal-but-not-fulfilled
+     * statuses on both flows' status machines). Used by {@code DealQuotationService
+     * #createFromPricingRequest} to refuse (409) when this legacy chain already has one open. */
+    public boolean hasLiveQuotation(long pricingRequestId) {
+        // MINOR-4 fix (owner ruling, confirmed 2026-09-20, second re-review) — REJECTED added to
+        // the non-live set: a customer who REJECTED the old-flow quotation has, by definition, no
+        // live offer in front of them, so the pricing request must be free to use the NEW engine
+        // instead. Without this, a rejected old-flow quotation permanently blocked
+        // DealQuotationService#createFromPricingRequest with the M2 "already has an old quotation"
+        // 409, even though nothing about it is still live. See #hasLivePricingRequestQuotation's
+        // own comment for the mirror-image consistency this is paired with.
+        Boolean found = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.quotation
+                 WHERE pricing_request_id = :id AND origin IS NULL
+                   AND doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED')
+            )
+            """, Map.of("id", pricingRequestId), Boolean.class);
+        return Boolean.TRUE.equals(found);
+    }
+
     public List<CustomerQuotationDto> findByPricingRequest(long pricingRequestId) {
         List<Long> ids = jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE pricing_request_id = :id
+             -- GLA-123 slice S1: origin IS NULL — see #findById's identical exclusion. Without
+             -- this, a request that has BOTH a legacy customerquotation AND a new
+             -- PRICING_REQUEST-origin quotation would return the new row through this
+             -- legacy-shaped DTO/query, which does not know its TILE-line columns.
+             WHERE pricing_request_id = :id AND origin IS NULL
              ORDER BY quotation_revision_no, quotation_id
             """, Map.of("id", pricingRequestId), (rs, rowNum) -> rs.getLong("quotation_id"));
         List<CustomerQuotationDto> result = new ArrayList<>();
@@ -553,9 +590,14 @@ public class CustomerQuotationRepository {
      * it ALONE.
      */
     public List<CustomerQuotationDto> findByTicket(long ticketId) {
+        // GLA-123 slice S1: origin IS NULL — see #findById's identical exclusion. Technically
+        // redundant with #findById's own filter (called per id below, so a PRICING_REQUEST row's
+        // id would already be silently dropped by ifPresent), kept here too so this query doesn't
+        // fetch — and this method's own Javadoc doesn't have to reason about — a row it will
+        // immediately discard.
         List<Long> ids = jdbc.query("""
             SELECT quotation_id FROM sales.quotation
-             WHERE ticket_id = :id AND pricing_request_id IS NOT NULL
+             WHERE ticket_id = :id AND pricing_request_id IS NOT NULL AND origin IS NULL
              ORDER BY quotation_id
             """, Map.of("id", ticketId), (rs, rowNum) -> rs.getLong("quotation_id"));
         List<CustomerQuotationDto> result = new ArrayList<>();

@@ -504,13 +504,19 @@ public class PricingDecisionRepository {
     /** Design correction 2's sales-facing projection — see {@link PricingDecisionDtos.PricingDecisionSalesViewDto}. */
     public Optional<PricingDecisionSalesViewDto> findApprovedSalesView(long pricingRequestId) {
         try {
+            // MINOR-1 fix (owner ruling, confirmed 2026-09-20) — `price_mode IS NOT NULL` computed
+            // IN SQL, as a boolean, rather than fetching the raw price_mode string into Java at
+            // all: there is then no string value in this method for a future caller to
+            // accidentally forward, only the yes/no fact PricingDecisionSalesViewDto#newFormPricing
+            // documents itself as being.
             PricingDecisionSalesViewDto header = jdbc.queryForObject("""
-                SELECT pricing_decision_id, currency, approved_at
+                SELECT pricing_decision_id, currency, approved_at, price_mode IS NOT NULL AS new_form_pricing
                   FROM sales.pricing_decision
                  WHERE pricing_request_id = :pricingRequestId AND status = 'APPROVED'
                 """, Map.of("pricingRequestId", pricingRequestId),
                 (rs, rowNum) -> new PricingDecisionSalesViewDto(pricingRequestId, rs.getLong("pricing_decision_id"),
-                    rs.getString("currency"), rs.getTimestamp("approved_at").toInstant(), List.of()));
+                    rs.getString("currency"), rs.getTimestamp("approved_at").toInstant(), List.of(),
+                    rs.getBoolean("new_form_pricing")));
             // color/texture/size added here (sales-view only — findItems() above is the OTHER
             // query, feeding the cost-bearing PricingDecisionItemDto, and is deliberately left
             // untouched) so Step 4's CustomerQuotationService#buildItem has them to snapshot
@@ -535,7 +541,8 @@ public class PricingDecisionRepository {
                     rs.getBigDecimal("requested_quantity"), rs.getBigDecimal("approved_selling_price_per_requested_unit"),
                     rs.getBigDecimal("minimum_selling_price_per_requested_unit")));
             return Optional.of(new PricingDecisionSalesViewDto(
-                header.pricingRequestId(), header.pricingDecisionId(), header.currency(), header.approvedAt(), items));
+                header.pricingRequestId(), header.pricingDecisionId(), header.currency(), header.approvedAt(), items,
+                header.newFormPricing()));
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }

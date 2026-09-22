@@ -530,6 +530,16 @@ export const API_ROUTES = {
   dealQuotations: {
     listForTicket: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
     create: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
+    // GLA-123 slice S1 — "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin
+    // quotation on this SAME engine, prefilled from an approved pricing request's CEO decision.
+    // Mirrors DealQuotationController#createFromPricingRequest. NOT
+    // `/pricing-requests/{id}/quotations` -- that exact path is already
+    // customerQuotations.create (the legacy path this sits beside, not inside).
+    createFromPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
+    // M1 fix (Opus review, 2026-09-20) — read-only counterpart of the POST above: no create side
+    // effect, just "does this PR already have a new-engine quotation". Mirrors
+    // DealQuotationController#findForPricingRequest. Same path, GET instead of POST.
+    findForPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
     // Approver queue / role-scoped list. `status` filters by docStatus; sales is scoped to its own
     // deals server-side.
     //
@@ -565,6 +575,9 @@ export const API_ROUTES = {
     reorders: (id) => `/api/deal-quotations/${id}/reorders`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
+    // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
+    // dropped. Mirrors DealQuotationController#restoreRemovedItem.
+    restoreRemovedItem: (id, pricingDecisionItemId) => `/api/deal-quotations/${id}/items/${pricingDecisionItemId}/restore`,
   },
 };
 

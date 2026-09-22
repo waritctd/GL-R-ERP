@@ -421,6 +421,67 @@ export function isDealQuotationNeedingRework(row) {
   return row?.docStatus === 'DRAFT' && (row.approvalNote != null || row.parentQuotationId != null);
 }
 
+// ── CEO-comparison marker: LOCAL, unsaved-window mirror (coordinator follow-up, 2026-09-20) ──
+// Bug: QuotationItemRow's "เปลี่ยนจากราคา CEO" marker read ONLY `item.priceChangedFromCeo`, a
+// server-computed flag that is frozen at whatever the last successful save carried. A row with
+// validation errors never autosaves (QuotationEditorPage gates autosave on
+// !hasValidationErrors), so editing ส่วนลด on such a row left the badge reading "✓ ราคาจาก CEO"
+// — "this is the CEO's own price" — right next to a number the rep had just typed something
+// else into. The fix is a client-side mirror of the exact same comparison, evaluated against the
+// CURRENT (possibly unsaved) local field values, so the marker updates the instant the field
+// changes rather than only after a round trip.
+
+/** Null-safe numeric equality for a CEO-comparison field. Mirrors
+ * `DealQuotationRepository#moneyEquals`'s BigDecimal `compareTo` (scale-insensitive: 10 and 10.00
+ * are the same value) using a tiny epsilon instead of a decimal type, since these are plain typed
+ * JS numbers, not persisted NUMERIC columns — there is no scale to normalize, only float
+ * representation to tolerate. Treats `''`/`null`/`undefined` uniformly as "nothing typed yet". */
+function localMoneyEquals(a, b) {
+  const na = a === '' || a == null ? null : Number(a);
+  const nb = b === '' || b == null ? null : Number(b);
+  if (na == null || nb == null) return na === nb;
+  if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+  return Math.abs(na - nb) < 1e-6;
+}
+
+/**
+ * Client-side mirror of `DealQuotationRepository#priceChangedFromCeo`, evaluated against the
+ * item's CURRENT local editor fields (`unitPrice`/`discountPct`/`specialPriceSqm`/
+ * `directNetPrice` — the exact fields QuotationItemRow's own inputs `patch`) instead of what is
+ * on disk. Reuses the SAME `ceo*` fields the server already joined onto the item (never
+ * re-derives them) and the SAME per-mode field selection, zeroIfNull convention on
+ * `discountPct`, and "unrecognised mode always reads changed" default as the backend — see that
+ * method's own Javadoc for why each rule exists. `priceMode` must be the DOCUMENT's CURRENT mode
+ * (`docSettings.priceMode`, which may itself be an unsaved local switch), not the CEO's frozen
+ * `ceoPriceMode` — exactly like the backend compares against its own currently-SAVED price_mode,
+ * never the CEO's original one.
+ *
+ * Callers OR this with the server's `item.priceChangedFromCeo` (never replace it) so the server
+ * flag stays authoritative once a save lands — after a successful save, `ceo*` and the local
+ * fields are both in sync (MAJOR-2's whitelist merge refreshes `ceo*` from the response; the
+ * local fields already equal whatever was just PUT), so this function and the server flag are
+ * guaranteed to agree; OR-ing only changes anything during the unsaved window this fix targets.
+ */
+export function isTilePriceChangedFromCeoLocally(item, priceMode) {
+  if (item.ceoListUnitPrice == null && item.ceoDiscountPct == null
+      && item.ceoSpecialPriceSqm == null && item.ceoDirectNetPrice == null) {
+    // Unlinked row (no decision item) — nothing to compare against, mirrors the backend's own
+    // "every ceo_* column came back null" short-circuit.
+    return false;
+  }
+  if (priceMode === 'SPECIAL_SQM') {
+    return !localMoneyEquals(item.specialPriceSqm, item.ceoSpecialPriceSqm);
+  }
+  if (priceMode === 'DIRECT_NET') {
+    return !localMoneyEquals(item.directNetPrice, item.ceoDirectNetPrice);
+  }
+  if (priceMode === 'NET') {
+    return !localMoneyEquals(item.unitPrice, item.ceoListUnitPrice)
+      || !localMoneyEquals(item.discountPct ?? 0, item.ceoDiscountPct ?? 0);
+  }
+  return true;
+}
+
 // ── แผ่น/ตร.ม. (owner feedback 2026-09-12) ───────────────────────────────────────────────────────
 // "ขณะเพิ่มสินค้า ปัจจุบันแสดงเป็น จำนวน ตรม ต่อ แผ่น ขอแค่เป็น จำนวนแผ่นต่อตารางเมตรแทน" -- a rep
 // thinks in "how many pieces make up one ตร.ม.", not "how much area one piece covers", so the

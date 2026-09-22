@@ -955,6 +955,35 @@ public class PricingRequestRepository {
     }
 
     /**
+     * MINOR fix (Opus review, 2026-09-20), GLA-123 slice S1 — a PRICING_REQUEST-origin (the NEW,
+     * {@code th.co.glr.hr.dealquotation} engine) DRAFT quotation orphaned by a customer-change
+     * revision, mirroring {@link #supersedeOpenPricingDecisionAndQuotation}'s own "DRAFT is in the
+     * predicate deliberately, and it closes a real hole" reasoning — but scoped MUCH narrower than
+     * that method, and NOT the same call: {@code createCustomerChangeRevision} deliberately never
+     * calls {@code supersedeOpenPricingDecisionAndQuotation} itself, because the owner's
+     * reissue-through-CEO-chain ruling keeps an ALREADY-ISSUED legacy (origin IS NULL) quotation
+     * live until the replacement is issued (see that method's own Javadoc and this call's own
+     * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
+     * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
+     * NEVER reach ISSUED (submit is refused — {@code DealQuotationService#requireStatusMachineEnabled}),
+     * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
+     * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
+     * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever
+     * retires it (there is no S2 issue-time supersede for this origin yet). {@code origin =
+     * 'PRICING_REQUEST'} in the predicate is what keeps this from ever touching the legacy
+     * quotation the paragraph above is protecting.
+     */
+    public void supersedeOpenPricingRequestOriginDraft(long pricingRequestId) {
+        jdbc.update("""
+            UPDATE sales.quotation
+               SET doc_status = 'SUPERSEDED'
+             WHERE pricing_request_id = :pricingRequestId
+               AND origin = 'PRICING_REQUEST'
+               AND doc_status = 'DRAFT'
+            """, Map.of("pricingRequestId", pricingRequestId));
+    }
+
+    /**
      * Step 6 (V76): the order-confirmation bridge's own idempotency/state check — read under the
      * same {@link #lockPricingRequest} hold as the guarded update below, exactly like every prior
      * step's create/issue/outcome replay check (e.g. {@code CustomerQuotationRepository
