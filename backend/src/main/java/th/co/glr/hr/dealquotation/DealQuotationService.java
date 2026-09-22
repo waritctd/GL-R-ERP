@@ -354,6 +354,13 @@ public class DealQuotationService {
         // document also leaves the PR at QUOTATION_ISSUED); that is enforced once, unconditionally,
         // by #hasLivePricingRequestQuotation just below the idempotent-DRAFT check, which is the
         // ONE place "no second live quotation" is actually decided for BOTH branches.
+        //
+        // GLA-123 slice S3 BLOCKER-B fix note: this same QUOTATION_ISSUED check ALSO now correctly
+        // covers the REVISION_REQUESTED recovery path with no further change here — recordOutcome
+        // deliberately never moves the PR's own status off QUOTATION_ISSUED for that outcome (same
+        // as REJECTED), so the variable name below ("AfterExpiry") undersells what it now gates;
+        // the actual invariant is just "PR status == QUOTATION_ISSUED", which is what BOTH the
+        // expiry and the revision-requested recovery paths leave it at.
         boolean prReadyForFirstQuotation = PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status());
         boolean prReadyForReplacementAfterExpiry = PricingRequestStatus.QUOTATION_ISSUED.equals(summary.status());
         if (!prReadyForFirstQuotation && !prReadyForReplacementAfterExpiry) {
@@ -644,7 +651,26 @@ public class DealQuotationService {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
             }
         }
-        return quotations.findByTicket(ticketId);
+        // GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23): the
+        // entry gate above is DEAL_DIRECT's own broad rule (VIEW_ROLES + a full hasQuotationGrant
+        // bypass) — correct for a DEAL_DIRECT row, where price is the rep's own typed number, but
+        // WAY too broad for a PRICING_REQUEST row, where unitPrice/discountPct/netUnitPrice ARE
+        // the CEO's approved price/discount. #findByTicket was widened (MAJOR 4, this same S3
+        // round) to include PRICING_REQUEST rows in its RESULT SET without this method's own
+        // per-row visibility check being widened to match — reproduced live: import could read
+        // discountPct=10.00 off a PRICING_REQUEST row via this endpoint. Filtered here (not
+        // field-stripped) — every OTHER list/count surface on this class (search/counts) already
+        // behaves as "rows you may see", not "rows with some fields blanked out", so an
+        // unauthorized PRICING_REQUEST row is dropped from the list entirely, exactly as if
+        // #findByTicket had never returned it, rather than appearing with nulled-out price fields.
+        List<DealQuotationDto> rows = quotations.findByTicket(ticketId);
+        List<DealQuotationDto> visible = new ArrayList<>(rows.size());
+        for (DealQuotationDto row : rows) {
+            if (!"PRICING_REQUEST".equals(row.origin()) || canViewPricingRequestOriginRow(actor, row)) {
+                visible.add(row);
+            }
+        }
+        return visible;
     }
 
     /** The approver queue (sales_manager/ceo/import/account see everything; sales sees only their
@@ -1617,6 +1643,15 @@ public class DealQuotationService {
         if (outcomeClientRequestId != null) {
             Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
             if (replay.isPresent()) {
+                // MINOR-2 fix (Opus review, 2026-09-23) — mirrors CustomerQuotationService#issue's
+                // own identical guard: a replay resolving to a DIFFERENT quotation than the one
+                // this call actually named is a genuine conflict, not a silent "success" — without
+                // this, the caller would get back some OTHER quotation's DTO with no outcome
+                // recorded on the one they meant to act on, and no error to notice it by.
+                if (replay.get() != quotationId) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+                }
                 return requireQuotation(replay.get());
             }
         }
@@ -1630,8 +1665,18 @@ public class DealQuotationService {
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
         }
 
-        int rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
-            actor.id(), outcomeClientRequestId);
+        // MINOR-3 fix (Opus review, 2026-09-23) — see CustomerQuotationService#recordOutcome's
+        // identical fix for the full reasoning: V75's own unique index is table-wide, both
+        // origins' replay lookups are now origin-scoped, so a cross-engine clientRequestId reuse
+        // deterministically hits this constraint instead of replay-matching. Caught and turned
+        // into the same clean 409 the wrong-quotation replay guard above already uses.
+        int rows;
+        try {
+            rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+                actor.id(), outcomeClientRequestId);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+        }
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
@@ -3250,12 +3295,8 @@ public class DealQuotationService {
         // checked FIRST and returning early so the broader DEAL_DIRECT rules below never apply to
         // it. Covers get/render/download/pictures — every read here funnels through this method.
         if ("PRICING_REQUEST".equals(quotation.origin())) {
-            requireRole(actor, PRICING_REQUEST_VIEW_ROLES);
-            if ("sales".equals(actor.role())) {
-                TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-                if (ticket.createdById() != actor.id()) {
-                    throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-                }
+            if (!canViewPricingRequestOriginRow(actor, quotation)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
             return;
         }
@@ -3269,6 +3310,34 @@ public class DealQuotationService {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
+    }
+
+    /**
+     * GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23): the boolean
+     * form of {@link #requireViewAccess}'s PRICING_REQUEST branch, factored out so {@link
+     * #listForTicket} can FILTER a mixed-origin list with the exact same rule this method already
+     * enforces for a single row — rather than duplicating the role/owner check a second time (the
+     * duplication is exactly how {@code listForTicket} ended up leaking CEO price/discount to
+     * import/account/grant-holders in the first place: it had its OWN, broader gate at the
+     * method's entry — {@link #VIEW_ROLES} plus a full {@link #hasQuotationGrant} bypass — and
+     * nothing origin-aware downstream of it).
+     *
+     * <p>On this origin, {@link DealQuotationItemDto#unitPrice}/{@code discountPct}/{@code
+     * netUnitPrice} ARE the CEO's approved price and discount (not a rep's own typed price, as on
+     * a DEAL_DIRECT row) — two prior owner rulings (S1 review MAJOR-3, then the "block import"
+     * ruling) restrict reading them to {@link #PRICING_REQUEST_VIEW_ROLES} (sales-owner,
+     * sales_manager, ceo) with NO {@link #hasQuotationGrant} bypass, unlike every other role/read
+     * gate on this class.
+     */
+    private boolean canViewPricingRequestOriginRow(UserPrincipal actor, DealQuotationDto quotation) {
+        if (!PRICING_REQUEST_VIEW_ROLES.contains(actor.role())) {
+            return false;
+        }
+        if ("sales".equals(actor.role())) {
+            TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
+            return ticket.createdById() == actor.id();
+        }
+        return true;
     }
 
     /** Live DB read of the per-employee grant — see {@link EmployeeAuthRepository#canCreateQuotation}

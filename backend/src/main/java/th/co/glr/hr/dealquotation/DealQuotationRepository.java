@@ -182,11 +182,23 @@ public class DealQuotationRepository {
         // OTHER engine). STILL never actually written by this origin's own #reject (R9 returns to
         // DRAFT, not a REJECTED terminal status — see that method's own comment) — kept in the
         // non-live set anyway for the same forward-looking consistency reasoning MINOR-4 gave.
+        //
+        // GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
+        // REVISION_REQUESTED added — this WAS reachable (S3's own recordOutcome writes it) and WAS
+        // missing, so a quotation the customer asked to change was a permanent dead end: create
+        // refused ("a live quotation still exists"), cancel/update refused (not DRAFT),
+        // re-recording an outcome refused (not ISSUED), and the expiry sweep never touches it
+        // (ISSUED-only) — every exit 409'd, proven end to end against real Postgres. This is NOT
+        // D12 (revising an ACCEPTED quotation, out of S3's scope) — REVISION_REQUESTED is an
+        // ISSUED quotation the customer asked to change, squarely R9/S3's own concern. Gives it
+        // the SAME recovery path REJECTED and EXPIRED already have: sales writes a fresh
+        // quotation from the same pricing request (the old REVISION_REQUESTED row stays, kept for
+        // audit, exactly like a REJECTED/EXPIRED one already does).
         Boolean found = jdbc.queryForObject("""
             SELECT EXISTS (
                 SELECT 1 FROM sales.quotation
                  WHERE pricing_request_id = :id AND origin = 'PRICING_REQUEST'
-                   AND doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED')
+                   AND doc_status NOT IN ('CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED', 'REVISION_REQUESTED')
             )
             """, Map.of("id", pricingRequestId), Boolean.class);
         return Boolean.TRUE.equals(found);
@@ -264,6 +276,17 @@ public class DealQuotationRepository {
         }
     }
 
+    /** One accepted line's reconciliation-relevant numbers — {@link #qty} is {@code
+     * quotation_item.qty} (see {@link #findAcceptedItemQuantitiesByPricingRequest}'s own Javadoc);
+     * {@link #sqmPerPiece} is {@code quotation_item.sqm_per_piece} (V165), read from the SAME row
+     * so {@code OrderConfirmationService#reconcileTicketItems} can derive {@code qty_sqm} via
+     * {@code WastageCalculator#sqmQuantityFromPieces} — GLA-123 slice S3 MAJOR-B fix — rather than
+     * leaving it unreconciled (still the PR's stale, pre-edit area) while {@code qty} moves. Null
+     * exactly when the row has no sqm/piece basis (should not happen for a TILE row on this
+     * origin, but this origin's own extra-row feature (D7, S1b) is not yet shipped, so this stays
+     * nullable defensively rather than assumed). */
+    public record AcceptedItemQty(java.math.BigDecimal qty, java.math.BigDecimal sqmPerPiece) {}
+
     /**
      * GLA-123 slice S3 BLOCKER 2 fix (Opus review against real Postgres, 2026-09-23):
      * {@code OrderConfirmationService#reconcileTicketItems} used to write {@code
@@ -288,9 +311,9 @@ public class DealQuotationRepository {
      * capability on its own quotation items, so the PR item's value was always already correct
      * there; or a PR item added after acceptance with no matching quotation line).
      */
-    public Map<Long, java.math.BigDecimal> findAcceptedItemQuantitiesByPricingRequest(long pricingRequestId) {
+    public Map<Long, AcceptedItemQty> findAcceptedItemQuantitiesByPricingRequest(long pricingRequestId) {
         List<Object[]> rows = jdbc.query("""
-            SELECT qi.pricing_request_item_id, qi.qty
+            SELECT qi.pricing_request_item_id, qi.qty, qi.sqm_per_piece
               FROM sales.quotation_item qi
               JOIN sales.quotation q ON q.quotation_id = qi.quotation_id
              WHERE q.pricing_request_id = :pricingRequestId
@@ -298,10 +321,11 @@ public class DealQuotationRepository {
                AND q.doc_status = 'ACCEPTED'
                AND qi.pricing_request_item_id IS NOT NULL
             """, Map.of("pricingRequestId", pricingRequestId),
-            (rs, rowNum) -> new Object[]{rs.getLong("pricing_request_item_id"), rs.getBigDecimal("qty")});
-        Map<Long, java.math.BigDecimal> result = new LinkedHashMap<>();
+            (rs, rowNum) -> new Object[]{
+                rs.getLong("pricing_request_item_id"), rs.getBigDecimal("qty"), rs.getBigDecimal("sqm_per_piece")});
+        Map<Long, AcceptedItemQty> result = new LinkedHashMap<>();
         for (Object[] row : rows) {
-            result.put((Long) row[0], (java.math.BigDecimal) row[1]);
+            result.put((Long) row[0], new AcceptedItemQty((java.math.BigDecimal) row[1], (java.math.BigDecimal) row[2]));
         }
         return result;
     }

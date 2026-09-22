@@ -292,24 +292,39 @@ public class OrderConfirmationService {
         // #findAcceptedItemQuantitiesByPricingRequest's own Javadoc. Empty (not merely unwired)
         // whenever this PR's accepted quotation is on the LEGACY engine or there is none yet — the
         // legacy engine has no per-line quantity edit at all, so falling back to the PR item's own
-        // requestedQty() below is correct there, not a compromise.
-        java.util.Map<Long, java.math.BigDecimal> acceptedQtyByPrItemId = dealQuotations != null
-            ? dealQuotations.findAcceptedItemQuantitiesByPricingRequest(pricingRequestId)
-            : java.util.Map.of();
+        // requestedQty()/requestedQtySqm() below is correct there, not a compromise.
+        java.util.Map<Long, th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty> acceptedByPrItemId =
+            dealQuotations != null
+                ? dealQuotations.findAcceptedItemQuantitiesByPricingRequest(pricingRequestId)
+                : java.util.Map.of();
         boolean anyChange = false;
         for (PricingRequestItemDto item : items) {
             String unitBasis = mapUnitBasisToTicketItem(item.requestedUnitBasis());
             // The customer ACCEPTED this quantity on the quotation, not necessarily what the PR
             // was authored with (S1 explicitly lets sales edit qty/เผื่อ on a PRICING_REQUEST-origin
             // quotation without CEO re-approval — see requireCeoApprovalIfChanged's own exclusion).
-            // qty_sqm has no equivalent on this engine's quotation_item (S1's quantity model is
-            // pieces-only — GLA-125), so it is never overridden here.
-            BigDecimal reconciledQty = acceptedQtyByPrItemId.getOrDefault(item.id(), item.requestedQty());
+            th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty accepted =
+                acceptedByPrItemId.get(item.id());
+            BigDecimal reconciledQty = accepted != null ? accepted.qty() : item.requestedQty();
+            // GLA-123 slice S3 MAJOR-B fix (Opus review against real Postgres, 2026-09-23): qty
+            // used to move (BLOCKER 2's own fix) while qty_sqm silently kept the PR's ORIGINAL,
+            // pre-edit area — reproduced live: qty=25.00 (correct) alongside qty_sqm=3.6000 (still
+            // the stale 10-piece area), a genuine contradiction between the two columns on the
+            // SAME row. Derives qty_sqm from the SAME accepted qty via the shared {@code
+            // WastageCalculator#sqmQuantityFromPieces} (never reimplemented here) whenever a
+            // sqm/piece basis is available on the accepted line; falls back to the PR item's own
+            // requestedQtySqm() when there is no accepted new-engine quotation (legacy engine —
+            // correct already, see comment above) or the accepted line has no sqm/piece basis
+            // (defensive only — every TILE row on this origin has one).
+            BigDecimal reconciledQtySqm = (accepted != null && accepted.sqmPerPiece() != null)
+                ? th.co.glr.hr.dealquotation.WastageCalculator.sqmQuantityFromPieces(
+                    reconciledQty.intValueExact(), accepted.sqmPerPiece())
+                : item.requestedQtySqm();
             if (item.sourceTicketItemId() != null) {
                 boolean changed;
                 try {
                     changed = tickets.reconcileItemQty(
-                        ticketId, item.sourceTicketItemId(), reconciledQty, item.requestedQtySqm());
+                        ticketId, item.sourceTicketItemId(), reconciledQty, reconciledQtySqm);
                 } catch (DataIntegrityViolationException e) {
                     throw new ApiException(HttpStatus.CONFLICT,
                         "ไม่สามารถปรับจำนวนสินค้า (item " + item.sourceTicketItemId()
@@ -321,7 +336,7 @@ public class OrderConfirmationService {
                 // to reconcile against, so one is created now (once), before it becomes visible
                 // to reserveStock/completeDelivery.
                 tickets.insertReconciledItem(ticketId, resolveBrand(item), item.model(), item.color(),
-                    item.texture(), item.size(), item.factory(), reconciledQty, item.requestedQtySqm(),
+                    item.texture(), item.size(), item.factory(), reconciledQty, reconciledQtySqm,
                     unitBasis);
                 anyChange = true;
             }

@@ -295,6 +295,52 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
     }
 
+    /** GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
+     * REVISION_REQUESTED was missing from {@code hasLivePricingRequestQuotation}'s non-live set,
+     * even though S3 (this slice's own recordOutcome) is what makes that outcome reachable —
+     * proven end to end against real Postgres before the fix: create refused (409, "a live
+     * quotation still exists"), cancel/update refused (not DRAFT), re-recording an outcome
+     * refused (not ISSUED), and the expiry sweep never touches it (ISSUED-only). Every exit
+     * 409'd — a permanent dead end for any deal the customer asked to change. NOT D12 (revising an
+     * ACCEPTED quotation, out of scope) — this is an ISSUED quotation, squarely R9/S3's own
+     * concern. Fixed by adding REVISION_REQUESTED to the non-live set, the SAME recovery path
+     * REJECTED/EXPIRED already have. */
+    @Test
+    void revisionRequestedOutcome_isNotAPermanentDeadEnd_createSucceedsFromTheSameDecision() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = jdbc.queryForObject(
+            "SELECT pricing_request_id FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", issued.id()), Long.class);
+
+        DealQuotationDto revisionRequested = quotationService.recordOutcome(issued.id(),
+            new RecordOutcomeRequest(QuotationStatus.REVISION_REQUESTED, "ขอปรับราคา", UUID.randomUUID().toString()),
+            salesActor);
+        assertThat(revisionRequested.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
+        // Mirrors REJECTED: this outcome deliberately does NOT change the PR's own status — still
+        // QUOTATION_ISSUED, which is exactly what #createFromPricingRequest's own "expiry escape
+        // hatch" status gate already tolerates (see that method's own updated comment).
+        assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
+            .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+
+        // Before the fix, this next call 409'd unconditionally — a permanent dead end.
+        DealQuotationDto fresh = quotationService.createFromPricingRequest(pricingRequestId, salesActor);
+        assertThat(fresh.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(fresh.id()).isNotEqualTo(issued.id());
+        assertThat(fresh.pricingRequestId()).isEqualTo(pricingRequestId);
+        // Prefilled from the SAME approved decision — same line count, same CEO-approved price.
+        assertThat(fresh.items()).hasSameSizeAs(issued.items());
+        assertThat(fresh.items().get(0).unitPrice()).isEqualByComparingTo(issued.items().get(0).ceoListUnitPrice());
+
+        // Normal flow continues unimpeded: submit -> approve -> ISSUED.
+        DealQuotationDto withValidity = quotationService.update(fresh.id(), upsertWithValidityDays(fresh, 30), salesActor);
+        DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
+        DealQuotationDto reIssued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(reIssued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
+
+        // The old REVISION_REQUESTED row stays untouched, kept for audit.
+        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // R8 — one finalized (ACCEPTED) quotation per DEAL, across BOTH คำขอราคา origins. Both
     // directions are wrong-way-round: the SECOND accept must be refused with NOTHING written,
@@ -393,6 +439,15 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             "SELECT qty FROM sales.ticket_item WHERE item_id = :id",
             Map.of("id", originalTicketItemId), BigDecimal.class);
         assertThat(reconciledQty).isEqualByComparingTo(requestedQty);
+
+        // GLA-123 slice S3 MAJOR-B fix — qty_sqm must be reconciled too, not just qty. Unedited
+        // case: derived from the accepted quotation's own qty x sqmPerPiece (0.36), which agrees
+        // with the PR's own requestedQtySqm here since nothing was edited.
+        BigDecimal reconciledQtySqm = jdbc.queryForObject(
+            "SELECT qty_sqm FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", originalTicketItemId), BigDecimal.class);
+        assertThat(reconciledQtySqm).isEqualByComparingTo(
+            WastageCalculator.sqmQuantityFromPieces(requestedQty.intValueExact(), new BigDecimal("0.36")));
     }
 
     /** GLA-123 slice S3 BLOCKER 2 — real-DB reproduction of the reviewer's exact scenario: PR
@@ -430,6 +485,18 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", originalTicketItemId), BigDecimal.class);
         assertThat(reconciledQty).isEqualByComparingTo("25");
         assertThat(reconciledQty).isNotEqualByComparingTo(prOriginalQty);
+
+        // GLA-123 slice S3 MAJOR-B fix (Opus review against real Postgres, 2026-09-23): qty
+        // moving to 25 while qty_sqm silently kept the PR's ORIGINAL 10-piece area (3.6000, from
+        // sqmPerPiece 0.36 x 10) was a genuine contradiction between the two columns on the SAME
+        // row, proven live. qty_sqm must now move WITH qty: 25 pieces x 0.36 sqm/piece = 9.00,
+        // via the shared WastageCalculator#sqmQuantityFromPieces (never reimplemented locally).
+        BigDecimal reconciledQtySqm = jdbc.queryForObject(
+            "SELECT qty_sqm FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", originalTicketItemId), BigDecimal.class);
+        assertThat(reconciledQtySqm).isEqualByComparingTo("9.00");
+        assertThat(reconciledQtySqm).isEqualByComparingTo(
+            WastageCalculator.sqmQuantityFromPieces(25, new BigDecimal("0.36")));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -448,6 +515,114 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
         assertThat(forTicket).extracting(DealQuotationDto::id).contains(issued.id());
         assertThat(forTicket).extracting(DealQuotationDto::origin).allMatch("PRICING_REQUEST"::equals);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23):
+    // MAJOR 4's own widening of #findByTicket's RESULT SET (above) was not matched by a widening
+    // of #listForTicket's own per-row VISIBILITY rule, which stayed the DEAL_DIRECT-shaped
+    // VIEW_ROLES {sales,sales_manager,ceo,import,account} + a full hasQuotationGrant bypass — so
+    // import/account/any canCreateQuotation-granted employee could now read a PRICING_REQUEST
+    // row's unitPrice/discountPct/netUnitPrice through this endpoint, which on THIS origin are the
+    // CEO's own approved price and discount (two prior owner rulings restrict them to
+    // PRICING_REQUEST_VIEW_ROLES with no grant bypass). Reproduced live: listForTicket as import
+    // returned the full item list including discountPct=10.00. Chosen fix: the unauthorized
+    // PRICING_REQUEST row is FILTERED OUT of the list entirely (not field-stripped) — see
+    // #listForTicket's own comment for why that matches every sibling list/count surface on this
+    // class.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void listForTicket_hidesPricingRequestOriginRow_fromImport() {
+        issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+
+        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, importActor);
+
+        assertThat(forTicket).as("import must not see the PRICING_REQUEST-origin row at all").isEmpty();
+    }
+
+    @Test
+    void listForTicket_hidesPricingRequestOriginRow_fromAccount() {
+        issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+
+        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, accountActor("hide"));
+
+        assertThat(forTicket).as("account must not see the PRICING_REQUEST-origin row at all").isEmpty();
+    }
+
+    @Test
+    void listForTicket_hidesPricingRequestOriginRow_fromACanCreateQuotationGrantHolder() {
+        issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+
+        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, grantedAccountActor("hide"));
+
+        assertThat(forTicket)
+            .as("the can_create_quotation grant does NOT bypass PRICING_REQUEST_VIEW_ROLES — unlike a DEAL_DIRECT row")
+            .isEmpty();
+    }
+
+    @Test
+    void listForTicket_doesNotHidePricingRequestOriginRow_fromSalesOwnerSalesManagerOrCeo() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+
+        assertThat(quotationService.listForTicket(ticketId, salesActor))
+            .as("the owning sales rep sees the row").extracting(DealQuotationDto::id).contains(issued.id());
+        assertThat(quotationService.listForTicket(ticketId, salesManagerActor))
+            .as("sales_manager sees the row").extracting(DealQuotationDto::id).contains(issued.id());
+        assertThat(quotationService.listForTicket(ticketId, ceoActor))
+            .as("ceo sees the row").extracting(DealQuotationDto::id).contains(issued.id());
+    }
+
+    /** GLA-123 slice S3 MAJOR-A fix (Opus review, 2026-09-23): the ONLY real-DB regression
+     * coverage for BLOCKER 1's fix ({@code findForPricingRequest} switched from the DRAFT-only
+     * {@code findOpenDraftForPricingRequest} to {@code findLatestForPricingRequest}) — the 4
+     * frontend tests added alongside BLOCKER 1 stub the API response directly and cannot see a
+     * backend regression; mutating this method back to the old reader left all 73 of them green.
+     * Asserts the method returns the quotation for ISSUED, ACCEPTED and EXPIRED — every status
+     * past DRAFT the old reader silently returned {@code Optional.empty()} for. */
+    @Test
+    void findForPricingRequest_returnsTheQuotationPastDraft_issuedAcceptedAndExpired() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        long pricingRequestId = jdbc.queryForObject(
+            "SELECT pricing_request_id FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", issued.id()), Long.class);
+
+        assertThat(quotationService.findForPricingRequest(pricingRequestId, salesActor))
+            .as("ISSUED must be visible").isPresent()
+            .get().extracting(DealQuotationDto::docStatus).isEqualTo(QuotationStatus.ISSUED);
+
+        DealQuotationDto accepted = quotationService.recordOutcome(issued.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, null, UUID.randomUUID().toString()), salesActor);
+        assertThat(quotationService.findForPricingRequest(pricingRequestId, salesActor))
+            .as("ACCEPTED must be visible").isPresent()
+            .get().extracting(DealQuotationDto::docStatus).isEqualTo(QuotationStatus.ACCEPTED);
+        assertThat(accepted.docStatus()).isEqualTo(QuotationStatus.ACCEPTED); // sanity on the setup itself
+
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'EXPIRED' WHERE quotation_id = :id",
+            Map.of("id", issued.id()));
+        assertThat(quotationService.findForPricingRequest(pricingRequestId, salesActor))
+            .as("EXPIRED must be visible (the escape-hatch UI is keyed on seeing this)").isPresent()
+            .get().extracting(DealQuotationDto::docStatus).isEqualTo(QuotationStatus.EXPIRED);
+    }
+
+    /** GLA-123 slice S3 MINOR-2 fix (Opus review, 2026-09-23) — mirrors
+     * {@code CustomerQuotationService#issue}'s own wrong-quotation replay guard: a replayed
+     * clientRequestId resolving to a DIFFERENT quotation than the one this call actually named
+     * must 409, not silently hand back the other quotation's DTO with nothing recorded on the one
+     * the caller meant to act on. */
+    @Test
+    void recordOutcome_replayWithClientRequestIdBoundToADifferentQuotation_refused409() {
+        DealQuotationDto issuedA = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        DealQuotationDto issuedB = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("5"));
+        String clientRequestId = UUID.randomUUID().toString();
+        quotationService.recordOutcome(issuedA.id(),
+            new RecordOutcomeRequest(QuotationStatus.REJECTED, null, clientRequestId), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issuedB.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, null, clientRequestId), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        // Nothing recorded on B — the replay guard fired before any write to it.
+        assertThat(quotationService.get(issuedB.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -618,6 +793,29 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    /** {@code account} role, NO {@code can_create_quotation} grant — part of the BLOCKER-A
+     * wrong-way-round matrix (mirrors this class's own {@code importActor}). */
+    private UserPrincipal accountActor(String suffix) {
+        EmployeeRepository employees = new EmployeeRepository(
+            jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        long id = createEmployee(employees, "บัญชี S3 BLOCKER-A " + suffix,
+            "acct-s3-blockera-" + suffix + "@glr.co.th", "ACCT", "ฝ่ายบัญชี");
+        return actor(id, "account");
+    }
+
+    /** {@code account} role WITH the {@code can_create_quotation} grant — mirrors
+     * {@code PricingRequestQuotationIntegrationTest#grantedAccountActor}'s identical pattern; the
+     * grant lets this actor view/edit ANY DEAL_DIRECT deal, but must NOT bypass
+     * {@link DealQuotationService#PRICING_REQUEST_VIEW_ROLES} for a PRICING_REQUEST-origin row. */
+    private UserPrincipal grantedAccountActor(String suffix) {
+        EmployeeRepository employees = new EmployeeRepository(
+            jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
+        long id = createEmployee(employees, "บัญชี S3 BLOCKER-A (สิทธิ์พิเศษ) " + suffix,
+            "acct-s3-blockera-grant-" + suffix + "@glr.co.th", "ACCT", "ฝ่ายบัญชี");
+        jdbc.update("UPDATE hr.employee SET can_create_quotation = TRUE WHERE employee_id = :id", Map.of("id", id));
+        return actor(id, "account");
     }
 
     private UserPrincipal actor(long employeeId, String role) {

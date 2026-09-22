@@ -582,6 +582,15 @@ public class CustomerQuotationService {
         if (outcomeClientRequestId != null) {
             Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
             if (replay.isPresent()) {
+                // MINOR-2 fix (Opus review, 2026-09-23) — mirrors #issue's own identical guard
+                // (:337): a replay resolving to a DIFFERENT quotation than the one this call
+                // actually named is a genuine conflict, not a silent "success" — without this, the
+                // caller would get back some OTHER quotation's DTO with no outcome recorded on the
+                // one they meant to act on, and no error to notice it by.
+                if (replay.get() != quotationId) {
+                    throw new ApiException(HttpStatus.CONFLICT,
+                        "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+                }
                 return requireQuotation(replay.get());
             }
         }
@@ -596,8 +605,23 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
         }
-        int rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
-            actor.id(), outcomeClientRequestId);
+        // MINOR-3 fix (Opus review, 2026-09-23): V75's own (issued_by, outcome_client_request_id)
+        // partial unique index is TABLE-WIDE (both origins share sales.quotation), but the two
+        // engines' own #findIdByOutcomeClientRequestId lookups are now each origin-scoped (this
+        // one origin IS NULL, DealQuotationRepository's origin = 'PRICING_REQUEST' — see that
+        // method's own MINOR-2 Javadoc). So the SAME actor reusing a clientRequestId across the
+        // two recordOutcome endpoints no longer replay-matches on EITHER side, and instead
+        // deterministically hits the DB constraint here as a bare DataIntegrityViolationException
+        // — a 500 with no Thai message. Scoping the index itself by origin (a migration) was
+        // judged not worth it for this slice; catching the violation and turning it into the same
+        // clean 409 #issue's own wrong-quotation guard above already uses is the cheaper fix.
+        int rows;
+        try {
+            rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
+                actor.id(), outcomeClientRequestId);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+        }
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }

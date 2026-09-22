@@ -2761,7 +2761,17 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
 // even though these mock-driven tests already exercised the UI logic correctly, since they mock
 // the API response directly and never went through the real (buggy) backend query. These tests
 // pin the SAME UI behaviour per status the legacy "Step 5" describe block above pins for the old
-// engine, now for the new one, so a future regression on either query is caught here too.
+// engine, now for the new one.
+//
+// CORRECTION (Opus MAJOR-A re-review, 2026-09-23): the sentence this replaced claimed these tests
+// also catch a regression in the BACKEND query — false. They stub api.dealQuotations
+// .findForPricingRequest's RESOLVED VALUE directly (see newEngineQuotation()/mockResolvedValue
+// below), so reverting DealQuotationService#findForPricingRequest to the old DRAFT-only reader
+// leaves every one of these 4 tests green — proven: 73/73 still passed under that mutation. The
+// real backend-query regression coverage is
+// DealQuotationOutcomeIntegrationTest#findForPricingRequest_returnsTheQuotationPastDraft (real
+// Postgres, added for MAJOR-A) — THAT is what a future regression on the repository method is
+// caught by, not this file.
 describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
   function newEngineQuotation(overrides = {}) {
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
