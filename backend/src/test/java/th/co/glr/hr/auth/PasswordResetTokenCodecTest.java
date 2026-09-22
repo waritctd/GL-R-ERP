@@ -2,6 +2,7 @@ package th.co.glr.hr.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -49,6 +50,21 @@ class PasswordResetTokenCodecTest {
 
         assertThat(rawToken).matches(URL_SAFE_BASE64_NO_PADDING);
         assertThat(rawToken).doesNotContain("=", "+", "/");
+    }
+
+    @Test
+    void generatedTokenDecodesToExactlyThirtyTwoBytes() {
+        // Proven by mutation, not assumed: shrinking generateRawToken's source to `new byte[4]`
+        // still passes every other test in this class (uniqueness and URL-safe-format checks
+        // don't care how many bytes back the string), so none of them actually pins the entropy
+        // budget the design depends on. This is the one assertion that does - it decodes the
+        // token back to bytes and asserts the count directly, so a future shrink cannot land
+        // silently.
+        String rawToken = PasswordResetTokenCodec.generateRawToken();
+
+        byte[] decoded = Base64.getUrlDecoder().decode(rawToken);
+
+        assertThat(decoded).hasSize(32);
     }
 
     @Test

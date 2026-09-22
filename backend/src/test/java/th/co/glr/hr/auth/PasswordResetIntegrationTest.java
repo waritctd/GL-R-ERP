@@ -9,13 +9,23 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.audit.AuditLogRepository;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.brand.BrandAssets;
@@ -141,6 +151,86 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(rawToken, "SecondNewPass1!")))
             .isInstanceOf(ApiException.class)
             .satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
+    }
+
+    /**
+     * The race {@link #aTokenAlreadyUsedCannotBeUsedAgain} does NOT cover: that test reuses a
+     * token strictly SEQUENTIALLY, which only proves {@code used_at} sticks after a commit — it
+     * says nothing about two requests that both read the token as still-open BEFORE either writes.
+     * Without {@link PasswordResetTokenRepository#markUsedIfUnused}'s conditional {@code UPDATE
+     * ... WHERE used_at IS NULL}, that window (hundreds of milliseconds wide once a real BCrypt
+     * hash sits between the read and the write) lets both callers pass and both overwrite {@code
+     * password_hash} — a lost update with no error to either side.
+     *
+     * <p>{@code service} is hand-wired with {@code new} (see {@link #wireRealCollaborators}), so
+     * {@code PasswordResetService#resetPassword}'s own {@code @Transactional} is INERT without a
+     * Spring AOP proxy — same caveat {@code PayrollDraftOptimisticConcurrencyIntegrationTest}
+     * documents. Each racing call is instead wrapped in its own explicit {@link TransactionTemplate}
+     * bound to the same {@code DataSource} {@code jdbc} uses, so two GENUINELY concurrent Postgres
+     * transactions race the same row — proving the atomicity comes from {@code
+     * markUsedIfUnused}'s single conditional statement (true with or without the annotation), not
+     * from an application-level lock this test would otherwise only be pretending to exercise.
+     *
+     * <p>{@code @RepeatedTest}: the race is only forced when both threads happen to read the
+     * still-open row before either commits its consume — a genuine timing race, not a deterministic
+     * ordering (same rationale {@code PayrollDraftOptimisticConcurrencyIntegrationTest} states for
+     * its own {@code @RepeatedTest(20)}). Fewer repeats here since the window this specific race
+     * needs is wide (a real BCrypt hash, not a comparatively fast Postgres round trip).
+     */
+    @RepeatedTest(10)
+    void exactlyOneOfTwoConcurrentResetsWithTheSameTokenWinsAndTheLoserIsRejected() throws Exception {
+        long id = insertEmployeeWithEmail("RESET-007", "reset.race@glr.co.th", "EMP007", ORIGINAL_PASSWORD);
+
+        service.forgotPassword(new ForgotPasswordRequest("reset.race@glr.co.th"));
+        String rawToken = extractToken(mailer.lastSentTo("reset.race@glr.co.th"));
+
+        var txManager = new DataSourceTransactionManager(jdbc.getJdbcTemplate().getDataSource());
+        var txTemplate = new TransactionTemplate(txManager);
+
+        Callable<String> byFirstCaller = () -> txTemplate.execute(status -> {
+            service.resetPassword(new ResetPasswordRequest(rawToken, "FirstRacePass1!"));
+            return "FirstRacePass1!";
+        });
+        Callable<String> bySecondCaller = () -> txTemplate.execute(status -> {
+            service.resetPassword(new ResetPasswordRequest(rawToken, "SecondRacePass1!"));
+            return "SecondRacePass1!";
+        });
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        List<String> successes = new ArrayList<>();
+        List<Throwable> failures = new ArrayList<>();
+        try {
+            Future<String> f1 = executor.submit(byFirstCaller);
+            Future<String> f2 = executor.submit(bySecondCaller);
+            for (Future<String> f : List.of(f1, f2)) {
+                try {
+                    successes.add(f.get(10, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    failures.add(e.getCause());
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(successes).as("exactly one racing reset must win").hasSize(1);
+        assertThat(failures).as("exactly one racing reset must be rejected, not silently overwritten").hasSize(1);
+        assertThat(failures.get(0)).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        // The stored hash must match EXACTLY the winner's password - never the loser's, and never
+        // some artifact of both writes interleaving.
+        String hash = jdbc.queryForObject(
+            "SELECT password_hash FROM hr.employee WHERE employee_id = :id", Map.of("id", id), String.class);
+        assertThat(encoder.matches(successes.get(0), hash))
+            .as("stored password_hash must be the winner's, not the loser's")
+            .isTrue();
+
+        // Exactly one row consumed the token - not zero (both rejected), not two (both consumed).
+        Integer usedCount = jdbc.queryForObject(
+            "SELECT count(*) FROM hr.password_reset_token WHERE employee_id = :id AND used_at IS NOT NULL",
+            Map.of("id", id), Integer.class);
+        assertThat(usedCount).isEqualTo(1);
     }
 
     @Test

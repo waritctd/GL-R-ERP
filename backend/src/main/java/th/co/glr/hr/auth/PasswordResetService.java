@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.NotificationEmailService;
@@ -134,6 +135,26 @@ public class PasswordResetService {
             "/reset-password?token=" + rawToken);
     }
 
+    /**
+     * {@code @Transactional}: the atomic-consume ({@link PasswordResetTokenRepository
+     * #markUsedIfUnused}) and the {@code password_hash} write below must commit or roll back
+     * together. Without this, a failure in {@code employees.updatePassword} AFTER a successful
+     * consume would permanently burn the token on a reset that never actually took effect — the
+     * employee would be locked out of both the old and the (never-set) new password with no
+     * working link left to retry.
+     *
+     * <p><b>The double-redemption race this guards against.</b> Two requests bearing the same
+     * valid token can both pass {@code findValidByTokenHash} — that read alone proves nothing once
+     * a slow BCrypt hash (hundreds of milliseconds) separates it from the write. The fix is not
+     * "add a transaction": a shared transaction across two DIFFERENT HTTP requests is not even a
+     * concept Spring offers here (each request gets its own). It is that {@code
+     * markUsedIfUnused}'s {@code UPDATE ... WHERE used_at IS NULL} is a single atomic statement at
+     * the Postgres row level — only one concurrent caller's statement can match a still-open row,
+     * full stop, independent of any transaction wrapping. Consuming FIRST and returning the same
+     * generic rejection on failure — before {@code employee}'s new hash is ever computed or
+     * written — is what makes the loser's request a clean no-op rather than a second write.
+     */
+    @Transactional
     public MessageResponse resetPassword(ResetPasswordRequest request) {
         String tokenHash = PasswordResetTokenCodec.hash(request.token());
         PasswordResetTokenRepository.OpenToken openToken = tokens.findValidByTokenHash(tokenHash)
@@ -148,13 +169,20 @@ public class PasswordResetService {
         // Same rule AuthService#changePassword applies, shared rather than duplicated - see that
         // method's sibling call. The "must not equal the CURRENT password" rule does not carry
         // over: a self-service reset via a verified emailed link has no current password to
-        // compare against, since the caller never supplies one.
+        // compare against, since the caller never supplies one. Deliberately checked BEFORE the
+        // token is consumed: a caller who fails this validation must still be able to retry with a
+        // different password using the same, still-valid token.
         AuthService.rejectEmployeeCodeAsNewPassword(request.newPassword(), employee);
 
+        // Consume FIRST, atomically and conditionally - see the class-level Javadoc above for why
+        // this ordering (not merely "wrap it in a transaction") is what closes the race. A losing
+        // concurrent caller gets the SAME rejection a normal invalid/expired token gets, and never
+        // reaches passwordEncoder.encode/updatePassword below.
+        if (!tokens.markUsedIfUnused(openToken.id())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, INVALID_OR_EXPIRED_TOKEN);
+        }
+
         employees.updatePassword(employee.employeeId(), passwordEncoder.encode(request.newPassword()));
-        // Marked used only after the write succeeds, so a failure between the two leaves the token
-        // still redeemable rather than burning it on a reset that never actually happened.
-        tokens.markUsed(openToken.id());
 
         recordPasswordResetAudit(employee);
 
