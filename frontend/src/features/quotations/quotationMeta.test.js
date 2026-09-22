@@ -73,9 +73,14 @@ describe('canTransitionDealQuotation', () => {
     expect(canTransitionDealQuotation('DRAFT', undefined)).toBe(false);
   });
 
-  it('DEAL_QUOTATION_TRANSITIONS covers exactly the five statuses the plan defines', () => {
+  // GLA-123 slice S2 — widened from five to seven: ISSUED/EXPIRED are the PRICING_REQUEST-origin
+  // tail (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo; ISSUED -> EXPIRED
+  // past validity_date, D5). Unreachable in practice for a DEAL_DIRECT row — see
+  // DEAL_QUOTATION_TRANSITIONS' own comment for why widening this shared abstract graph does not
+  // loosen what a DEAL_DIRECT row can actually reach.
+  it('DEAL_QUOTATION_TRANSITIONS covers exactly the seven statuses the plan (+ S2) defines', () => {
     expect(Object.keys(DEAL_QUOTATION_TRANSITIONS).sort()).toEqual(
-      ['APPROVED', 'CANCELLED', 'DRAFT', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
+      ['APPROVED', 'CANCELLED', 'DRAFT', 'EXPIRED', 'ISSUED', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
     );
   });
 });
@@ -87,6 +92,9 @@ describe('dealQuotationStatusLabel', () => {
     expect(dealQuotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
     expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' });
     expect(dealQuotationStatusLabel('CANCELLED')).toEqual({ label: 'ยกเลิก', tone: 'danger' });
+    // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row.
+    expect(dealQuotationStatusLabel('ISSUED')).toEqual({ label: 'ออกใบแล้ว', tone: 'success' });
+    expect(dealQuotationStatusLabel('EXPIRED')).toEqual({ label: 'หมดอายุ', tone: 'neutral' });
   });
 
   it('falls back gracefully for an unknown status', () => {

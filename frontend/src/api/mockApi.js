@@ -5811,6 +5811,65 @@ function submitDealQuotationRow(row, user) {
   return delay({ quotation: buildDealQuotationDto(row) });
 }
 
+/**
+ * GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE approval —
+ * by sales_manager OR ceo — issues the document, and whoever approves is the signature that
+ * prints. The CEO's price authority survives sales's freedom to edit price after create: when the
+ * quotation's current price/discount/mode no longer matches the CEO's original decision, or a
+ * CEO-linked line was removed, ONLY the ceo may approve — computed here from the SAME
+ * priceModeChangedFromCeo/priceChangedFromCeo/itemsRemovedFromCeoCount fields the editor's own
+ * comparison UI reads (never a client-sent flag), by building the DTO first and reading them off
+ * it, so this can never drift from what buildDealQuotationDto itself computes. Mirrors
+ * DealQuotationService#approveAndIssuePricingRequestOrigin/#requireCeoApprovalIfChanged —
+ * AUTHZ NOTE: this mock's role/gate logic is NOT authoritative, per CLAUDE.md's "Mock API
+ * contract" section; verify against the real Java service, never this file.
+ */
+function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
+  if (row.docStatus !== 'PENDING_APPROVAL') {
+    fail(`ใบเสนอราคาไม่ได้อยู่ในสถานะรออนุมัติ จึงอนุมัติไม่ได้`, 409);
+  }
+  if (user.role !== 'ceo') {
+    const dto = buildDealQuotationDto(row);
+    const changed = dto.priceModeChangedFromCeo
+      || dto.items.some((it) => it.priceChangedFromCeo)
+      || dto.itemsRemovedFromCeoCount > 0;
+    if (changed) fail('มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ', 403);
+  }
+  const now = new Date().toISOString();
+  row.docStatus = 'ISSUED';
+  row.approvedById = user.employeeId ?? null;
+  row.approvedByName = user.name;
+  // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve),
+  // shared verbatim with the DEAL_DIRECT branch below.
+  row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
+  row.approvedAt = now;
+  row.approvalDecidedAt = now;
+  row.approvalDecidedBy = user.employeeId ?? null;
+  row.approvalNote = payload?.note?.trim() || null;
+  row.updatedAt = now;
+  row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
+    ? row.validityUntil
+    : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
+  const pr = findPricingRequestRaw(row.pricingRequestId);
+  const ticket = db.tickets.find((t) => t.id === row.ticketId);
+  if (pr && pr.status === 'APPROVED_FOR_QUOTATION') {
+    pr.status = 'QUOTATION_ISSUED';
+  }
+  if (pr && ticket) {
+    if (pr.recipientType === 'DESIGNER') autoAdvanceStage(ticket, 'QUOTE_DESIGN_SIDE', user);
+    if (pr.recipientType === 'OWNER') autoAdvanceStage(ticket, 'QUOTE_OWNER', user);
+    if (pr.recipientType === 'BUYER') autoAdvanceStage(ticket, 'QUOTE_BUYER', user);
+    pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
+    pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
+    // Parity with the real service's unconditional CEO-visibility notification on issue (redundant
+    // when the ceo is the one approving, kept anyway — see DealQuotationService
+    // #approveAndIssuePricingRequestOrigin's own comment for why).
+    db.users.filter((u) => u.role === 'ceo' && u.active).forEach((ceoUser) => addNotification(
+      ceoUser.id, row.ticketId, ticket.code, 'DEAL_QUOTATION_APPROVED', `ใบเสนอราคา ${row.number} ถูกออกแล้ว`));
+  }
+  return delay({ quotation: buildDealQuotationDto(row) });
+}
+
 // round2 (2dp rounding) is defined once, above, near the commission fixtures -- reused here
 // rather than redeclared.
 
@@ -14848,12 +14907,10 @@ export const api = {
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
       const ticket = db.tickets.find((t) => t.id === row.ticketId);
       requireDealQuotationWriteAccess(ticket, user, row.origin);
-      // GLA-123 slice S1: the dual-approval flow (S2's job) that actually issues a
-      // PRICING_REQUEST-origin quotation does not exist yet -- mirrors
-      // DealQuotationService#submit's identical origin gate.
-      if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
-        fail('ยังไม่เปิดใช้งานการอนุมัติใบเสนอราคาจากคำขอราคา — จะเปิดใช้งานในระยะถัดไป', 409);
-      }
+      // GLA-123 slice S2: submit is now LIVE for a PRICING_REQUEST-origin quotation too — mirrors
+      // DealQuotationService#submit, which widened its own origin predicate rather than keeping
+      // this refusal. Every validation below already applied to both origins in the mock; only
+      // this gate (and the resubmit-mints-a-revision branch further down) needed to change.
       if (!canTransitionDealQuotation(row.docStatus, 'PENDING_APPROVAL')) {
         fail(`ส่งขออนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
@@ -14889,7 +14946,11 @@ export const api = {
       // isDealQuotationNeedingRework, which also matches an in-progress child revision -- a
       // different case with no rejection to resubmit FROM). A first-ever submit (approvalNote is
       // null) is untouched below.
-      if (row.docStatus === 'DRAFT' && row.approvalNote != null) {
+      // GLA-123 slice S2: deliberately EXCLUDED for a PRICING_REQUEST-origin row — a resubmit
+      // after ตีกลับ on this origin reuses the SAME row/number instead (mirrors
+      // DealQuotationService#submit's own origin exclusion; createRevision stays refused for this
+      // origin, see #createRevision below).
+      if (row.docStatus === 'DRAFT' && row.approvalNote != null && (row.origin || 'DEAL_DIRECT') !== 'PRICING_REQUEST') {
         if (hasOpenDealQuotationRevision(row.id)) {
           fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
         }
@@ -14904,6 +14965,14 @@ export const api = {
       const user = hasRole('sales_manager', 'ceo');
       const row = mockDealQuotations.find((q) => q.id === Number(id));
       if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20) — a
+      // PRICING_REQUEST-origin quotation still branches out: ONE approval issues it, but only the
+      // ceo may act once the quotation no longer matches the CEO's decision. Mirrors
+      // DealQuotationService#approve's own origin branch. AUTHZ NOTE: this mock's role/gate logic
+      // is NOT authoritative — verify against DealQuotationService, never this file (CLAUDE.md).
+      if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST') {
+        return mockApproveDealQuotationPricingRequestOrigin(row, payload, user);
+      }
       if (!canTransitionDealQuotation(row.docStatus, 'APPROVED')) {
         fail(`อนุมัติไม่ได้ในสถานะ '${row.docStatus}'`, 409);
       }
@@ -14993,6 +15062,9 @@ export const api = {
       row.approvalDecidedBy = user.employeeId ?? null;
       row.approvalNote = reason;
       row.updatedAt = now;
+      // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20) — reject
+      // is fully shared across both origins now: one approver, one decision, so there is nothing
+      // origin-specific left to clear here (there is no second slot any more).
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 

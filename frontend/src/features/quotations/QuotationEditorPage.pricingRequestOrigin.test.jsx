@@ -104,17 +104,30 @@ function pricingRequestDraft(overrides = {}) {
   });
 }
 
-function renderEditor(path) {
+function renderEditor(path, user = salesUser) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/quotations/:id" element={<QuotationEditorPage user={salesUser} showToast={vi.fn()} />} />
+          <Route path="/quotations/:id" element={<QuotationEditorPage user={user} showToast={vi.fn()} />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+// GLA-123 slice S2 — the two roles who may approve.
+const salesManagerUser = { id: 7, name: 'คุณผึ้ง ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: 7 };
+const ceoUser = { id: 8, name: 'คุณราม ผู้บริหาร', role: 'ceo', employeeId: 8 };
+
+/** A PRICING_REQUEST-origin quotation already PENDING_APPROVAL — the S2 approval tests' shared
+ * starting point. */
+function pendingApprovalQuotation(overrides = {}) {
+  return pricingRequestDraft({
+    docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-20T03:00:00Z',
+    ...overrides,
+  });
 }
 
 beforeEach(() => {
@@ -240,13 +253,22 @@ describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () =
     expect(screen.queryByRole('button', { name: /เพิ่มส่วนลดพิเศษ/ })).toBeNull();
   });
 
-  it('submit is disabled with the S2 note, not the normal ส่งขออนุมัติ button', async () => {
+  // GLA-123 slice S2: submit is now LIVE for this origin — the S1-era disabled placeholder
+  // ("ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป") is GONE; canSubmitDealQuotation is origin-agnostic, so the
+  // SAME ordinary submit button DEAL_DIRECT always had now serves this origin too.
+  it('submit is now a normal, enabled ส่งขออนุมัติ button that calls the real endpoint', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
+    api.dealQuotations.submit.mockResolvedValue({ quotation: pricingRequestDraft({ docStatus: 'PENDING_APPROVAL' }) });
     renderEditor('/quotations/5');
     await waitFor(() => expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeTruthy());
     const button = screen.getByRole('button', { name: 'ส่งขออนุมัติ' });
-    expect(button.disabled).toBe(true);
-    expect(button.getAttribute('title')).toBe('ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป');
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('title')).not.toBe('ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป');
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByText('ส่งขออนุมัติใบเสนอราคา')).toBeTruthy());
+    const confirmButtons = screen.getAllByRole('button', { name: 'ส่งขออนุมัติ' });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+    await waitFor(() => expect(api.dealQuotations.submit).toHaveBeenCalledWith('5'));
   });
 
   it('a DEAL_DIRECT quotation is completely unaffected: no CEO badge/marker, no PR link, normal submit and add-item actions', async () => {
@@ -404,5 +426,94 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
     fireEvent.click(screen.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }));
     await waitFor(() => expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull());
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
+  });
+});
+
+// GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE approval —
+// by sales_manager OR ceo — issues the document, unless the quotation no longer matches the CEO's
+// decision, in which case only the ceo may act. A DEAL_DIRECT quotation's own single-shot
+// approve/reject (QuotationEditorPage.test.jsx) is untouched by every change here.
+describe('QuotationEditorPage — GLA-123 slice S2 approval (reworked)', () => {
+  it('sales_manager sees a plain อนุมัติ button on an UNCHANGED quotation', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
+    renderEditor('/quotations/5', salesManagerUser);
+    await screen.findByRole('button', { name: 'อนุมัติ' });
+    expect(screen.getByRole('button', { name: 'ไม่อนุมัติ' })).toBeTruthy();
+  });
+
+  it('sales_manager confirms อนุมัติ -> calls approve with no payload, on an UNCHANGED quotation', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
+    api.dealQuotations.approve.mockResolvedValue({ quotation: pendingApprovalQuotation({
+      docStatus: 'ISSUED', approvedById: 7, approvedByName: 'คุณผึ้ง ผู้จัดการฝ่ายขาย',
+    }) });
+    renderEditor('/quotations/5', salesManagerUser);
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันอนุมัติ' }));
+    await waitFor(() => expect(api.dealQuotations.approve).toHaveBeenCalledWith('5', {}));
+  });
+
+  it('sales_manager sees NO อนุมัติ button, and an inline explanation, on a CHANGED quotation', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: pendingApprovalQuotation({
+        items: [linkedNetTileItem({ unitPrice: 90, discountPct: 5, priceChangedFromCeo: true })],
+      }),
+    });
+    renderEditor('/quotations/5', salesManagerUser);
+    await screen.findByRole('button', { name: 'ไม่อนุมัติ' });
+    expect(screen.queryByRole('button', { name: 'อนุมัติ' })).toBeNull();
+    await waitFor(() => expect(screen.getByText('มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
+  });
+
+  it('ceo still sees อนุมัติ on a CHANGED quotation, and can confirm it', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: pendingApprovalQuotation({
+        items: [linkedNetTileItem({ unitPrice: 90, discountPct: 5, priceChangedFromCeo: true })],
+      }),
+    });
+    api.dealQuotations.approve.mockResolvedValue({ quotation: pendingApprovalQuotation({
+      docStatus: 'ISSUED', approvedById: 8, approvedByName: 'คุณราม ผู้บริหาร',
+    }) });
+    renderEditor('/quotations/5', ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันอนุมัติ' }));
+    await waitFor(() => expect(api.dealQuotations.approve).toHaveBeenCalledWith('5', {}));
+  });
+
+  it('the approve dialog shows the changed-price summary prominently for a priceChangedFromCeo line', async () => {
+    api.dealQuotations.get.mockResolvedValue({
+      quotation: pendingApprovalQuotation({
+        items: [linkedNetTileItem({ unitPrice: 90, discountPct: 5, priceChangedFromCeo: true })],
+      }),
+    });
+    renderEditor('/quotations/5', ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(screen.getByText(/ราคา CEO: ฿83.00/)).toBeTruthy());
+  });
+
+  it('the approve dialog shows "no change" when nothing was changed from the CEO decision', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
+    renderEditor('/quotations/5', ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(screen.getByText('ราคาทุกรายการตรงกับที่ CEO อนุมัติ ไม่มีการเปลี่ยนแปลง')).toBeTruthy());
+  });
+
+  it('reject requires a reason and calls reject with it', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });
+    api.dealQuotations.reject.mockResolvedValue({ quotation: pricingRequestDraft({ docStatus: 'DRAFT', approvalNote: 'ราคาไม่เหมาะสม' }) });
+    renderEditor('/quotations/5', ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: 'ไม่อนุมัติ' }));
+    const confirmReject = await screen.findByRole('button', { name: 'ยืนยันไม่อนุมัติ' });
+    expect(confirmReject.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/^เหตุผลที่ไม่อนุมัติ/), { target: { value: 'ราคาไม่เหมาะสม' } });
+    expect(confirmReject.disabled).toBe(false);
+    fireEvent.click(confirmReject);
+    await waitFor(() => expect(api.dealQuotations.reject).toHaveBeenCalledWith('5', { reason: 'ราคาไม่เหมาะสม' }));
+  });
+
+  it('a DEAL_DIRECT quotation is completely unaffected — either role decides, one click, done', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-20T03:00:00Z' }) });
+    renderEditor('/quotations/5', salesManagerUser);
+    await screen.findByRole('button', { name: 'อนุมัติ' });
+    expect(screen.queryByText('มีรายการที่เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
   });
 });
