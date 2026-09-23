@@ -460,4 +460,16 @@ public final class DealQuotationRequests {
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CancelRequest(@Size(max = 2000) String reason) {}
+
+    /** GLA-123 slice S3 (R9 — customer outcome) — mirrors {@code
+     * CustomerQuotationRequests.RecordQuotationOutcomeRequest} field-for-field; kept as this
+     * package's own record rather than reused across packages, matching this file's existing
+     * convention of one self-contained request-record family per quotation engine. {@code
+     * outcome} is one of {@code ACCEPTED}/{@code REJECTED}/{@code REVISION_REQUESTED} — validated
+     * against {@code DealQuotationService}'s own {@code RECORDABLE_OUTCOMES}, not here. */
+    public record RecordOutcomeRequest(
+        String outcome,
+        @Size(max = 4000) String customerNote,
+        String clientRequestId
+    ) {}
 }

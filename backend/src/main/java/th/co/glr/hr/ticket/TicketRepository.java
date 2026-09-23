@@ -1265,6 +1265,25 @@ public class TicketRepository {
             Map.of("id", ticketId), (rs, n) -> 0);
     }
 
+    /**
+     * GLA-123 slice S3 (R8 — one finalized quotation per deal, across BOTH คำขอราคา origins):
+     * {@code true} when {@code sales.quotation} already carries an {@code ACCEPTED} row for this
+     * ticket, regardless of {@code origin} — the legacy chain ({@code origin IS NULL}), the new
+     * PricingRequest-chain engine ({@code origin = 'PRICING_REQUEST'}) and the direct engine
+     * ({@code origin = 'DEAL_DIRECT'}, which in practice never reaches ACCEPTED — R10, it never
+     * joins this pipeline) all write the ONE shared {@code sales.quotation} table, so a single
+     * origin-agnostic EXISTS check is the whole guard; see {@code
+     * CustomerQuotationService#recordOutcome} and {@code DealQuotationService#recordOutcome},
+     * both of which call this AFTER {@link #lockTicketForUpdate} serializes concurrent callers
+     * (possibly one on each side) against each other, and BEFORE their own compare-and-set UPDATE.
+     */
+    public boolean hasAcceptedQuotation(long ticketId) {
+        Boolean value = jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.quotation WHERE ticket_id = :ticketId AND doc_status = 'ACCEPTED')",
+            Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
     public void updateSalesStage(long ticketId, String stage) {
         jdbc.update(
             "UPDATE sales.ticket SET sales_stage = :s, stage_updated_at = now() WHERE ticket_id = :id",

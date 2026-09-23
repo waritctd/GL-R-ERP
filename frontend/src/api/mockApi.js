@@ -1583,6 +1583,18 @@ function mockCustomerQuotationEditAccess(id, user) {
   return quotation;
 }
 
+// GLA-123 slice S3 (R8 — one finalized quotation per deal, across BOTH คำขอราคา origins).
+// Mirrors TicketRepository#hasAcceptedQuotation: the real backend has ONE shared sales.quotation
+// table for both origins, so that method is a single origin-agnostic EXISTS query. This mock
+// keeps the two origins in SEPARATE arrays (mockCustomerQuotations / mockDealQuotations), so the
+// mock's own guard has to check both explicitly — a real divergence from the backend's storage
+// shape, called out here rather than left implicit, per CLAUDE.md's "argument handling is not
+// guaranteed by the contract test" note (this is exactly that kind of shape difference).
+function mockHasAcceptedQuotationForTicket(ticketId) {
+  return mockCustomerQuotations.some((q) => q.ticketId === ticketId && q.docStatus === 'ACCEPTED')
+    || mockDealQuotations.some((q) => q.ticketId === ticketId && q.docStatus === 'ACCEPTED');
+}
+
 // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16) — mirrors
 // CustomerQuotationService#raiseDiscountApprovalsIfNeeded / DiscountApprovalRepository#ensureRequested.
 // For every line currently below its CEO-approved minimum, opens (or silently reuses) a PENDING
@@ -13956,13 +13968,31 @@ export const api = {
       if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
         fail('outcome ไม่ถูกต้อง', 400);
       }
+      // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors CustomerQuotationService#recordOutcome's
+      // MINOR-2 fix EXACTLY (that method's own comment, :587) — a replay resolving to a DIFFERENT
+      // quotation than the one THIS call names is a genuine conflict, not a silent "success".
+      // Before this fix the mock returned the OTHER quotation's DTO with no outcome recorded on
+      // the one the caller meant to act on, and no error to notice it by — the header comment
+      // above claimed field-for-field parity "INCLUDING R8" while this 409 was missing.
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.outcomeClientRequestId === payload.clientRequestId);
-        if (replay) return delay({ quotation: replay });
+        if (replay) {
+          if (replay.id !== quotation.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: replay });
+        }
       }
       if (quotation.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
+      }
+      const pr = findPricingRequestRaw(quotation.pricingRequestId);
+      // GLA-123 slice S3 (R8) — refused when ANY quotation on this TICKET is already ACCEPTED,
+      // the new PRICING_REQUEST-origin engine included. Mirrors dealQuotations.recordOutcome's
+      // identical check below.
+      if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(pr.ticketId)) {
+        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
       const now = new Date().toISOString();
       quotation.docStatus = payload.outcome;
@@ -13972,7 +14002,6 @@ export const api = {
       if (payload.outcome === 'ACCEPTED') quotation.acceptedAt = now;
       if (payload.outcome === 'REJECTED') quotation.rejectedAt = now;
 
-      const pr = findPricingRequestRaw(quotation.pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       const eventKind = payload.outcome === 'ACCEPTED' ? 'CUSTOMER_QUOTATION_ACCEPTED'
         : payload.outcome === 'REJECTED' ? 'CUSTOMER_QUOTATION_REJECTED' : 'CUSTOMER_QUOTATION_REVISION_REQUESTED';
@@ -15065,6 +15094,102 @@ export const api = {
       // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20) — reject
       // is fully shared across both origins now: one approver, one decision, so there is nothing
       // origin-specific left to clear here (there is no second slot any more).
+      return delay({ quotation: buildDealQuotationDto(row) });
+    },
+
+    // GLA-123 slice S3 (R9 — customer outcome). Mirrors recordCustomerQuotationOutcome's own
+    // shape field-for-field, INCLUDING R8 below — the two are kept in sync by hand in this mock
+    // (mockHasAcceptedQuotationForTicket checks BOTH origin arrays), unlike the real backend
+    // where one shared sales.quotation table makes it automatic. AUTHZ NOTE (mirrors the real
+    // DealQuotationService#recordOutcome's own comment): deliberately NARROWER than this origin's
+    // own EDIT_ROLES (sales_manager may edit/submit/cancel ANY deal) — outcome-recording mirrors
+    // the LEGACY gate instead (sales, ticket owner ONLY, no sales_manager carve-out), since that
+    // is the only precedent this action has. Authorization is NOT authoritative here (CLAUDE.md);
+    // verify against the real Java service.
+    async recordOutcome(id, payload = {}) {
+      // MINOR fix (Opus review, 2026-09-23): reordered to match
+      // DealQuotationService#recordOutcome's ACTUAL precedence — outcome-value checks
+      // (EXPIRED/RECORDABLE_OUTCOMES) run BEFORE the quotation is even looked up there, and the
+      // origin check runs BEFORE the role/owner authz check (requireOutcomeAccess). Session
+      // existence is checked FIRST regardless (requireSession, mirroring Spring Security's
+      // default-deny filter chain, which rejects an unauthenticated request before ANY controller
+      // code runs — that part of the ordering was never backend-accurate to skip). This used to
+      // check role+existence+origin+owner, THEN outcome value — a different error for the SAME
+      // malformed request than the real backend gives (e.g. a bad outcome value on a missing id
+      // 400'd here but 404's on the real service). Authorization is NOT authoritative here
+      // regardless of ordering (CLAUDE.md) — this fix is about matching observable error
+      // PRECEDENCE for manual/demo testing, not a claim of verified authz.
+      const user = requireSession();
+      if (payload.outcome === 'EXPIRED') {
+        fail('EXPIRED ไม่สามารถบันทึกผ่าน API นี้ได้ — ระบบตั้งเป็นอัตโนมัติเท่านั้น', 400);
+      }
+      if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
+        fail('outcome ไม่ถูกต้อง', 400);
+      }
+      const row = mockDealQuotations.find((q) => q.id === Number(id));
+      if (!row) fail('ไม่พบใบเสนอราคานี้', 404);
+      if ((row.origin || 'DEAL_DIRECT') !== 'PRICING_REQUEST') {
+        fail('ใบเสนอราคาฉบับนี้ไม่ได้อยู่ในสายงานคำขอราคา จึงบันทึกผลลูกค้าด้วย endpoint นี้ไม่ได้', 409);
+      }
+      if (user.role !== 'sales') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const ticket = db.tickets.find((t) => t.id === row.ticketId);
+      if (ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (payload.clientRequestId) {
+        // MAJOR 6 fix (Opus review, 2026-09-23): this used to compare q.createdById ===
+        // user.employeeId — always-true, not just wrong-field, because the seeded sales persona's
+        // own employeeId is null and every row here defaults createdById to
+        // `user.employeeId ?? null`, so `null === null` matched EVERY row regardless of actor or
+        // ticket. row.salesRepId is `ticket.createdById` (kept in the LOGIN-ACCOUNT id space, same
+        // space as `user.id` — see #create's own comment on why), matching the SAME space the
+        // legacy sibling's `q.issuedById === user.id` replay check already uses correctly. This
+        // also happens to be the exact identity #requireOutcomeAccess-equivalent gating above
+        // already required (only the ticket's owning rep reaches this far), so scoping the replay
+        // to it is not just field-correct but semantically the right actor to scope by.
+        // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors DealQuotationService#recordOutcome's
+        // own MINOR-2 fix (:1642) — a replay resolving to a DIFFERENT quotation than the one this
+        // call names is a genuine conflict, not a silent "success". Before this fix the mock
+        // returned the OTHER quotation's DTO with no outcome recorded on the one the caller meant
+        // to act on, and no error to notice it by — the header comment above claiming
+        // field-for-field parity "INCLUDING R8" was not true of this guard.
+        const replay = mockDealQuotations.find(
+          (q) => q.origin === 'PRICING_REQUEST' && q.salesRepId === user.id
+            && q.outcomeClientRequestId === payload.clientRequestId);
+        if (replay) {
+          if (replay.id !== row.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: buildDealQuotationDto(replay) });
+        }
+      }
+      if (row.docStatus !== 'ISSUED') {
+        fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
+      }
+      if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(row.ticketId)) {
+        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
+      }
+      const now = new Date().toISOString();
+      row.docStatus = payload.outcome;
+      row.outcomeNote = payload.customerNote ?? null;
+      row.outcomeRecordedAt = now;
+      row.outcomeClientRequestId = payload.clientRequestId ?? null;
+      if (payload.outcome === 'ACCEPTED') row.acceptedAt = now;
+      if (payload.outcome === 'REJECTED') row.rejectedAt = now;
+      row.updatedAt = now;
+
+      const pr = findPricingRequestRaw(row.pricingRequestId);
+      const eventKind = payload.outcome === 'ACCEPTED' ? 'CUSTOMER_QUOTATION_ACCEPTED'
+        : payload.outcome === 'REJECTED' ? 'CUSTOMER_QUOTATION_REJECTED' : 'CUSTOMER_QUOTATION_REVISION_REQUESTED';
+      const label = payload.outcome === 'ACCEPTED' ? 'ลูกค้ายอมรับแล้ว'
+        : payload.outcome === 'REJECTED' ? 'ถูกลูกค้าปฏิเสธ' : 'ลูกค้าขอแก้ไข';
+      pushPricingRequestEvent(pr, user, eventKind, null, null,
+        `บันทึกผลใบเสนอราคาลูกค้า ${row.number}: ${payload.outcome}${payload.customerNote ? ` — ${payload.customerNote}` : ''}`);
+      const ceoUsers = db.users.filter((u) => u.role === 'ceo');
+      ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, eventKind,
+        `ใบเสนอราคาลูกค้า ${row.number} ${label}`));
+
+      if (payload.outcome === 'ACCEPTED' && pr.status === 'QUOTATION_ISSUED') {
+        pr.status = 'QUOTATION_ACCEPTED';
+      }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 

@@ -820,6 +820,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
+    // GLA-123 S3 review round 5 fix (NEW-A): the NEW engine's counterpart of the invalidation
+    // above. dealQuotationForPrQuery backs both the outcome-recording panel AND the recreate gate
+    // (['EXPIRED','REVISION_REQUESTED','REJECTED'].includes(dealQuotationForPr?.docStatus)) further
+    // down this file. ['pricingRequests','detail',id] does NOT prefix-match
+    // ['pricingRequests','dealQuotationForPricingRequest',id] — these are siblings, not a parent/
+    // child pair — so without this line the outcome mutation's success toast fires but the DTO
+    // backing the recreate button stays stale until a manual reload or the 30s staleTime lapses
+    // (api/queryClient.js). Nothing else in the app invalidates this key.
+    queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId) });
     // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
     // family with the shared 'discountApprovals' prefix rather than needing the current
     // quotation's id here too (this function is called from mutations that may have just
@@ -1192,6 +1201,26 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Step 5: Customer Decision and Commercial Revisions.
   const recordQuotationOutcome = useMutation({
     mutationFn: ({ quotation, outcome }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
+      outcome,
+      customerNote: outcomeNote || null,
+      clientRequestId: outcomeClientRequestId,
+    }),
+    onSuccess: () => {
+      setOutcomeClientRequestId(generateClientRequestId());
+      setOutcomeNote('');
+      showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
+      invalidate();
+    },
+    onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
+  });
+  // GLA-123 slice S3 (R9) — the SAME outcome action as recordQuotationOutcome above, on the
+  // NEW-engine (PRICING_REQUEST-origin) quotation instead of the legacy one. Shares
+  // outcomeNote/outcomeClientRequestId state with recordQuotationOutcome: M2 already guarantees a
+  // pricing request can never carry a live quotation on BOTH engines at once, so only one of the
+  // two outcome UI blocks below is ever rendered for a given request, and the two mutations never
+  // race over the same state.
+  const recordDealQuotationOutcome = useMutation({
+    mutationFn: ({ quotation, outcome }) => api.dealQuotations.recordOutcome(quotation.id, {
       outcome,
       customerNote: outcomeNote || null,
       clientRequestId: outcomeClientRequestId,
@@ -2950,21 +2979,77 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Link>
               </div>
             ) : null}
-            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"):
-                once the linked NEW-engine quotation has EXPIRED (D5), sales may write a FRESH one
-                from the SAME approved decision — DealQuotationService#createFromPricingRequest now
-                tolerates this specific case server-side (see that method's own comment). Gated on
-                canManageCustomerQuotation (sales + ticket owner, no PR-status check) rather than
-                canCreateCustomerQuotation, which requires pr.status === 'APPROVED_FOR_QUOTATION' —
-                a PR whose quotation has expired sits at QUOTATION_ISSUED instead (the backend
-                deliberately does not roll PR status back), so that stricter gate would incorrectly
-                hide this button in exactly the state it needs to appear. Reuses the SAME
-                createDealQuotationFromRequest mutation the first-ever create button below already
-                uses (same navigate-on-success behaviour), since the server-side call is identical
-                either way — only the PR's current state differs. */}
-            {dealQuotationForPr?.docStatus === 'EXPIRED' && canManageCustomerQuotation(user, summary) ? (
+
+            {/* GLA-123 slice S3 (R9) — the SAME outcome-recording action the legacy block below
+                offers (canRecordCustomerQuotationOutcome is origin-agnostic: sales + ticket owner,
+                docStatus === 'ISSUED'), now also reachable for the NEW engine's own quotation. R8
+                (only one finalized quotation per deal, across both คำขอราคา origins) is enforced
+                server-side by DealQuotationService#recordOutcome, not here. */}
+            {canRecordCustomerQuotationOutcome(user, summary, dealQuotationForPr) ? (
+              <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
+                <strong className="text-sm">บันทึกผลจากลูกค้า</strong>
+                <textarea
+                  className="rounded border border-border p-2 text-sm"
+                  placeholder="หมายเหตุจากลูกค้า (ถ้ามี)"
+                  value={outcomeNote}
+                  onChange={(e) => setOutcomeNote(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'ACCEPTED' })}>
+                    ลูกค้ายอมรับ
+                  </Button>
+                  <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
+                    ลูกค้าปฏิเสธ
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={recordDealQuotationOutcome.isPending}
+                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
+                    ลูกค้าขอแก้ไข
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Read-only outcome summary — mirrors the legacy block's identical read-only
+                summary below (visible to everyone with view access, once the customer's response
+                has been recorded or the document moved past ISSUED for any other reason). */}
+            {dealQuotationForPr
+              && ['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED'].includes(dealQuotationForPr.docStatus) ? (
+              <p className="text-sm text-text-muted">
+                ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
+              </p>
+            ) : null}
+            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"),
+                widened by the S3 round-3 review (NEW-1, MAJOR, 2026-09-23): once the linked
+                NEW-engine quotation has EXPIRED (D5), was REJECTED, or the customer asked for a
+                REVISION, sales may write a FRESH one from the SAME approved decision —
+                DealQuotationService#createFromPricingRequest tolerates all three cases
+                server-side (its own PR-status check treats them identically: none of the three
+                move the PR off QUOTATION_ISSUED — see that method's own comment), and
+                DealQuotationRepository#hasLivePricingRequestQuotation excludes all three from
+                its own "live" set for the same reason. This gate used to only cover EXPIRED,
+                which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
+                own outcome-recording buttons just above — as UI dead ends: the backend accepted
+                a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
+                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
+                states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
+                status back), so that stricter gate would incorrectly hide this button in exactly
+                the states it needs to appear. Reuses the SAME createDealQuotationFromRequest
+                mutation the first-ever create button below already uses (same
+                navigate-on-success behaviour), since the server-side call is identical in every
+                case — only the PR's current state differs. */}
+            {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && canManageCustomerQuotation(user, summary) ? (
               <div className="flex flex-col items-start gap-2">
-                <p className="m-0 text-sm text-warning">ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้</p>
+                <p className="m-0 text-sm text-warning">
+                  {dealQuotationForPr.docStatus === 'EXPIRED'
+                    ? 'ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้'
+                    : dealQuotationForPr.docStatus === 'REVISION_REQUESTED'
+                      ? 'ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้'
+                      : 'ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้'}
+                </p>
                 <Button
                   type="button"
                   variant="primary"

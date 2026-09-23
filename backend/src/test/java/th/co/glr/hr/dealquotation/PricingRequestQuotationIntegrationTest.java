@@ -345,9 +345,10 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         DealQuotationDto second = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
 
         assertThat(second.id()).isEqualTo(first.id());
-        // findByTicket is the DIRECT-deal-only list surface (deliberately origin = 'DEAL_DIRECT',
-        // see directDealSearch_doesNotIncludePricingRequestOriginRows) — count the PRICING_REQUEST
-        // row directly instead.
+        // Count the PRICING_REQUEST row directly with raw SQL rather than via #listForTicket —
+        // unrelated to which origins that method includes (see directDealSearch_...
+        // includesPricingRequestOriginRows for that), this just avoids depending on this
+        // origin-agnostic dedupe test on that method's own return shape at all.
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND origin = 'PRICING_REQUEST'
             """, Map.of("id", ticketId), Integer.class);
@@ -1241,12 +1242,25 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
-    void directDealSearch_doesNotIncludePricingRequestOriginRows() {
+    void directDealSearch_includesPricingRequestOriginRows() {
+        // GLA-123 slice S3 MAJOR 4 fix (Opus review against real Postgres, 2026-09-23): this test
+        // used to assert the OPPOSITE — that #listForTicket stayed empty for a ticket whose only
+        // quotation is PRICING_REQUEST-origin, because DealQuotationRepository#findByTicket used
+        // to be `origin = 'DEAL_DIRECT'` only. That scope was wrong: #listForTicket backs `GET
+        // /tickets/{id}/deal-quotations`, which is the ONLY source DealDocumentRegister.jsx's
+        // directQuotationsQuery and DealDirectQuotationPanel.jsx have for "does this deal have a
+        // quotation at all" (GLA-123 item 8) — with the old scope, a deal whose only quotation was
+        // PRICING_REQUEST-origin showed the FALSE "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state even
+        // with one ISSUED, reproduced against real Postgres. #search/#counts (the DEAL_DIRECT
+        // approver queue, a genuinely different surface) are UNCHANGED and still exclude this
+        // origin — see those methods' own Javadoc.
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
-        quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
-        // The DEAL_DIRECT-only list surface (`origin = 'DEAL_DIRECT'` throughout the repository)
-        // must stay empty — this ticket has ONLY a PRICING_REQUEST-origin quotation.
-        assertThat(quotationService.listForTicket(ticketId, salesActor)).isEmpty();
+        DealQuotationDto created = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
+
+        List<DealQuotationDto> forTicket = quotationService.listForTicket(ticketId, salesActor);
+
+        assertThat(forTicket).extracting(DealQuotationDto::id).containsExactly(created.id());
+        assertThat(forTicket.get(0).origin()).isEqualTo("PRICING_REQUEST");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1378,12 +1392,14 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** M6 fix (coordinator follow-up, 2026-09-20): the wrong-way-round tests above all assert "no
-     * row was inserted". They used to query {@link DealQuotationRepository#findByTicket}, which is
-     * deliberately DEAL_DIRECT-only (see {@code directDealSearch_doesNotIncludePricingRequestOriginRows})
-     * — a PRICING_REQUEST-origin row would never show up there regardless of whether the guard
-     * under test actually fired, so that assertion could never fail. Count the row directly with
-     * raw SQL instead, exactly like {@code duplicateCreate_returnsTheSameOpenDraft_doesNotInsertASecondRow}
-     * already does. */
+     * row was inserted". They used to query {@link DealQuotationRepository#findByTicket}, which
+     * WAS DEAL_DIRECT-only at the time (widened since — GLA-123 slice S3 MAJOR 4 fix, see {@code
+     * directDealSearch_includesPricingRequestOriginRows}) — a PRICING_REQUEST-origin row would
+     * never show up there regardless of whether the guard under test actually fired, so that
+     * assertion could never fail. Count the row directly with raw SQL instead (still correct and
+     * still the better assertion even now that #findByTicket would also see it, since this stays
+     * independent of that method's own origin scope), exactly like {@code
+     * duplicateCreate_returnsTheSameOpenDraft_doesNotInsertASecondRow} already does. */
     private int countPricingRequestQuotationsForTicket() {
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND origin = 'PRICING_REQUEST'

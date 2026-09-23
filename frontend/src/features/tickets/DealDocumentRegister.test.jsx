@@ -22,6 +22,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
       },
+      // GLA-123 slice S3 MAJOR 4 fix — directQuotationsQuery's own source (backs the "ใบเสนอราคา"
+      // panel this register only counts/points to). Absent from this mock before this fix;
+      // harmless while it was never asserted on, but the new test below needs a real value.
+      dealQuotations: {
+        listForTicket: vi.fn().mockResolvedValue({ items: [] }),
+      },
       depositNotices: {
         listByTicket: vi.fn(),
         downloadXlsx: vi.fn(),
@@ -78,6 +84,7 @@ describe('DealDocumentRegister', () => {
     vi.clearAllMocks();
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
   });
 
   it('renders one honest empty state — not three silently-omitted sections — for a viewer admitted to none of the three row families', async () => {
@@ -120,6 +127,30 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('register-attachments')).not.toBeNull();
     expect(screen.getByText('po.pdf')).not.toBeNull();
     await waitFor(() => expect(api.pricingRequests.listCustomerQuotations).toHaveBeenCalledWith(501));
+  });
+
+  // GLA-123 item 8 / slice S3 MAJOR 4 fix — DealQuotationRepository#findByTicket used to be
+  // DEAL_DIRECT-only, so a deal whose only quotation was PRICING_REQUEST-origin showed the false
+  // "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state even with one ISSUED. With the backend fix, the
+  // SAME endpoint (dealQuotations.listForTicket) now returns that row, so this register — which
+  // only counts/points to it, the full row renders in DealDirectQuotationPanel below — must stop
+  // claiming there are no quotations.
+  it('a deal with only a PRICING_REQUEST-origin quotation does not show the false "no quotations" empty state', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', origin: 'PRICING_REQUEST' }],
+    });
+    renderRegister({
+      user: { id: 1, role: 'sales' },
+      sections: SALES_SECTIONS,
+      canViewPricingRequests: true,
+      canViewDocumentsTab: true,
+      pricingRequests: [],
+      legacyQuotations: [],
+    });
+
+    expect(await screen.findByTestId('register-quotations')).not.toBeNull();
+    expect(await screen.findByText(/ใบเสนอราคาของดีลนี้ 1 ฉบับ/)).not.toBeNull();
+    expect(screen.queryByText('ยังไม่มีใบเสนอราคาสำหรับดีลนี้')).toBeNull();
   });
 
   // REQUIRED CASE (coordinator addendum): an import rep who IS this deal's

@@ -817,7 +817,34 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, owner).summary().id();
 
-        driveDraftPricingRequestToQuotationAccepted(pricingRequestId, quantity, owner);
+        // GLA-123 slice S3 MAJOR 5 fix (Opus review, 2026-09-23): this used to call
+        // #driveDraftPricingRequestToQuotationAccepted (recordOutcome through the real API), then
+        // paper over R8's refusal by first SUPERSEDING chain A's quotation via raw SQL. That made
+        // the fixture self-consistent but VACUOUS for this test's own purpose: with only one
+        // ACCEPTED row ever existing at a time, RemainingInvoiceService's own "pick the newest
+        // ACCEPTED chain" selection logic never actually had two real candidates to choose
+        // between — it would have passed identically with a broken "pick ANY accepted row"
+        // implementation. R8 (recordOutcome's own application-layer guard) is real and correct —
+        // no production caller can ever put a ticket into "two rows ACCEPTED at once" — but
+        // whether RemainingInvoiceService's SELECTION QUERY picks the right one among several
+        // ACCEPTED-shaped rows is a genuine, independent thing to prove, and this DB SHAPE (two
+        // ACCEPTED quotations, same ticket) is not reachable through the app at all post-R8. So:
+        // drive chain B to ISSUED through the real API (unchanged), then flip its doc_status to
+        // ACCEPTED with a DIRECT SQL UPDATE — bypassing recordOutcome (and therefore R8)
+        // deliberately and explicitly, not silently. This is a fixture reaching into forbidden
+        // territory on purpose, to test code that must behave correctly even in a shape the
+        // application itself will never again produce (defense in depth, same reasoning as
+        // #v188_dbInvariant_atMostOneIssuedRemainingInvoicePerTicket_evenBypassingTheService a few
+        // tests below, which does the identical "go around the service with raw SQL" move for the
+        // identical reason). Chain A's own row is left untouched — genuinely still ACCEPTED.
+        CustomerQuotationDto issuedB = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
+            Map.of("id", issuedB.id()));
+        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
+        // QUOTATION_ACCEPTED) — the confirmOrder call right below gates on THIS column, not
+        // sales.quotation.doc_status, so the raw-SQL bypass above must carry that write too.
+        jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId));
 
         orderConfirmation.confirmOrder(pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), owner);
@@ -829,6 +856,15 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     private void driveDraftPricingRequestToQuotationAccepted(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {
+        CustomerQuotationDto issued = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
+        quotationService.recordOutcome(issued.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), owner);
+    }
+
+    /** Drives a fresh pricing request to an ISSUED customer quotation — factored out of {@link
+     * #driveDraftPricingRequestToQuotationAccepted} so {@link #buildSecondAcceptedQuotationChain}
+     * can stop short of {@code recordOutcome} (see that method's own MAJOR 5 fix comment for why). */
+    private CustomerQuotationDto driveDraftPricingRequestToQuotationIssued(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {
         pricingRequestService.submit(pricingRequestId, owner);
         pricingRequestService.pickup(pricingRequestId, importActor);
 
@@ -861,8 +897,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 UUID.randomUUID().toString()), owner);
         CustomerQuotationDto issued = quotationService.issue(
             draftQuotation.id(), new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), owner);
-        quotationService.recordOutcome(issued.id(),
-            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าโอเค", UUID.randomUUID().toString()), owner);
+        return issued;
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

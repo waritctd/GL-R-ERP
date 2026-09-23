@@ -89,6 +89,9 @@ vi.mock('../../api/index.js', () => ({
       // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
       findForPricingRequest: vi.fn(),
       createFromPricingRequest: vi.fn(),
+      // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
+      // pricingRequests.recordCustomerQuotationOutcome above.
+      recordOutcome: vi.fn(),
     },
   },
 }));
@@ -2748,6 +2751,176 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
       issued.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
+  });
+});
+
+// GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):
+// DealQuotationService#findForPricingRequest used to call the DRAFT-only
+// findOpenDraftForPricingRequest, so dealQuotationForPr was null for every status past DRAFT and
+// this whole panel (outcome-recording, the EXPIRED escape hatch) was unreachable in production —
+// even though these mock-driven tests already exercised the UI logic correctly, since they mock
+// the API response directly and never went through the real (buggy) backend query. These tests
+// pin the SAME UI behaviour per status the legacy "Step 5" describe block above pins for the old
+// engine, now for the new one.
+//
+// CORRECTION (Opus MAJOR-A re-review, 2026-09-23): the sentence this replaced claimed these tests
+// also catch a regression in the BACKEND query — false. They stub api.dealQuotations
+// .findForPricingRequest's RESOLVED VALUE directly (see newEngineQuotation()/mockResolvedValue
+// below), so reverting DealQuotationService#findForPricingRequest to the old DRAFT-only reader
+// leaves every one of these 4 tests green — proven: 73/73 still passed under that mutation. The
+// real backend-query regression coverage is
+// DealQuotationOutcomeIntegrationTest#findForPricingRequest_returnsTheQuotationPastDraft (real
+// Postgres, added for MAJOR-A) — THAT is what a future regression on the repository method is
+// caught by, not this file.
+describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
+  function newEngineQuotation(overrides = {}) {
+    return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
+  }
+
+  it('ISSUED: offers the outcome-recording controls to the owning sales rep, and records ACCEPTED via dealQuotations.recordOutcome', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
+    fireEvent.click(acceptButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+    ));
+  });
+
+  it('ISSUED: never shows the outcome-recording controls to CEO or Import — read-only', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    renderDetailPage({ user: ceoUser });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
+
+  it('ACCEPTED: hides the outcome-recording controls and shows the read-only outcome summary', async () => {
+    const accepted = newEngineQuotation({ docStatus: 'ACCEPTED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
+    renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(accepted.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText(/ผลใบเสนอราคา/)).not.toBeNull();
+  });
+
+  it('EXPIRED: the outcome panel is gone and the expiry escape hatch renders instead', async () => {
+    const expired = newEngineQuotation({ docStatus: 'EXPIRED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: expired });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(expired.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
+  });
+
+  // S3 round-3 review fix (NEW-1, MAJOR, 2026-09-23): BLOCKER-B's service-layer fix let a
+  // REVISION_REQUESTED quotation be recreated (DealQuotationService#createFromPricingRequest /
+  // #hasLivePricingRequestQuotation both treat it like EXPIRED), but the frontend's own recreate
+  // gate only ever checked docStatus === 'EXPIRED' — so the owning rep hit a dead end: a
+  // read-only "ผลใบเสนอราคา" line with no way to write the replacement the backend already
+  // supports. Pins that the recreate button is now reachable for REVISION_REQUESTED too.
+  it('REVISION_REQUESTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9103, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
+  // Same S3 round-3 review fix (NEW-1) — REJECTED is the other status the backend already
+  // supports a recreate from (same #hasLivePricingRequestQuotation non-live set) but the old
+  // frontend gate never offered.
+  it('REJECTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: rejected });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9104, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(rejected.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
+  // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
+  // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
+  // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
+  // which both the outcome panel above AND the recreate gate just below it read. Because
+  // ['pricingRequests','detail',id] does not prefix-match
+  // ['pricingRequests','dealQuotationForPricingRequest',id], a rep recording an outcome got the
+  // success toast but the screen kept showing the stale ISSUED DTO — and with it, the OLD
+  // outcome-recording buttons instead of the new recreate affordance — until a manual reload or
+  // the query's 30s staleTime lapsed (api/queryClient.js). This test proves the refetch actually
+  // happens and the UI actually re-renders, WITHOUT a remount: it stubs
+  // findForPricingRequest to first resolve ISSUED, then REVISION_REQUESTED on any later call, and
+  // watches (a) the call count rise after the outcome is recorded, and (b) the recreate button
+  // become reachable while the old outcome buttons disappear — proving invalidate() actually
+  // reached this key and not just the six others already covered above.
+  it('invalidates dealQuotationForPr after recording an outcome, so the recreate button appears without a reload', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest
+      .mockResolvedValueOnce({ quotation: issued })
+      .mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: revisionRequested });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+
+    const callsBeforeOutcome = api.dealQuotations.findForPricingRequest.mock.calls.length;
+    const reviseButton = screen.getByRole('button', { name: 'ลูกค้าขอแก้ไข' });
+    fireEvent.click(reviseButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'REVISION_REQUESTED', clientRequestId: expect.any(String) }),
+    ));
+
+    // The regression this pins: without invalidating dealQuotationForPricingRequest, this second
+    // call never fires and the assertions below would time out against the stale ISSUED DTO.
+    await waitFor(() => expect(api.dealQuotations.findForPricingRequest.mock.calls.length)
+      .toBeGreaterThan(callsBeforeOutcome));
+
+    expect(await screen.findByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
   });
 });
 
