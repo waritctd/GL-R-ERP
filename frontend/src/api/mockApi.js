@@ -13968,10 +13968,21 @@ export const api = {
       if (!['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED'].includes(payload.outcome)) {
         fail('outcome ไม่ถูกต้อง', 400);
       }
+      // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors CustomerQuotationService#recordOutcome's
+      // MINOR-2 fix EXACTLY (that method's own comment, :587) — a replay resolving to a DIFFERENT
+      // quotation than the one THIS call names is a genuine conflict, not a silent "success".
+      // Before this fix the mock returned the OTHER quotation's DTO with no outcome recorded on
+      // the one the caller meant to act on, and no error to notice it by — the header comment
+      // above claimed field-for-field parity "INCLUDING R8" while this 409 was missing.
       if (payload.clientRequestId) {
         const replay = mockCustomerQuotations.find(
           (q) => q.issuedById === user.id && q.outcomeClientRequestId === payload.clientRequestId);
-        if (replay) return delay({ quotation: replay });
+        if (replay) {
+          if (replay.id !== quotation.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: replay });
+        }
       }
       if (quotation.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${quotation.docStatus})`, 409);
@@ -15134,10 +15145,21 @@ export const api = {
         // also happens to be the exact identity #requireOutcomeAccess-equivalent gating above
         // already required (only the ticket's owning rep reaches this far), so scoping the replay
         // to it is not just field-correct but semantically the right actor to scope by.
+        // S3 round-3 review fix (NEW-3, 2026-09-23): mirrors DealQuotationService#recordOutcome's
+        // own MINOR-2 fix (:1642) — a replay resolving to a DIFFERENT quotation than the one this
+        // call names is a genuine conflict, not a silent "success". Before this fix the mock
+        // returned the OTHER quotation's DTO with no outcome recorded on the one the caller meant
+        // to act on, and no error to notice it by — the header comment above claiming
+        // field-for-field parity "INCLUDING R8" was not true of this guard.
         const replay = mockDealQuotations.find(
           (q) => q.origin === 'PRICING_REQUEST' && q.salesRepId === user.id
             && q.outcomeClientRequestId === payload.clientRequestId);
-        if (replay) return delay({ quotation: buildDealQuotationDto(replay) });
+        if (replay) {
+          if (replay.id !== row.id) {
+            fail('clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น', 409);
+          }
+          return delay({ quotation: buildDealQuotationDto(replay) });
+        }
       }
       if (row.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);

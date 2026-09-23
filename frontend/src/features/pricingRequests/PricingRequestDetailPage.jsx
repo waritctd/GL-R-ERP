@@ -3011,21 +3011,36 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
               </p>
             ) : null}
-            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"):
-                once the linked NEW-engine quotation has EXPIRED (D5), sales may write a FRESH one
-                from the SAME approved decision — DealQuotationService#createFromPricingRequest now
-                tolerates this specific case server-side (see that method's own comment). Gated on
-                canManageCustomerQuotation (sales + ticket owner, no PR-status check) rather than
-                canCreateCustomerQuotation, which requires pr.status === 'APPROVED_FOR_QUOTATION' —
-                a PR whose quotation has expired sits at QUOTATION_ISSUED instead (the backend
-                deliberately does not roll PR status back), so that stricter gate would incorrectly
-                hide this button in exactly the state it needs to appear. Reuses the SAME
-                createDealQuotationFromRequest mutation the first-ever create button below already
-                uses (same navigate-on-success behaviour), since the server-side call is identical
-                either way — only the PR's current state differs. */}
-            {dealQuotationForPr?.docStatus === 'EXPIRED' && canManageCustomerQuotation(user, summary) ? (
+            {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"),
+                widened by the S3 round-3 review (NEW-1, MAJOR, 2026-09-23): once the linked
+                NEW-engine quotation has EXPIRED (D5), was REJECTED, or the customer asked for a
+                REVISION, sales may write a FRESH one from the SAME approved decision —
+                DealQuotationService#createFromPricingRequest tolerates all three cases
+                server-side (its own PR-status check treats them identically: none of the three
+                move the PR off QUOTATION_ISSUED — see that method's own comment), and
+                DealQuotationRepository#hasLivePricingRequestQuotation excludes all three from
+                its own "live" set for the same reason. This gate used to only cover EXPIRED,
+                which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
+                own outcome-recording buttons just above — as UI dead ends: the backend accepted
+                a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
+                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
+                states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
+                status back), so that stricter gate would incorrectly hide this button in exactly
+                the states it needs to appear. Reuses the SAME createDealQuotationFromRequest
+                mutation the first-ever create button below already uses (same
+                navigate-on-success behaviour), since the server-side call is identical in every
+                case — only the PR's current state differs. */}
+            {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && canManageCustomerQuotation(user, summary) ? (
               <div className="flex flex-col items-start gap-2">
-                <p className="m-0 text-sm text-warning">ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้</p>
+                <p className="m-0 text-sm text-warning">
+                  {dealQuotationForPr.docStatus === 'EXPIRED'
+                    ? 'ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้'
+                    : dealQuotationForPr.docStatus === 'REVISION_REQUESTED'
+                      ? 'ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้'
+                      : 'ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้'}
+                </p>
                 <Button
                   type="button"
                   variant="primary"

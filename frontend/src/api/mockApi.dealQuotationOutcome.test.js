@@ -151,17 +151,22 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
   // clientRequestId, called twice) must return the ORIGINAL result without a second write —
   // proven here by asserting the SECOND call's customerNote still reads the FIRST call's value
   // even though the payload's own note differs, which only holds if the second call short-circuits
-  // into the replay branch rather than re-running the update. (A cross-quotation/cross-actor
-  // replay-scoping test was attempted here and DELETED: reusing one clientRequestId across two
-  // DIFFERENT quotations by the SAME actor is not actually a "should not replay" case — the real
-  // backend's own idempotency key is `(issued_by, outcome_client_request_id)`, not further scoped
-  // by quotation id either, so that scenario legitimately replay-matches the FIRST usage on BOTH
-  // the mock and the real service. The mock's OLD bug was narrower than that: q.createdById ===
-  // user.employeeId matched literally ANY row regardless of which ACTOR owned it (both sides
-  // null), which this test cannot distinguish from correct behaviour without a second,
-  // mock-unrepresentable actor identity — see the comment below. The fix is still justified by
-  // direct comparison: q.salesRepId === user.id now scopes to the SAME login-account id space the
-  // legacy sibling's own q.issuedById === user.id replay check already uses correctly.)
+  // into the replay branch rather than re-running the update. The mock's OLD bug was narrower than
+  // that: q.createdById === user.employeeId matched literally ANY row regardless of which ACTOR
+  // owned it (both sides null). The fix is justified by direct comparison: q.salesRepId ===
+  // user.id now scopes to the SAME login-account id space the legacy sibling's own
+  // q.issuedById === user.id replay check already uses correctly.
+  //
+  // CORRECTION (S3 round-3 review, NEW-3, 2026-09-23): this comment used to also claim a
+  // cross-quotation/cross-actor replay-scoping test was "attempted and DELETED" because reusing
+  // one clientRequestId across two DIFFERENT quotations by the same actor "legitimately
+  // replay-matches the FIRST usage on BOTH the mock and the real service" — that was true when
+  // written (04:52), but DealQuotationService#recordOutcome's own MINOR-2 fix (added later the
+  // same day, 06:08, see that method's comment) changed the real backend's behaviour: a replay
+  // that resolves to a DIFFERENT quotation than the one THIS call names is now a 409 CONFLICT
+  // ("clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น"), not a silent cross-quotation replay. The
+  // mock did not mirror that fix until this same round-3 pass — see the cross-quotation test
+  // below, which is the scenario this comment used to say could not exist.
   it('a genuine replay (same quotation, same clientRequestId) returns the original result, not a second write', async () => {
     const { ticketId, sourceItemId } = await freshTicket();
     const { quotationId } = await issuedNewOriginQuotation(ticketId, sourceItemId, 'DESIGNER');
@@ -178,6 +183,37 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     expect(replayed.id).toBe(first.id);
     expect(replayed.docStatus).toBe('ACCEPTED');
   });
+
+  // S3 round-3 review fix (NEW-3, 2026-09-23) — mirrors DealQuotationService#recordOutcome's own
+  // MINOR-2 guard: the SAME actor reusing a clientRequestId that already resolved to a DIFFERENT
+  // quotation is a 409 conflict, not a silent replay onto the wrong document. Before this fix the
+  // mock returned quotation A's DTO with no outcome recorded on quotation B, and no error to
+  // notice it by. Two SEPARATE decision chains on two SEPARATE tickets, both owned by the same
+  // seeded 'sales' demo account, so the same clientRequestId genuinely collides across quotations.
+  it('a replay whose clientRequestId already resolved to a DIFFERENT quotation is refused with 409, and neither quotation is changed', async () => {
+    const ticketA = await freshTicket();
+    const { quotationId: quotationAId } = await issuedNewOriginQuotation(
+      ticketA.ticketId, ticketA.sourceItemId, 'DESIGNER');
+    const ticketB = await freshTicket();
+    const { quotationId: quotationBId } = await issuedNewOriginQuotation(
+      ticketB.ticketId, ticketB.sourceItemId, 'DESIGNER');
+
+    const sharedKey = nextClientRequestId();
+    await api.auth.login({ role: 'sales' });
+    const { quotation: onA } = await api.dealQuotations.recordOutcome(quotationAId, {
+      outcome: 'ACCEPTED', customerNote: 'บันทึกบนใบ A', clientRequestId: sharedKey,
+    });
+    expect(onA.docStatus).toBe('ACCEPTED');
+
+    await expect(api.dealQuotations.recordOutcome(quotationBId, {
+      outcome: 'ACCEPTED', customerNote: 'ไม่ควรถูกบันทึกบนใบ B', clientRequestId: sharedKey,
+    })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('clientRequestId') });
+
+    const { quotation: stillA } = await api.dealQuotations.get(quotationAId);
+    expect(stillA.docStatus).toBe('ACCEPTED');
+    const { quotation: stillB } = await api.dealQuotations.get(quotationBId);
+    expect(stillB.docStatus).toBe('ISSUED');
+  }, 20000);
 
   // A "different sales rep" case is NOT representable through this mock: login({role: 'sales'})
   // always resolves to the ONE seeded sales demo account (mockApi.js's db.users), so there is no

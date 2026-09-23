@@ -2828,6 +2828,55 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     expect(screen.getByText('ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
   });
+
+  // S3 round-3 review fix (NEW-1, MAJOR, 2026-09-23): BLOCKER-B's service-layer fix let a
+  // REVISION_REQUESTED quotation be recreated (DealQuotationService#createFromPricingRequest /
+  // #hasLivePricingRequestQuotation both treat it like EXPIRED), but the frontend's own recreate
+  // gate only ever checked docStatus === 'EXPIRED' — so the owning rep hit a dead end: a
+  // read-only "ผลใบเสนอราคา" line with no way to write the replacement the backend already
+  // supports. Pins that the recreate button is now reachable for REVISION_REQUESTED too.
+  it('REVISION_REQUESTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9103, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าขอแก้ไขใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
+  // Same S3 round-3 review fix (NEW-1) — REJECTED is the other status the backend already
+  // supports a recreate from (same #hasLivePricingRequestQuotation non-live set) but the old
+  // frontend gate never offered.
+  it('REJECTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
+    const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: rejected });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9104, number: 'QT-2026-0101-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(rejected.number);
+
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.getByText('ลูกค้าปฏิเสธใบเสนอราคา — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
 });
 
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {

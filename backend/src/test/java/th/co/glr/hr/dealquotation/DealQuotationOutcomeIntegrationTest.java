@@ -625,6 +625,61 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issuedB.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
+    /** GLA-123 slice S3 MINOR-3 fix (Opus review, 2026-09-23) — S3 round-3 review coverage gap
+     * (NEW-4): V75's {@code (issued_by, outcome_client_request_id)} partial unique index is
+     * TABLE-WIDE across both คำขอราคา origins, but each engine's own {@code
+     * findIdByOutcomeClientRequestId} is origin-scoped ({@code origin IS NULL} for the legacy
+     * chain, {@code origin = 'PRICING_REQUEST'} for this one — see each repository method's own
+     * Javadoc). So the SAME actor reusing a {@code clientRequestId} across the TWO ENGINES does
+     * not replay-match on either side (each side's own scoped lookup finds nothing), and instead
+     * falls through to the UPDATE, which then hits the table-wide unique index as a bare {@code
+     * DataIntegrityViolationException} — MINOR-3 catches that and turns it into the same clean 409
+     * MINOR-2's same-engine guard above already gives, rather than letting it surface as an
+     * uncaught 500. This is the cross-engine direction of the collision the reviewer's own probe
+     * proved live (legacy-then-new); {@link
+     * #recordOutcome_crossEngineClientRequestIdCollision_newThenLegacy_refused409} below proves the
+     * reverse order. */
+    @Test
+    void recordOutcome_crossEngineClientRequestIdCollision_legacyThenNew_refused409() {
+        CustomerQuotationDto issuedLegacy = issuedLegacyQuotation(PricingRequestRecipient.DESIGNER);
+        DealQuotationDto issuedNew = issuedNewOriginQuotation(PricingRequestRecipient.OWNER, new BigDecimal("5"));
+        String clientRequestId = UUID.randomUUID().toString();
+        legacyQuotationService.recordOutcome(issuedLegacy.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.REJECTED, null, clientRequestId), salesActor);
+
+        assertThatThrownBy(() -> quotationService.recordOutcome(issuedNew.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, null, clientRequestId), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+            });
+        // Nothing recorded on the new-engine row — the collision surfaced as a clean 409 before
+        // any partial write could stick (the UPDATE and the constraint violation are atomic).
+        assertThat(quotationService.get(issuedNew.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+    }
+
+    /** Reverse order of {@link
+     * #recordOutcome_crossEngineClientRequestIdCollision_legacyThenNew_refused409} — same
+     * collision, same guard, opposite engine calling second, proving the catch in {@code
+     * CustomerQuotationService#recordOutcome} (not just {@code DealQuotationService}'s) actually
+     * fires. */
+    @Test
+    void recordOutcome_crossEngineClientRequestIdCollision_newThenLegacy_refused409() {
+        DealQuotationDto issuedNew = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("5"));
+        CustomerQuotationDto issuedLegacy = issuedLegacyQuotation(PricingRequestRecipient.OWNER);
+        String clientRequestId = UUID.randomUUID().toString();
+        quotationService.recordOutcome(issuedNew.id(),
+            new RecordOutcomeRequest(QuotationStatus.REJECTED, null, clientRequestId), salesActor);
+
+        assertThatThrownBy(() -> legacyQuotationService.recordOutcome(issuedLegacy.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, null, clientRequestId), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
+            });
+        assertThat(legacyQuotationService.get(issuedLegacy.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
     // ─────────────────────────────────────────────────────────────────────────────────────
