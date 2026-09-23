@@ -145,6 +145,10 @@ export const queryKeys = {
   // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill
   // source a new draft snapshots from.
   storedRemainingInvoices: (ticketId) => ['remainingInvoice', 'stored', ticketId],
+  // The STORED billing note aggregate (V189, GLA-99 step 3), customer-scoped — GLA-129's money-tab
+  // document pipeline joins this against a deal's own remaining invoice to resolve the ใบวางบิล
+  // step's status.
+  billingNotesForCustomer: (customerId) => ['billingNotes', 'customer', customerId ?? ''],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor, owner 2026-09-11). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id — see

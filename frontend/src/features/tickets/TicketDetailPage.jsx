@@ -30,12 +30,15 @@ import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GA
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel } from './DealDepositPanel.jsx';
+import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
 import { DealDocumentRegister } from './DealDocumentRegister.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
+import { DealMoneyStatusStrip } from './DealMoneyStatusStrip.jsx';
 import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
+import { DealRemainingInvoiceCard } from './DealRemainingInvoiceCard.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Sibling to DealQuotationPanel
 // above (the PCR-chain's own panel, untouched) -- renders `origin = 'DEAL_DIRECT'` rows, which
@@ -2217,18 +2220,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="money" idPrefix="ticket-detail" active={visibleActiveTab === 'money'}>
+          {/* GLA-129 step 4 part 2: status strip + document pipeline — an at-a-glance read of
+              ใบแจ้งมัดจำ → ใบแจ้งหนี้ส่วนที่เหลือ → ใบวางบิล → รับชำระครบ, additive above the
+              existing deposit/remaining-invoice controls and the (unmodified) payment timeline.
+              Same sections.payment gate DealMoneyTimeline already used, since this is the same
+              audience reading the same underlying data. */}
           {sections.payment ? (
-            <DealMoneyTimeline
-              events={events}
-              paymentReceipts={paymentReceipts}
-              paymentsLoading={paymentsQuery.isLoading}
-              summary={summary}
-              canRecordPayment={can.recordPayment}
-              canSetBilling={can.setBilling}
-              actionLoading={actionLoading}
-              onRecordPayment={openPaymentModal}
-              onSetBilling={openBillingModal}
-            />
+            <Panel title="สถานะการเงิน" className="mb-4">
+              <div className="flex flex-col gap-4">
+                <DealMoneyStatusStrip summary={summary} />
+                <DealDocumentPipeline ticketId={ticketId} summary={summary} user={user} />
+              </div>
+            </Panel>
           ) : null}
 
           {/* "มัดจำ" (Phase 3 Slice S3 — see
@@ -2252,6 +2255,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             ) : null}
           </div>
 
+          {/* GLA-129 step 4 part 2: entry point into the existing RemainingInvoiceDialog (GLA-99
+              step 2, unmodified) — reuses the SAME dialog-open state the deal-stage sticky bar's
+              own "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" button controls, see
+              DealRemainingInvoiceCard's own doc comment for why. The card's status summary is
+              visible to the full sections.payment audience; canManage passes the EXACT SAME gate
+              (can.downloadRemainingInvoice) the existing sticky-bar button uses, so this card
+              never offers a control account/ceo/non-sales never had, or on a deal not yet ready. */}
+          {sections.payment ? (
+            <div className="mt-4">
+              <DealRemainingInvoiceCard
+                ticketId={ticketId}
+                canManage={can.downloadRemainingInvoice}
+                onManage={() => setRemainingInvoiceDialogOpen(true)}
+              />
+            </div>
+          ) : null}
+
           {/* Slice C2b: relocated here from the dissolved การดำเนินการอื่น ๆ
               grab-bag — a close-lifecycle action, not an items action, so it
               belongs with การเงิน rather than สินค้าและราคา. Gate unchanged
@@ -2263,7 +2283,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               ticketDetailTabs.js's own comment on this tab's gate), so the
               action can never end up stranded behind a hidden `money` tab. */}
           {can.revokeCloseConfirm && (
-            <Panel className="bg-surface-muted">
+            <Panel className="bg-surface-muted mt-4">
               <div className="flex flex-wrap gap-2.5 p-[12px_18px]">
                 <Button type="button" variant="secondary" disabled={actionLoading}
                   onClick={() => doAction(() => api.tickets.revokeCloseConfirmation(ticketId, {}),
@@ -2273,6 +2293,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </div>
             </Panel>
           )}
+
+          {/* GLA-129 step 4 part 2: moved to the END of the tab (was first) — owner ruling "keep
+              การชำระเงิน timeline as-is" means the COMPONENT stays untouched, not its position; see
+              .design/gla-129-money-tab/INFORMATION_ARCHITECTURE.md's Content Hierarchy for the
+              reasoning (the four items above are "what do I do next", this is the historical
+              record a user checks for detail/verification, not the primary surface). */}
+          {sections.payment ? (
+            <div className="mt-4">
+              <DealMoneyTimeline
+                events={events}
+                paymentReceipts={paymentReceipts}
+                paymentsLoading={paymentsQuery.isLoading}
+                summary={summary}
+                canRecordPayment={can.recordPayment}
+                canSetBilling={can.setBilling}
+                actionLoading={actionLoading}
+                onRecordPayment={openPaymentModal}
+                onSetBilling={openBillingModal}
+              />
+            </div>
+          ) : null}
       </TabPanel>
 
       <TabPanel id="fulfilment" idPrefix="ticket-detail" active={visibleActiveTab === 'fulfilment'}>

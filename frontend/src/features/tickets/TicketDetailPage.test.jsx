@@ -121,6 +121,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         deleteDraft: vi.fn(),
         download: vi.fn(),
       },
+      // The STORED billing note aggregate (V189, GLA-129 step 4 part 2) — DealDocumentPipeline's
+      // own query is gated on `summary.customerId && issuedRemainingInvoice`, both absent from
+      // every fixture below, so this is never actually called by the existing tests; mocked so a
+      // future test that DOES set both doesn't throw on an undefined namespace.
+      billingNotes: {
+        listForCustomer: vi.fn().mockResolvedValue({ billingNotes: [] }),
+      },
       // The items table converts a foreign-currency factory price to baht. Mocked because an
       // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
       // which would silently leave the baht line absent rather than exercising it.
@@ -3343,6 +3350,43 @@ describe('TicketDetailPage', () => {
 
       // The button only ever opens the dialog — it never downloads directly.
       expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    });
+  });
+
+  // GLA-129 step 4 part 2 (review round 2, 2026-09-23): a wiring-level test for the money tab's
+  // new content — nothing previously asserted the "สถานะการเงิน" Panel or DealRemainingInvoiceCard
+  // actually render inside TicketDetailPage, so dropping or renaming the `canManage` prop at this
+  // call site would silently fail closed (the button disappears) with nothing here going red.
+  describe('money tab — GLA-129 status strip / pipeline / remaining-invoice card', () => {
+    it('renders the status strip and pipeline, and shows the remaining-invoice manage button for a ready deal', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 },
+        }),
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/^การเงิน/);
+
+      expect(await screen.findByText('สถานะการเงิน')).toBeTruthy();
+      expect(await screen.findByRole('button', { name: 'จัดการใบแจ้งหนี้ส่วนที่เหลือ' })).toBeTruthy();
+    });
+
+    // Wrong-way-round: the same button must NOT appear once the deal is no longer ready
+    // (isRemainingInvoiceReady false) — canManage must track can.downloadRemainingInvoice exactly,
+    // not just "is this a sales owner".
+    it('hides the remaining-invoice manage button before the deal is ready', async () => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: { status: 'quotation_issued', fulfillmentStatus: null, createdById: 1 },
+        }),
+      });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/^การเงิน/);
+
+      await screen.findByText('สถานะการเงิน');
+      expect(screen.queryByRole('button', { name: 'จัดการใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
     });
   });
 
