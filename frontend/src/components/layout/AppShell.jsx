@@ -221,6 +221,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
     // Account's money-lifecycle worklist (Account role-scoped views): deposit
     // -> final payment -> close-ready -> record-invoice/commission, one page.
+    // Deliberately NOT OR'd with the per-employee canIssueBillingNote grant (GLA-129) yet — see
+    // permissions.js's isBillingNoteReleaseUser for why: the grant is wired into this nav item,
+    // the PATH_GUARDS entry, and AccountFinancePage.jsx's own tab scoping together, on the branch
+    // that adds the scoping.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },

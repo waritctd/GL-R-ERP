@@ -301,40 +301,6 @@ const SERVER_ONLY = {
     + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
     + 'built backend-first; wire it up if a cross-deal CEO queue view is ever requested.',
 
-  // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer landed on this
-  // branch; the /finance ใบวางบิล tab that calls these eleven routes is step 4, a separate branch
-  // not yet merged. BillingNoteService/BillingNoteController/BillingNoteRenderer are already
-  // covered by BillingNoteServiceIntegrationTest (real Postgres, including the wrong-way-round
-  // authz suite) and BillingNoteRendererTest. Delete this whole block once step 4's screen calls
-  // these through hrApi.js.
-  'GET /api/customers/{}/billing-note-candidates':
-    'BillingNoteService.candidates — the customer-level outstanding-documents picker step 4\'s '
-    + 'ใบวางบิล tab will call before creating a draft. Backend-first; no screen yet.',
-  'GET /api/customers/{}/billing-notes':
-    'BillingNoteService.list — per-customer billing note history. Backend-first; no screen yet.',
-  'POST /api/customers/{}/billing-notes':
-    'BillingNoteService.createDraft. Backend-first; no screen yet.',
-  'GET /api/billing-notes/{}':
-    'BillingNoteService.get. Backend-first; no screen yet.',
-  'PUT /api/billing-notes/{}':
-    'BillingNoteService.updateDraft. Backend-first; no screen yet.',
-  'POST /api/billing-notes/{}/issue':
-    'BillingNoteService.issue — mints the AR_GLR number. Backend-first; no screen yet.',
-  'POST /api/billing-notes/{}/revise':
-    'BillingNoteService.revise — prepares a correction DRAFT. Backend-first; no screen yet.',
-  'POST /api/billing-notes/{}/cancel':
-    'BillingNoteService.cancel — voids an ISSUED note and releases its lines for re-billing. '
-    + 'Backend-first; no screen yet.',
-  'POST /api/billing-notes/{}/mark-received':
-    'BillingNoteService.markReceived — records ผู้รับวางบิล/วันนัดชำระเงิน after the customer '
-    + 'signs on paper. Backend-first; no screen yet.',
-  'POST /api/billing-notes/{}/mark-settled':
-    'BillingNoteService.markSettled — owner ruling C1: the only caller-triggered settlement path, '
-    + 'for an all-MANUAL note (e.g. ค่าขนส่ง) that can never auto-settle. Backend-first; no screen yet.',
-  'DELETE /api/billing-notes/{}':
-    'BillingNoteService.deleteDraft. Backend-first; no screen yet.',
-  'GET /api/billing-notes/{}/file':
-    'BillingNoteService.file — downloads the rendered .xls. Backend-first; no screen yet.',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -572,6 +538,25 @@ describe('controller surface / hrApi.js contract', () => {
  * stale-entry test below deletes the entry for you.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer + hrApi/mockApi
+  // wiring landed on this branch (GLA-129 step 4 part 1); the /finance ใบวางบิล tab and the
+  // redesigned deal-page การเงิน tab that actually CALL these twelve methods are step 4 parts
+  // 2/3, separate branches not yet merged. BillingNoteService/BillingNoteController/
+  // BillingNoteRenderer are already covered by BillingNoteServiceIntegrationTest (real Postgres,
+  // including the wrong-way-round authz suite) and BillingNoteRendererTest. Remove this block once
+  // those screens call these through hrApi.js.
+  'DELETE /api/billing-notes/{}',
+  'GET /api/billing-notes/{}',
+  'GET /api/billing-notes/{}/file',
+  'GET /api/customers/{}/billing-note-candidates',
+  'GET /api/customers/{}/billing-notes',
+  'POST /api/billing-notes/{}/cancel',
+  'POST /api/billing-notes/{}/issue',
+  'POST /api/billing-notes/{}/mark-received',
+  'POST /api/billing-notes/{}/mark-settled',
+  'POST /api/billing-notes/{}/revise',
+  'POST /api/customers/{}/billing-notes',
+  'PUT /api/billing-notes/{}',
   'DELETE /api/factory-quote-attachments/{}',
   'GET /api/catalog',
   // GET/PUT /api/catalog/thickness-defaults joined this list on 2026-09-17: the CEO settings

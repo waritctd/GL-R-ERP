@@ -58,7 +58,8 @@ public class AuthService {
         }
         session.setAttribute(SessionContext.SESSION_USER_KEY, principal);
         recordLogin(principal);
-        return new AuthResponse(principal, employees.isAdmin(principal.id()), employees.canCreateQuotation(principal.id()));
+        return new AuthResponse(principal, employees.isAdmin(principal.id()), employees.canCreateQuotation(principal.id()),
+            employees.canIssueBillingNote(principal.id()));
     }
 
     /**
@@ -103,7 +104,8 @@ public class AuthService {
         if (value instanceof UserPrincipal user) {
             // Re-read per call rather than trusting the session, so granting or revoking admin
             // shows up on the next page load instead of at the holder's next login.
-            return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()));
+            return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
+                employees.canIssueBillingNote(user.id()));
         }
         throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
     }
@@ -132,7 +134,8 @@ public class AuthService {
         // is that this employee set their own password at this moment. Until now the sole trace was
         // must_change_password flipping to false, which fires once per person and never again.
         recordAuthEvent(refreshed, "CHANGE_PASSWORD");
-        return new AuthResponse(refreshed, employees.isAdmin(refreshed.id()), employees.canCreateQuotation(refreshed.id()));
+        return new AuthResponse(refreshed, employees.isAdmin(refreshed.id()), employees.canCreateQuotation(refreshed.id()),
+            employees.canIssueBillingNote(refreshed.id()));
     }
 
     public void logout(HttpSession session) {

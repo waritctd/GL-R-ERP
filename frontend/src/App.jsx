@@ -89,9 +89,18 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 // `canCreateQuotation` is the same shape, carried by the same record (AuthResponse.java's own
 // javadoc) -- Quotation v2's per-employee "can create quotations" capability (owner ruling, Ploy
 // 2026-09-09). Also a hint only: DealQuotationService re-reads the grant live on every request.
+//
+// `canIssueBillingNote` is the same shape again -- the per-employee "can issue billing notes"
+// capability (GLA-99/GLA-129, owner ruling, Ploy 2026-09-19). Also a hint only:
+// BillingNoteService.hasWriteGrant re-reads the grant live on every request.
 function userFromAuthResponse(response) {
   if (!response?.user) return null;
-  return { ...response.user, admin: Boolean(response.admin), canCreateQuotation: Boolean(response.canCreateQuotation) };
+  return {
+    ...response.user,
+    admin: Boolean(response.admin),
+    canCreateQuotation: Boolean(response.canCreateQuotation),
+    canIssueBillingNote: Boolean(response.canIssueBillingNote),
+  };
 }
 
 function TicketDetailRoute({ user, showToast }) {

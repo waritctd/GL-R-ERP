@@ -518,6 +518,15 @@ const mockCustomers = [
   // inverse of the usual fixture lie (a mock more permissive than production): a fixture too
   // EMPTY to reach the code path at all is just as useless for verification.
   { id: 5, name: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',        taxId: '0105545678901', address: '587, 589 ถนนรามอินทรา แขวงคันนายาว กรุงเทพฯ 10230', branch: 'สำนักงานใหญ่', phone: '02-947-5000' },
+  // Same reasoning as customer 5's own comment, one level down (GLA-129, review round 1,
+  // 2026-09-23): billing-note candidates() joins an ISSUED remaining invoice/deposit notice back
+  // to its ticket's customerId, and every one of demoSales.js's money-cycle deals (tickets 19-25,
+  // "the ฝ่ายบัญชี money-cycle deals") predates that field and carries none. Without at least one
+  // linked customer, mockApi.billingNotes.candidates() would return an empty picker for every
+  // seeded customer, in mock mode ONLY — the exact "fixture too EMPTY to reach the code path"
+  // trap customer 5's comment already names. Ticket 19 (ISSUED deposit notice, 2026-08-11) is
+  // wired to this row via demoSales.js's makeMoneyDeal `customerId` param.
+  { id: 6, name: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด', taxId: '0105512345678', address: '991 ถนนพระราม 1 แขวงปทุมวัน กรุงเทพฯ 10330', branch: 'สำนักงานใหญ่', phone: '02-610-8000' },
 ];
 let mockCustomerSeq = mockCustomers.length + 1;
 
@@ -551,6 +560,12 @@ const mockContacts = [
   // so the picker on the seeded deal has something to CHANGE to and not just one forced answer.
   { id: 6, customerId: 5, firstName: 'ณัฐพงศ์', lastName: 'ศรีวิไล',  position: 'ฝ่ายจัดซื้อ',      email: 'nattapong@fashionisland.co.th', phone: '086-222-3333' },
   { id: 7, customerId: 5, firstName: 'พิมพ์ใจ', lastName: 'บุญมาก',   position: 'ผู้จัดการโครงการ', email: 'pimjai@fashionisland.co.th',    phone: '086-444-5555' },
+  // Customer 6 (its own comment above) had no contact row — harmless before ticket 19 carried a
+  // customerId at all (resolveDealQuotationContact skips the ownership check when
+  // ticket.customerId is null), but wiring ticket 19 to a real customer activates that check for
+  // any future quotation work on it. One row keeps that path from dead-ending (review round 2,
+  // 2026-09-23).
+  { id: 8, customerId: 6, firstName: 'วรวุฒิ', lastName: 'พารากร', position: 'ฝ่ายจัดซื้อ', email: 'worawut@siamparagon-dev.co.th', phone: '02-610-8001' },
 ];
 let mockContactSeq = mockContacts.length + 1;
 
@@ -2236,14 +2251,20 @@ function publicUser(user) {
   };
 }
 
-// Mirrors AuthResponse.java's shape: `{ user, admin, canCreateQuotation }` -- `admin` and
-// `canCreateQuotation` are siblings of `user`, not fields ON it (App.jsx's userFromAuthResponse
-// flattens them back onto one object). auth.login/me/changePassword all resolve this so
-// `canCreateQuotation` actually reaches the frontend under mock mode (#H4) -- previously these
-// three returned `{ user: publicUser(user) }` alone, so `response.canCreateQuotation` was always
-// undefined regardless of the seed's own `canCreateQuotation` field on `db.users`.
+// Mirrors AuthResponse.java's shape: `{ user, admin, canCreateQuotation, canIssueBillingNote }` --
+// `admin`, `canCreateQuotation` and `canIssueBillingNote` are siblings of `user`, not fields ON it
+// (App.jsx's userFromAuthResponse flattens them back onto one object). auth.login/me/changePassword
+// all resolve this so `canCreateQuotation` actually reaches the frontend under mock mode (#H4) --
+// previously these three returned `{ user: publicUser(user) }` alone, so `response.canCreateQuotation`
+// was always undefined regardless of the seed's own `canCreateQuotation` field on `db.users`.
+// `canIssueBillingNote` (GLA-129) follows the same discipline, sourced from the seed's own field.
 function authResponse(user) {
-  return { user: publicUser(user), admin: Boolean(user?.admin), canCreateQuotation: Boolean(user?.canCreateQuotation) };
+  return {
+    user: publicUser(user),
+    admin: Boolean(user?.admin),
+    canCreateQuotation: Boolean(user?.canCreateQuotation),
+    canIssueBillingNote: Boolean(user?.canIssueBillingNote),
+  };
 }
 
 function requireSession() {
@@ -2381,6 +2402,193 @@ function mockRemainingInvoiceSnapshot(ticket) {
   const vatAmount = Math.round(netAmount * 0.07 * 100) / 100;
   const grandTotal = Math.round((netAmount + vatAmount) * 100) / 100;
   return { items, itemsTotal, depositDeduction, netAmount, vatAmount, grandTotal };
+}
+
+// ── The STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129 step 4) ─────────────────────────
+// A CUSTOMER-level cover sheet (not ticket-level, unlike remaining invoices above) rolling several
+// already-ISSUED remaining invoices / deposit notices — possibly across several of the customer's
+// deals — into one billed total for one credit cycle. Mirrors
+// th.co.glr.hr.billing.BillingNoteService's lifecycle/numbering shape (DRAFT -> ISSUED ->
+// {SUPERSEDED (revise) | CANCELLED | SETTLED}, minted on the SAME shared AR_GLR sequence remaining
+// invoices use — reuses mockArGlrSeqByYear above) and its exact authz split (write:
+// requireBillingNoteWriteGate below; read: requireBillingNoteReadAccess). Per CLAUDE.md's
+// mock-contract rule, this does NOT reproduce BillingNoteService's real settlement-reconcile
+// machinery (BillingNoteRepository#reconcileSettlementForCustomer's automatic ISSUED -> SETTLED on
+// every read) — markSettled() below is the only path to SETTLED in mock mode, always explicit,
+// which is honestly narrower than production rather than silently wrong. Nor does it reproduce the
+// remaining-invoice outstanding-amount approximation's own caveats beyond mirroring its exact
+// signed-sum SQL (mockBillingNoteSignedReceiptSum, shared with the deposit-notice half) — the
+// documented double-count-across-a-ticket's-full-history gap on the real side is not reproduced
+// here at all, since mock mode never accumulates that history the same way.
+let mockBillingNoteSeq = 1;
+const mockBillingNotes = []; // BillingNoteDocumentDto-shaped rows, each with its own `lines`.
+const MOCK_BILLING_NOTE_MAX_LINES = 15; // mirrors BillingNoteRenderer.MAX_LINE_ROWS
+
+// Mirrors BillingNoteService#hasWriteGrant: ceo, or any employee holding the live
+// can_issue_billing_note grant (App.jsx's userFromAuthResponse flattens it onto `user`, same as
+// canCreateQuotation). Unlike requireRemainingInvoiceWriteGate above, this is NOT ticket-scoped —
+// a billing note is a customer-level document with no single owning deal.
+function requireBillingNoteWriteGate() {
+  const user = requireSession();
+  if (user.role !== 'ceo' && !user.canIssueBillingNote) {
+    fail('ไม่มีสิทธิ์ออกหรือแก้ไขใบวางบิล', 403);
+  }
+  return user;
+}
+
+const MOCK_BILLING_NOTE_READ_ROLES = ['account', 'sales_manager', 'ceo'];
+
+// Mirrors BillingNoteService#requireReadAccess: the write set, plus account/sales_manager
+// unconditionally, plus a sales rep who owns at least one deal referenced by the note's own lines.
+function requireBillingNoteReadAccess(note) {
+  const user = requireSession();
+  const hasWriteGrant = user.role === 'ceo' || Boolean(user.canIssueBillingNote);
+  if (MOCK_BILLING_NOTE_READ_ROLES.includes(user.role) || hasWriteGrant) return user;
+  if (user.role === 'sales') {
+    const ticketIds = [...new Set(note.lines.map((l) => l.ticketId).filter((id) => id != null))];
+    const owns = ticketIds.some((id) => findTicketRaw(id).createdById === user.id);
+    if (owns) return user;
+  }
+  fail('ไม่มีสิทธิ์เข้าถึงใบวางบิลนี้', 403);
+  return user;
+}
+
+function findStoredBillingNoteRaw(id) {
+  const row = mockBillingNotes.find((n) => n.id === Number(id));
+  if (!row) fail('ไม่พบใบวางบิลนี้', 404);
+  return row;
+}
+
+// BillingNoteLineDto (11 components — id, billingNoteId, seq, sourceType, sourceId, ticketId,
+// docNumber, docDate, dueDate, amount, note) carries no `released` field — it is this mock's own
+// internal bookkeeping for mockBillingNoteLiveClaims, with no counterpart on the real DTO (the
+// real invariant lives in sales.billing_note_line.note_status, a column the API never serializes
+// either). Every response below goes through this rather than a bare structuredClone, so a caller
+// never sees a field the real API would never send — review round 2 (2026-09-23) caught the leak.
+function toBillingNoteResponse(note) {
+  const clone = structuredClone(note);
+  clone.lines = clone.lines.map(({ released, ...line }) => line);
+  return clone;
+}
+
+// Signed payment-receipt sum, mirroring both OUTSTANDING_EXPRs' shared
+// `SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END)` — an ADJUSTMENT receipt
+// INCREASES outstanding (it is stored as a reduction elsewhere, so negating it here restores the
+// balance owed), every other kind reduces it at face value.
+function mockBillingNoteSignedReceiptSum(receipts) {
+  return receipts.reduce((sum, r) => sum + (r.kind === 'ADJUSTMENT' ? -Number(r.amount || 0) : Number(r.amount || 0)), 0);
+}
+
+// Every ISSUED remaining invoice / deposit notice across this customer's deals, with its
+// VAT-inclusive outstanding amount — mirrors BillingNoteRepository#candidatesForCustomer's own
+// CANDIDATES_SQL (see this section's own header comment for the simplifications this mock keeps).
+function mockBillingNoteCandidateRows(customerId) {
+  const rows = [];
+  for (const ri of mockRemainingInvoices) {
+    if (ri.status !== 'ISSUED') continue;
+    const ticket = findTicketRaw(ri.ticketId);
+    if (ticket.customerId !== Number(customerId)) continue;
+    // REMAINING_INVOICE_OUTSTANDING_EXPR: ticket-scoped, kind IN ('BALANCE','ADJUSTMENT') only.
+    const paid = mockBillingNoteSignedReceiptSum(db.paymentReceipts
+      .filter((r) => r.ticketId === ri.ticketId && (r.kind === 'BALANCE' || r.kind === 'ADJUSTMENT')));
+    rows.push({
+      sourceType: 'REMAINING_INVOICE', sourceId: ri.id, ticketId: ri.ticketId,
+      docNumber: ri.docNumber, docDate: ri.docDate, dueDate: ticket.dueDate ?? null,
+      outstandingAmount: Math.round((ri.grandTotal - paid) * 100) / 100,
+    });
+  }
+  for (const dn of mockDepositNotices) {
+    if (dn.status !== 'ISSUED') continue;
+    const ticket = findTicketRaw(dn.ticketId);
+    if (ticket.customerId !== Number(customerId)) continue;
+    // DEPOSIT_NOTICE_OUTSTANDING_EXPR: EVERY receipt linked by deposit_notice_id, no kind filter
+    // at all (unlike the remaining-invoice half above) — a DEPOSIT-kind receipt from
+    // confirmDepositPaid counts here just as a BALANCE one would.
+    const paid = mockBillingNoteSignedReceiptSum(db.paymentReceipts.filter((r) => r.depositNoticeId === dn.id));
+    rows.push({
+      sourceType: 'DEPOSIT_NOTICE', sourceId: dn.id, ticketId: dn.ticketId,
+      docNumber: dn.docNumber, docDate: dn.issueDate, dueDate: ticket.dueDate ?? null,
+      outstandingAmount: Math.round((dn.totalPayable - paid) * 100) / 100,
+    });
+  }
+  // ORDER BY doc_date NULLS LAST, doc_number — a plain localeCompare on a possibly-null docDate
+  // would sort nulls FIRST, the opposite of the real query.
+  return rows.sort((a, b) => {
+    if (a.docDate == null && b.docDate != null) return 1;
+    if (a.docDate != null && b.docDate == null) return -1;
+    return (a.docDate ?? '').localeCompare(b.docDate ?? '') || (a.docNumber ?? '').localeCompare(b.docNumber ?? '');
+  });
+}
+
+// Mirrors BillingNoteRepository#findLiveClaimsForCustomer / #findLiveClaim: which (sourceType,
+// sourceId) pairs are already claimed by a DRAFT or ISSUED note's line, keyed "TYPE:id" — global,
+// not customer-scoped, same as the real unique index (a document belongs to exactly one customer
+// anyway, so scoping would change nothing).
+function mockBillingNoteLiveClaims() {
+  const claims = new Map();
+  for (const note of mockBillingNotes) {
+    if (note.status !== 'DRAFT' && note.status !== 'ISSUED') continue;
+    for (const line of note.lines) {
+      if (line.sourceId == null || line.released) continue;
+      claims.set(`${line.sourceType}:${line.sourceId}`, { billingNoteId: note.id, docNumber: note.docNumber });
+    }
+  }
+  return claims;
+}
+
+// Mirrors BillingNoteService#resolveLine — validates one requested line against the customer's
+// live candidate pool (ERP-sourced) or the request's own manual* fields, refusing a source that is
+// fully paid, unknown, or already claimed by a DIFFERENT live note.
+function mockResolveBillingNoteLine(sel, candidatesByKey, claims, excludeNoteId) {
+  const type = (sel?.sourceType ?? '').trim().toUpperCase();
+  if (!['REMAINING_INVOICE', 'DEPOSIT_NOTICE', 'MANUAL'].includes(type)) {
+    fail(`ไม่รองรับประเภทรายการ '${sel?.sourceType ?? ''}'`, 400);
+  }
+  if (type === 'MANUAL') {
+    if (sel.sourceId != null) fail('รายการที่พิมพ์เองต้องไม่ระบุเอกสารอ้างอิง', 400);
+    if (!sel.manualDocNumber || !String(sel.manualDocNumber).trim()) fail('รายการที่พิมพ์เองต้องระบุเลขที่เอกสาร', 400);
+    // Mirrors manualAmount.setScale(2, HALF_UP).signum() <= 0 in SHAPE, not exact arithmetic —
+    // round to the cent BEFORE the zero/negative check, so a sub-satang amount like 0.004 is
+    // rejected rather than stored as-is. NOT a faithful mirror at an exact .xx5 half-satang
+    // boundary: Java's BigDecimal.setScale(2, HALF_UP) rounds 100.005 to 100.01 exactly, while
+    // this float multiply/round (100.005 * 100 = 100.00499999999999...) rounds down to 100.00.
+    // Only the boundary value differs; the reject-if-non-positive semantics this fix exists for
+    // are unaffected.
+    const roundedAmount = Math.round(Number(sel.manualAmount) * 100) / 100;
+    if (!(roundedAmount > 0)) fail('รายการที่พิมพ์เองต้องระบุจำนวนเงินมากกว่า 0', 400);
+    return {
+      sourceType: 'MANUAL', sourceId: null, ticketId: null,
+      docNumber: sel.manualDocNumber, docDate: sel.manualDocDate ?? null, dueDate: sel.manualDueDate ?? null,
+      amount: roundedAmount, note: sel.manualNote ?? null,
+    };
+  }
+  if (sel.sourceId == null) fail('ต้องระบุเอกสารอ้างอิงสำหรับรายการประเภทนี้', 400);
+  const candidate = candidatesByKey.get(`${type}:${sel.sourceId}`);
+  if (!candidate) fail('ไม่พบเอกสารนี้สำหรับลูกค้ารายนี้ หรือเอกสารยังไม่ได้ออกเลข', 400);
+  if (!(candidate.outstandingAmount > 0)) fail(`เอกสาร ${candidate.docNumber} ชำระครบแล้ว ไม่สามารถวางบิลได้`, 409);
+  const claim = claims.get(`${type}:${sel.sourceId}`);
+  if (claim && claim.billingNoteId !== excludeNoteId) {
+    fail(`เอกสาร ${candidate.docNumber} อยู่ในใบวางบิลอื่นอยู่แล้ว${claim.docNumber ? ` (เลขที่ ${claim.docNumber})` : ' (ร่าง)'}`, 409);
+  }
+  return {
+    sourceType: type, sourceId: candidate.sourceId, ticketId: candidate.ticketId,
+    docNumber: candidate.docNumber, docDate: candidate.docDate,
+    dueDate: sel.manualDueDate ?? candidate.dueDate, amount: candidate.outstandingAmount, note: sel.manualNote ?? null,
+  };
+}
+
+// Whole-value replace of a note's lines, mirroring BillingNoteService#writeLines — validates the
+// row-count cap, resolves every selection, then overwrites `lines` atomically (no partial write on
+// a validation failure, since every fail() throws before this function returns).
+function mockWriteBillingNoteLines(note, selections) {
+  if (selections.length > MOCK_BILLING_NOTE_MAX_LINES) {
+    fail(`ใบวางบิลมีรายการ ${selections.length} รายการ เกินความจุของแบบฟอร์ม (สูงสุด ${MOCK_BILLING_NOTE_MAX_LINES} แถว) กรุณาลดจำนวนรายการหรือออกเอกสารหลายฉบับ`, 409);
+  }
+  const candidatesByKey = new Map(mockBillingNoteCandidateRows(note.customerId).map((r) => [`${r.sourceType}:${r.sourceId}`, r]));
+  const claims = mockBillingNoteLiveClaims();
+  const resolved = selections.map((sel) => mockResolveBillingNoteLine(sel, candidatesByKey, claims, note.id));
+  note.lines = resolved.map((l, i) => ({ id: `${note.id}-${i + 1}`, billingNoteId: note.id, seq: i + 1, ...l, released: false }));
+  note.totalAmount = Math.round(note.lines.reduce((sum, l) => sum + Number(l.amount || 0), 0) * 100) / 100;
 }
 
 // Mirrors th.co.glr.hr.importrequest.ImportRequestStep — same codes, same order, same Thai labels.
@@ -3685,6 +3893,24 @@ function buildMockRemainingInvoiceXlsxFromRow(row) {
     ...(row.items ?? []).map((it, i) =>
       `${i + 1}. ${it.description} — ${it.qty ?? ''} ${it.unit ?? 'แผ่น'} × ${it.unitPrice ?? ''}`),
     ...(row.depositDeduction ? [`หัก  มัดจำ${row.depositReference ? '  ' + row.depositReference : ''}`] : []),
+  ];
+  return mockDocPlaceholderBlob(lines);
+}
+
+// ── Billing note XLSX (demo placeholder) — real file from BillingNoteRenderer.java ────────────
+// Same discipline as buildMockRemainingInvoiceXlsxFromRow above: renders from THIS row's own
+// stored lines, never recomputed from live ticket/customer data.
+function buildMockBillingNoteXlsxFromRow(row) {
+  const lines = [
+    `ใบวางบิล  เลขที่ ${row.docNumber ?? '(ร่าง)'}`,
+    `วันที่: ${row.billDate ? mockThaiDate(new Date(row.billDate)) : ''}`,
+    `ลูกค้า: ${row.customerName ?? ''}`,
+    ...(row.customerTaxId ? [`เลขประจำตัวผู้เสียภาษี: ${row.customerTaxId}`] : []),
+    '',
+    ...row.lines.map((l, i) =>
+      `${i + 1}. ${l.docNumber ?? ''} ${l.docDate ? mockThaiDate(new Date(l.docDate)) : ''} — ${l.amount ?? 0}`),
+    '',
+    `รวมเป็นเงิน: ${row.totalAmount ?? 0}`,
   ];
   return mockDocPlaceholderBlob(lines);
 }
@@ -12013,6 +12239,296 @@ export const api = {
       requireDepositNoticeViewer(row.ticketId);
       const blob = await tryBackendBlob(`/api/remaining-invoices/${id}/file`);
       return blob ?? buildMockRemainingInvoiceXlsxFromRow(row);
+    },
+  },
+
+  // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
+  // step 4). See this file's own "STORED ใบวางบิล aggregate" header comment (near
+  // mockBillingNotes) for what is and is not mirrored faithfully.
+  billingNotes: {
+    async candidates(customerId) {
+      const user = requireSession();
+      const hasWriteGrant = user.role === 'ceo' || Boolean(user.canIssueBillingNote);
+      if (!MOCK_BILLING_NOTE_READ_ROLES.includes(user.role) && !hasWriteGrant) {
+        fail('ไม่มีสิทธิ์ดูรายการที่วางบิลได้ของลูกค้ารายนี้', 403);
+      }
+      const customer = mockCustomers.find((c) => c.id === Number(customerId));
+      if (!customer) fail('ไม่พบลูกค้ารายนี้', 404);
+      const rows = mockBillingNoteCandidateRows(customerId);
+      const claims = mockBillingNoteLiveClaims();
+      const candidates = [];
+      const alreadyBilled = [];
+      for (const row of rows) {
+        if (!(row.outstandingAmount > 0)) continue; // fully paid — excluded from both lists
+        const claim = claims.get(`${row.sourceType}:${row.sourceId}`);
+        if (claim) {
+          alreadyBilled.push({ ...row, blockedByNoteId: claim.billingNoteId, blockedByNoteNumber: claim.docNumber });
+        } else {
+          candidates.push({ ...row, blockedByNoteId: null, blockedByNoteNumber: null });
+        }
+      }
+      return delay({ customerId: Number(customerId), customerName: customer.name, candidates, alreadyBilled });
+    },
+
+    async listForCustomer(customerId) {
+      const user = requireSession();
+      const hasWriteGrant = user.role === 'ceo' || Boolean(user.canIssueBillingNote);
+      const fullAccess = MOCK_BILLING_NOTE_READ_ROLES.includes(user.role) || hasWriteGrant;
+      if (!fullAccess && user.role !== 'sales') {
+        fail('ไม่มีสิทธิ์เข้าถึงใบวางบิลของลูกค้ารายนี้', 403);
+      }
+      if (!mockCustomers.some((c) => c.id === Number(customerId))) fail('ไม่พบลูกค้ารายนี้', 404);
+      const all = mockBillingNotes.filter((n) => n.customerId === Number(customerId));
+      const visible = fullAccess ? all : all.filter((n) => {
+        const ticketIds = [...new Set(n.lines.map((l) => l.ticketId).filter((id) => id != null))];
+        return ticketIds.some((id) => findTicketRaw(id).createdById === user.id);
+      });
+      // Mirrors findByCustomer's own ORDER BY COALESCE(base_number, ''), type, version — groups a
+      // revision chain together (same base_number) and puts a not-yet-issued draft (base_number
+      // null -> '') first within it, not newest-created-first.
+      return delay({
+        billingNotes: visible.sort((a, b) =>
+          (a.baseNumber ?? '').localeCompare(b.baseNumber ?? '')
+          || a.type.localeCompare(b.type)
+          || a.version - b.version).map(toBillingNoteResponse),
+      });
+    },
+
+    // B1 (owner ruling 2026-09-20): a brand-new draft starts its OWN chain — no predecessor/
+    // customer+type conflict check at all, several may legitimately be in progress at once.
+    async createDraft(customerId, payload = {}) {
+      const user = requireBillingNoteWriteGate();
+      const customer = mockCustomers.find((c) => c.id === Number(customerId));
+      if (!customer) fail('ไม่พบลูกค้ารายนี้', 404);
+      const type = (payload.type ?? '').trim().toUpperCase();
+      if (!['GOODS', 'FREIGHT'].includes(type)) fail('ต้องระบุประเภทใบวางบิลเป็น GOODS หรือ FREIGHT', 400);
+      const now = new Date().toISOString();
+      const id = mockBillingNoteSeq++;
+      const note = {
+        id, customerId: Number(customerId), type, baseNumber: null, version: 1, docNumber: null,
+        status: 'DRAFT', supersededById: null, revisionOfId: null,
+        cancelReason: null, cancelledById: null, cancelledByName: null, cancelledAt: null,
+        billDate: payload.billDate ?? null, paymentDueNote: payload.paymentDueNote ?? null,
+        paymentAppointmentDate: null, receivedByName: null, receivedAt: null, note: payload.note ?? null,
+        customerName: customer.name, customerTaxId: customer.taxId, customerBranch: customer.branch,
+        customerAddress: customer.address,
+        totalAmount: 0,
+        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        issuedById: null, issuedByName: null, issuedAt: null,
+        settledById: null, settledByName: null, settledAt: null,
+        lines: [],
+      };
+      // Resolve/validate lines BEFORE pushing the note — mirrors @Transactional: a line-validation
+      // failure (cap, unknown source, already-claimed, fully-paid, bad MANUAL fields) must leave no
+      // trace, not an orphan DRAFT with zero lines. mockWriteBillingNoteLines only reads OTHER
+      // notes' claims via mockBillingNotes, so calling it before this note is in that array is safe
+      // — excludeNoteId is a plain id comparison, not a presence check.
+      mockWriteBillingNoteLines(note, payload.lines ?? []);
+      mockBillingNotes.push(note);
+      return delay({ billingNote: toBillingNoteResponse(note) });
+    },
+
+    async get(id) {
+      const row = findStoredBillingNoteRaw(id);
+      requireBillingNoteReadAccess(row);
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    // PATCH: an absent field is left alone; `lines`, when supplied, whole-value replaces (matching
+    // RemainingInvoiceDraftRequest's own replace-not-append discipline) — mirrors
+    // BillingNoteService#updateDraft.
+    // F2/S7 (matching BillingNoteService's own fix, applied verbatim here): the write gate runs
+    // BEFORE the existence lookup in every write method below — an unauthorized caller must not be
+    // able to distinguish "no such note" (404) from "exists but wrong state" (409) without ever
+    // passing the write gate. Review round 1 (GLA-129 branch 1) caught this ordering reversed.
+    async update(id, payload = {}) {
+      requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'DRAFT') fail('ใบวางบิลนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      if (payload.billDate != null) row.billDate = payload.billDate;
+      if (payload.paymentDueNote != null) row.paymentDueNote = payload.paymentDueNote;
+      if (payload.note != null) row.note = payload.note;
+      const customer = mockCustomers.find((c) => c.id === row.customerId);
+      if (customer) {
+        row.customerName = customer.name; row.customerTaxId = customer.taxId;
+        row.customerBranch = customer.branch; row.customerAddress = customer.address;
+      }
+      if (payload.lines != null) mockWriteBillingNoteLines(row, payload.lines);
+      row.updatedAt = new Date().toISOString();
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    // DRAFT -> ISSUED: mints/carries base_number the same way RemainingInvoiceService#issue does,
+    // via ITS OWN revisionOfId pointer (B1) — never by scanning for "the" ISSUED note of this
+    // customer+type, since several may legitimately coexist across credit cycles.
+    async issue(id) {
+      const user = requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'DRAFT') fail('ใบวางบิลนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      if (!row.lines.length) fail('ใบวางบิลนี้ยังไม่มีรายการ', 409);
+
+      let predecessor = null;
+      if (row.revisionOfId != null) {
+        predecessor = mockBillingNotes.find((n) => n.id === row.revisionOfId) ?? null;
+        if (!predecessor || predecessor.status !== 'ISSUED') {
+          fail('ใบวางบิลต้นฉบับไม่ได้อยู่ในสถานะออกแล้วอีกต่อไป ไม่สามารถออกฉบับแก้ไขนี้ได้', 409);
+        }
+      }
+      let baseNumber;
+      let version;
+      if (predecessor) {
+        baseNumber = predecessor.baseNumber;
+        version = predecessor.version + 1;
+        predecessor.status = 'SUPERSEDED';
+        predecessor.supersededById = row.id;
+      } else {
+        const thaiYear = new Date().getFullYear() + 543;
+        mockArGlrSeqByYear[thaiYear] = (mockArGlrSeqByYear[thaiYear] ?? 0) + 1;
+        baseNumber = `GLR${String(thaiYear).slice(-2)}${String(mockArGlrSeqByYear[thaiYear]).padStart(5, '0')}`;
+        version = 1;
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      row.billDate = row.billDate ?? today; // mirrors `bill_date = COALESCE(bill_date, :issueDate)`
+      row.baseNumber = baseNumber;
+      row.version = version;
+      row.docNumber = `${baseNumber}-${version}`;
+      row.status = 'ISSUED';
+      row.issuedById = user.id;
+      row.issuedByName = user.name;
+      row.issuedAt = new Date().toISOString();
+      row.updatedAt = row.issuedAt;
+      const ticketIds = [...new Set(row.lines.map((l) => l.ticketId).filter((tid) => tid != null))];
+      for (const ticketId of ticketIds) {
+        const ticket = findTicketRaw(ticketId);
+        pushEvent(ticket, user, 'DOCUMENT_ISSUED', ticket.status, ticket.status, `ใบวางบิล ${row.docNumber} ออกแล้ว`);
+      }
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    // Prepares a correction: a new DRAFT tied to its predecessor via revisionOfId (B1), copying the
+    // ISSUED note's own body/lines VERBATIM — mirrors BillingNoteService#revise. The predecessor
+    // stays ISSUED until the replacement is actually issued (issue() above does the supersede), but
+    // its LINES release their live claim immediately (mirrors stored.releaseLines) so a corrected
+    // draft that drops a line frees it for another note right away, rather than waiting for issue().
+    async revise(id) {
+      const user = requireBillingNoteWriteGate();
+      const issued = findStoredBillingNoteRaw(id);
+      // Mirrors requireIssued: revise() reuses the SAME generic "must be ISSUED" gate cancel/
+      // markReceived/markSettled use, not a bespoke revise-only message.
+      if (issued.status !== 'ISSUED') fail('ดำเนินการได้เฉพาะใบวางบิลที่ออกแล้ว (ISSUED)', 409);
+      const hasLiveDraft = mockBillingNotes.some((n) => n.status === 'DRAFT' && n.revisionOfId === issued.id);
+      if (hasLiveDraft) fail('มีร่างฉบับแก้ไขของใบวางบิลนี้อยู่แล้ว', 409);
+
+      const now = new Date().toISOString();
+      const newId = mockBillingNoteSeq++;
+      const clone = structuredClone(issued);
+      const note = {
+        ...clone, id: newId, baseNumber: null, version: 1, docNumber: null, status: 'DRAFT',
+        supersededById: null, revisionOfId: issued.id,
+        cancelReason: null, cancelledById: null, cancelledByName: null, cancelledAt: null,
+        // Neither the predecessor's receivedByName/receivedAt NOR its paymentAppointmentDate carry
+        // to the correction draft — mirrors insertDraft, which never passes any of the three.
+        receivedByName: null, receivedAt: null, paymentAppointmentDate: null,
+        createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
+        issuedById: null, issuedByName: null, issuedAt: null,
+        settledById: null, settledByName: null, settledAt: null,
+        lines: clone.lines.map((l, i) => ({ ...l, id: `${newId}-${i + 1}`, billingNoteId: newId, released: false })),
+      };
+      mockBillingNotes.push(note);
+      // Release the predecessor's OWN lines (the live object, not the clone) so their sources
+      // become billable again immediately — mirrors stored.releaseLines(id) in BillingNoteService
+      // #revise, run before the new draft's lines are written on the real side too.
+      issued.lines.forEach((l) => { l.released = true; });
+      return delay({ billingNote: toBillingNoteResponse(note) });
+    },
+
+    async cancel(id, reason) {
+      const user = requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'ISSUED') fail('ดำเนินการได้เฉพาะใบวางบิลที่ออกแล้ว (ISSUED)', 409);
+      if (!reason || !String(reason).trim()) fail('ต้องระบุเหตุผลการยกเลิก', 400);
+      row.status = 'CANCELLED';
+      row.cancelReason = reason;
+      row.cancelledById = user.id;
+      row.cancelledByName = user.name;
+      row.cancelledAt = new Date().toISOString();
+      row.updatedAt = row.cancelledAt;
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    async markReceived(id, payload = {}) {
+      requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'ISSUED') fail('ดำเนินการได้เฉพาะใบวางบิลที่ออกแล้ว (ISSUED)', 409);
+      if (!payload.receivedByName || !String(payload.receivedByName).trim()) fail('ต้องระบุชื่อผู้รับวางบิล', 400);
+      row.receivedByName = payload.receivedByName;
+      row.receivedAt = new Date().toISOString();
+      // Unconditional, matching the real UPDATE — omitting paymentAppointmentDate on a SECOND
+      // markReceived call clears it, it does not keep the first call's value.
+      row.paymentAppointmentDate = payload.paymentAppointmentDate ?? null;
+      row.updatedAt = row.receivedAt;
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    // C1 (owner ruling 2026-09-20): the only caller-triggered path to SETTLED in mock mode — this
+    // file does not reproduce BillingNoteRepository#reconcileSettlementForCustomer's automatic
+    // recompute-on-read (see this section's own header comment), so unlike production, a
+    // non-all-MANUAL note here only ever settles via this same explicit action.
+    async markSettled(id) {
+      const user = requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'ISSUED') fail('ดำเนินการได้เฉพาะใบวางบิลที่ออกแล้ว (ISSUED)', 409);
+      row.status = 'SETTLED';
+      row.settledById = user.id;
+      row.settledByName = user.name;
+      row.settledAt = new Date().toISOString();
+      row.updatedAt = row.settledAt;
+      return delay({ billingNote: toBillingNoteResponse(row) });
+    },
+
+    async remove(id) {
+      requireBillingNoteWriteGate();
+      const row = findStoredBillingNoteRaw(id);
+      if (row.status !== 'DRAFT') fail('ใบวางบิลนี้ไม่ได้อยู่ในสถานะร่าง (DRAFT)', 409);
+      // Look up the predecessor (if any) BEFORE removing — mirrors deleteDraft's own ordering.
+      const predecessor = row.revisionOfId != null
+        ? mockBillingNotes.find((n) => n.id === row.revisionOfId) ?? null : null;
+      // Mirrors restoreLinesToIssued's own guard (`AND bn.status = 'ISSUED'`, a no-op restore if
+      // the predecessor is no longer ISSUED) PLUS the ux_billing_note_line_source_live race it can
+      // trip: if any of the predecessor's own sources was claimed by a DIFFERENT live note in the
+      // window since revise() released it (e.g. C creates a fresh draft on a source this draft's
+      // own update() dropped), restoring would double-claim that source across two notes at once —
+      // review round 2 (2026-09-23) caught this permitted where production 409s. Checked and
+      // refused BEFORE the splice below, mirroring the real @Transactional rollback: the whole
+      // delete fails atomically, the draft is not removed either, not silently half-applied.
+      const predecessorIsLive = predecessor?.status === 'ISSUED';
+      if (predecessorIsLive) {
+        const claims = mockBillingNoteLiveClaims();
+        const stolen = predecessor.lines.some((l) => {
+          if (l.sourceId == null) return false;
+          const claim = claims.get(`${l.sourceType}:${l.sourceId}`);
+          return claim && claim.billingNoteId !== row.id && claim.billingNoteId !== predecessor.id;
+        });
+        if (stolen) {
+          fail('ไม่สามารถคืนสถานะรายการของใบวางบิลต้นฉบับได้ เนื่องจากเอกสารอ้างอิงถูกใช้ในใบวางบิลอื่นไปแล้วระหว่างการลบ', 409);
+        }
+      }
+      mockBillingNotes.splice(mockBillingNotes.indexOf(row), 1);
+      // Abandoning a correction-in-progress restores the predecessor's own lines to their live
+      // ISSUED claim — mirrors restoreLinesToIssued, the counterpart of revise()'s own release
+      // above. Skipped (silently, matching the real no-op) when the predecessor is no longer
+      // ISSUED — its lines are already excluded from mockBillingNoteLiveClaims by status alone.
+      if (predecessorIsLive) predecessor.lines.forEach((l) => { l.released = false; });
+      return delay({ deleted: true });
+    },
+
+    // Binary, so it goes through fetch directly — same shape as storedRemainingInvoices.download
+    // above. Renders from THIS row's own stored snapshot, never recomputed from live data.
+    async download(id) {
+      const row = findStoredBillingNoteRaw(id);
+      requireBillingNoteReadAccess(row);
+      const blob = await tryBackendBlob(`/api/billing-notes/${id}/file`);
+      return blob ?? buildMockBillingNoteXlsxFromRow(row);
     },
   },
 
