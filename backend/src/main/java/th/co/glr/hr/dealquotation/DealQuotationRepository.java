@@ -170,18 +170,18 @@ public class DealQuotationRepository {
      * of {@code CustomerQuotationRepository#hasLiveQuotation}: whether THIS pricing request
      * already has a live (not CANCELLED/SUPERSEDED/EXPIRED) PRICING_REQUEST-origin quotation.
      * Used by {@code CustomerQuotationService#create} to refuse (409) starting the OLD chain when
-     * the new one is already in play. */
+     * the new one is already in play, and — since S2 — by {@code DealQuotationService
+     * #createFromPricingRequest} itself, to refuse a SECOND live quotation of this SAME engine
+     * (MAJOR-3 fix, Opus re-review 2026-09-20: closes the gap where a rep could otherwise mint a
+     * second live quotation while their first sat PENDING_APPROVAL, since PR status alone does
+     * not move until actual issue). */
     public boolean hasLivePricingRequestQuotation(long pricingRequestId) {
         // MINOR-4 fix (owner ruling, confirmed 2026-09-20, second re-review) — REJECTED added to
         // the non-live set, for CONSISTENCY with CustomerQuotationRepository#hasLiveQuotation's
-        // own identical addition (see that method's own comment for the reasoning: a rejected
-        // quotation has no live offer, so it must not block the OTHER engine). UNREACHABLE today
-        // — a PRICING_REQUEST-origin row can only ever be DRAFT or CANCELLED in S1
-        // (DealQuotationService#requireStatusMachineEnabled refuses submit/approve/reject/revise/
-        // reorder for this origin), so REJECTED never appears here yet — but adding it NOW, while
-        // it costs nothing, is what keeps this check already correct the day S2 enables the full
-        // status machine for this origin, instead of silently reintroducing the exact bug class
-        // MINOR-4 fixes on the other side.
+        // own identical addition (a rejected quotation has no live offer, so it must not block the
+        // OTHER engine). STILL never actually written by this origin's own #reject (R9 returns to
+        // DRAFT, not a REJECTED terminal status — see that method's own comment) — kept in the
+        // non-live set anyway for the same forward-looking consistency reasoning MINOR-4 gave.
         Boolean found = jdbc.queryForObject("""
             SELECT EXISTS (
                 SELECT 1 FROM sales.quotation
@@ -242,6 +242,29 @@ public class DealQuotationRepository {
     }
 
     /**
+     * MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): the
+     * most recent PRICING_REQUEST-origin quotation for this pricing request, REGARDLESS of
+     * status — used by {@code DealQuotationService#createFromPricingRequest} to continue the SAME
+     * {@code {base}-{n}} number family when re-creating after an EXPIRED quotation, rather than
+     * minting an unrelated fresh base number. There is at most one LIVE row at a time (M2/the
+     * one-quotation-per-request rule) and this origin has no revision chain (D12), so "most
+     * recent by id" and "the only row" coincide in every reachable case today; ORDER BY id DESC
+     * is still the honest query to write in case that ever stops being true.
+     */
+    public Optional<Long> findLatestForPricingRequest(long pricingRequestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject("""
+                SELECT quotation_id FROM sales.quotation
+                 WHERE pricing_request_id = :pricingRequestId AND origin = 'PRICING_REQUEST'
+                 ORDER BY quotation_id DESC
+                 LIMIT 1
+                """, Map.of("pricingRequestId", pricingRequestId), Long.class));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * M3 (found while testing the fix above): the next unused revision number for the chain
      * {@code baseNumber} belongs to — MAX(quotation_revision_no) across every row that has EVER
      * existed under this base (found by exact match on {@code baseNumber} itself, or the {@code
@@ -255,13 +278,31 @@ public class DealQuotationRepository {
      * APPROVED) parent again — a legitimate, expected flow, not a race — and the naive formula
      * recomputes the SAME {@code {base}-N} number the cancelled row still holds (cancelling never
      * frees the UNIQUE {@code number} slot), hitting the identical DuplicateKeyException M3 was
-     * about. This method is called under the SAME {@link #lockTicket} advisory lock {@link
-     * #hasOpenRevision} already relies on, so it is race-safe against concurrent callers too.
+     * about. {@code DealQuotationService#createRevision}/{@code #createReorder} call this under
+     * the SAME {@link #lockTicket} advisory lock {@link #hasOpenRevision} already relies on, so
+     * those two callers are race-safe against concurrent callers too.
+     *
+     * <p>GLA-123 slice S2 review fix (2026-09-20) — widened from {@code origin = 'DEAL_DIRECT'}
+     * to include {@code 'PRICING_REQUEST'}: {@code DealQuotationService#createFromPricingRequest}
+     * reuses this SAME method (not a hand-rolled {@code latest.revisionNo() + 1}) to number a
+     * fresh quotation written after the previous one EXPIRED (D9 — "the version never restarts"),
+     * for the identical reason M3 gives above — a cancelled/expired row never frees its own
+     * {@code number}, so the naive "one more than the latest row" formula has the same latent
+     * collision risk this method was written to close. NIT (Opus re-review, 2026-09-20): that
+     * caller does NOT hold {@link #lockTicket} — it serialises on {@code
+     * CustomerQuotationRepository#lockPricingRequest} instead, since the escape hatch's own
+     * invariant ("one live quotation per pricing request") is scoped to the pricing request, not
+     * the ticket. Still race-safe (two concurrent escape-hatch calls for the SAME pricing request
+     * fully serialise on that lock), just not via the ticket lock this Javadoc used to imply
+     * unconditionally. The two origins can never collide on a shared {@code ticket_id} either way:
+     * each mints its own base number from its own {@link #nextQuotationCode()} call at first
+     * creation, so widening this predicate only ever WIDENS the MAX() scan, never merges two
+     * unrelated numbering families.
      */
     public int nextRevisionNo(long ticketId, String baseNumber) {
         Integer max = jdbc.queryForObject("""
             SELECT COALESCE(MAX(quotation_revision_no), 0) FROM sales.quotation
-             WHERE ticket_id = :ticketId AND origin = 'DEAL_DIRECT'
+             WHERE ticket_id = :ticketId AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
                AND (number = :baseNumber OR number LIKE :basePrefix)
             """,
             new MapSqlParameterSource()
@@ -883,33 +924,51 @@ public class DealQuotationRepository {
 
     /** Compare-and-set DRAFT -> PENDING_APPROVAL. Rowcount 0 means not open for submit. Clears any
      * stale rejection reason from a prior cycle (V165's own header comment: "cleared on the next
-     * submit"). */
+     * submit"). GLA-123 slice S2: widened from {@code origin = 'DEAL_DIRECT'} to include {@code
+     * 'PRICING_REQUEST'} — submit's own validations (item completeness, ผู้สั่งซื้อ, payment term,
+     * validity date) are origin-agnostic and apply unchanged to both. */
     public int submit(long quotationId, long actorId) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET doc_status = 'PENDING_APPROVAL', submitted_at = now(), submitted_by = :actorId,
                    approval_note = NULL, updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'DRAFT'
+             WHERE quotation_id = :id AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST') AND doc_status = 'DRAFT'
             """, new MapSqlParameterSource().addValue("id", quotationId).addValue("actorId", actorId));
     }
 
     /**
-     * Compare-and-set PENDING_APPROVAL -> APPROVED, and — in the SAME statement — the V175 approver
-     * snapshot (owner ruling 2026-09-13, "already-sent quotations never change afterwards"): the
-     * approver's Thai/English names and signature bytes as they are at this instant. A data-modifying
-     * CTE rather than two statements, so the pair is atomic even with no surrounding transaction:
-     * the INSERT only sees the row the UPDATE actually won, and a lost compare-and-set inserts
-     * nothing. No signature on file stores NULL image + mime with the names still frozen. Returns
-     * the snapshot rowcount, which equals the UPDATE's (both LEFT JOINs keep the row).
+     * Compare-and-set PENDING_APPROVAL -> APPROVED (DEAL_DIRECT) or -> ISSUED (PRICING_REQUEST),
+     * and — in the SAME statement — the V175 approver snapshot (owner ruling 2026-09-13,
+     * "already-sent quotations never change afterwards"): the approver's Thai/English names and
+     * signature bytes as they are at this instant. A data-modifying CTE rather than two
+     * statements, so the pair is atomic even with no surrounding transaction: the INSERT only
+     * sees the row the UPDATE actually won, and a lost compare-and-set inserts nothing. No
+     * signature on file stores NULL image + mime with the names still frozen. Returns the
+     * snapshot rowcount, which equals the UPDATE's (both LEFT JOINs keep the row).
+     *
+     * <p>GLA-123 slice S2 REWORK (owner ruling reversed the dual-approval design, 2026-09-20):
+     * this is now the WHOLE of "approve" for BOTH origins — one approval issues a
+     * PRICING_REQUEST-origin quotation exactly the way one approval already terminates a
+     * DEAL_DIRECT one (that origin's own "terminal" state is spelled {@code APPROVED} rather than
+     * {@code ISSUED}, a pre-existing naming difference this rework does not touch — see
+     * {@code DealQuotationService#approve}'s own origin branch for where that name is chosen).
+     * Reusing this ONE method (rather than a parallel PRICING_REQUEST-only compare-and-set, as an
+     * earlier draft of this feature had) is what makes the printed approver, the frozen V175
+     * signature, and the {@code approval_note} column all come from the SAME, already-tested path
+     * DEAL_DIRECT uses — there is no second signature/snapshot mechanism to keep in sync.
+     * {@code CASE WHEN origin = 'DEAL_DIRECT' THEN 'APPROVED' ELSE 'ISSUED' END} is the only
+     * origin-aware fragment in the whole statement.
      */
     public int approve(long quotationId, long approverId, String note, LocalDate validityDate) {
         return jdbc.update("""
             WITH approved AS (
                 UPDATE sales.quotation
-                   SET doc_status = 'APPROVED', approved_at = now(), approved_by = :approverId,
+                   SET doc_status = CASE WHEN origin = 'DEAL_DIRECT' THEN 'APPROVED' ELSE 'ISSUED' END,
+                       approved_at = now(), approved_by = :approverId,
                        approval_decided_at = now(), approval_decided_by = :approverId,
                        approval_note = :note, validity_date = :validityDate, updated_at = now()
-                 WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+                 WHERE quotation_id = :id AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
+                   AND doc_status = 'PENDING_APPROVAL'
                 RETURNING quotation_id, approved_by
             )
             INSERT INTO sales.quotation_approver_snapshot
@@ -932,15 +991,54 @@ public class DealQuotationRepository {
                 .addValue("note", note).addValue("validityDate", validityDate));
     }
 
-    /** Compare-and-set PENDING_APPROVAL -> DRAFT, with the reason recorded for the rep to see. */
+    /** Compare-and-set PENDING_APPROVAL -> DRAFT, with the reason recorded for the rep to see.
+     * GLA-123 slice S2 rework: widened to both origins for the identical reason {@link #approve}
+     * was — a reject is a reject, one approver, one decision, regardless of origin. */
     public int reject(long quotationId, long approverId, String reason) {
         return jdbc.update("""
             UPDATE sales.quotation
                SET doc_status = 'DRAFT', approval_decided_at = now(), approval_decided_by = :approverId,
                    approval_note = :reason, updated_at = now()
-             WHERE quotation_id = :id AND origin = 'DEAL_DIRECT' AND doc_status = 'PENDING_APPROVAL'
+             WHERE quotation_id = :id AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
+               AND doc_status = 'PENDING_APPROVAL'
             """, new MapSqlParameterSource().addValue("id", quotationId).addValue("approverId", approverId)
                 .addValue("reason", reason));
+    }
+
+    /** One quotation actually flipped ISSUED -> EXPIRED — same shape as
+     * {@code CustomerQuotationRepository.ExpiredQuotationRow}. */
+    public record ExpiredQuotationRow(long quotationId, long pricingRequestId, long ticketId, String number) {}
+
+    /**
+     * D5 — the PRICING_REQUEST-origin counterpart of
+     * {@code CustomerQuotationRepository#expireOverdueQuotations}; see that method's own comment
+     * for why this predicate EXCLUDES it (that query is {@code origin IS NULL}-scoped precisely
+     * to leave this origin to its own S2 flow, which this method now is). Never touches a
+     * {@code DEAL_DIRECT} row (D5 — that origin never expires) because {@code origin =
+     * 'PRICING_REQUEST'} excludes it categorically, not merely by never reaching {@code ISSUED}.
+     */
+    public List<ExpiredQuotationRow> expireOverdueQuotations() {
+        // NIT fix (Opus re-review, 2026-09-20): validity_date is computed and compared in Bangkok
+        // local time everywhere else this feature touches it (DealQuotationService
+        // #approveAndIssuePricingRequestOrigin's own LocalDate.now(BANGKOK)) — CURRENT_DATE reads
+        // the DB SESSION's timezone instead, which is
+        // not guaranteed to be Bangkok. Inherited from the legacy CustomerQuotationRepository
+        // query this one was modelled on, but that one is untouched here (out of this fix's
+        // scope) and this one is NEW, so it is bound to an explicit Bangkok "today" parameter
+        // instead of trusting the session TZ to agree.
+        LocalDate bangkokToday = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
+        return jdbc.query("""
+            UPDATE sales.quotation
+               SET doc_status = 'EXPIRED', updated_at = now()
+             WHERE doc_status = 'ISSUED'
+               AND origin = 'PRICING_REQUEST'
+               AND validity_date IS NOT NULL
+               AND validity_date < :bangkokToday
+            RETURNING quotation_id, pricing_request_id, ticket_id, number
+            """, new MapSqlParameterSource().addValue("bangkokToday", bangkokToday),
+            (rs, rowNum) -> new ExpiredQuotationRow(
+                rs.getLong("quotation_id"), rs.getLong("pricing_request_id"),
+                rs.getLong("ticket_id"), rs.getString("number")));
     }
 
     /** Compare-and-set DRAFT -> CANCELLED. */
@@ -1030,7 +1128,10 @@ public class DealQuotationRepository {
     public record ApproverSignatureSnapshot(String mimeType, byte[] image) {}
 
     /** Present iff the V175 snapshot row exists for this quotation (i.e. it was approved on or
-     * after V175, or backfilled); empty means "no snapshot taken", NOT "no signature". */
+     * after V175, or backfilled); empty means "no snapshot taken", NOT "no signature". GLA-123
+     * slice S2 rework: this is the ONLY snapshot read for BOTH origins now — whoever approves a
+     * PRICING_REQUEST-origin quotation freezes into this SAME row {@link #approve} already writes
+     * for DEAL_DIRECT, one approver, one snapshot, no slot concept. */
     public Optional<ApproverSignatureSnapshot> findApproverSignatureSnapshot(long quotationId) {
         List<ApproverSignatureSnapshot> rows = jdbc.query("""
             SELECT signature_mime_type, signature_image
@@ -1409,6 +1510,13 @@ public class DealQuotationRepository {
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
+              -- GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): one
+              -- approval, one snapshot row, no slot concept — this join (and the whole
+              -- approved_by/approver_has_signature pair it feeds) now serves BOTH origins exactly
+              -- alike, since #approve writes the SAME row for either. An earlier, never-merged
+              -- draft of this feature widened this table's key to (quotation_id, slot) for a
+              -- two-approver design (its own migration was deleted before ever landing, so there
+              -- is nothing to find in history for it) — this join is back to the plain V175 shape.
               LEFT JOIN sales.quotation_approver_snapshot aps ON aps.quotation_id = q.quotation_id
               LEFT JOIN hr.employee pbd ON pbd.employee_id = q.printed_by_display_id
               LEFT JOIN hr.employee srd ON srd.employee_id = q.sales_rep_display_id

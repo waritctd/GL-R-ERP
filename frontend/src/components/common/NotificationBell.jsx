@@ -19,6 +19,20 @@ const TYPE_ICON = {
   QUOTATION_ISSUED:{ name: 'fileText', color: '#22c55e' },
   CLOSED:          { name: 'check',    color: '#94a3b8' },
   CANCELLED:       { name: 'close',    color: '#94a3b8' },
+  // GLA-123 slice S2 review fix (Opus re-review, 2026-09-20, UI note 7) — the dual-approval
+  // notification surface had NO icon entries at all (confirmed by grep before this fix; every one
+  // of these fell back to the default bell/`#5c6b80`). DEAL_QUOTATION_APPROVED covers BOTH a
+  // partial fill ("รอการอนุมัติจากอีกฝ่ายหนึ่ง...") and a full/issuing approval
+  // ("ได้รับอนุมัติครบถ้วนและออกใบแล้ว") — the two are already distinguishable by their MESSAGE
+  // text (DealQuotationService's own partialMessage vs the issue-completion message), so one
+  // shared icon entry is correct here, not two. SUBMITTED/REJECTED reuse the SAME icon/colour as
+  // the plain kinds above (DEAL_QUOTATION_SUBMITTED reads exactly like SUBMITTED to a viewer;
+  // DEAL_QUOTATION_REJECTED like REJECTED) rather than inventing a visually different pair for
+  // what is, to the person reading the bell, the same kind of event under a more specific type
+  // string.
+  DEAL_QUOTATION_SUBMITTED: { name: 'fileText', color: '#f59e0b' },
+  DEAL_QUOTATION_APPROVED:  { name: 'check',    color: '#22c55e' },
+  DEAL_QUOTATION_REJECTED:  { name: 'close',    color: '#dc2626' },
 };
 
 function timeAgo(iso) {

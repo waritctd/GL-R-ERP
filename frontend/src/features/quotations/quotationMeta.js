@@ -30,15 +30,24 @@
 // edge already has -- just reached from a DRAFT parent instead of an APPROVED one. Hence DRAFT's
 // own SUPERSEDED edge below (mirrors DealQuotationRepository#supersede's own WHERE clause, widened
 // the same way and for the same reason).
+// GLA-123 slice S2 — a PRICING_REQUEST-origin quotation's own tail, added onto the SAME shared
+// map: DRAFT -> PENDING_APPROVAL -> (one approval, by sales_manager or ceo) -> ISSUED ->
+// (validity_date passes) -> EXPIRED. `ISSUED`/`EXPIRED` are UNREACHABLE for a DEAL_DIRECT row in practice (its
+// own single-shot approve() only ever requests the APPROVED edge, and D5 says a DEAL_DIRECT
+// quotation never expires) — widening this shared abstract graph does not loosen what a
+// DEAL_DIRECT row can actually reach, since that is decided by which edge a caller requests, not
+// by which edges the table allows.
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
-  PENDING_APPROVAL: ['APPROVED', 'DRAFT'],
+  PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'ISSUED'],
   // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being
   // approved, not a status a caller ever requests directly (there is no "supersede" endpoint in
   // the plan).
   APPROVED: ['SUPERSEDED'],
   SUPERSEDED: [],
   CANCELLED: [],
+  ISSUED: ['EXPIRED'],
+  EXPIRED: [],
 };
 
 export function canTransitionDealQuotation(from, to) {
@@ -60,6 +69,10 @@ const DEAL_QUOTATION_STATUS_LABELS = {
   // the plain, unremarkable end state it actually is.
   SUPERSEDED: { label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' },
   CANCELLED: { label: 'ยกเลิก', tone: 'danger' },
+  // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row (D5: DEAL_DIRECT never
+  // expires and never separately "issues" — its own APPROVED is terminal-until-revised).
+  ISSUED: { label: 'ออกใบแล้ว', tone: 'success' },
+  EXPIRED: { label: 'หมดอายุ', tone: 'neutral' },
 };
 
 export function dealQuotationStatusLabel(status) {
@@ -153,6 +166,34 @@ export function canApproveDealQuotation(user) {
  * the button-gating shape most callers want. */
 export function canDecideDealQuotation(user, quotation) {
   return canApproveDealQuotation(user) && quotation?.docStatus === 'PENDING_APPROVAL';
+}
+
+// ── GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20). There is no
+// second slot any more: canDecideDealQuotation/canApproveDealQuotation above already gate a
+// PRICING_REQUEST-origin quotation's approval exactly the same as a DEAL_DIRECT one (either role,
+// one call, done) — the ONE thing this origin adds on top is the CEO-required-when-changed gate
+// below, which the editor uses to explain (not merely block) a sales_manager's disabled button.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Whether this PRICING_REQUEST-origin quotation no longer matches the CEO's own decision — ANY
+ * line's price/discount, the header price mode, or a removed CEO-linked line — mirrors
+ * DealQuotationService#requireCeoApprovalIfChanged's own comparison exactly (client-side echo for
+ * UI wording ONLY; the server recomputes this itself and never trusts a flag from here). Always
+ * `false` for a DEAL_DIRECT quotation, which has no CEO decision to compare against. */
+export function dealQuotationRequiresCeoApproval(quotation) {
+  if (!quotation || quotation.origin !== 'PRICING_REQUEST') return false;
+  return Boolean(quotation.priceModeChangedFromCeo)
+    || (quotation.items ?? []).some((item) => item.priceChangedFromCeo)
+    || (quotation.itemsRemovedFromCeoCount ?? 0) > 0;
+}
+
+/** canDecideDealQuotation, further refused for a sales_manager once the quotation no longer
+ * matches the CEO's decision — the one case an otherwise-eligible sales_manager may NOT approve.
+ * Always agrees with canDecideDealQuotation for a ceo (the CEO's own authority is never gated by
+ * this) or a DEAL_DIRECT quotation (dealQuotationRequiresCeoApproval is always false there). */
+export function canApproveDealQuotationNow(user, quotation) {
+  if (!canDecideDealQuotation(user, quotation)) return false;
+  return user?.role === 'ceo' || !dealQuotationRequiresCeoApproval(quotation);
 }
 
 /** Mirrors the plan's "view/list/download" role set exactly: sales (own deals), sales_manager,

@@ -2565,6 +2565,32 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' })).toBeNull();
   });
 
+  // MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): once the
+  // linked quotation EXPIRES, the owning sales rep gets a plain note + a button to write a fresh
+  // one from the same approved decision — DealQuotationService#createFromPricingRequest now
+  // tolerates this specific case (PR status QUOTATION_ISSUED, no live quotation) server-side.
+  it('offers "เขียนใบเสนอราคาใหม่" once the linked quotation has EXPIRED, calling the same createFromPricingRequest endpoint', async () => {
+    // The PR itself sits at QUOTATION_ISSUED once its quotation issued — canManageCustomerQuotation
+    // (not canCreateCustomerQuotation) is the gate this button uses precisely because
+    // APPROVED_FOR_QUOTATION no longer holds at this point in the lifecycle.
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9002, number: 'QT-2026-0099-1', docStatus: 'EXPIRED' },
+    });
+    api.dealQuotations.createFromPricingRequest.mockResolvedValue({
+      quotation: { id: 9003, number: 'QT-2026-0099-2', docStatus: 'DRAFT' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    expect(await screen.findByText('ใบเสนอราคาหมดอายุแล้ว — เขียนใบใหม่ได้')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
+      .toHaveBeenCalledWith(request.summary.id));
+  });
+
   it('does not offer the create button before APPROVED_FOR_QUOTATION, and never fetches the quotation list for a non-owning role', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     renderDetailPage({ user: salesOwner, request });

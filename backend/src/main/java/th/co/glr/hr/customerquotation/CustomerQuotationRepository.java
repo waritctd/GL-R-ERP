@@ -498,10 +498,10 @@ public class CustomerQuotationRepository {
              WHERE doc_status = 'ISSUED'
                AND pricing_request_id IS NOT NULL
                -- GLA-123 slice S1 (2026-09-19): PRICING_REQUEST-origin rows also set
-               -- pricing_request_id, but their own S2 dual-approval flow owns their expiry
-               -- (D5, not yet implemented) — origin IS NULL keeps this scoped to the LEGACY
-               -- (customerquotation/) chain this class has always owned, exactly like every other
-               -- query in this file now excludes the new origin explicitly.
+               -- pricing_request_id, but their own expiry (D5) is owned by
+               -- DealQuotationService#expireOverdueQuotations instead — origin IS NULL keeps this
+               -- scoped to the LEGACY (customerquotation/) chain this class has always owned,
+               -- exactly like every other query in this file now excludes the new origin explicitly.
                AND origin IS NULL
                AND validity_date IS NOT NULL
                AND validity_date < CURRENT_DATE
