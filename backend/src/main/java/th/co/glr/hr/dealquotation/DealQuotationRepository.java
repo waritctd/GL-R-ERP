@@ -179,9 +179,17 @@ public class DealQuotationRepository {
         // MINOR-4 fix (owner ruling, confirmed 2026-09-20, second re-review) — REJECTED added to
         // the non-live set, for CONSISTENCY with CustomerQuotationRepository#hasLiveQuotation's
         // own identical addition (a rejected quotation has no live offer, so it must not block the
-        // OTHER engine). STILL never actually written by this origin's own #reject (R9 returns to
-        // DRAFT, not a REJECTED terminal status — see that method's own comment) — kept in the
-        // non-live set anyway for the same forward-looking consistency reasoning MINOR-4 gave.
+        // OTHER engine).
+        //
+        // CORRECTION (S3 review round 5, NEW-B, 2026-09-23): this comment used to say REJECTED is
+        // "still never actually written by this origin's own #reject ... kept in the non-live set
+        // anyway for forward-looking consistency" — that stopped being true once S3's own
+        // #recordOutcome shipped: REJECTED is one of RECORDABLE_OUTCOMES, so it IS live, reachable
+        // customer-driven data, not a hedge for a future writer. Its presence here is exactly what
+        // the frontend's recreate gate (PricingRequestDetailPage.jsx, dealQuotationForPr.docStatus
+        // in ['EXPIRED','REVISION_REQUESTED','REJECTED']) depends on: a REJECTED quotation must
+        // read as non-live so #createFromPricingRequest will accept a replacement, mirroring
+        // EXPIRED and REVISION_REQUESTED immediately below.
         //
         // GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
         // REVISION_REQUESTED added — this WAS reachable (S3's own recordOutcome writes it) and WAS

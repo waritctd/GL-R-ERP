@@ -2877,6 +2877,51 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     await waitFor(() => expect(api.dealQuotations.createFromPricingRequest)
       .toHaveBeenCalledWith(request.summary.id));
   });
+
+  // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
+  // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
+  // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
+  // which both the outcome panel above AND the recreate gate just below it read. Because
+  // ['pricingRequests','detail',id] does not prefix-match
+  // ['pricingRequests','dealQuotationForPricingRequest',id], a rep recording an outcome got the
+  // success toast but the screen kept showing the stale ISSUED DTO — and with it, the OLD
+  // outcome-recording buttons instead of the new recreate affordance — until a manual reload or
+  // the query's 30s staleTime lapsed (api/queryClient.js). This test proves the refetch actually
+  // happens and the UI actually re-renders, WITHOUT a remount: it stubs
+  // findForPricingRequest to first resolve ISSUED, then REVISION_REQUESTED on any later call, and
+  // watches (a) the call count rise after the outcome is recorded, and (b) the recreate button
+  // become reachable while the old outcome buttons disappear — proving invalidate() actually
+  // reached this key and not just the six others already covered above.
+  it('invalidates dealQuotationForPr after recording an outcome, so the recreate button appears without a reload', async () => {
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
+    const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
+    api.dealQuotations.findForPricingRequest
+      .mockResolvedValueOnce({ quotation: issued })
+      .mockResolvedValue({ quotation: revisionRequested });
+    api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: revisionRequested });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+
+    const callsBeforeOutcome = api.dealQuotations.findForPricingRequest.mock.calls.length;
+    const reviseButton = screen.getByRole('button', { name: 'ลูกค้าขอแก้ไข' });
+    fireEvent.click(reviseButton);
+
+    await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome: 'REVISION_REQUESTED', clientRequestId: expect.any(String) }),
+    ));
+
+    // The regression this pins: without invalidating dealQuotationForPricingRequest, this second
+    // call never fires and the assertions below would time out against the stale ISSUED DTO.
+    await waitFor(() => expect(api.dealQuotations.findForPricingRequest.mock.calls.length)
+      .toBeGreaterThan(callsBeforeOutcome));
+
+    expect(await screen.findByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+  });
 });
 
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {

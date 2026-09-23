@@ -820,6 +820,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisions(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pricingRequestId) });
+    // GLA-123 S3 review round 5 fix (NEW-A): the NEW engine's counterpart of the invalidation
+    // above. dealQuotationForPrQuery backs both the outcome-recording panel AND the recreate gate
+    // (['EXPIRED','REVISION_REQUESTED','REJECTED'].includes(dealQuotationForPr?.docStatus)) further
+    // down this file. ['pricingRequests','detail',id] does NOT prefix-match
+    // ['pricingRequests','dealQuotationForPricingRequest',id] — these are siblings, not a parent/
+    // child pair — so without this line the outcome mutation's success toast fires but the DTO
+    // backing the recreate button stays stale until a manual reload or the 30s staleTime lapses
+    // (api/queryClient.js). Nothing else in the app invalidates this key.
+    queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId) });
     // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
     // family with the shared 'discountApprovals' prefix rather than needing the current
     // quotation's id here too (this function is called from mutations that may have just

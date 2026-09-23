@@ -299,6 +299,39 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     const { quotation } = await api.pricingRequests.getCustomerQuotation(legacyId);
     expect(quotation.docStatus).toBe('ISSUED');
   }, 20000);
+
+  // S3 round-5 review fix (NEW-D, 2026-09-23): the cross-quotation replay-mismatch 409 above
+  // (line ~193) exercises dealQuotations.recordOutcome only. recordCustomerQuotationOutcome
+  // (mockApi.js, ~13977-13986) got the IDENTICAL guard added in the same round-3 pass — mirroring
+  // CustomerQuotationService#recordOutcome's own MINOR-2 fix, cited in that method's comment at
+  // :587 — but never got its own test. Proven un-exercised: deleting the legacy guard entirely
+  // left this whole 619-test suite green, so nothing here caught its absence. Two separate
+  // decision chains on two separate tickets, both issued through the LEGACY engine and both owned
+  // by the same seeded 'sales' demo account, so the same clientRequestId genuinely collides.
+  it('legacy recordCustomerQuotationOutcome: a replay whose clientRequestId already resolved to a DIFFERENT quotation is refused with 409, and neither quotation is changed', async () => {
+    const ticketA = await freshTicket();
+    const { quotationId: legacyAId } = await issuedLegacyQuotation(
+      ticketA.ticketId, ticketA.sourceItemId, 'DESIGNER');
+    const ticketB = await freshTicket();
+    const { quotationId: legacyBId } = await issuedLegacyQuotation(
+      ticketB.ticketId, ticketB.sourceItemId, 'DESIGNER');
+
+    const sharedKey = nextClientRequestId();
+    await api.auth.login({ role: 'sales' });
+    const { quotation: onA } = await api.pricingRequests.recordCustomerQuotationOutcome(legacyAId, {
+      outcome: 'ACCEPTED', customerNote: 'บันทึกบนใบ A', clientRequestId: sharedKey,
+    });
+    expect(onA.docStatus).toBe('ACCEPTED');
+
+    await expect(api.pricingRequests.recordCustomerQuotationOutcome(legacyBId, {
+      outcome: 'ACCEPTED', customerNote: 'ไม่ควรถูกบันทึกบนใบ B', clientRequestId: sharedKey,
+    })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('clientRequestId') });
+
+    const { quotation: stillA } = await api.pricingRequests.getCustomerQuotation(legacyAId);
+    expect(stillA.docStatus).toBe('ACCEPTED');
+    const { quotation: stillB } = await api.pricingRequests.getCustomerQuotation(legacyBId);
+    expect(stillB.docStatus).toBe('ISSUED');
+  }, 20000);
 });
 
 describe('mockApi confirmOrder from a NEW-engine accepted quotation (GLA-123 slice S3, R9)', () => {
