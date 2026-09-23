@@ -47,6 +47,12 @@ Cloudflare HTTPS; the ghcr image is **amd64** (server must be amd64).
 - [ ] SSH: install your public key → test key login → then `PasswordAuthentication no`,
       `PermitRootLogin no`. 🔐 Never pass an SSH password as a CLI argument.
 - [ ] Create a non-root sudo user; check `sudo -l`.
+- [ ] **Add swap — the VM is 4GB, which is tight.** The backend image runs Chromium + LibreOffice
+      for PDF/Excel export; a spike can OOM-kill a container. Add 2–4GB swap
+      (`fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`,
+      then persist in `/etc/fstab`). Compose sets per-service `mem_limit`s (backend 2.5G / postgres
+      640M / caddy+cloudflared 128M each) sized for this box; if PDF/Excel use is heavy, raise the VM
+      to 6–8GB RAM and bump the limits + `JAVA_OPTS` rather than leaning on swap.
 
 ## Phase 2 — Docker
 - [ ] Install Docker Engine (official repo) + Compose v2 plugin.

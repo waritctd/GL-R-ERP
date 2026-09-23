@@ -14,6 +14,15 @@ services:
     # a newer server will not restore into an older one.
     image: postgres:16
     restart: unless-stopped
+    # Modest tuning for a 4GB VM — Postgres shares RAM with Spring + Chromium/LibreOffice.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=192MB"
+      - "-c"
+      - "effective_cache_size=512MB"
+      - "-c"
+      - "max_connections=50"
     environment:
       POSTGRES_DB: hris
       POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME}
@@ -27,6 +36,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    mem_limit: 640m
+    cpus: 1.0
     # Not published to the host — only the backend reaches it on the compose network.
 
   backend:
@@ -51,8 +62,14 @@ services:
       # We sit behind Caddy + Cloudflare; trust X-Forwarded-* so Spring builds correct
       # absolute URLs and sees the request as HTTPS.
       SERVER_FORWARD_HEADERS_STRATEGY: framework
+      # Cap the JVM heap so this container's 2.5GB also fits Chromium + LibreOffice, which
+      # run as SEPARATE processes inside it during PDF/Excel export. SerialGC keeps GC
+      # overhead low on a small 2-vCPU/low-heap box. Tune up if the VM gets more RAM.
+      JAVA_OPTS: "-XX:MaxRAMPercentage=50 -XX:InitialRAMPercentage=25 -XX:+UseSerialGC"
     volumes:
       - /srv/glr/uploads:/srv/glr/uploads
+    mem_limit: 2560m
+    cpus: 2.0
     # Not published — Caddy proxies /api to it on the compose network.
 
   caddy:
@@ -65,6 +82,7 @@ services:
       - /srv/glr/www:/srv/www:ro       # frontend dist (built with mocks off, portal unlocked)
       - caddy_data:/data
       - caddy_config:/config
+    mem_limit: 128m
     # ports:
     #   - "127.0.0.1:8081:80"          # ← uncomment for local-on-server smoke test only
 
@@ -74,6 +92,7 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    mem_limit: 128m
     depends_on:
       - caddy
     # Ingress (hostname → http://caddy:80) is configured in the Cloudflare Zero Trust
