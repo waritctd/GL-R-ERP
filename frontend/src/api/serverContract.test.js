@@ -539,17 +539,20 @@ describe('controller surface / hrApi.js contract', () => {
  */
 const UNREACHABLE_FROM_UI = new Set([
   // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer + hrApi/mockApi
-  // wiring landed on this branch (GLA-129 step 4 part 1); the /finance ใบวางบิล tab and the
-  // redesigned deal-page การเงิน tab that actually CALL these twelve methods are step 4 parts
-  // 2/3, separate branches not yet merged. BillingNoteService/BillingNoteController/
+  // wiring landed on GLA-129 step 4 part 1; the /finance ใบวางบิล tab that calls the rest of these
+  // eleven methods is step 4 part 3, a separate branch not yet merged. `GET
+  // /api/customers/{}/billing-notes` (listForCustomer) left this list on part 2 — the redesigned
+  // deal-page การเงิน tab's DealDocumentPipeline now reads it to resolve the ใบวางบิล step's status
+  // (a client-side join against the deal's own remaining invoice, no new endpoint). Cancel/issue/
+  // mark-received/mark-settled/revise and the create/update/delete/candidates/file routes are all
+  // still write-side or picker-only, with no screen yet. BillingNoteService/BillingNoteController/
   // BillingNoteRenderer are already covered by BillingNoteServiceIntegrationTest (real Postgres,
   // including the wrong-way-round authz suite) and BillingNoteRendererTest. Remove this block once
-  // those screens call these through hrApi.js.
+  // those screens call the rest through hrApi.js.
   'DELETE /api/billing-notes/{}',
   'GET /api/billing-notes/{}',
   'GET /api/billing-notes/{}/file',
   'GET /api/customers/{}/billing-note-candidates',
-  'GET /api/customers/{}/billing-notes',
   'POST /api/billing-notes/{}/cancel',
   'POST /api/billing-notes/{}/issue',
   'POST /api/billing-notes/{}/mark-received',
