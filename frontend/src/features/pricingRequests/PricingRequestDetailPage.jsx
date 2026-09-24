@@ -404,12 +404,13 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
               บันทึกร่างอีเมล
             </Button>
           ) : null}
-          {canOfferSendActions ? (
-            <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
-              <Icon name="clipboard" size={14} />
-              คัดลอกข้อความ
-            </Button>
-          ) : null}
+          {/* Copy stays available after sending too — viewing + re-copying the sent RFQ is the
+              whole point of reopening it read-only (owner ask 2026-09-24). Only the "ส่งแล้ว"
+              transition is DRAFT-only. */}
+          <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
+            <Icon name="clipboard" size={14} />
+            คัดลอกข้อความ
+          </Button>
           {canOfferSendActions ? (
             <Button type="button" variant="success" data-testid="pcr-mark-factory-email-sent" onClick={onRequestSend}>
               ส่งแล้ว
@@ -1880,7 +1881,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
                     || (current.status === 'READY_FOR_COSTING' && dirty));
                 const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
-                const canOpenEmailDraft = isImport(user) && current.status === 'DRAFT';
+                // Import can OPEN the RFQ email at any status (owner ask 2026-09-24): to draft+send
+                // it while DRAFT, or just to VIEW what was actually sent afterwards. The modal is
+                // read-only once the quote leaves DRAFT (FactoryEmailDraftModal's canEditFields /
+                // canOfferSendActions), so opening it post-send can only view + copy, never re-edit.
+                const canOpenEmailDraft = isImport(user);
                 // หน่วยราคา is a per-FACTORY control now, not per-line (owner-supplied mockup) — every
                 // line in `draft.items` shares one unitBasis, so the first line speaks for the whole
                 // group. defaultResponseItems seeds every line from the same source when untouched,
@@ -1940,7 +1945,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       {canOpenEmailDraft ? (
                         <Button type="button" variant="secondary" onClick={() => setEmailModalQuoteId(current.id)} data-testid={`pcr-open-email-draft-${current.id}`}>
                           <Icon name="mail" size={14} />
-                          ร่างอีเมล
+                          {emailSent ? 'ดูอีเมล' : 'ร่างอีเมล'}
                         </Button>
                       ) : null}
                     </div>

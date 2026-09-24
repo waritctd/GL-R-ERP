@@ -845,6 +845,22 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByTestId('pcr-detail-pickup')).toBeNull();
   });
 
+  // owner ask 2026-09-24: after ส่งแล้ว, Import can still reopen the RFQ email — read-only (view +
+  // copy), labelled ดูอีเมล; the ส่งแล้ว transition is gone.
+  it('reopens a SENT factory RFQ email read-only (ดูอีเมล, copy kept, no ส่งแล้ว)', async () => {
+    renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const openBtn = screen.getByTestId('pcr-open-email-draft-91');
+    expect(openBtn.textContent).toContain('ดูอีเมล');
+    fireEvent.click(openBtn);
+
+    const dialog = await screen.findByTestId('factory-email-draft-modal');
+    expect(within(dialog).getByTestId('pcr-copy-factory-email')).not.toBeNull();          // copy kept
+    expect(within(dialog).queryByTestId('pcr-mark-factory-email-sent')).toBeNull();       // no ส่งแล้ว
+  });
+
   it('records a factory response revision entry via receiveFactoryQuote with a fresh clientRequestId', async () => {
     const quote = buildFactoryQuote({ status: 'REQUESTED' });
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
