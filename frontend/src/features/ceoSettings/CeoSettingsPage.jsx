@@ -763,6 +763,20 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
+  // Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule
+  // (POST /api/fx-rates/fetch-now — CEO-only, same gate as the manual upsert above).
+  const fetchFxNowMutation = useMutation({
+    mutationFn: () => api.fxRates.fetchNow(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.fxRates() });
+      const r = data?.result;
+      showToast('success', r
+        ? `ดึงเรตจาก BOT แล้ว — อัปเดต ${r.updated}/${r.total} สกุล (${r.asOf})`
+        : 'ดึงเรตจาก BOT แล้ว');
+    },
+    onError: (e) => showToast('error', e.message || 'ดึงเรตจาก BOT ไม่สำเร็จ'),
+  });
+
   // A single shared mutation acts on whichever currency row is being saved —
   // this reads the in-flight variables back out to know which row's button
   // should show a busy state (there's no per-row mutation instance).
@@ -851,7 +865,21 @@ export function CeoSettingsPage({ showToast }) {
       </header>
 
       {/* FX Rates */}
-      <Panel flush title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)">
+      <Panel
+        flush
+        title="อัตราแลกเปลี่ยน (1 หน่วย = ? บาท)"
+        actions={(
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={fetchFxNowMutation.isPending}
+            onClick={() => fetchFxNowMutation.mutate()}
+            data-testid="fx-fetch-now"
+          >
+            {fetchFxNowMutation.isPending ? 'กำลังดึงเรต…' : 'ดึงเรตจาก BOT ตอนนี้'}
+          </Button>
+        )}
+      >
         {/* P0 fix follow-up (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน
             การดึงอัตราอัตโนมัติ", which implied the CEO had to wait on an admin before costing
             would work at all. That is no longer true — FxResolver no longer requires source ===
