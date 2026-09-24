@@ -88,6 +88,12 @@ public class DealQuotationService {
     private static final Set<String> EDIT_ROLES = Set.of("sales", "sales_manager");
     private static final Set<String> APPROVE_ROLES = Set.of("sales_manager", "ceo");
     private static final Set<String> VIEW_ROLES = Set.of("sales", "sales_manager", "ceo", "import", "account");
+    /** Owner ruling 2026-09-24: on the GLOBAL LIST ({@link #search}/{@link #counts}) ONLY,
+     * sales_manager and ceo see every deal's quotations; everyone else (sales, import, account,
+     * and any {@code canCreateQuotation} grant-holder) sees only quotations on deals they created.
+     * Scope boundary: this affects ONLY {@link #listOwnerScope} — detail/create/edit access
+     * elsewhere is unchanged. Backported onto the v2026-09-22 base as a migration-free hotfix. */
+    private static final Set<String> LIST_SEE_ALL_ROLES = Set.of("sales_manager", "ceo");
 
     private final DealQuotationRepository quotations;
     private final TicketRepository tickets;
@@ -261,7 +267,10 @@ public class DealQuotationService {
         if (!grant) {
             requireRole(actor, VIEW_ROLES);
         }
-        return (!grant && "sales".equals(actor.role())) ? actor.id() : null;
+        // Owner ruling 2026-09-24 (see LIST_SEE_ALL_ROLES): only sales_manager/ceo see every deal;
+        // everyone else — including a canCreateQuotation grant-holder, import and account — is
+        // scoped to deals they created. Narrows the previous "grant or non-sales sees all".
+        return LIST_SEE_ALL_ROLES.contains(actor.role()) ? null : actor.id();
     }
 
     /** Rule: server recomputes every number, always — this is the stateless preview the item
